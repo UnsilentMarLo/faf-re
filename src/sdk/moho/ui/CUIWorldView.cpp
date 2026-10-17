@@ -12,6 +12,7 @@
 #include "Wm3DistVector3Segment3.h"
 #include "moho/mesh/Mesh.h"
 #include "moho/render/ProjectileArcRenderer.h"
+#include "moho/editor/EdOverlay.h"
 #include "moho/render/camera/CameraImpl.h"
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/d3d/CD3DPrimBatcher.h"
@@ -76,6 +77,11 @@ namespace moho
     }
 
     mWldSession->RenderProjectileIcons(mCamera.get(), batcher, tickFraction, frameSeconds);
+
+    // Editor addition: retained world-space line overlay (areas, brush ring, placement ghosts), main view only.
+    if (!IsMiniMap()) {
+      edoverlay::Render(const_cast<GeomCamera3*>(&mCamera->CameraGetView()), batcher);
+    }
 
     if (UI_RenProjectileArcs) {
       RenderProjectileArcs(mWldSession, const_cast<GeomCamera3*>(&mCamera->CameraGetView()), batcher, tickFraction);

@@ -1247,6 +1247,8 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q 
     <ClCompile Include="moho\editor\EditorDocument.cpp" />
     <ClCompile Include="moho\editor\EdTextBackend.cpp" />
     <ClCompile Include="moho\editor\EdPopout.cpp" />
+    <ClCompile Include="moho\editor\EdOverlay.cpp" />
+    <ClCompile Include="moho\editor\EdSimResources.cpp" />
     <ClCompile Include="libpng\PngWriteRuntime.cpp">
       <ExcludedFromBuild Condition="true">true</ExcludedFromBuild>
     </ClCompile>
