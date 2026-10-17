@@ -4332,6 +4332,32 @@ namespace moho
   }
 
   /**
+   * Editor addition (not part of the recovered binary): the same container `MapSave` writes, to an explicit
+   * disk path instead of a path resolved through the virtual file system.
+   */
+  bool CWldMap::MapSaveToDiskPath(const char* const diskPath)
+  {
+    if (mMapPreviewChunk == nullptr || mTerrainRes == nullptr || mProps == nullptr || diskPath == nullptr) {
+      return false;
+    }
+
+    msvc8::auto_ptr<gpg::Stream> stream = DISK_OpenFileWrite(diskPath);
+    if (stream.get() == nullptr) {
+      return false;
+    }
+
+    gpg::BinaryWriter writer(stream.get());
+    const SWorldMapFileHeader header{kWorldMapFileMagic, kWorldMapFileVersion};
+    writer.Write(header);
+    (void)mMapPreviewChunk->Save(writer);
+    (void)mTerrainRes->Save(writer);
+    (void)mProps->Save(writer);
+
+    stream->VirtClose(gpg::Stream::ModeBoth);
+    return true;
+  }
+
+  /**
    * Address: 0x00891250 (FUN_00891250, ?MapSetPreview@CWldMap@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@ABV?$Vector2@M@Wm3@@PBD@Z)
    *
    * What it does:

@@ -964,16 +964,18 @@ namespace moho
     writer.Write(mDecalCount);
     writer.Write(mNumDecals);
 
+    // Editor: decals the simulation created at run time (scorch marks, effects; `mArmy >= 0`) are not map
+    // content and must not end up in a saved map; only decals that came off the map (`mArmy == -1`) are kept.
     std::uint32_t activeDecalCount = 0u;
     for (CWldTerrainDecal* const decal : mDecals) {
-      if (decal != nullptr && decal->mUnknownA0 == 0u) {
+      if (decal != nullptr && decal->mUnknownA0 == 0u && decal->mArmy < 0) {
         ++activeDecalCount;
       }
     }
     writer.Write(activeDecalCount);
 
     for (CWldTerrainDecal* const decal : mDecals) {
-      if (decal != nullptr && decal->mUnknownA0 == 0u) {
+      if (decal != nullptr && decal->mUnknownA0 == 0u && decal->mArmy < 0) {
         decal->DecalSave(writer);
       }
     }

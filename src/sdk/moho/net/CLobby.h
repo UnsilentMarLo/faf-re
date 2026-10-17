@@ -369,18 +369,7 @@ namespace moho
   static_assert(offsetof(CLobby, mSocket) == 0xC0, "mSocket offset");
   static_assert(offsetof(CLobby, hostedTime) == 0xC4, "hostedTime offset");
 
-  template <>
-  class CScrLuaMetatableFactory<CLobby> final : public CScrLuaObjectFactory
-  {
-  public:
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CLobby>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(sizeof(CScrLuaMetatableFactory<CLobby>) == 0x08, "CScrLuaMetatableFactory<CLobby> size must be 0x08");
 

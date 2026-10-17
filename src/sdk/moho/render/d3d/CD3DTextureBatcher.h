@@ -56,6 +56,21 @@ namespace moho
     CD3DTextureBatcher();
 
     /**
+     * Editor addition: an atlas of another size / gal format token. Format 12 (DXT5) is the retail layout; format 2
+     * (A8R8G8B8) holds 4 bytes per texel and serves the editor text backend (`CD3DBatchTexture::GetSheetFormat`).
+     */
+    CD3DTextureBatcher(std::int32_t width, std::int32_t height, std::int32_t format);
+
+    /** Editor addition: the process-wide A8R8G8B8 atlas (created on first use, needs the D3D device). */
+    [[nodiscard]] static CD3DTextureBatcher& GetArgbAtlas();
+
+    /**
+     * Editor addition: the device is being reset or destroyed. The sheet is released; the next `GetCompositeTexture` creates
+     * a new one and uploads the retained CPU copy of the whole atlas.
+     */
+    void OnDeviceExit();
+
+    /**
      * Address: 0x00448B60 (FUN_00448B60)
      *
      * What it does:
@@ -127,6 +142,7 @@ namespace moho
     std::uint8_t mDirty;                    // +0x2C
     std::uint8_t mPad2D[0x03];              // +0x2D
     PixelByteVector mPixels;                // +0x30
+    std::int32_t mFormat = 12;              // editor addition: gal format token of the atlas sheet
   };
 
   static_assert(sizeof(CD3DTextureBatcher::TextureAtlasEntry) == 0x18, "CD3DTextureBatcher::TextureAtlasEntry size must be 0x18");

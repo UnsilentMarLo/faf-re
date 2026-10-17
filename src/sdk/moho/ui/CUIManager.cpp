@@ -207,7 +207,57 @@ int moho::CUIManager::AddFrame(wxWindow* const inputWindow, wxWindow* const even
   const int head = static_cast<int>(mInputWindows.Size() - 1);
 
   inputWindow->PushEventHandler(new CUIKeyHandler());
+  ++mNumDisplayHeads;
   return head;
+}
+
+/**
+ * Editor addition: see the declaration.
+ */
+int moho::CUIManager::AddPopoutFrame(wxWindow* const window)
+{
+  if (window == nullptr) {
+    return -1;
+  }
+
+  mInputWindows.PushBack(window);
+  mHostWindows.PushBack(window);
+  const std::size_t head = mInputWindows.Size() - 1;
+
+  window->PushEventHandler(new CUIKeyHandler());
+
+  if (mLuaState != nullptr) {
+    while (mFrames.Size() < head) {
+      mFrames.PushBack(boost::shared_ptr<CMauiFrame>()); // keep the frame array aligned with the window array
+    }
+    CreateRootFrameForHead(head);
+  }
+  return static_cast<int>(head);
+}
+
+/**
+ * Editor addition: see the declaration.
+ */
+void moho::CUIManager::RemovePopoutFrame(const int index)
+{
+  if (index < 0 || static_cast<std::size_t>(index) >= mInputWindows.Size() || mInputWindows[static_cast<std::size_t>(index)] == nullptr) {
+    return;
+  }
+
+  const std::size_t head = static_cast<std::size_t>(index);
+  wxWindow* const window = mInputWindows[head];
+  UI_ClearInputCapture();
+  UI_ClearCurrentDragger();
+
+  if (head < mFrames.Size() && mFrames[head]) {
+    (void)window->PopEventHandler(false); // the frame's event mapper (pushed last)
+    mFrames[head]->Destroy();
+    mFrames[head] = boost::shared_ptr<CMauiFrame>();
+  }
+  delete window->PopEventHandler(false);  // the key handler pushed by AddPopoutFrame
+
+  mInputWindows[head] = nullptr;
+  mHostWindows[head] = nullptr;
 }
 
 /**
@@ -250,6 +300,26 @@ bool moho::CUIManager::SetNewLuaState(LuaPlus::LuaState* const state)
   (void)globals.CreateTable("__EngineStats", 0, 0);
 
   for (std::size_t head = 0; head < mInputWindows.Size(); ++head) {
+    if (mInputWindows[head] == nullptr) {
+      mFrames.PushBack(boost::shared_ptr<CMauiFrame>()); // editor: a removed pop-out keeps its (empty) slot
+      continue;
+    }
+    CreateRootFrameForHead(head);
+  }
+
+  if (!MAUI_StartMainScript()) {
+    gpg::Die("CUIManager::Init - unable to start main UI script.");
+  }
+
+  return true;
+}
+
+/**
+ * Editor addition: the former body of the `SetNewLuaState` loop (Address: 0x0084CC50), shared with `AddPopoutFrame`.
+ */
+void moho::CUIManager::CreateRootFrameForHead(const std::size_t head)
+{
+  {
     boost::shared_ptr<CMauiFrame> frame = CMauiFrame::Create(mLuaState);
     if (!frame) {
       gpg::Die("CUIManager::Init - unable to create root frame for head %d.", static_cast<int>(head));
@@ -280,12 +350,6 @@ bool moho::CUIManager::SetNewLuaState(LuaPlus::LuaState* const state)
 
     frameView->mTargetHead = static_cast<std::int32_t>(head);
   }
-
-  if (!MAUI_StartMainScript()) {
-    gpg::Die("CUIManager::Init - unable to start main UI script.");
-  }
-
-  return true;
 }
 
 /**
@@ -490,6 +554,7 @@ void moho::CUIManager::RenderFrames(const int head, CD3DPrimBatcher* const primB
     mFrames[static_cast<std::size_t>(head)]->RenderChildControls(primBatcher, 1);
   }
 
+  primBatcher->EndTextRun(); // editor: leave the LCD text technique (flushes its queued quads)
   primBatcher->Flush();
 }
 
@@ -544,6 +609,9 @@ void moho::CUIManager::GetControlAtCursor(
   // them (DebugMouseOverControl does).
   const wxPoint mouse = wxGetMousePosition();
   for (std::size_t head = 0; head < mInputWindows.Size(); ++head) {
+    if (mInputWindows[head] == nullptr || head >= mFrames.Size() || !mFrames[head]) {
+      continue; // editor: removed pop-out slot
+    }
     int x = mouse.x;
     int y = mouse.y;
     mInputWindows[head]->ScreenToClient(&x, &y);
@@ -570,6 +638,9 @@ void moho::CUIManager::DumpControlsUnderMouse()
 {
   const wxPoint mouse = wxGetMousePosition();
   for (std::size_t head = 0; head < mInputWindows.Size(); ++head) {
+    if (mInputWindows[head] == nullptr) {
+      continue; // editor: removed pop-out slot
+    }
     int localX = mouse.x;
     int localY = mouse.y;
     mInputWindows[head]->ScreenToClient(&localX, &localY);

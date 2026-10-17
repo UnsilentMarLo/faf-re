@@ -8,6 +8,7 @@
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/textures/CD3DBatchTexture.h"
 #include "moho/render/textures/CD3DDynamicTextureSheet.h"
+#include "moho/render/textures/DeviceExitListener.h"
 
 namespace moho
 {
@@ -107,27 +108,83 @@ namespace moho
    * backing store, and creates one dynamic texture sheet.
    */
   CD3DTextureBatcher::CD3DTextureBatcher()
-    : mWidth(kCompositeWidth)
-    , mHeight(kCompositeHeight)
+    : CD3DTextureBatcher(kCompositeWidth, kCompositeHeight, kDynamicTextureFormat)
+  {
+  }
+
+  /**
+   * Editor addition: same body as the retail constructor with a caller-chosen size and gal format token
+   * (12 = DXT5, 1 byte per texel; 2 = A8R8G8B8, 4 bytes per texel).
+   */
+  CD3DTextureBatcher::CD3DTextureBatcher(const std::int32_t width, const std::int32_t height, const std::int32_t format)
+    : mWidth(width)
+    , mHeight(height)
     , mRects()
     , mDynTexSheet()
     , mMap()
     , mDirty(0)
     , mPad2D{0, 0, 0}
     , mPixels()
+    , mFormat(format)
   {
     if (CD3DDevice* const device = D3D_GetDevice(); device != nullptr) {
       if (ID3DDeviceResources* const resources = device->GetResources(); resources != nullptr) {
-        (void)resources->NewDynamicTextureSheet(
-          mDynTexSheet,
-          kCompositeWidth,
-          kCompositeHeight,
-          kDynamicTextureFormat
-        );
+        (void)resources->NewDynamicTextureSheet(mDynTexSheet, width, height, format);
       }
     }
 
-    mPixels.resize(kCompositeBytes);
+    const std::size_t bytes = (format == 2)
+      ? static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u
+      : static_cast<std::size_t>(kCompositeBytes);
+    mPixels.resize(bytes);
+    Reset();
+  }
+
+  /**
+   * Editor addition: the shared A8R8G8B8 atlas for text glyphs and other full-colour batch textures.
+   */
+  namespace
+  {
+    // Tells the shared A8R8G8B8 atlas about device exits (reset / shutdown): the sheet content is lost, the CPU copy is not.
+    class ArgbAtlasListener final : public Listener<const SD3DDeviceEvent&>
+    {
+    public:
+      explicit ArgbAtlasListener(CD3DTextureBatcher* const atlas)
+        : mAtlas(atlas)
+      {
+        D3D_GetDevice()->AddListener(this);
+      }
+
+      void OnEvent(const SD3DDeviceEvent& event) override
+      {
+        // Type 1 = about to reset or destroy the device. A reset sends it with mShouldReleaseTextures false (CD3DDevice::
+        // InitContext), so the flag must not be required: the engine's own save / restore of dynamic sheets across a
+        // reset did not preserve this atlas cleanly (stray lines after a resize), a fresh sheet does.
+        if (event.mEventType == 1u) {
+          mAtlas->OnDeviceExit();
+        }
+      }
+
+    private:
+      CD3DTextureBatcher* mAtlas;
+    };
+  } // namespace
+
+  CD3DTextureBatcher& CD3DTextureBatcher::GetArgbAtlas()
+  {
+    static CD3DTextureBatcher* const atlas = [] {
+      auto* const created = new CD3DTextureBatcher(2048, 2048, 2);
+      (void)new ArgbAtlasListener(created);
+      return created;
+    }();
+    return *atlas;
+  }
+
+  void CD3DTextureBatcher::OnDeviceExit()
+  {
+    // The sheet is gone. Start from an empty atlas: glyph textures are added again (and re-uploaded from their own CPU
+    // copies) the next time they are drawn, so no stale rectangle can point into the new sheet.
+    mDynTexSheet.reset();
     Reset();
   }
 
@@ -184,9 +241,13 @@ namespace moho
       found = mMap.insert(insertedEntry).first;
       ReleaseBatchTextureHandle(&insertionScratch);
 
-      const std::size_t destinationOffset =
-        (static_cast<std::size_t>(mWidth) * static_cast<std::size_t>(allocatedRect.z0)) +
-        (static_cast<std::size_t>(allocatedRect.x0) * 4u);
+      // DXT5 (retail): one byte per texel, so a 4-row block row is 4 * mWidth bytes and the offset is
+      // mWidth * z0 + 4 * x0. A8R8G8B8 (editor): 4 bytes per texel, a row is 4 * mWidth bytes.
+      const std::size_t destinationOffset = (mFormat == 2)
+        ? (static_cast<std::size_t>(mWidth) * 4u * static_cast<std::size_t>(allocatedRect.z0)) +
+            (static_cast<std::size_t>(allocatedRect.x0) * 4u)
+        : (static_cast<std::size_t>(mWidth) * static_cast<std::size_t>(allocatedRect.z0)) +
+            (static_cast<std::size_t>(allocatedRect.x0) * 4u);
       texture->BuildTextureData(mPixels.begin() + destinationOffset, static_cast<std::uint32_t>(4 * mWidth));
       mDirty = 1;
     }
@@ -225,12 +286,32 @@ namespace moho
    */
   boost::shared_ptr<ID3DTextureSheet> CD3DTextureBatcher::GetCompositeTexture()
   {
+    if (!mDynTexSheet && mFormat == 2) {
+      // editor: the sheet was released by OnDeviceExit; create it again and upload the whole CPU copy
+      if (CD3DDevice* const device = D3D_GetDevice(); device != nullptr) {
+        if (ID3DDeviceResources* const resources = device->GetResources(); resources != nullptr) {
+          (void)resources->NewDynamicTextureSheet(mDynTexSheet, mWidth, mHeight, mFormat);
+          mDirty = 1;
+        }
+      }
+    }
     const std::uint32_t dirtyLane = static_cast<std::uint32_t>(mDirty);
     if (!IsZero(&dirtyLane)) {
       std::uint32_t pitch = 0;
       void* lockedBits = nullptr;
 
-      if (mDynTexSheet && mDynTexSheet->Lock(&pitch, &lockedBits)) {
+      if (mDynTexSheet && mFormat == 2 && mDynTexSheet->Lock(&pitch, &lockedBits)) {
+        // Editor A8R8G8B8 atlas: copy row by row into the locked surface.
+        const std::size_t rowBytes = static_cast<std::size_t>(mWidth) * 4u;
+        for (std::int32_t row = 0; row < mHeight; ++row) {
+          std::copy_n(
+            mPixels.begin() + (rowBytes * static_cast<std::size_t>(row)),
+            rowBytes,
+            static_cast<std::uint8_t*>(lockedBits) + (static_cast<std::size_t>(pitch) * static_cast<std::size_t>(row))
+          );
+        }
+        (void)mDynTexSheet->Unlock();
+      } else if (mDynTexSheet && mFormat != 2 && mDynTexSheet->Lock(&pitch, &lockedBits)) {
         // Binary 0x00448EF0 memcpy's raw BYTES (FUN_00A89190): the atlas
         // buffer holds one byte per texel (width*height bytes total, sized
         // 0x100000 by the ctor). Fast path copies the whole width*height-byte

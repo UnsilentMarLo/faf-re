@@ -237,25 +237,7 @@ namespace moho
    * VFTABLE: 0x00E130BC
    * COL: 0x00E743C0
    */
-  template <>
-  class CScrLuaMetatableFactory<CDamage> final : public CScrLuaObjectFactory
-  {
-  public:
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00739CF0 (FUN_00739CF0, Moho::CScrLuaMetatableFactory<Moho::CDamage>::Create)
-     *
-     * What it does:
-     * Builds the metatable object used for `CDamage` Lua userdata.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    CScrLuaMetatableFactory();
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CDamage>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(sizeof(CScrLuaMetatableFactory<CDamage>) == 0x8, "CScrLuaMetatableFactory<CDamage> size must be 0x8");
 

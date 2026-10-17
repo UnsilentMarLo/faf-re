@@ -1657,6 +1657,9 @@ namespace moho
      */
     [[nodiscard]] bool MapSave(gpg::StrArg mapName);
 
+    /// Editor addition: save to an explicit disk path (same container as `MapSave`).
+    [[nodiscard]] bool MapSaveToDiskPath(const char* diskPath);
+
     /**
      * Address: 0x00891250 (FUN_00891250, ?MapSetPreview@CWldMap@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@ABV?$Vector2@M@Wm3@@PBD@Z)
      *

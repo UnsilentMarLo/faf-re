@@ -994,6 +994,10 @@ namespace moho
 
     if (ren_GenerateMesh && (dirty || decalsDirty)) {
       mTesselator->Rebuild(mCamera, terrainRes);
+      // the rebuild consumes the pending-changes request (the editor raises it after height edits; nothing else clears it)
+      if (decalsDirty) {
+        static_cast<CDecalManager*>(terrainRes->GetDecalManager())->ClearPendingChanges();
+      }
 
       auto& shaderVars = GetTerrainShaderVars();
       if (shaderVars.heightScale.Exists()) {

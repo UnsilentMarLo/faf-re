@@ -41,19 +41,7 @@ namespace moho
   int cfunc_CollisionBeamEntityGetLauncher(lua_State* luaContext);
   int cfunc_CollisionBeamEntityGetLauncherL(LuaPlus::LuaState* state);
 
-  template <>
-  class CScrLuaMetatableFactory<CollisionBeamEntity> final : public CScrLuaObjectFactory
-  {
-  public:
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    CScrLuaMetatableFactory();
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CollisionBeamEntity>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CollisionBeamEntity>) == 0x08,

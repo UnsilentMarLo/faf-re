@@ -150,19 +150,7 @@ namespace moho
     std::uint32_t mCreatedAtTick;         // +0xD4
   };
 
-  template <>
-  class CScrLuaMetatableFactory<CDecalHandle> final : public CScrLuaObjectFactory
-  {
-  public:
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    CScrLuaMetatableFactory();
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CDecalHandle>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CDecalHandle>) == 0x08,

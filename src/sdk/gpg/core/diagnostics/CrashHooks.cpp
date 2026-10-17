@@ -270,7 +270,8 @@ namespace gpg::diag
       static int sFaultBudget = 0;
 
       if (code == kCppException) {
-        if (!sLogThrows || sThrowBudget >= 40) {
+        static const int sThrowLimit = [] { char v[16] = {}; const DWORD n = ::GetEnvironmentVariableA("FAF_LOGTHROW", v, sizeof(v)); const int lim = (n != 0u && n < sizeof(v)) ? std::atoi(v) : 0; return lim > 1 ? lim : 40; }();
+      if (!sLogThrows || sThrowBudget >= sThrowLimit) {
           return EXCEPTION_CONTINUE_SEARCH;
         }
         ++sThrowBudget;

@@ -16681,7 +16681,8 @@ int moho::cfunc_GetNumRootFramesL(LuaPlus::LuaState* const state)
 
   CUIManager* const uiManager = static_cast<CUIManager*>(UI_GetManager());
   if (uiManager != nullptr && uiManager->HasFrames()) {
-    lua_pushnumber(rawState, static_cast<float>(uiManager->mFrames.Size()));
+    // editor: pop-out windows are not display heads (FAF's multi-head Lua keys off this count)
+    lua_pushnumber(rawState, static_cast<float>(uiManager->mNumDisplayHeads != 0u ? uiManager->mNumDisplayHeads : uiManager->mFrames.Size()));
     (void)lua_gettop(rawState);
   } else {
     LuaPlus::LuaState::Error(state, kUiLayerNotInitializedText);
@@ -23422,7 +23423,13 @@ int moho::cfunc_GetDepositsAroundPoint(lua_State* const luaContext)
   lua_newtable(luaContext);
 
   Sim* const sim = ResolveGlobalSim(luaContext);
-  CSimResources* const resources = sim ? sim->mSimResources.px : nullptr;
+  CSimResources* resources = sim ? sim->mSimResources.px : nullptr;
+  if (resources == nullptr && luaContext->l_G != nullptr) {
+    // user lane: the UI state has no Sim; the world session carries its own resource view
+    if (CWldSession* const session = WLD_GetActiveSession(); session != nullptr) {
+      resources = session->mSimResources.px;
+    }
+  }
   if (!resources) {
     return 1;
   }
@@ -23557,6 +23564,26 @@ moho::CScrLuaInitForm* moho::func_GetTimeForProfileSim_LuaFuncDef()
  * `GetDepositsAroundPoint` (`.exxt` def chain node 0x0128EA8C, function
  * slot 0x0128B884).
  */
+/**
+ * What it does:
+ * Publishes the user-lane (UI Lua state) binder for global `GetDepositsAroundPoint`.
+ * `/lua/ui/controls/worldview.lua` calls it on every mouse event; the shipped binary
+ * registers the same body for both lanes and resolves the resource view through the
+ * active world session when no Sim is attached to the Lua state.
+ */
+moho::CScrLuaInitForm* moho::func_GetDepositsAroundPointUser_LuaFuncDef()
+{
+  static CScrLuaBinder binder(
+    UserLuaInitSet(),
+    "GetDepositsAroundPoint",
+    &moho::cfunc_GetDepositsAroundPoint,
+    nullptr,
+    "<global>",
+    kGetDepositsAroundPointHelpText
+  );
+  return &binder;
+}
+
 moho::CScrLuaInitForm* moho::func_GetDepositsAroundPoint_LuaFuncDef()
 {
   static CScrLuaBinder binder(
@@ -27039,6 +27066,7 @@ namespace
       (void)::moho::func_SetFocusArmySim_LuaFuncDef();
       (void)::moho::func_GetTimeForProfileSim_LuaFuncDef();
       (void)::moho::func_GetDepositsAroundPoint_LuaFuncDef();
+      (void)::moho::func_GetDepositsAroundPointUser_LuaFuncDef();
       (void)::moho::func_SetCommandSourceSim_LuaFuncDef();
       (void)::moho::func_SessionIsBeingRecorded_LuaFuncDef();
       (void)::moho::func_SessionIsMultiplayer_LuaFuncDef();

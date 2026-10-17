@@ -92,7 +92,7 @@ namespace moho
             mTextureSheet,
             static_cast<int>(sheetWidth),
             static_cast<int>(sheetHeight),
-            12
+            static_cast<int>(GetSheetFormat()) // editor: virtual, default 12 (DXT5)
           );
         }
       }

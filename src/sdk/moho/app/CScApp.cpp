@@ -1381,6 +1381,11 @@ bool CScApp::CreateAppFrame(
           gpg::Warnf(
             "Unable to set requested size %i,%i. Results are undefined.", primarySize.x, primarySize.y
           );
+          // EDITOR: this wx 2.4.2 frame comes out taller than asked for on current Windows (client 1280x729 for 1280x720).
+          // Every later blit uses the live client rect, so give the device a back buffer of that size instead of
+          // letting a StretchRect read past the surface (D3DERR_INVALIDCALL, black window).
+          primaryHead.mWidth = static_cast<std::uint32_t>(appliedWidth);
+          primaryHead.mHeight = static_cast<std::uint32_t>(appliedHeight);
         }
       }
 

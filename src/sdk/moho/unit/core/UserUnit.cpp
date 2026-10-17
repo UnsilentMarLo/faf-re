@@ -53,20 +53,7 @@ using namespace moho;
 
 namespace moho
 {
-  template <>
-  class CScrLuaMetatableFactory<UserUnit> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<UserUnit>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(sizeof(CScrLuaMetatableFactory<UserUnit>) == 0x08, "CScrLuaMetatableFactory<UserUnit> size must be 0x08");
 } // namespace moho

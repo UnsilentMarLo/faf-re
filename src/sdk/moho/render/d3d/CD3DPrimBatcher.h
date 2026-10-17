@@ -118,6 +118,12 @@ namespace moho
     void SetTexture(boost::shared_ptr<ID3DTextureSheet> sheet);
 
     /**
+     * Editor addition: leaves the LCD text technique. Flushes the queued glyph quads (still under `TTextLcd`) and restores
+     * `TAlphaBlendLinearSampleNoDepth`. No effect when LCD text is not active.
+     */
+    void EndTextRun();
+
+    /**
      * Address: 0x004389A0 (?DrawQuad@CD3DPrimBatcher@Moho@@QAEXABUVertex@12@000@Z)
      *
      * What it does:
@@ -332,6 +338,10 @@ namespace moho
     // (`ecx = this + 0x28`) via the `reserve` emissions 0x0043A470/0x0043A6C0,
     // the append lane is `push_back` at 0x0043A5C0, and the empty() probe is
     // 0x0043A570. The proxy dwords are never read by the binary.
+    // Editor addition: non-null while the pending quads sample the A8R8G8B8 atlas instead of `mTextureBatcher`'s DXT5 one.
+    CD3DTextureBatcher* mArgbAtlasInUse = nullptr;
+    // Editor addition: true while the `TTextLcd` technique is selected for consecutive `ed:` text runs (see EndTextRun).
+    bool mLcdTextActive = false;
     CD3DTextureBatcher* mTextureBatcher = nullptr;      // +0x00
     CD3DVertexSheet* mVertexSheets[3]{};                // +0x04
     std::int32_t mCurVertexSheet = 0;                   // +0x10

@@ -276,6 +276,7 @@ namespace moho
    */
   CD3DPrimBatcher* CD3DPrimBatcher::Setup(const char* const techniqueName)
   {
+    EndTextRun(); // editor: pending LCD glyph quads must be drawn with their own technique first
     CD3DDevice* const device = D3D_GetDevice();
     device->SelectFxFile("primbatcher");
     device->SelectTechnique(techniqueName);
@@ -402,8 +403,15 @@ namespace moho
   {
     auto* const runtime = this;
 
-    const std::uint32_t atlasHalfWidth = static_cast<std::uint32_t>(runtime->mTextureBatcher->mWidth) >> 1u;
-    const std::uint32_t atlasHalfHeight = static_cast<std::uint32_t>(runtime->mTextureBatcher->mHeight) >> 1u;
+    // Editor: textures that ask for the A8R8G8B8 sheet format (text glyphs) are packed into the second atlas.
+    const bool argb = texture->GetSheetFormat() == 2u;
+    if (!argb && runtime->mLcdTextActive) {
+      EndTextRun(); // a non-glyph quad follows: back to the UI technique
+    }
+    CD3DTextureBatcher* const atlas = argb ? &CD3DTextureBatcher::GetArgbAtlas() : runtime->mTextureBatcher;
+
+    const std::uint32_t atlasHalfWidth = static_cast<std::uint32_t>(atlas->mWidth) >> 1u;
+    const std::uint32_t atlasHalfHeight = static_cast<std::uint32_t>(atlas->mHeight) >> 1u;
     const bool useDirectTexture = texture->mWidth >= atlasHalfWidth || texture->mHeight >= atlasHalfHeight;
 
     if (useDirectTexture) {
@@ -411,6 +419,7 @@ namespace moho
         Flush();
       }
 
+      runtime->mArgbAtlasInUse = nullptr;
       runtime->mTexture = texture;
 
       CD3DBatchTexture::TextureSheetHandle textureSheet{};
@@ -426,18 +435,21 @@ namespace moho
       return;
     }
 
-    if (!runtime->mVertices.empty() && runtime->mDynamicTexSheet) {
+    // Flush when leaving the direct-sheet mode or when switching between the DXT5 and the A8R8G8B8 atlas.
+    if (!runtime->mVertices.empty() &&
+        (runtime->mDynamicTexSheet || ((runtime->mArgbAtlasInUse != nullptr) != argb))) {
       Flush();
     }
 
-    const gpg::Rect2f* uvRect = runtime->mTextureBatcher->AddTexture(texture);
+    const gpg::Rect2f* uvRect = atlas->AddTexture(texture);
     if (uvRect == nullptr) {
       if (!runtime->mVertices.empty()) {
         Flush();
       }
-      runtime->mTextureBatcher->Reset();
-      uvRect = runtime->mTextureBatcher->AddTexture(texture);
+      atlas->Reset();
+      uvRect = atlas->AddTexture(texture);
     }
+    runtime->mArgbAtlasInUse = argb ? atlas : nullptr;
 
     // Binary order: 0x00438728 `lea eax, [edi+44h]` -> call 0x0043A8B0 (batch
     // texture lane), then 0x00438730 `lea eax, [edi+3Ch]` -> call 0x0043A860
@@ -450,6 +462,19 @@ namespace moho
     runtime->mP2y = uvRect->z0;
     runtime->mP1x = uvRect->x1 - uvRect->x0;
     runtime->mP1y = uvRect->z1 - uvRect->z0;
+  }
+
+  /**
+   * Editor addition: see the declaration.
+   */
+  void CD3DPrimBatcher::EndTextRun()
+  {
+    if (!mLcdTextActive) {
+      return;
+    }
+    Flush();
+    mLcdTextActive = false;
+    D3D_GetDevice()->SelectTechnique("TAlphaBlendLinearSampleNoDepth");
   }
 
   /**
@@ -470,6 +495,7 @@ namespace moho
   void CD3DPrimBatcher::SetTexture(boost::shared_ptr<ID3DTextureSheet> sheet)
   {
     auto* const runtime = this;
+    EndTextRun();
 
     const boost::shared_ptr<CD3DDynamicTextureSheet> derivedSheet =
       boost::static_pointer_cast<CD3DDynamicTextureSheet>(sheet);
@@ -482,6 +508,7 @@ namespace moho
     // reaches through 0x0043A8B0; expressed here through the named recovery so
     // both emissions share one source body.
     ResetSharedBatchTextureHandle(runtime->mTexture);
+    runtime->mArgbAtlasInUse = nullptr;
     runtime->mDynamicTexSheet = derivedSheet;
 
     runtime->mP2x = 0.0f;
@@ -1038,8 +1065,9 @@ namespace moho
     if (runtime->mDynamicTexSheet) {
       shaderVarPrimBatcherTexture1.GetTexture(runtime->mDynamicTexSheet);
     } else {
-      (void)runtime->mTextureBatcher->GetCompositeTexture();
-      shaderVarPrimBatcherTexture1.GetTexture(runtime->mTextureBatcher->mDynTexSheet);
+      CD3DTextureBatcher* const atlas = runtime->mArgbAtlasInUse != nullptr ? runtime->mArgbAtlasInUse : runtime->mTextureBatcher;
+      (void)atlas->GetCompositeTexture();
+      shaderVarPrimBatcherTexture1.GetTexture(atlas->mDynTexSheet);
     }
 
     runtime->mCurVertexSheet = (runtime->mCurVertexSheet + 1) % 3;

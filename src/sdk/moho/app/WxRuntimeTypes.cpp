@@ -52,6 +52,7 @@
 #include "moho/render/d3d/CD3DFont.h"
 #include "moho/render/d3d/CD3DPrimBatcher.h"
 #include "moho/render/d3d/CD3DTextureBatcher.h"
+#include "moho/editor/EdPopout.h"
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/d3d/CD3DDepthStencil.h"
 #include "moho/render/d3d/CD3DRenderTarget.h"
@@ -3464,6 +3465,9 @@ void moho::WRenViewport::D3DWindowOnDeviceRender()
       Render(head, mWorldViews);
     }
   }
+
+  // Editor: draw the pop-out panel windows (moho/editor/EdPopout.cpp) after the main frame's scene is closed.
+  moho::edpopout::RenderAll();
 
   ++moho::snd_index;
   gRenderLock = false;

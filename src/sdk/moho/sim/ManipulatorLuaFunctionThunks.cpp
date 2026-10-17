@@ -72,89 +72,17 @@ namespace moho
   int cfunc_CThrustManipulatorSetThrustingParam(lua_State* luaContext);
   int cfunc_CThrustManipulatorSetThrustingParamL(LuaPlus::LuaState* state);
 
-  template <>
-  class CScrLuaMetatableFactory<CBoneEntityManipulator> final : public CScrLuaObjectFactory
-  {
-  public:
-    static CScrLuaMetatableFactory& Instance();
+  // CScrLuaMetatableFactory<CBoneEntityManipulator>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+  // CScrLuaMetatableFactory<CBuilderArmManipulator>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
-  private:
-    CScrLuaMetatableFactory();
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CFootPlantManipulator>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
-  template <>
-  class CScrLuaMetatableFactory<CBuilderArmManipulator> final : public CScrLuaObjectFactory
-  {
-  public:
-    static CScrLuaMetatableFactory& Instance();
+  // CScrLuaMetatableFactory<Entity>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+  // CScrLuaMetatableFactory<CRotateManipulator>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
-  private:
-    CScrLuaMetatableFactory();
-    static CScrLuaMetatableFactory sInstance;
-  };
-
-  template <>
-  class CScrLuaMetatableFactory<CFootPlantManipulator> final : public CScrLuaObjectFactory
-  {
-  public:
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    CScrLuaMetatableFactory();
-    static CScrLuaMetatableFactory sInstance;
-  };
-
-  template <>
-  class CScrLuaMetatableFactory<Entity> final : public CScrLuaObjectFactory
-  {
-  public:
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    CScrLuaMetatableFactory();
-    static CScrLuaMetatableFactory sInstance;
-  };
-
-  template <>
-  class CScrLuaMetatableFactory<CRotateManipulator> final : public CScrLuaObjectFactory
-  {
-  public:
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    CScrLuaMetatableFactory();
-    static CScrLuaMetatableFactory sInstance;
-  };
-
-  template <>
-  class CScrLuaMetatableFactory<CThrustManipulator> final : public CScrLuaObjectFactory
-  {
-  public:
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    CScrLuaMetatableFactory();
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CThrustManipulator>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CBoneEntityManipulator>) == 0x08,

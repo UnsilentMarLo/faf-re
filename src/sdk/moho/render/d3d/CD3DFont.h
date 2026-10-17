@@ -46,6 +46,15 @@ namespace moho
     [[nodiscard]] static boost::SharedPtrRaw<CD3DFont> Create(std::int32_t pointSize, gpg::StrArg faceName);
 
     /**
+     * Editor addition: like `Create` with a fractional size. Only `ed:` faces keep the fraction (UI scale factors such as
+     * 11 px x 1.25); every other face is created at the truncated integer size exactly as before.
+     */
+    [[nodiscard]] static boost::SharedPtrRaw<CD3DFont> CreateF(float pointSize, gpg::StrArg faceName);
+
+    /** Editor addition: shared body of `Create` / `CreateF` (cache key plus the real pixel size). */
+    [[nodiscard]] static boost::SharedPtrRaw<CD3DFont> CreateScaled(std::int32_t cacheKey, float pixelSize, gpg::StrArg faceName);
+
+    /**
      * Address: 0x00425500 (FUN_00425500, ??0CD3DFont@Moho@@AAE@PAX@Z)
      *
      * HFONT
@@ -163,6 +172,8 @@ namespace moho
     KerningPairVector mKerningPairs; // +0x3C
     HDC mDeviceContext;              // +0x4C
     HBITMAP mBitmap;                 // +0x50
+    /** Editor addition: DirectWrite backend state for `ed:` fonts (moho/editor/EdTextBackend.h), null otherwise. */
+    void* mEdBackend = nullptr;
   };
 
   static_assert(sizeof(CD3DFont::SKerningPair) == 0x08, "moho::CD3DFont::SKerningPair size must be 0x08");

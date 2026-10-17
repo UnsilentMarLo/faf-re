@@ -178,288 +178,84 @@ namespace moho
 
 namespace moho
 {
-  template <>
-  class CScrLuaMetatableFactory<CLuaWldUIProvider> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CLuaWldUIProvider>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CLuaWldUIProvider>) == 0x8,
     "CScrLuaMetatableFactory<CLuaWldUIProvider> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CUIWorldMesh> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CUIWorldMesh>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CUIWorldMesh>) == 0x8,
     "CScrLuaMetatableFactory<CUIWorldMesh> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CUIWorldView> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CUIWorldView>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CUIWorldView>) == 0x8,
     "CScrLuaMetatableFactory<CUIWorldView> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CUIMapPreview> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CUIMapPreview>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CUIMapPreview>) == 0x8,
     "CScrLuaMetatableFactory<CUIMapPreview> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiControl> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00783070 (FUN_00783070, Moho::CScrLuaMetatableFactory<Moho::CMauiControl>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiControl`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiControl>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiControl>) == 0x8,
     "CScrLuaMetatableFactory<CMauiControl> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiBorder> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00786180 (FUN_00786180, Moho::CScrLuaMetatableFactory<Moho::CMauiBorder>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiBorder`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiBorder>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiBorder>) == 0x8,
     "CScrLuaMetatableFactory<CMauiBorder> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiBitmap> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00783040 (FUN_00783040, Moho::CScrLuaMetatableFactory<Moho::CMauiBitmap>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiBitmap`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiBitmap>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiBitmap>) == 0x8,
     "CScrLuaMetatableFactory<CMauiBitmap> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiCursor> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x0078D940 (FUN_0078D940, Moho::CScrLuaMetatableFactory<Moho::CMauiCursor>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiCursor`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiCursor>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiCursor>) == 0x8,
     "CScrLuaMetatableFactory<CMauiCursor> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiLuaDragger> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x0078E660 (FUN_0078E660, Moho::CScrLuaMetatableFactory<Moho::CMauiLuaDragger>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiLuaDragger`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiLuaDragger>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiLuaDragger>) == 0x8,
     "CScrLuaMetatableFactory<CMauiLuaDragger> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiEdit> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00794E90 (FUN_00794E90, Moho::CScrLuaMetatableFactory<Moho::CMauiEdit>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiEdit`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiEdit>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiEdit>) == 0x8,
     "CScrLuaMetatableFactory<CMauiEdit> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiScrollbar> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x007A2470 (FUN_007A2470, Moho::CScrLuaMetatableFactory<Moho::CMauiScrollbar>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiScrollbar`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiScrollbar>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiScrollbar>) == 0x8,
     "CScrLuaMetatableFactory<CMauiScrollbar> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiText> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x007A4250 (FUN_007A4250, Moho::CScrLuaMetatableFactory<Moho::CMauiText>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiText`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiText>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiText>) == 0x8,
@@ -10263,9 +10059,9 @@ int moho::cfunc_CMauiEditSetNewFontL(
   if (lua_type(state->m_state, 3) != LUA_TNUMBER) {
     LuaPlus::LuaStackObject::TypeError(&pointSizeArg, "integer");
   }
-  const int pointSize = static_cast<int>(lua_tonumber(state->m_state, 3));
+  const float pointSize = static_cast<float>(lua_tonumber(state->m_state, 3)); // editor: fractional sizes reach `ed:` fonts
 
-  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::Create(pointSize, familyName);
+  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::CreateF(pointSize, familyName);
   if (createdFont.px != nullptr) {
     ApplyEditFontAndRefreshClip(edit, createdFont);
     lua_settop(state->m_state, 1);
@@ -13229,9 +13025,9 @@ int moho::cfunc_CMauiItemListSetNewFontL(
   if (lua_type(state->m_state, 3) != LUA_TNUMBER) {
     LuaPlus::LuaStackObject::TypeError(&pointSizeArg, "integer");
   }
-  const int pointSize = static_cast<int>(lua_tonumber(state->m_state, 3));
+  const float pointSize = static_cast<float>(lua_tonumber(state->m_state, 3)); // editor: fractional sizes reach `ed:` fonts
 
-  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::Create(pointSize, familyName);
+  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::CreateF(pointSize, familyName);
   if (createdFont.px != nullptr) {
     itemList->SetFont(createdFont.px);
     lua_settop(state->m_state, 1);
@@ -16702,9 +16498,9 @@ int moho::cfunc_CMauiTextSetNewFontL(
   if (lua_type(state->m_state, 3) != LUA_TNUMBER) {
     LuaPlus::LuaStackObject::TypeError(&pointSizeArg, "integer");
   }
-  const int pointSize = static_cast<int>(lua_tonumber(state->m_state, 3));
+  const float pointSize = static_cast<float>(lua_tonumber(state->m_state, 3)); // editor: fractional sizes reach `ed:` fonts
 
-  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::Create(pointSize, familyName);
+  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::CreateF(pointSize, familyName);
   if (createdFont.px != nullptr) {
     textControl->SetNewFont(createdFont.px);
     lua_settop(state->m_state, 1);
@@ -17513,8 +17309,10 @@ namespace moho
 
     std::size_t index = 0;
     for (wxWindow* const inputWindow : g_UIManager->mInputWindows) {
-      suspended[index].push_back(inputWindow->PopEventHandler(false));
-      suspended[index].push_back(inputWindow->PopEventHandler(false));
+      if (inputWindow != nullptr) { // editor: removed pop-out slots are null
+        suspended[index].push_back(inputWindow->PopEventHandler(false));
+        suspended[index].push_back(inputWindow->PopEventHandler(false));
+      }
       ++index;
     }
 
@@ -17524,8 +17322,10 @@ namespace moho
 
     index = 0;
     for (wxWindow* const inputWindow : g_UIManager->mInputWindows) {
-      inputWindow->PushEventHandler(suspended[index][1]);
-      inputWindow->PushEventHandler(suspended[index][0]);
+      if (inputWindow != nullptr) {
+        inputWindow->PushEventHandler(suspended[index][1]);
+        inputWindow->PushEventHandler(suspended[index][0]);
+      }
       ++index;
     }
   }

@@ -29,20 +29,7 @@ using namespace moho;
 
 namespace moho
 {
-  template <>
-  class CScrLuaMetatableFactory<ScriptedDecal> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<ScriptedDecal>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(sizeof(CScrLuaMetatableFactory<ScriptedDecal>) == 0x08, "CScrLuaMetatableFactory<ScriptedDecal> size must be 0x08");
 } // namespace moho

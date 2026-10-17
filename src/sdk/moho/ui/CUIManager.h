@@ -64,6 +64,20 @@ namespace moho
     [[nodiscard]] bool HasFrames() const override;
 
     /**
+     * Editor addition: registers an extra root-frame window (a pop-out panel window, moho/editor/EdPopout.cpp). Same as
+     * `AddFrame` except that the window is not counted as a display head (`mNumDisplayHeads`, what `GetNumRootFrames`
+     * reports, so FAF's multi-head Lua stays off) and, when a Lua state is already set, its root frame is created at once.
+     * Returns the frame index (stable: pop-out slots are nulled on removal, never erased).
+     */
+    int AddPopoutFrame(wxWindow* window);
+
+    /** Editor addition: unregisters a pop-out window: pops its handlers, destroys its root frame and nulls the slot. */
+    void RemovePopoutFrame(int index);
+
+    /** Editor addition: creates the root frame for `mInputWindows[head]` (the body of the `SetNewLuaState` loop). */
+    void CreateRootFrameForHead(std::size_t head);
+
+    /**
      * Address: 0x0084D010 (FUN_0084D010)
      */
     void ClearFrames() override;
@@ -160,6 +174,7 @@ namespace moho
     float mUnknown6C = 0.0f;                // +0x6C
     float mGCTime = 0.0f;                   // +0x70
     std::uint32_t mUnknown74 = 0;           // +0x74
+    std::uint32_t mNumDisplayHeads = 0;     // editor addition: windows registered by AddFrame (pop-outs excluded)
   };
 
   static_assert(sizeof(CUIManager::mFrames) == 0x20, "moho::CUIManager::mFrames size must be 0x20");

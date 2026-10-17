@@ -872,20 +872,7 @@ namespace moho
    */
   int cfunc_UnitGetStatL(LuaPlus::LuaState* state);
 
-  template <>
-  class CScrLuaMetatableFactory<Unit> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<Unit>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(sizeof(CScrLuaMetatableFactory<Unit>) == 0x08, "CScrLuaMetatableFactory<Unit> size must be 0x08");
 } // namespace moho
