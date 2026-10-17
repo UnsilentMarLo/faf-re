@@ -4,7 +4,8 @@
 //   ed_stratum_layer(i)                        -> path, tileSize, tileCount   i = 0..9 albedo (lower, strata 0..7, upper), 10..19 normals
 //   ed_stratum_set_layer(i, path, tileSize)    -> true | nil, message   loads the texture and applies the size against the map
 //   ed_stratum_read(stratum, x0, z0, x1, z1)   -> values, x0, z0, x1, z1   mask bytes of the rectangle (clamped), row major
-//   ed_stratum_write(stratum, x0, z0, x1, z1, values) -> number of cells written
+//   ed_stratum_write(stratum, x0, z0, x1, z1, values[, defer]) -> number of cells written; with defer the texture is not uploaded yet
+//   ed_stratum_flush()                         -> uploads the masks written with defer (a stroke of many dabs uploads once)
 //
 // The masks are the engine's own dynamic textures. They are locked with D3DLOCK_DISCARD, so the engine's partial UpdateStratumMask / GetStratumMask
 // cannot be used on a live texture: a copy of the eight masks is kept here (MaskShadow) and a change rewrites the whole mask texture it belongs
@@ -137,6 +138,7 @@ namespace
     int h = 0;
     std::vector<std::uint8_t> lane[8];
     bool loaded[2] = {false, false};
+    bool dirty[2] = {false, false};   // written to the shadow, not yet to the texture (ed_stratum_write with defer)
   };
 
   MaskShadow gShadow;
@@ -244,6 +246,7 @@ namespace
       }
     }
     (void)sheet->Unlock();
+    gShadow.dirty[which] = false;
   }
 
   void ClampMask(const moho::StratumMaterial& m, int& x0, int& z0, int& x1, int& z1)
@@ -334,8 +337,27 @@ namespace
           static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, value)));
       }
     }
-    UploadShadow(res, stratum / 4);
+    if (lua_toboolean(L, 7) != 0) {
+      gShadow.dirty[stratum / 4] = true;
+    } else {
+      UploadShadow(res, stratum / 4);
+    }
     lua_pushnumber(L, static_cast<lua_Number>(index - 1));
+    return 1;
+  }
+
+  int __cdecl cfunc_EdStratumFlush(lua_State* const L)
+  {
+    moho::IWldTerrainRes* const res = Terrain();
+    if (res != nullptr && gShadow.terrain == res) {
+      for (int which = 0; which < 2; ++which) {
+        if (gShadow.dirty[which] && gShadow.loaded[which]) {
+          UploadShadow(res, which);
+        }
+        gShadow.dirty[which] = false;
+      }
+    }
+    lua_pushnumber(L, 0);
     return 1;
   }
 
@@ -362,6 +384,7 @@ namespace
                                     "ed_stratum_shader([name]) -> terrain technique name (TTerrain: strata 0..3, TTerrainXP: all eight)");
       (void)new moho::CScrLuaBinder(set, "ed_stratum_read", &cfunc_EdStratumRead, nullptr, "<global>",
                                     "ed_stratum_read(stratum, x0, z0, x1, z1) -> values, x0, z0, x1, z1");
+      (void)new moho::CScrLuaBinder(set, "ed_stratum_flush", &cfunc_EdStratumFlush, nullptr, "<global>", "ed_stratum_flush() -> uploads deferred mask writes");
       (void)new moho::CScrLuaBinder(set, "ed_stratum_write", &cfunc_EdStratumWrite, nullptr, "<global>",
                                     "ed_stratum_write(stratum, x0, z0, x1, z1, values) -> cells written");
     }
