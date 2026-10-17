@@ -35,8 +35,11 @@
 // Props of the map file (the list the .scmap save writes; the simulation's own prop entities are created by
 // the sim callbacks in editor/runtime/schook/lua/SimCallbacks.lua):
 //   ed_prop_count()                      -> n
-//   ed_prop_get(i)                       -> blueprint, x, y, z, qw, qx, qy, qz        (i = 1..n)
-//   ed_prop_add(blueprint, x, y, z, heading) -> new index   (heading in radians about the up axis)
+//   ed_prop_get(i)                       -> blueprint, x, y, z, qw, qx, qy, qz, sx, sy, sz   (i = 1..n)
+//   ed_prop_add(blueprint, x, y, z, heading [, sx [, sy, sz]]) -> new index
+//                                           (heading in radians about the up axis; one scale value = uniform;
+//                                            the scale is kept in the map file's per-prop scale lanes)
+//   ed_prop_scale(i, sx [, sy, sz])      -> bool   (map data only; the sim entity is rescaled by the caller)
 //   ed_prop_move(i, x, y, z)             -> bool
 //   ed_prop_remove(i)                    -> bool
 //
@@ -524,7 +527,24 @@ namespace
     lua_pushnumber(state, e.mTransform.orient_.x);
     lua_pushnumber(state, e.mTransform.orient_.y);
     lua_pushnumber(state, e.mTransform.orient_.z);
-    return 8;
+    lua_pushnumber(state, e.mScale.x);
+    lua_pushnumber(state, e.mScale.y);
+    lua_pushnumber(state, e.mScale.z);
+    return 11;
+  }
+
+  // Scale arguments starting at `first`: none = (1,1,1), one = uniform, three = per axis.
+  [[nodiscard]] Wm3::Vec3f ScaleArgs(lua_State* const state, const int first)
+  {
+    if (lua_gettop(state) < first) {
+      return Wm3::Vec3f(1.0f, 1.0f, 1.0f);
+    }
+    const float sx = static_cast<float>(luaL_checknumber(state, first));
+    if (lua_gettop(state) < first + 2) {
+      return Wm3::Vec3f(sx, sx, sx);
+    }
+    return Wm3::Vec3f(
+      sx, static_cast<float>(luaL_checknumber(state, first + 1)), static_cast<float>(luaL_checknumber(state, first + 2)));
   }
 
   int __cdecl cfunc_EdPropAdd(lua_State* const state)
@@ -543,6 +563,7 @@ namespace
     entry.mBlueprintPath = msvc8::string(blueprint);
     entry.mTransform.pos_ = Wm3::Vec3f(x, y, z);
     entry.mTransform.orient_ = Wm3::Quatf(std::cos(heading * 0.5f), 0.0f, std::sin(heading * 0.5f), 0.0f);
+    entry.mScale = ScaleArgs(state, 6);
     props->mEntries.push_back(entry);
     lua_pushnumber(state, static_cast<lua_Number>(props->mEntries.size()));
     return 1;
@@ -561,6 +582,19 @@ namespace
       static_cast<float>(luaL_checknumber(state, 2)),
       static_cast<float>(luaL_checknumber(state, 3)),
       static_cast<float>(luaL_checknumber(state, 4)));
+    lua_pushboolean(state, 1);
+    return 1;
+  }
+
+  int __cdecl cfunc_EdPropScale(lua_State* const state)
+  {
+    moho::CWldProps* const props = LiveProps();
+    const int index = static_cast<int>(luaL_checknumber(state, 1)) - 1;
+    if (props == nullptr || index < 0 || static_cast<std::size_t>(index) >= props->mEntries.size()) {
+      lua_pushboolean(state, 0);
+      return 1;
+    }
+    props->mEntries[static_cast<std::size_t>(index)].mScale = ScaleArgs(state, 2);
     lua_pushboolean(state, 1);
     return 1;
   }
@@ -790,6 +824,7 @@ namespace
       (void)BindGlobal("ed_prop_add", &cfunc_EdPropAdd, "ed_prop_add(...)");
       (void)BindGlobal("ed_prop_move", &cfunc_EdPropMove, "ed_prop_move(...)");
       (void)BindGlobal("ed_prop_remove", &cfunc_EdPropRemove, "ed_prop_remove(...)");
+      (void)BindGlobal("ed_prop_scale", &cfunc_EdPropScale, "ed_prop_scale(...)");
       (void)BindGlobal("ed_decal_count", &cfunc_EdDecalCount, "ed_decal_count(...)");
       (void)BindGlobal("ed_decal_get", &cfunc_EdDecalGet, "ed_decal_get(...)");
       (void)BindGlobal("ed_decal_add", &cfunc_EdDecalAdd, "ed_decal_add(...)");

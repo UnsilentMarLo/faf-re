@@ -386,16 +386,19 @@ namespace
     const float wy2 = 2.0f * w * y;
     const float wz2 = 2.0f * w * z;
 
+    // EDITOR DIVERGENCE: this was the transpose of what QuaternionFromMatrixRows reads, so a map saved by the engine
+    // came back rotated the opposite way round (found by scripts/ed_prop_roundtrip.py). It is now the exact inverse
+    // of the loader, so load -> save keeps the three rotation vectors of every prop.
     matrix[0][0] = 1.0f - yy2 - zz2;
-    matrix[0][1] = wz2 + xy2;
-    matrix[0][2] = xz2 - wy2;
+    matrix[0][1] = xy2 - wz2;
+    matrix[0][2] = xz2 + wy2;
 
-    matrix[1][0] = xy2 - wz2;
+    matrix[1][0] = xy2 + wz2;
     matrix[1][1] = 1.0f - xx2 - zz2;
-    matrix[1][2] = yz2 + wx2;
+    matrix[1][2] = yz2 - wx2;
 
-    matrix[2][0] = wy2 + xz2;
-    matrix[2][1] = yz2 - wx2;
+    matrix[2][0] = xz2 - wy2;
+    matrix[2][1] = yz2 + wx2;
     matrix[2][2] = 1.0f - xx2 - yy2;
   }
 
@@ -989,6 +992,7 @@ namespace
     defaultEntry.mBlueprintPath.tidy(false, 0U);
     defaultEntry.mTransform.orient_ = Wm3::Quatf{1.0f, 0.0f, 0.0f, 0.0f};
     defaultEntry.mTransform.pos_ = Wm3::Vec3f{0.0f, 0.0f, 0.0f};
+    defaultEntry.mScale = Wm3::Vec3f{1.0f, 1.0f, 1.0f};
     return defaultEntry;
   }
 
@@ -1000,10 +1004,16 @@ namespace
    * storage record.
    */
   moho::CWldPropEntry*
-  PackWldPropEntry(moho::CWldPropEntry& outEntry, const moho::VTransform& transform, const msvc8::string& path)
+  PackWldPropEntry(
+    moho::CWldPropEntry& outEntry,
+    const moho::VTransform& transform,
+    const msvc8::string& path,
+    const Wm3::Vec3f& scale = Wm3::Vec3f{1.0f, 1.0f, 1.0f}
+  )
   {
     outEntry.mBlueprintPath.assign_owned(path.c_str());
     outEntry.mTransform = transform;
+    outEntry.mScale = scale;
     return &outEntry;
   }
 
@@ -1196,7 +1206,7 @@ namespace moho
    * What it does:
    * Reads world-prop entries from stream, converts matrix orientation to a
    * normalized quaternion lane, and stores packed 7-float transform data for
-   * each entry.
+   * each entry. Editor build: the per-prop scale lanes are stored as well.
    */
   bool CWldProps::Load(gpg::BinaryReader& reader, CBackgroundTaskControl& loadControl)
   {
@@ -1232,18 +1242,19 @@ namespace moho
       reader.ReadExact(matrix[2][1]);
       reader.ReadExact(matrix[2][2]);
 
-      float ignoredLane0 = 0.0f;
-      float ignoredLane1 = 0.0f;
-      float ignoredLane2 = 0.0f;
-      reader.ReadExact(ignoredLane0);
-      reader.ReadExact(ignoredLane1);
-      reader.ReadExact(ignoredLane2);
+      // The three scale lanes retail reads and drops (EDITOR DIVERGENCE: kept, see CWldPropEntry::mScale).
+      float scaleX = 1.0f;
+      float scaleY = 1.0f;
+      float scaleZ = 1.0f;
+      reader.ReadExact(scaleX);
+      reader.ReadExact(scaleY);
+      reader.ReadExact(scaleZ);
 
       QuaternionLanes orientation = QuaternionFromMatrixRows(matrix);
       NormalizeQuaternionLanes(orientation);
       transform.orient_ = Wm3::Quatf{orientation.w, orientation.x, orientation.y, orientation.z};
 
-      PackWldPropEntry(mEntries[index], transform, blueprintPath);
+      PackWldPropEntry(mEntries[index], transform, blueprintPath, Wm3::Vec3f{scaleX, scaleY, scaleZ});
     }
 
     return true;
@@ -1254,7 +1265,7 @@ namespace moho
    *
    * What it does:
    * Saves all prop entries as blueprint path + position + rotation matrix
-   * lanes in the world-map binary format.
+   * lanes + scale lanes in the world-map binary format (retail writes 1,1,1).
    */
   bool CWldProps::Save(gpg::BinaryWriter& writer) const
   {
@@ -1284,10 +1295,9 @@ namespace moho
       writer.Write(matrix[2][1]);
       writer.Write(matrix[2][2]);
 
-      constexpr float kScaleIdentity = 1.0f;
-      writer.Write(kScaleIdentity);
-      writer.Write(kScaleIdentity);
-      writer.Write(kScaleIdentity);
+      writer.Write(entry.mScale.x);
+      writer.Write(entry.mScale.y);
+      writer.Write(entry.mScale.z);
     }
 
     return true;

@@ -7063,7 +7063,21 @@ void Sim::Setup(LaunchInfoNew* const info)
     if (props != nullptr && !props->mEntries.empty()) {
       propCount = static_cast<int>(props->mEntries.size());
       for (const CWldPropEntry* entry = props->mEntries.begin(); entry != props->mEntries.end(); ++entry) {
-        (void)PROP_Create(this, entry->mTransform, entry->mBlueprintPath.c_str());
+        Prop* const prop = PROP_Create(this, entry->mTransform, entry->mBlueprintPath.c_str());
+        // EDITOR DIVERGENCE (prop-scale compat layer), same contract as the patched retail exe's MapPropScale
+        // (FA-Binary-Patches-mesh/section/MapPropScale.cpp): the record's scale multiplies the draw scale the
+        // blueprint gave the new prop (Display.UniformScale), per axis; 1,1,1, a lane that is not positive and a
+        // lane above 1000 leave the prop as it is.
+        const Wm3::Vec3f& scale = entry->mScale;
+        const bool scaleUsable = std::isfinite(scale.x) && std::isfinite(scale.y) && std::isfinite(scale.z) &&
+                                 scale.x > 0.0f && scale.y > 0.0f && scale.z > 0.0f && scale.x <= 1000.0f &&
+                                 scale.y <= 1000.0f && scale.z <= 1000.0f;
+        if (prop != nullptr && scaleUsable && (scale.x != 1.0f || scale.y != 1.0f || scale.z != 1.0f)) {
+          prop->mVarDat.mScale.x *= scale.x;
+          prop->mVarDat.mScale.y *= scale.y;
+          prop->mVarDat.mScale.z *= scale.z;
+          prop->ListLinkBefore(&mCoordEntities);
+        }
       }
     }
     gpg::Warnf(" NUM PROPS = %d", propCount);
