@@ -72,6 +72,22 @@ namespace
     return decals;
   }
 
+  // A grid of values on the height samples (brush weights): node (x0 + i, z0 + j) carries `v[j * nw + i]` (0..255) as the alpha of
+  // `rgb`, the cells between the nodes are drawn with smoothly interpolated alpha, draped over the terrain.
+  struct NodeGrid
+  {
+    int x0 = 0, z0 = 0, nw = 0, nh = 0;
+    std::vector<std::uint8_t> v;
+    std::uint32_t rgb = 0xFFFFFFu;
+    std::uint32_t maxAlpha = 0xC0u;
+  };
+
+  std::map<std::string, NodeGrid>& NodeGrids()
+  {
+    static std::map<std::string, NodeGrid> grids;
+    return grids;
+  }
+
   float gCam[16] = {};  // camera->viewport rows, for ed_overlay_stats
   float gDbg[8] = {};   // ed_overlay_stats: first vertex of the last drawn line (screen x, y, depth, half), viewport w, h, segments drawn, culled
 
@@ -481,12 +497,48 @@ namespace
     return 1;
   }
 
+  // ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha])  values: nw * nh numbers 0..255, row major
+  int __cdecl cfunc_EdOverlayNodes(lua_State* const L)
+  {
+    if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 6) != LUA_TTABLE) {
+      lua_pushnil(L);
+      lua_pushstring(L, "ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha])");
+      return 2;
+    }
+    NodeGrid g;
+    g.x0 = static_cast<int>(lua_tonumber(L, 2));
+    g.z0 = static_cast<int>(lua_tonumber(L, 3));
+    g.nw = static_cast<int>(lua_tonumber(L, 4));
+    g.nh = static_cast<int>(lua_tonumber(L, 5));
+    if (g.nw < 2 || g.nh < 2 || g.nw > 300 || g.nh > 300) {
+      lua_pushnil(L);
+      lua_pushstring(L, "ed_overlay_nodes: size out of range");
+      return 2;
+    }
+    const int count = g.nw * g.nh;
+    g.v.resize(static_cast<std::size_t>(count), 0);
+    for (int i = 0; i < count; ++i) {
+      lua_rawgeti(L, 6, i + 1);
+      const double value = lua_tonumber(L, -1);
+      g.v[static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, value)));
+      lua_settop(L, -2);
+    }
+    if (const char* const text = lua_tostring(L, 7)) {
+      g.rgb = static_cast<std::uint32_t>(std::strtoul(text, nullptr, 16)) & 0xFFFFFFu;
+    }
+    if (lua_type(L, 8) == LUA_TNUMBER) g.maxAlpha = static_cast<std::uint32_t>(std::max(0.0, std::min(255.0, lua_tonumber(L, 8))));
+    NodeGrids()[lua_tostring(L, 1)] = std::move(g);
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+
   int __cdecl cfunc_EdOverlayRemove(lua_State* const L)
   {
     if (const char* const id = lua_tostring(L, 1)) {
       Lines().erase(id);
       Icons().erase(id);
       Decals().erase(id);
+      NodeGrids().erase(id);
     }
     return 0;
   }
@@ -496,6 +548,7 @@ namespace
     Lines().clear();
     Icons().clear();
     Decals().clear();
+    NodeGrids().clear();
     return 0;
   }
 
@@ -512,7 +565,7 @@ namespace
 
   int __cdecl cfunc_EdOverlayCount(lua_State* const L)
   {
-    lua_pushnumber(L, static_cast<lua_Number>(Lines().size() + Icons().size() + Decals().size()));
+    lua_pushnumber(L, static_cast<lua_Number>(Lines().size() + Icons().size() + Decals().size() + NodeGrids().size()));
     return 1;
   }
 
@@ -537,6 +590,8 @@ namespace
       (void)new moho::CScrLuaBinder(set, "ed_overlay_slope_off", &cfunc_EdOverlaySlopeOff, nullptr, "<global>", "ed_overlay_slope_off()");
       (void)new moho::CScrLuaBinder(set, "ed_slope_at", &cfunc_EdSlopeAt, nullptr, "<global>",
                                     "ed_slope_at(kind, x, z, window) -> rating of the cell, in the engine's units");
+      (void)new moho::CScrLuaBinder(set, "ed_overlay_nodes", &cfunc_EdOverlayNodes, nullptr, "<global>",
+                                    "ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha]) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_decal", &cfunc_EdOverlayDecal, nullptr, "<global>",
                                     "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw]) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_icon", &cfunc_EdOverlayIcon, nullptr, "<global>",
@@ -557,7 +612,7 @@ namespace moho
   {
     void Render(GeomCamera3* const camera, CD3DPrimBatcher* const batcher)
     {
-      if ((Lines().empty() && Icons().empty() && Decals().empty() && !gSlope.on) || camera == nullptr || batcher == nullptr) {
+      if ((Lines().empty() && Icons().empty() && Decals().empty() && NodeGrids().empty() && !gSlope.on) || camera == nullptr || batcher == nullptr) {
         return;
       }
       for (int r = 0; r < 4; ++r) {
@@ -682,6 +737,52 @@ namespace moho
             }
             batcher->Flush();
           }
+        }
+      }
+
+      // value grids (brush weights) draped over the ground
+      if (!NodeGrids().empty()) {
+        if (moho::CHeightField* const field = ViewHeightField(); field != nullptr) {
+          batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
+          using V = CD3DPrimBatcher::Vertex;
+          for (const auto& entry : NodeGrids()) {
+            const NodeGrid& g = entry.second;
+            struct GNode { float x, y; bool ok; std::uint32_t color; };
+            std::vector<GNode> nd(static_cast<std::size_t>(g.nw) * static_cast<std::size_t>(g.nh));
+            for (int j = 0; j < g.nh; ++j) {
+              for (int i = 0; i < g.nw; ++i) {
+                const int wx = g.x0 + i;
+                const int wz = g.z0 + j;
+                GNode& n = nd[static_cast<std::size_t>(j) * g.nw + i];
+                const std::uint32_t alpha = (static_cast<std::uint32_t>(g.v[static_cast<std::size_t>(j) * g.nw + i]) * g.maxAlpha) / 255u;
+                n.color = (alpha << 24) | g.rgb;
+                const Wm3::Vector3f p{static_cast<float>(wx), static_cast<float>(field->GetHeightAt(wx, wz)) / 128.0f + 0.14f, static_cast<float>(wz)};
+                n.ok = camera->viewport.ProjectViewportDepthRow1(p) >= 1.0f;
+                if (n.ok) {
+                  const Wm3::Vector2f sp = camera->Project(p, 0.0f, vw, vh, 0.0f);
+                  n.x = sp.x;
+                  n.y = sp.y;
+                }
+              }
+            }
+            for (int j = 0; j + 1 < g.nh; ++j) {
+              for (int i = 0; i + 1 < g.nw; ++i) {
+                const GNode& a = nd[static_cast<std::size_t>(j) * g.nw + i];
+                const GNode& b = nd[static_cast<std::size_t>(j) * g.nw + i + 1];
+                const GNode& c = nd[static_cast<std::size_t>(j + 1) * g.nw + i + 1];
+                const GNode& d = nd[static_cast<std::size_t>(j + 1) * g.nw + i];
+                if (!(a.ok && b.ok && c.ok && d.ok)) {
+                  continue;
+                }
+                if (((a.color | b.color | c.color | d.color) >> 24) == 0u) {
+                  continue;
+                }
+                batcher->DrawQuad(V{a.x, a.y, 0.0f, a.color, 0.0f, 0.0f}, V{b.x, b.y, 0.0f, b.color, 1.0f, 0.0f},
+                                  V{c.x, c.y, 0.0f, c.color, 1.0f, 1.0f}, V{d.x, d.y, 0.0f, d.color, 0.0f, 1.0f});
+              }
+            }
+          }
+          batcher->Flush();
         }
       }
 

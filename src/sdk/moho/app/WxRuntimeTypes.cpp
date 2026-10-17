@@ -19,6 +19,7 @@
 #include "gpg/core/containers/String.h"
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/DeviceContext.hpp"
+#include "gpg/gal/Error.hpp"
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
 #include "moho/console/CConCommand.h"
 #include "moho/effects/rendering/SEfxCurve.h"
@@ -1692,7 +1693,17 @@ void moho::CBloomRenderer::DoBloom(const float amount)
   // the blur target. This seeds the blur target with the current back buffer.
   boost::shared_ptr<ID3DRenderTarget> writerLock;
   D3D_GetDevice()->GetWriterLock1(writerLock, static_cast<int>(mHead));
-  D3D_GetDevice()->SetViewRect(writerLock.get(), mRenderTargets[1].get(), nullptr, nullptr);
+  // EDITOR: the seeding blit can fail (D3DERR_INVALIDCALL: a bloom target that no longer matches the back buffer after a device
+  // reset or a resize). Nothing has been changed yet at this point, so the frame simply goes on without bloom.
+  try {
+    D3D_GetDevice()->SetViewRect(writerLock.get(), mRenderTargets[1].get(), nullptr, nullptr);
+  } catch (const gpg::gal::Error& error) {
+    static int sBloomBlitFailures = 0;
+    if (sBloomBlitFailures++ < 5) {
+      gpg::Warnf("bloom: seeding blit failed, frame goes on without bloom: %s(%d) %s", error.GetFile(), error.GetLine(), error.what());
+    }
+    return;
+  }
 
   // Save the current device viewport, then install a full-frame viewport
   // (0,0,width,height,0,1) for the post-process passes.
@@ -3441,6 +3452,12 @@ void moho::WRenViewport::D3DWindowOnDeviceRender()
     return;
   }
   gRenderLock = true;
+  // EDITOR: a frame that throws (a gal::Error from any pass) must not leave the lock set - every later paint would return at the
+  // check above and the window stays black for good while the rest of the app runs on. The guard releases it on every exit.
+  struct RenderLockGuard
+  {
+    ~RenderLockGuard() { gRenderLock = false; }
+  } renderLockGuard;
 
   ResetRenderUnitCountStat();
   (void)moho::D3D_GetDevice()->InitRenderEngineStats();
