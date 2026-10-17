@@ -6,8 +6,11 @@
 //   ed_stratum_read(stratum, x0, z0, x1, z1)   -> values, x0, z0, x1, z1   mask bytes of the rectangle (clamped), row major
 //   ed_stratum_write(stratum, x0, z0, x1, z1, values) -> number of cells written
 //
-// The masks are the engine's own dynamic textures (CWldTerrainRes::UpdateStratumMask / GetStratumMask); nothing is cached here, the
-// terrain renderer and the map writer read the same data. Undo of mask edits is the Lua side's (editor/strata.lua).
+// The masks are the engine's own dynamic textures. They are locked with D3DLOCK_DISCARD, so the engine's partial UpdateStratumMask / GetStratumMask
+// cannot be used on a live texture: a copy of the eight masks is kept here (MaskShadow) and a change rewrites the whole mask texture it belongs
+// to in one lock. The terrain renderer and the map writer read the same textures. Undo of mask edits is the Lua side's (editor/strata.lua).
+//
+//   ed_stratum_shader([name])                  -> terrain technique name; 'TTerrain' blends strata 0..3 only, 'TTerrainXP' all eight
 
 #include <algorithm>
 #include <cstdint>
@@ -16,6 +19,7 @@
 #include "lua/LuaPrimitives.h"
 #include "lua/LuaRuntimeTypes.h"
 #include "moho/lua/CScrLuaBinder.h"
+#include "moho/render/textures/CD3DDynamicTextureSheet.h"
 #include "moho/lua/CScrLuaInitForm.h"
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/CWldSession.h"
@@ -104,6 +108,125 @@ namespace
     return 1;
   }
 
+  // ed_stratum_shader([name]) -> the terrain technique name; with a name it is changed. 'TTerrain' blends strata 0..3 only (painted layers 1..4),
+  // 'TTerrainXP' all eight.
+  int __cdecl cfunc_EdStratumShader(lua_State* const L)
+  {
+    moho::IWldTerrainRes* const res = Terrain();
+    if (res == nullptr) {
+      lua_pushnil(L);
+      return 1;
+    }
+    moho::StratumMaterial& m = res->GetStratumMaterial();
+    if (const char* const name = lua_tostring(L, 1); name != nullptr && name[0] != '\0') {
+      m.mShaderName.assign(name);
+    }
+    lua_pushstring(L, m.mShaderName.c_str());
+    return 1;
+  }
+
+  // The mask textures are locked with D3DLOCK_DISCARD (CD3DDynamicTextureSheet::Lock on a dynamic texture), so a partial update through
+  // UpdateStratumMask leaves everything outside the rectangle undefined (it showed as diagonal stripes), and reading a lane back is not
+  // reliable either. The masks are therefore kept here, one byte array per stratum, read from the texture once, and a change always writes
+  // a whole mask texture (four lanes, one lock).
+  struct MaskShadow
+  {
+    const void* terrain = nullptr;
+    const void* sheet[2] = {nullptr, nullptr};
+    int w = 0;
+    int h = 0;
+    std::vector<std::uint8_t> lane[8];
+    bool loaded[2] = {false, false};
+  };
+
+  MaskShadow gShadow;
+
+  moho::CD3DDynamicTextureSheet* MaskSheet(moho::StratumMaterial& m, const int which)
+  {
+    return reinterpret_cast<moho::CD3DDynamicTextureSheet*>(which != 0 ? m.mStratumMask1.px : m.mStratumMask0.px);
+  }
+
+  // Makes the shadow of mask texture `which` (0: strata 0..3, 1: 4..7) valid. false when there is no mask.
+  bool EnsureShadow(moho::IWldTerrainRes* const res, const int which)
+  {
+    moho::StratumMaterial& m = res->GetStratumMaterial();
+    const int w = static_cast<int>(m.mStratumMaskWidth);
+    const int h = static_cast<int>(m.mStratumMaskHeight);
+    moho::CD3DDynamicTextureSheet* const sheet = MaskSheet(m, which);
+    if (sheet == nullptr || w <= 0 || h <= 0) {
+      return false;
+    }
+    if (gShadow.terrain != res || gShadow.w != w || gShadow.h != h || gShadow.sheet[which] != sheet) {
+      // another map, another size, or the engine replaced the texture (edit mode clones): the copy of this mask is stale
+      if (gShadow.terrain != res || gShadow.w != w || gShadow.h != h) {
+        gShadow = MaskShadow{};
+        gShadow.terrain = res;
+        gShadow.w = w;
+        gShadow.h = h;
+      }
+      gShadow.loaded[which] = false;
+      gShadow.sheet[which] = sheet;
+    }
+    if (gShadow.loaded[which]) {
+      return true;
+    }
+    const std::size_t count = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
+    std::uint32_t pitch = 0;
+    void* bits = nullptr;
+    if (!sheet->Lock(&pitch, &bits) || bits == nullptr) {
+      return false;
+    }
+    for (int i = 0; i < 4; ++i) {
+      gShadow.lane[which * 4 + i].assign(count, 0);
+    }
+    for (int y = 0; y < h; ++y) {
+      const auto* row = reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(bits) + static_cast<std::size_t>(y) * pitch);
+      for (int x = 0; x < w; ++x) {
+        const std::uint32_t px = row[x];
+        const std::size_t at = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
+        gShadow.lane[which * 4 + 0][at] = static_cast<std::uint8_t>((px >> 16) & 0xFFu);
+        gShadow.lane[which * 4 + 1][at] = static_cast<std::uint8_t>((px >> 8) & 0xFFu);
+        gShadow.lane[which * 4 + 2][at] = static_cast<std::uint8_t>(px & 0xFFu);
+        gShadow.lane[which * 4 + 3][at] = static_cast<std::uint8_t>((px >> 24) & 0xFFu);
+      }
+    }
+    // the lock may have discarded the contents: write back exactly what was read
+    for (int y = 0; y < h; ++y) {
+      auto* row = reinterpret_cast<std::uint32_t*>(static_cast<std::uint8_t*>(bits) + static_cast<std::size_t>(y) * pitch);
+      for (int x = 0; x < w; ++x) {
+        const std::size_t at = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
+        row[x] = (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 3][at]) << 24) | (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 0][at]) << 16) |
+                 (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 1][at]) << 8) | static_cast<std::uint32_t>(gShadow.lane[which * 4 + 2][at]);
+      }
+    }
+    (void)sheet->Unlock();
+    gShadow.loaded[which] = true;
+    return true;
+  }
+
+  // Writes the whole mask texture `which` from the shadow (one lock, four lanes).
+  void UploadShadow(moho::IWldTerrainRes* const res, const int which)
+  {
+    moho::StratumMaterial& m = res->GetStratumMaterial();
+    moho::CD3DDynamicTextureSheet* const sheet = MaskSheet(m, which);
+    const int w = gShadow.w;
+    const int h = gShadow.h;
+    std::uint32_t pitch = 0;
+    void* bits = nullptr;
+    if (sheet == nullptr || !sheet->Lock(&pitch, &bits) || bits == nullptr) {
+      return;
+    }
+    for (int y = 0; y < h; ++y) {
+      auto* row = reinterpret_cast<std::uint32_t*>(static_cast<std::uint8_t*>(bits) + static_cast<std::size_t>(y) * pitch);
+      for (int x = 0; x < w; ++x) {
+        const std::size_t at = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
+        row[x] = (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 3][at]) << 24) | (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 0][at]) << 16) |
+                 (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 1][at]) << 8) | static_cast<std::uint32_t>(gShadow.lane[which * 4 + 2][at]);
+      }
+    }
+    (void)sheet->Unlock();
+  }
+
   void ClampMask(const moho::StratumMaterial& m, int& x0, int& z0, int& x1, int& z1)
   {
     x0 = std::max(0, x0);
@@ -136,8 +259,11 @@ namespace
     if (x0 > x1 || z0 > z1) {
       return 1;
     }
-    std::vector<std::uint8_t> full(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0);
-    res->GetStratumMask(stratum, full.data());
+    if (!EnsureShadow(res, stratum / 4)) {
+      lua_pushnil(L);
+      return 1;
+    }
+    const std::vector<std::uint8_t>& full = gShadow.lane[stratum];
     int index = 1;
     for (int z = z0; z <= z1; ++z) {
       for (int x = x0; x <= x1; ++x, ++index) {
@@ -174,8 +300,11 @@ namespace
       lua_pushnumber(L, 0);
       return 1;
     }
-    // UpdateStratumMask indexes the source like the whole mask (row * width + column) and touches the rectangle only
-    std::vector<std::uint8_t> full(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0);
+    if (!EnsureShadow(res, stratum / 4)) {
+      lua_pushnumber(L, 0);
+      return 1;
+    }
+    std::vector<std::uint8_t>& full = gShadow.lane[stratum];
     int index = 1;
     for (int z = z0; z <= z1; ++z) {
       for (int x = x0; x <= x1; ++x, ++index) {
@@ -186,7 +315,7 @@ namespace
           static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, value)));
       }
     }
-    res->UpdateStratumMask(stratum, full.data(), x0, z0, x1 + 1, z1 + 1);
+    UploadShadow(res, stratum / 4);
     lua_pushnumber(L, static_cast<lua_Number>(index - 1));
     return 1;
   }
@@ -210,6 +339,8 @@ namespace
                                     "ed_stratum_layer(i) -> path, tileSize, tileCount (0..9 albedo, 10..19 normal)");
       (void)new moho::CScrLuaBinder(set, "ed_stratum_set_layer", &cfunc_EdStratumSetLayer, nullptr, "<global>",
                                     "ed_stratum_set_layer(i, path, tileSize) -> loaded | nil, message");
+      (void)new moho::CScrLuaBinder(set, "ed_stratum_shader", &cfunc_EdStratumShader, nullptr, "<global>",
+                                    "ed_stratum_shader([name]) -> terrain technique name (TTerrain: strata 0..3, TTerrainXP: all eight)");
       (void)new moho::CScrLuaBinder(set, "ed_stratum_read", &cfunc_EdStratumRead, nullptr, "<global>",
                                     "ed_stratum_read(stratum, x0, z0, x1, z1) -> values, x0, z0, x1, z1");
       (void)new moho::CScrLuaBinder(set, "ed_stratum_write", &cfunc_EdStratumWrite, nullptr, "<global>",
