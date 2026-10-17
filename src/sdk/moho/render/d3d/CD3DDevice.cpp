@@ -1666,7 +1666,13 @@ namespace moho
     try {
       gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
       (void)device->BeginScene();
-      device->Clear(true, true, true, 0xFF000000u, 1.0f, 0);
+      // EDITOR: the clear is expected to throw when no depth-stencil is bound (see above); the scene it opened must still be
+      // ended, or the device keeps an open scene and every following Present fails with D3DERR_INVALIDCALL (black window after
+      // a resize drag, where this runs once per paint).
+      try {
+        device->Clear(true, true, true, 0xFF000000u, 1.0f, 0);
+      } catch (const gpg::gal::Error&) {
+      }
       device->EndScene();
     } catch (const gpg::gal::Error&) {
     }
@@ -1731,6 +1737,12 @@ namespace moho
     } catch (const gpg::gal::Error& error) {
       gpg::Warnf("%s(%d) %s", error.GetFile(), error.GetLine(), error.what());
       mSceneStarted = 0;
+      // EDITOR: a scene left open by a failed frame makes every later Present fail; closing it (an error here just means none
+      // was open) lets the next frame recover.
+      try {
+        device->EndScene();
+      } catch (const gpg::gal::Error&) {
+      }
     }
   }
 

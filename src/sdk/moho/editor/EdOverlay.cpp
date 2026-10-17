@@ -29,6 +29,7 @@ namespace
     float maxPx = 14.0f;        // never thicker than this on screen
     bool closed = false;
     bool halo = true;           // dark underlay for contrast on any terrain
+    bool caps = true;           // squares at the vertices that join the ribbons (off for thin grid lines)
   };
 
   std::map<std::string, Polyline>& Lines()
@@ -50,6 +51,22 @@ namespace
   {
     static std::map<std::string, Icon> icons;
     return icons;
+  }
+
+  // A textured square lying on the ground (a splat): `size` world units across, centred on (x, y, z), projected like everything else.
+  struct Decal
+  {
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    float size = 2.0f;
+    float yaw = 0.0f;   // radians
+    std::uint32_t argb = 0xFFFFFFFFu;
+    std::string texture;
+  };
+
+  std::map<std::string, Decal>& Decals()
+  {
+    static std::map<std::string, Decal> decals;
+    return decals;
   }
 
   float gCam[16] = {};  // camera->viewport rows, for ed_overlay_stats
@@ -143,9 +160,11 @@ namespace
       if (!halo) gDbg[6] += 1.0f;
       Emit(b, a.x, a.y, half[i0], c.x, c.y, half[i1], color);
     }
-    for (std::size_t i = 0; i < n; ++i) {
-      if (sp[i].depth >= 1.0f) {
-        Cap(b, sp[i].x, sp[i].y, half[i], color);   // joins the ribbons at the vertices
+    if (pl.caps) {
+      for (std::size_t i = 0; i < n; ++i) {
+        if (sp[i].depth >= 1.0f) {
+          Cap(b, sp[i].x, sp[i].y, half[i], color);   // joins the ribbons at the vertices
+        }
       }
     }
   }
@@ -178,6 +197,7 @@ namespace
     if (lua_type(L, 6) == LUA_TNUMBER) pl.maxPx = static_cast<float>(lua_tonumber(L, 6));
     pl.closed = lua_toboolean(L, 7) != 0;
     if (lua_type(L, 8) != LUA_TNIL && lua_type(L, 8) != LUA_TNONE) pl.halo = lua_toboolean(L, 8) != 0;
+    if (lua_type(L, 9) != LUA_TNIL && lua_type(L, 9) != LUA_TNONE) pl.caps = lua_toboolean(L, 9) != 0;
     Lines()[lua_tostring(L, 1)] = std::move(pl);
     lua_pushboolean(L, 1);
     return 1;
@@ -206,11 +226,36 @@ namespace
     return 1;
   }
 
+  // ed_overlay_decal(id, x, y, z, texturePath, size [, color, yawRadians])
+  int __cdecl cfunc_EdOverlayDecal(lua_State* const L)
+  {
+    if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 5) != LUA_TSTRING) {
+      lua_pushnil(L);
+      lua_pushstring(L, "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw])");
+      return 2;
+    }
+    Decal decal;
+    decal.x = static_cast<float>(lua_tonumber(L, 2));
+    decal.y = static_cast<float>(lua_tonumber(L, 3));
+    decal.z = static_cast<float>(lua_tonumber(L, 4));
+    decal.texture = lua_tostring(L, 5);
+    if (lua_type(L, 6) == LUA_TNUMBER) decal.size = static_cast<float>(lua_tonumber(L, 6));
+    if (const char* const text = lua_tostring(L, 7)) {
+      const std::uint32_t v = static_cast<std::uint32_t>(std::strtoul(text, nullptr, 16));
+      decal.argb = (std::strlen(text) <= 6u) ? (0xFF000000u | v) : v;
+    }
+    if (lua_type(L, 8) == LUA_TNUMBER) decal.yaw = static_cast<float>(lua_tonumber(L, 8));
+    Decals()[lua_tostring(L, 1)] = std::move(decal);
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+
   int __cdecl cfunc_EdOverlayRemove(lua_State* const L)
   {
     if (const char* const id = lua_tostring(L, 1)) {
       Lines().erase(id);
       Icons().erase(id);
+      Decals().erase(id);
     }
     return 0;
   }
@@ -219,6 +264,7 @@ namespace
   {
     Lines().clear();
     Icons().clear();
+    Decals().clear();
     return 0;
   }
 
@@ -235,7 +281,7 @@ namespace
 
   int __cdecl cfunc_EdOverlayCount(lua_State* const L)
   {
-    lua_pushnumber(L, static_cast<lua_Number>(Lines().size() + Icons().size()));
+    lua_pushnumber(L, static_cast<lua_Number>(Lines().size() + Icons().size() + Decals().size()));
     return 1;
   }
 
@@ -255,6 +301,8 @@ namespace
       auto& set = UserLuaInitSet();
       (void)new moho::CScrLuaBinder(set, "ed_overlay_set", &cfunc_EdOverlaySet, nullptr, "<global>",
                                     "ed_overlay_set(id, points, color [, worldWidth, minPx, maxPx, closed, halo]) -> true | nil, message");
+      (void)new moho::CScrLuaBinder(set, "ed_overlay_decal", &cfunc_EdOverlayDecal, nullptr, "<global>",
+                                    "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw]) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_icon", &cfunc_EdOverlayIcon, nullptr, "<global>",
                                     "ed_overlay_icon(id, x, y, z, texturePath, sizePx [, color]) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_remove", &cfunc_EdOverlayRemove, nullptr, "<global>", "ed_overlay_remove(id)");
@@ -273,7 +321,7 @@ namespace moho
   {
     void Render(GeomCamera3* const camera, CD3DPrimBatcher* const batcher)
     {
-      if ((Lines().empty() && Icons().empty()) || camera == nullptr || batcher == nullptr) {
+      if ((Lines().empty() && Icons().empty() && Decals().empty()) || camera == nullptr || batcher == nullptr) {
         return;
       }
       for (int r = 0; r < 4; ++r) {
@@ -292,6 +340,47 @@ namespace moho
       batcher->SetViewMatrix(VMatrix4::Identity());
       (void)batcher->Setup("TAlphaBlendLinearSampleNoDepth");
       batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
+
+      // ground decals first (splats under everything else), one texture at a time
+      {
+        std::map<std::string, std::vector<const Decal*>> decalsByTexture;
+        for (const auto& entry : Decals()) {
+          decalsByTexture[entry.second.texture].push_back(&entry.second);
+        }
+        for (const auto& group : decalsByTexture) {
+          const boost::shared_ptr<CD3DBatchTexture> texture = CD3DBatchTexture::FromFile(group.first.c_str(), 0u);
+          if (!texture) {
+            continue;
+          }
+          batcher->SetTexture(texture);
+          for (const Decal* const d : group.second) {
+            const float h = d->size * 0.5f;
+            const float cs = std::cos(d->yaw);
+            const float sn = std::sin(d->yaw);
+            const float cornersX[4] = {-h, h, h, -h};
+            const float cornersZ[4] = {-h, -h, h, h};
+            Wm3::Vector2f s[4];
+            bool visible = true;
+            for (int i = 0; i < 4; ++i) {
+              const Wm3::Vector3f p{d->x + cornersX[i] * cs - cornersZ[i] * sn, d->y, d->z + cornersX[i] * sn + cornersZ[i] * cs};
+              if (camera->viewport.ProjectViewportDepthRow1(p) < 1.0f) {
+                visible = false;
+                break;
+              }
+              s[i] = camera->Project(p, 0.0f, vw, vh, 0.0f);
+            }
+            if (!visible) {
+              continue;
+            }
+            using V = CD3DPrimBatcher::Vertex;
+            batcher->DrawQuad(V{s[0].x, s[0].y, 0.0f, d->argb, 0.0f, 0.0f}, V{s[1].x, s[1].y, 0.0f, d->argb, 1.0f, 0.0f},
+                              V{s[2].x, s[2].y, 0.0f, d->argb, 1.0f, 1.0f}, V{s[3].x, s[3].y, 0.0f, d->argb, 0.0f, 1.0f});
+          }
+          batcher->Flush();
+        }
+        (void)batcher->Setup("TAlphaBlendLinearSampleNoDepth");
+        batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
+      }
 
       // dark halos first, then every line on top of all of them
       for (const auto& entry : Lines()) {

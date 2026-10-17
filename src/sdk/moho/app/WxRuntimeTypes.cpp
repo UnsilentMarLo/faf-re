@@ -1128,6 +1128,9 @@ namespace
     }
 
     frame.SetClientSize(width, height);
+    // EDITOR: this wx 2.4.2 frame can end up with a client area that differs from the size asked for; the back buffer and the
+    // viewport must follow the live client rect (see CScApp.cpp, same quirk at start-up).
+    frame.GetClientSize(&width, &height);
     if (moho::ren_Viewport != nullptr) {
       moho::ren_Viewport->SetSize(-1, -1, width, height, wxSIZE_USE_EXISTING);
     }
