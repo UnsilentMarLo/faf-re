@@ -146,6 +146,17 @@ namespace
     return reinterpret_cast<moho::CD3DDynamicTextureSheet*>(which != 0 ? m.mStratumMask1.px : m.mStratumMask0.px);
   }
 
+  // The texture the engine holds must be exactly w x h (a map loaded from a file brings its own mask textures): a larger mask size than the texture
+  // would write past the locked memory.
+  bool SheetFits(moho::CD3DDynamicTextureSheet* const sheet, const int w, const int h)
+  {
+    Wm3::Vector3f dim{};
+    if (sheet->GetDimensions(&dim) == nullptr) {
+      return false;
+    }
+    return static_cast<int>(dim.x) == w && static_cast<int>(dim.y) == h;
+  }
+
   // Makes the shadow of mask texture `which` (0: strata 0..3, 1: 4..7) valid. false when there is no mask.
   bool EnsureShadow(moho::IWldTerrainRes* const res, const int which)
   {
@@ -153,7 +164,7 @@ namespace
     const int w = static_cast<int>(m.mStratumMaskWidth);
     const int h = static_cast<int>(m.mStratumMaskHeight);
     moho::CD3DDynamicTextureSheet* const sheet = MaskSheet(m, which);
-    if (sheet == nullptr || w <= 0 || h <= 0) {
+    if (sheet == nullptr || w <= 0 || h <= 0 || !SheetFits(sheet, w, h)) {
       return false;
     }
     if (gShadow.terrain != res || gShadow.w != w || gShadow.h != h || gShadow.sheet[which] != sheet) {
@@ -174,6 +185,10 @@ namespace
     std::uint32_t pitch = 0;
     void* bits = nullptr;
     if (!sheet->Lock(&pitch, &bits) || bits == nullptr) {
+      return false;
+    }
+    if (pitch < static_cast<std::uint32_t>(w) * 4u) {
+      (void)sheet->Unlock();
       return false;
     }
     for (int i = 0; i < 4; ++i) {
@@ -213,7 +228,11 @@ namespace
     const int h = gShadow.h;
     std::uint32_t pitch = 0;
     void* bits = nullptr;
-    if (sheet == nullptr || !sheet->Lock(&pitch, &bits) || bits == nullptr) {
+    if (sheet == nullptr || !SheetFits(sheet, w, h) || !sheet->Lock(&pitch, &bits) || bits == nullptr) {
+      return;
+    }
+    if (pitch < static_cast<std::uint32_t>(w) * 4u) {
+      (void)sheet->Unlock();
       return;
     }
     for (int y = 0; y < h; ++y) {
