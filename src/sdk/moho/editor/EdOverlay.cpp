@@ -132,6 +132,105 @@ namespace
     return static_cast<float>(hi - lo) / 128.0f;
   }
 
+  // Ratings of a whole region, computed with the same rules in separable passes (cost ~ cells x window), then reduced to blocks of
+  // `stride` x `stride` cells (the steepest cell of a block wins, so a thin cliff never disappears when zoomed far out).
+  struct SlopeCache
+  {
+    bool valid = false;
+    int kind = -1, x0 = 0, z0 = 0, x1 = 0, z1 = 0, window = 0;
+    unsigned builtAt = 0;
+    int stride = 1, bw = 0, bh = 0;
+    std::vector<float> block;   // bw x bh, row major
+  };
+
+  SlopeCache gSlopeCache;
+  unsigned gSlopeFrame = 0;
+
+  void RebuildSlopeCache(moho::CHeightField& field, const SlopeLayer& L, const int x0, const int z0, const int x1, const int z1)
+  {
+    SlopeCache& c = gSlopeCache;
+    const int n = L.window;
+    const int cw = x1 - x0;
+    const int ch = z1 - z0;
+    const int sw = cw + n + 1;
+    const int sh = ch + n + 1;
+    std::vector<int> hs(static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh));
+    for (int j = 0; j < sh; ++j) {
+      for (int i = 0; i < sw; ++i) {
+        hs[static_cast<std::size_t>(j) * sw + i] = static_cast<int>(field.GetHeightAt(x0 + i, z0 + j));
+      }
+    }
+    auto H = [&](const int i, const int j) { return hs[static_cast<std::size_t>(j) * sw + i]; };
+
+    std::vector<float> val(static_cast<std::size_t>(cw) * ch, 0.0f);
+    if (L.kind == 0) {
+      // neighbouring-sample deltas inside the window: rows z in [j, j+n] of horizontal deltas over x in [i, i+n-1], and the same for columns
+      std::vector<int> a(static_cast<std::size_t>(cw) * sh, 0);        // a[z][i] = max over x in [i, i+n-1] of |h(x+1,z) - h(x,z)|
+      for (int z = 0; z < sh; ++z) {
+        for (int i = 0; i < cw; ++i) {
+          int m = 0;
+          for (int x = i; x < i + n; ++x) m = std::max(m, std::abs(H(x + 1, z) - H(x, z)));
+          a[static_cast<std::size_t>(z) * cw + i] = m;
+        }
+      }
+      std::vector<int> b(static_cast<std::size_t>(sw) * ch, 0);        // b[j][x] = max over z in [j, j+n-1] of |h(x,z+1) - h(x,z)|
+      for (int j = 0; j < ch; ++j) {
+        for (int x = 0; x < sw; ++x) {
+          int m = 0;
+          for (int z = j; z < j + n; ++z) m = std::max(m, std::abs(H(x, z + 1) - H(x, z)));
+          b[static_cast<std::size_t>(j) * sw + x] = m;
+        }
+      }
+      for (int j = 0; j < ch; ++j) {
+        for (int i = 0; i < cw; ++i) {
+          int m = 0;
+          for (int z = j; z <= j + n; ++z) m = std::max(m, a[static_cast<std::size_t>(z) * cw + i]);
+          for (int x = i; x <= i + n; ++x) m = std::max(m, b[static_cast<std::size_t>(j) * sw + x]);
+          val[static_cast<std::size_t>(j) * cw + i] = static_cast<float>(m) / 128.0f;
+        }
+      }
+    } else {
+      std::vector<int> rmax(static_cast<std::size_t>(cw) * sh), rmin(static_cast<std::size_t>(cw) * sh);
+      for (int z = 0; z < sh; ++z) {
+        for (int i = 0; i < cw; ++i) {
+          int hi = -(1 << 30), lo = 1 << 30;
+          for (int x = i; x <= i + n; ++x) {
+            hi = std::max(hi, H(x, z));
+            lo = std::min(lo, H(x, z));
+          }
+          rmax[static_cast<std::size_t>(z) * cw + i] = hi;
+          rmin[static_cast<std::size_t>(z) * cw + i] = lo;
+        }
+      }
+      for (int j = 0; j < ch; ++j) {
+        for (int i = 0; i < cw; ++i) {
+          int hi = -(1 << 30), lo = 1 << 30;
+          for (int z = j; z <= j + n; ++z) {
+            hi = std::max(hi, rmax[static_cast<std::size_t>(z) * cw + i]);
+            lo = std::min(lo, rmin[static_cast<std::size_t>(z) * cw + i]);
+          }
+          val[static_cast<std::size_t>(j) * cw + i] = static_cast<float>(hi - lo) / 128.0f;
+        }
+      }
+    }
+
+    c.stride = std::max(1, (std::max(cw, ch) + 189) / 190);
+    c.bw = (cw + c.stride - 1) / c.stride;
+    c.bh = (ch + c.stride - 1) / c.stride;
+    c.block.assign(static_cast<std::size_t>(c.bw) * c.bh, 0.0f);
+    for (int j = 0; j < ch; ++j) {
+      for (int i = 0; i < cw; ++i) {
+        float& blockValue = c.block[static_cast<std::size_t>(j / c.stride) * c.bw + (i / c.stride)];
+        blockValue = std::max(blockValue, val[static_cast<std::size_t>(j) * cw + i]);
+      }
+    }
+    c.kind = L.kind;
+    c.x0 = x0; c.z0 = z0; c.x1 = x1; c.z1 = z1;
+    c.window = n;
+    c.builtAt = gSlopeFrame;
+    c.valid = true;
+  }
+
   // green (gentle) -> yellow -> red (at the limit), purple beyond it; flat ground stays clear so the terrain shows through
   std::uint32_t SlopeColor(const float value, const float limit)
   {
@@ -521,37 +620,31 @@ namespace moho
 
       // slope gradient over the ground (under every line and icon)
       if (gSlope.on) {
+        ++gSlopeFrame;
         if (moho::CHeightField* const field = ViewHeightField(); field != nullptr) {
           const int mapW = field->Width();
           const int mapH = field->Height();
           const int x0 = std::max(0, gSlope.x0);
           const int z0 = std::max(0, gSlope.z0);
-          const int x1 = std::min(mapW - 1, std::min(gSlope.x1, x0 + 192));
-          const int z1 = std::min(mapH - 1, std::min(gSlope.z1, z0 + 192));
-          const int n = gSlope.window;
+          const int x1 = std::min(mapW - 1, std::min(gSlope.x1, x0 + 1100));
+          const int z1 = std::min(mapH - 1, std::min(gSlope.z1, z0 + 1100));
           if (x1 > x0 && z1 > z0) {
-            const int cw = x1 - x0;
-            const int ch = z1 - z0;
-            const int sw = cw + n + 1;
-            const int sh = ch + n + 1;
-            std::vector<int> hs(static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh));
-            for (int j = 0; j < sh; ++j) {
-              for (int i = 0; i < sw; ++i) {
-                hs[static_cast<std::size_t>(j) * static_cast<std::size_t>(sw) + static_cast<std::size_t>(i)] =
-                  static_cast<int>(field->GetHeightAt(x0 + i, z0 + j));
-              }
+            SlopeCache& c = gSlopeCache;
+            // re-rate when something changed, and now and then so terrain edits show
+            if (!c.valid || c.kind != gSlope.kind || c.x0 != x0 || c.z0 != z0 || c.x1 != x1 || c.z1 != z1 || c.window != gSlope.window ||
+                gSlopeFrame - c.builtAt > 20u) {
+              RebuildSlopeCache(*field, gSlope, x0, z0, x1, z1);
             }
-            auto sample = [&](const int sx, const int sz) {
-              return hs[static_cast<std::size_t>(sz - z0) * static_cast<std::size_t>(sw) + static_cast<std::size_t>(sx - x0)];
-            };
 
-            // the surface nodes, projected once
+            const int stride = c.stride;
             struct Node { float x, y; bool ok; };
-            std::vector<Node> nodes(static_cast<std::size_t>(cw + 1) * static_cast<std::size_t>(ch + 1));
-            for (int j = 0; j <= ch; ++j) {
-              for (int i = 0; i <= cw; ++i) {
-                const Wm3::Vector3f p{static_cast<float>(x0 + i), static_cast<float>(sample(x0 + i, z0 + j)) / 128.0f + 0.12f, static_cast<float>(z0 + j)};
-                Node& nd = nodes[static_cast<std::size_t>(j) * static_cast<std::size_t>(cw + 1) + static_cast<std::size_t>(i)];
+            std::vector<Node> nodes(static_cast<std::size_t>(c.bw + 1) * static_cast<std::size_t>(c.bh + 1));
+            for (int j = 0; j <= c.bh; ++j) {
+              for (int i = 0; i <= c.bw; ++i) {
+                const int wx = std::min(x1, x0 + i * stride);
+                const int wz = std::min(z1, z0 + j * stride);
+                const Wm3::Vector3f p{static_cast<float>(wx), static_cast<float>(field->GetHeightAt(wx, wz)) / 128.0f + 0.12f, static_cast<float>(wz)};
+                Node& nd = nodes[static_cast<std::size_t>(j) * (c.bw + 1) + i];
                 nd.ok = camera->viewport.ProjectViewportDepthRow1(p) >= 1.0f;
                 if (nd.ok) {
                   const Wm3::Vector2f sp = camera->Project(p, 0.0f, vw, vh, 0.0f);
@@ -563,29 +656,28 @@ namespace moho
 
             batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
             using V = CD3DPrimBatcher::Vertex;
-            for (int j = 0; j < ch; ++j) {
-              for (int i = 0; i < cw; ++i) {
-                const Node& a = nodes[static_cast<std::size_t>(j) * static_cast<std::size_t>(cw + 1) + static_cast<std::size_t>(i)];
-                const Node& b = nodes[static_cast<std::size_t>(j) * static_cast<std::size_t>(cw + 1) + static_cast<std::size_t>(i + 1)];
-                const Node& c = nodes[static_cast<std::size_t>(j + 1) * static_cast<std::size_t>(cw + 1) + static_cast<std::size_t>(i + 1)];
-                const Node& d = nodes[static_cast<std::size_t>(j + 1) * static_cast<std::size_t>(cw + 1) + static_cast<std::size_t>(i)];
-                if (!(a.ok && b.ok && c.ok && d.ok)) {
-                  continue;
-                }
-                const float minX = std::min(std::min(a.x, b.x), std::min(c.x, d.x));
-                const float maxX = std::max(std::max(a.x, b.x), std::max(c.x, d.x));
-                const float minY = std::min(std::min(a.y, b.y), std::min(c.y, d.y));
-                const float maxY = std::max(std::max(a.y, b.y), std::max(c.y, d.y));
-                if (maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh) {
-                  continue;
-                }
-                const float value = SlopeMetric(gSlope.kind, n, x0 + i, z0 + j, sample);
-                const std::uint32_t color = SlopeColor(value, gSlope.limit);
+            for (int j = 0; j < c.bh; ++j) {
+              for (int i = 0; i < c.bw; ++i) {
+                const std::uint32_t color = SlopeColor(c.block[static_cast<std::size_t>(j) * c.bw + i], gSlope.limit);
                 if ((color >> 24) == 0u) {
                   continue;
                 }
+                const Node& a = nodes[static_cast<std::size_t>(j) * (c.bw + 1) + i];
+                const Node& b = nodes[static_cast<std::size_t>(j) * (c.bw + 1) + i + 1];
+                const Node& cc = nodes[static_cast<std::size_t>(j + 1) * (c.bw + 1) + i + 1];
+                const Node& d = nodes[static_cast<std::size_t>(j + 1) * (c.bw + 1) + i];
+                if (!(a.ok && b.ok && cc.ok && d.ok)) {
+                  continue;
+                }
+                const float minX = std::min(std::min(a.x, b.x), std::min(cc.x, d.x));
+                const float maxX = std::max(std::max(a.x, b.x), std::max(cc.x, d.x));
+                const float minY = std::min(std::min(a.y, b.y), std::min(cc.y, d.y));
+                const float maxY = std::max(std::max(a.y, b.y), std::max(cc.y, d.y));
+                if (maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh) {
+                  continue;
+                }
                 batcher->DrawQuad(V{a.x, a.y, 0.0f, color, 0.0f, 0.0f}, V{b.x, b.y, 0.0f, color, 1.0f, 0.0f},
-                                  V{c.x, c.y, 0.0f, color, 1.0f, 1.0f}, V{d.x, d.y, 0.0f, color, 0.0f, 1.0f});
+                                  V{cc.x, cc.y, 0.0f, color, 1.0f, 1.0f}, V{d.x, d.y, 0.0f, color, 0.0f, 1.0f});
               }
             }
             batcher->Flush();
