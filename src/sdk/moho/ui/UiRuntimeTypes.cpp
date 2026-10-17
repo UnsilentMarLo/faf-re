@@ -21549,7 +21549,8 @@ void moho::CUIWorldView::Frame(
       }
     }
 
-    const bool iconsVisible = !mCameraRotationActive && !cam_Free;
+    // EDITOR: see CUIWorldView::Render - the free camera does not hide strategic icons
+    const bool iconsVisible = !mCameraRotationActive;
     if (iconsVisible != mIconsVisible) {
       mIconsVisible = iconsVisible;
       RunScriptWithBool("OnIconsVisible", iconsVisible);

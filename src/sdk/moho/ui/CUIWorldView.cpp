@@ -60,7 +60,9 @@ namespace moho
     const float frameSeconds
   )
   {
-    if (!mCameraRotationActive && !cam_Free) {
+    // EDITOR: the free camera (cam_Free, which only lifts the map-edge clamp here) never hides resource splats or strategic icons
+    // (user decision, MAP_EDITOR_DESIGN.md section 9); only an active mouse rotation does.
+    if (!mCameraRotationActive) {
       if (mEnableResourceRendering) {
         GeomCamera3* const resourceView = const_cast<GeomCamera3*>(&mCamera->CameraGetView());
         if (UI_RenResources) {

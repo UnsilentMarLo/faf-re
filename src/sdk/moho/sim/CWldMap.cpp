@@ -3286,7 +3286,10 @@ namespace moho
       ((stratumIndex / 4) != 0) ? ShareAsDynamicSheet(mStrata.mStratumMask1)
                                 : ShareAsDynamicSheet(mStrata.mStratumMask0);
 
-    GetTextureChannel(sourceTexture, kChannelMask[channel], kChannelShift[channel], outMask);
+    // EDITOR: kChannelMask keeps the OTHER lanes (UpdateTextureChannel ANDs the pixel with it); GetTextureChannel isolates its lane with
+    // `pixel & mask`, so it needs the complement. With the same table the read returned the other three lanes shifted (zeros for a
+    // painted mask), which only showed once the editor read a mask back.
+    GetTextureChannel(sourceTexture, ~kChannelMask[channel], kChannelShift[channel], outMask);
   }
 
   /**
