@@ -220,14 +220,26 @@ int moho::CUIManager::AddPopoutFrame(wxWindow* const window)
     return -1;
   }
 
-  mInputWindows.PushBack(window);
-  mHostWindows.PushBack(window);
-  const std::size_t head = mInputWindows.Size() - 1;
+  // Reuse a slot freed by RemovePopoutFrame (never one of the display heads), else append.
+  std::size_t head = mInputWindows.Size();
+  for (std::size_t index = mNumDisplayHeads; index < mInputWindows.Size(); ++index) {
+    if (mInputWindows[index] == nullptr) {
+      head = index;
+      break;
+    }
+  }
+  if (head == mInputWindows.Size()) {
+    mInputWindows.PushBack(window);
+    mHostWindows.PushBack(window);
+  } else {
+    mInputWindows[head] = window;
+    mHostWindows[head] = window;
+  }
 
   window->PushEventHandler(new CUIKeyHandler());
 
   if (mLuaState != nullptr) {
-    while (mFrames.Size() < head) {
+    while (mFrames.Size() <= head) {
       mFrames.PushBack(boost::shared_ptr<CMauiFrame>()); // keep the frame array aligned with the window array
     }
     CreateRootFrameForHead(head);
@@ -325,7 +337,11 @@ void moho::CUIManager::CreateRootFrameForHead(const std::size_t head)
       gpg::Die("CUIManager::Init - unable to create root frame for head %d.", static_cast<int>(head));
     }
 
-    mFrames.PushBack(frame);
+    if (head < mFrames.Size()) {
+      mFrames[head] = frame; // editor: a reused pop-out slot
+    } else {
+      mFrames.PushBack(frame);
+    }
 
     moho::CMauiFrame* const frameView = frame.get();
     frameView->mRenderPass = 8;

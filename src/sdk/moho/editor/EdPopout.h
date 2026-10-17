@@ -14,5 +14,8 @@ namespace moho
   {
     /** Draws every open pop-out into its swap chain and presents it. Main thread only, after the main frame's scene. */
     void RenderAll();
+
+    /** Destroys every open pop-out (windows, swap chains, root frames). Call before the UI manager and the device go away. */
+    void DestroyAll();
   } // namespace edpopout
 } // namespace moho

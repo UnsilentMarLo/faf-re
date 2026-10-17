@@ -19,6 +19,7 @@
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/DeviceContext.hpp"
 #include "gpg/gal/Error.hpp"
+#include "moho/editor/EdPopout.h"
 #include "moho/audio/AudioEngine.h"
 #include "moho/console/CConCommand.h"
 #include "moho/audio/IUserSoundManager.h"
@@ -1117,6 +1118,7 @@ void CScApp::Main()
  */
 void CScApp::Destroy()
 {
+  moho::edpopout::DestroyAll(); // editor: pop-out windows hold swap chains and UI root frames; they must go first
   if (!::SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, usingScreensaver, nullptr, 0)) {
     gpg::Warnf("unable to reset screensaver");
   }

@@ -1,6 +1,7 @@
 #include "moho/editor/EdPopout.h"
 
 #include <cstdio>
+#include <deque>
 #include <map>
 #include <string>
 #include <vector>
@@ -21,6 +22,7 @@
 #include "lua/LuaPrimitives.h"
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/lua/CScrLuaInitForm.h"
+#include "moho/app/WxRuntimeTypes.h"
 #include "moho/misc/Listener.h"
 #include "moho/render/WRenViewport.h"
 #include "moho/render/d3d/CD3DDevice.h"
@@ -35,6 +37,41 @@ namespace moho
   {
     struct Popout;
 
+    // A pop-out is redrawn when it is dirty (creation, resize, input, a device reset, `ed_window_invalidate` from Lua) and at
+    // least every kHeartbeatMs otherwise, so Lua-driven changes without an explicit invalidate still show up quickly.
+    constexpr unsigned long long kHeartbeatMs = 100;
+    constexpr int kDirtyFrames = 3; // a change is drawn for a few frames (layout settles, hover states)
+
+    struct Event
+    {
+      int id;
+      std::string kind;
+      int a;
+      int b;
+    };
+
+    std::deque<Event> gEvents;
+
+    void PostEvent(const int id, const char* const kind, const int a, const int b, const bool coalesce)
+    {
+      if (id < 0) {
+        return; // the window is still being created
+      }
+      if (coalesce) {
+        for (auto it = gEvents.rbegin(); it != gEvents.rend(); ++it) {
+          if (it->id == id && it->kind == kind) {
+            it->a = a;
+            it->b = b;
+            return;
+          }
+        }
+      }
+      if (gEvents.size() > 4096u) {
+        gEvents.pop_front();
+      }
+      gEvents.push_back(Event{id, kind, a, b});
+    }
+
     class EdPopoutView final : public wxWindow
     {
     public:
@@ -46,10 +83,23 @@ namespace moho
       void OnPaint(wxPaintEvent& event)
       {
         (void)event;
-        wxPaintDC dc(this); // validates the update region; the engine draws the content every frame
+        wxPaintDC dc(this); // validates the update region; the engine draws the content
+        MarkDirty();
       }
 
       void OnEraseBackground(wxEraseEvent& event) { (void)event; }
+
+      long MSWWindowProc(const WXUINT message, const WXWPARAM wParam, const WXLPARAM lParam) override
+      {
+        // Input and focus changes mean the UI may look different next frame (hover, caret, selection).
+        if ((message >= WM_MOUSEFIRST && message <= WM_MOUSELAST) || message == WM_KEYDOWN || message == WM_KEYUP || message == WM_CHAR ||
+            message == WM_SETFOCUS || message == WM_KILLFOCUS || message == WM_MOUSELEAVE) {
+          MarkDirty();
+        }
+        return wxWindow::MSWWindowProc(message, wParam, lParam);
+      }
+
+      void MarkDirty();
 
       Popout* mOwner;
 
@@ -71,6 +121,7 @@ namespace moho
 
       void OnClose(wxCloseEvent& event);
       void OnSize(wxSizeEvent& event);
+      void OnMove(wxMoveEvent& event);
 
       Popout* mOwner;
 
@@ -80,6 +131,7 @@ namespace moho
     BEGIN_EVENT_TABLE(EdPopoutFrame, wxFrame)
       EVT_CLOSE(EdPopoutFrame::OnClose)
       EVT_SIZE(EdPopoutFrame::OnSize)
+      EVT_MOVE(EdPopoutFrame::OnMove)
     END_EVENT_TABLE()
 
     struct Popout
@@ -91,12 +143,22 @@ namespace moho
       IDirect3DSurface9* back = nullptr;
       int chainWidth = 0;
       int chainHeight = 0;
+      int dirty = kDirtyFrames;
+      unsigned long long lastDrawMs = 0;
+      bool deferClose = false; // true: the X button only posts a 'close' event, Lua decides (re-dock panels, then destroy)
       std::string capturePath;
       std::string lastError;
     };
 
     std::map<int, Popout*> gPopouts;
     unsigned long gFramesDrawn = 0;
+
+    void EdPopoutView::MarkDirty()
+    {
+      if (mOwner != nullptr) {
+        mOwner->dirty = kDirtyFrames;
+      }
+    }
 
     CUIManager* UiManager()
     {
@@ -161,6 +223,7 @@ namespace moho
       }
       p.chainWidth = width;
       p.chainHeight = height;
+      p.dirty = kDirtyFrames;
       p.lastError.clear();
       return true;
     }
@@ -216,7 +279,13 @@ namespace moho
     void EdPopoutFrame::OnClose(wxCloseEvent& event)
     {
       (void)event;
-      DestroyPopout(mOwner); // Destroy() of this frame is issued there
+      if (mOwner == nullptr) {
+        return;
+      }
+      PostEvent(mOwner->id, "close", 0, 0, false);
+      if (!mOwner->deferClose) {
+        DestroyPopout(mOwner); // Destroy() of this frame is issued there
+      }
     }
 
     void EdPopoutFrame::OnSize(wxSizeEvent& event)
@@ -224,12 +293,81 @@ namespace moho
       event.Skip();
       if (mOwner != nullptr && mOwner->view != nullptr) {
         mOwner->view->SetSize(GetClientSize()); // the child fills the frame; the chain follows in RenderAll
+        const wxSize client = GetClientSize();
+        mOwner->dirty = kDirtyFrames;
+        PostEvent(mOwner->id, "size", client.x, client.y, true);
       }
+    }
+
+    void EdPopoutFrame::OnMove(wxMoveEvent& event)
+    {
+      event.Skip();
+      if (mOwner != nullptr) {
+        const wxPoint position = GetPosition();
+        PostEvent(mOwner->id, "move", position.x, position.y, true);
+      }
+    }
+
+    // ---- monitors -------------------------------------------------------------------------------------------------------
+    struct MonitorInfo
+    {
+      int x, y, w, h, wx, wy, ww, wh;
+      bool primary;
+    };
+
+    BOOL CALLBACK MonitorEnum(HMONITOR monitor, HDC, LPRECT, LPARAM data)
+    {
+      MONITORINFO info{};
+      info.cbSize = sizeof(info);
+      if (GetMonitorInfoW(monitor, &info)) {
+        auto* const list = reinterpret_cast<std::vector<MonitorInfo>*>(data);
+        list->push_back(MonitorInfo{info.rcMonitor.left, info.rcMonitor.top, info.rcMonitor.right - info.rcMonitor.left,
+                                    info.rcMonitor.bottom - info.rcMonitor.top, info.rcWork.left, info.rcWork.top,
+                                    info.rcWork.right - info.rcWork.left, info.rcWork.bottom - info.rcWork.top,
+                                    (info.dwFlags & MONITORINFOF_PRIMARY) != 0});
+      }
+      return TRUE;
+    }
+
+    std::vector<MonitorInfo> Monitors()
+    {
+      std::vector<MonitorInfo> list;
+      EnumDisplayMonitors(nullptr, nullptr, &MonitorEnum, reinterpret_cast<LPARAM>(&list));
+      return list;
+    }
+
+    int MonitorIndexOf(HWND window)
+    {
+      HMONITOR target = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+      MONITORINFO info{};
+      info.cbSize = sizeof(info);
+      if (!GetMonitorInfoW(target, &info)) {
+        return -1;
+      }
+      const std::vector<MonitorInfo> list = Monitors();
+      for (std::size_t i = 0; i < list.size(); ++i) {
+        if (list[i].x == info.rcMonitor.left && list[i].y == info.rcMonitor.top) {
+          return static_cast<int>(i) + 1; // 1-based like ed_monitor_info
+        }
+      }
+      return -1;
     }
   } // namespace
 
   namespace edpopout
   {
+    void DestroyAll()
+    {
+      std::vector<Popout*> all;
+      for (auto& entry : gPopouts) {
+        all.push_back(entry.second);
+      }
+      for (Popout* const p : all) {
+        DestroyPopout(p);
+      }
+      gEvents.clear();
+    }
+
     void RenderAll()
     {
       if (gPopouts.empty()) {
@@ -242,6 +380,7 @@ namespace moho
         return;
       }
       CD3DPrimBatcher* const batcher = viewport->GetPrimBatcher();
+      const unsigned long long now = GetTickCount64();
 
       // Copy the ids: a close event handled while drawing must not invalidate the iteration.
       std::vector<int> ids;
@@ -262,11 +401,20 @@ namespace moho
         if (client.x <= 0 || client.y <= 0) {
           continue;
         }
-        if (p.chain == nullptr || p.chainWidth != client.x || p.chainHeight != client.y) {
+        const bool needChain = p.chain == nullptr || p.chainWidth != client.x || p.chainHeight != client.y;
+        const bool wantsCapture = !p.capturePath.empty();
+        if (!needChain && !wantsCapture && p.dirty <= 0 && now - p.lastDrawMs < kHeartbeatMs) {
+          continue; // nothing changed and the heartbeat is not due
+        }
+        if (needChain) {
           if (!CreateChain(p, client.x, client.y)) {
             continue;
           }
         }
+        if (p.dirty > 0) {
+          --p.dirty;
+        }
+        p.lastDrawMs = now;
 
         ui->ValidateFrame(p.id);
 
@@ -285,7 +433,7 @@ namespace moho
             (void)dev->EndScene();
           }
 
-          if (!p.capturePath.empty()) {
+          if (wantsCapture) {
             // GetRenderTargetData needs a system-memory surface of the same size and format as the back buffer.
             D3DSURFACE_DESC desc{};
             IDirect3DSurface9* system = nullptr;
@@ -389,7 +537,7 @@ namespace moho
       return 1;
     }
 
-    // ed_window_get_rect(id) -> x, y, w, h (outer), clientW, clientH, chainW, chainH, framesDrawn, lastError   (nil if unknown)
+    // ed_window_get_rect(id) -> x, y, w, h (outer), clientW, clientH, chainW, chainH, framesDrawn, lastError, monitor (1-based)   (nil if unknown)
     int __cdecl cfunc_EdWindowGetRect(lua_State* const state)
     {
       Popout* const p = Find(state, 1);
@@ -410,7 +558,8 @@ namespace moho
       lua_pushnumber(state, p->chainHeight);
       lua_pushnumber(state, static_cast<lua_Number>(gFramesDrawn));
       lua_pushstring(state, p->lastError.c_str());
-      return 10;
+      lua_pushnumber(state, MonitorIndexOf(reinterpret_cast<HWND>(p->frame->GetHWND())));
+      return 11;
     }
 
     // ed_window_set_rect(id, x, y, w, h) -> bool
@@ -423,11 +572,12 @@ namespace moho
       }
       p->frame->SetSize(static_cast<int>(lua_tonumber(state, 2)), static_cast<int>(lua_tonumber(state, 3)),
                         static_cast<int>(lua_tonumber(state, 4)), static_cast<int>(lua_tonumber(state, 5)));
+      p->dirty = kDirtyFrames;
       lua_pushboolean(state, 1);
       return 1;
     }
 
-    // ed_window_capture(id, path) -> bool   (the PNG is written by the next frame, just before the present)
+    // ed_window_capture(id, path) -> bool   (the PNG is written by the next frame, just before the present; absolute path, forward slashes)
     int __cdecl cfunc_EdWindowCapture(lua_State* const state)
     {
       Popout* const p = Find(state, 1);
@@ -441,6 +591,118 @@ namespace moho
       return 1;
     }
 
+    // ed_window_invalidate(id) -> bool   (redraw within the next frames; Lua calls it when a panel's content changed)
+    int __cdecl cfunc_EdWindowInvalidate(lua_State* const state)
+    {
+      Popout* const p = Find(state, 1);
+      if (p == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+      }
+      p->dirty = kDirtyFrames;
+      lua_pushboolean(state, 1);
+      return 1;
+    }
+
+    // ed_window_set_title(id, title) -> bool
+    int __cdecl cfunc_EdWindowSetTitle(lua_State* const state)
+    {
+      Popout* const p = Find(state, 1);
+      if (p == nullptr || p->frame == nullptr || !lua_isstring(state, 2)) {
+        lua_pushboolean(state, 0);
+        return 1;
+      }
+      p->frame->SetTitle(wxString(Widen(lua_tostring(state, 2)).c_str()));
+      lua_pushboolean(state, 1);
+      return 1;
+    }
+
+    // ed_window_set_defer_close(id, bool) -> bool   (true: the X button only posts a 'close' event and Lua destroys the window)
+    int __cdecl cfunc_EdWindowSetDeferClose(lua_State* const state)
+    {
+      Popout* const p = Find(state, 1);
+      if (p == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+      }
+      p->deferClose = lua_toboolean(state, 2) != 0;
+      lua_pushboolean(state, 1);
+      return 1;
+    }
+
+    // ed_window_poll_event() -> id, kind, a, b | nil     kinds: 'close', 'move' (x, y), 'size' (client w, h); move / size are coalesced
+    int __cdecl cfunc_EdWindowPollEvent(lua_State* const state)
+    {
+      if (gEvents.empty()) {
+        lua_pushnil(state);
+        return 1;
+      }
+      const Event e = gEvents.front();
+      gEvents.pop_front();
+      lua_pushnumber(state, e.id);
+      lua_pushstring(state, e.kind.c_str());
+      lua_pushnumber(state, e.a);
+      lua_pushnumber(state, e.b);
+      return 4;
+    }
+
+    // ed_main_window_rect() -> clientScreenX, clientScreenY, clientW, clientH, outerX, outerY, outerW, outerH   (the editor's main window; nil without one)
+    int __cdecl cfunc_EdMainWindowRect(lua_State* const state)
+    {
+      wxWindow* const main = sMainWindow;
+      if (main == nullptr) {
+        lua_pushnil(state);
+        return 1;
+      }
+      int cx = 0;
+      int cy = 0;
+      main->ClientToScreen(&cx, &cy);
+      const wxSize client = main->GetClientSize();
+      wxPoint position = main->GetPosition();
+      if (main->GetParent() != nullptr) {
+        position = main->GetParent()->ClientToScreen(position);
+      }
+      const wxSize size = main->GetSize();
+      lua_pushnumber(state, cx);
+      lua_pushnumber(state, cy);
+      lua_pushnumber(state, client.x);
+      lua_pushnumber(state, client.y);
+      lua_pushnumber(state, position.x);
+      lua_pushnumber(state, position.y);
+      lua_pushnumber(state, size.x);
+      lua_pushnumber(state, size.y);
+      return 8;
+    }
+
+    // ed_monitor_count() -> n
+    int __cdecl cfunc_EdMonitorCount(lua_State* const state)
+    {
+      lua_pushnumber(state, static_cast<lua_Number>(Monitors().size()));
+      return 1;
+    }
+
+    // ed_monitor_info(i) -> x, y, w, h, workX, workY, workW, workH, primary     (i = 1..n, screen coordinates)
+    int __cdecl cfunc_EdMonitorInfo(lua_State* const state)
+    {
+      const std::vector<MonitorInfo> list = Monitors();
+      const int i = static_cast<int>(lua_tonumber(state, 1)) - 1;
+      if (i < 0 || i >= static_cast<int>(list.size())) {
+        lua_pushnil(state);
+        return 1;
+      }
+      const MonitorInfo& m = list[static_cast<std::size_t>(i)];
+      lua_pushnumber(state, m.x);
+      lua_pushnumber(state, m.y);
+      lua_pushnumber(state, m.w);
+      lua_pushnumber(state, m.h);
+      lua_pushnumber(state, m.wx);
+      lua_pushnumber(state, m.wy);
+      lua_pushnumber(state, m.ww);
+      lua_pushnumber(state, m.wh);
+      lua_pushnumber(state, m.primary ? 1 : 0);
+      return 9;
+    }
+
     [[nodiscard]] CScrLuaInitFormSet& UserLuaInitSet()
     {
       if (CScrLuaInitFormSet* const set = SCR_FindLuaInitFormSet("User"); set != nullptr) {
@@ -450,17 +712,28 @@ namespace moho
       return fallbackSet;
     }
 
+    void Bind(const char* const name, int(__cdecl* const function)(lua_State*), const char* const help)
+    {
+      (void)new CScrLuaBinder(UserLuaInitSet(), name, function, nullptr, "<global>", help);
+    }
+
     struct EdPopoutLuaBootstrap
     {
       EdPopoutLuaBootstrap()
       {
-        (void)new CScrLuaBinder(UserLuaInitSet(), "ed_window_create", &cfunc_EdWindowCreate, nullptr, "<global>",
-                                "ed_window_create(x, y, w, h [, title]) -> id | nil, message");
-        (void)new CScrLuaBinder(UserLuaInitSet(), "ed_window_destroy", &cfunc_EdWindowDestroy, nullptr, "<global>", "ed_window_destroy(id) -> bool");
-        (void)new CScrLuaBinder(UserLuaInitSet(), "ed_window_get_rect", &cfunc_EdWindowGetRect, nullptr, "<global>",
-                                "ed_window_get_rect(id) -> x, y, w, h, clientW, clientH, chainW, chainH, framesDrawn, lastError");
-        (void)new CScrLuaBinder(UserLuaInitSet(), "ed_window_set_rect", &cfunc_EdWindowSetRect, nullptr, "<global>", "ed_window_set_rect(id, x, y, w, h) -> bool");
-        (void)new CScrLuaBinder(UserLuaInitSet(), "ed_window_capture", &cfunc_EdWindowCapture, nullptr, "<global>", "ed_window_capture(id, path) -> bool");
+        Bind("ed_window_create", &cfunc_EdWindowCreate, "ed_window_create(x, y, w, h [, title]) -> id | nil, message");
+        Bind("ed_window_destroy", &cfunc_EdWindowDestroy, "ed_window_destroy(id) -> bool");
+        Bind("ed_window_get_rect", &cfunc_EdWindowGetRect,
+             "ed_window_get_rect(id) -> x, y, w, h, clientW, clientH, chainW, chainH, framesDrawn, lastError, monitor");
+        Bind("ed_window_set_rect", &cfunc_EdWindowSetRect, "ed_window_set_rect(id, x, y, w, h) -> bool");
+        Bind("ed_window_capture", &cfunc_EdWindowCapture, "ed_window_capture(id, absolutePath) -> bool");
+        Bind("ed_window_invalidate", &cfunc_EdWindowInvalidate, "ed_window_invalidate(id) -> bool");
+        Bind("ed_window_set_title", &cfunc_EdWindowSetTitle, "ed_window_set_title(id, title) -> bool");
+        Bind("ed_window_set_defer_close", &cfunc_EdWindowSetDeferClose, "ed_window_set_defer_close(id, bool) -> bool");
+        Bind("ed_window_poll_event", &cfunc_EdWindowPollEvent, "ed_window_poll_event() -> id, kind, a, b | nil");
+        Bind("ed_main_window_rect", &cfunc_EdMainWindowRect, "ed_main_window_rect() -> clientScreenX, clientScreenY, clientW, clientH, outerX, outerY, outerW, outerH");
+        Bind("ed_monitor_count", &cfunc_EdMonitorCount, "ed_monitor_count() -> n");
+        Bind("ed_monitor_info", &cfunc_EdMonitorInfo, "ed_monitor_info(i) -> x, y, w, h, workX, workY, workW, workH, primary");
       }
     };
 
