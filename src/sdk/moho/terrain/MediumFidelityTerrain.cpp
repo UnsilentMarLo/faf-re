@@ -1758,4 +1758,14 @@ namespace moho
     }
     return object;
   }
+
+  // EDITOR: the water quad is built once at map load, at the water elevation of that moment (far below the map when the map has no water), so the
+  // editor rebuilds it after the water switch or an elevation changed.
+  void EdRefreshWaterSurfaceMedium(IWldTerrainRes* terrainResource)
+  {
+    if (sMediumFidelityWaterSurface != nullptr) {
+      (void)sMediumFidelityWaterSurface->InitVerts(terrainResource);
+    }
+  }
+
 } // namespace moho

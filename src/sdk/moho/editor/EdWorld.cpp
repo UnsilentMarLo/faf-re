@@ -25,7 +25,9 @@
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
+#include "moho/terrain/splat/CWldSplat.h"
 #include "moho/terrain/water/CWaterShaderProperties.h"
+#include "moho/terrain/water/WaterFactory.h"
 
 namespace
 {
@@ -148,6 +150,12 @@ namespace
     lua_settop(L, -2);
     if (lua_toboolean(L, 2) != 0) {
       t->UpdateWaterMap();
+      moho::EdRefreshWaterSurfaces(t);
+    }
+    // The renderer re-reads the numbers only when it rebuilds its render context, which it does when the camera moved, the terrain is in edit
+    // mode or the decal manager has pending changes (HighFidelityTerrain::UpdateRenderContext): with a still camera a change would not show.
+    if (moho::IDecalManager* const decals = t->GetDecalManager(); decals != nullptr) {
+      decals->MarkPendingChanges();
     }
     lua_pushboolean(L, 1);
     return 1;

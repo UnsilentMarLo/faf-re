@@ -71,4 +71,15 @@ namespace moho
     }
     return result;
   }
+
+  void EdRefreshWaterSurfaceHigh(IWldTerrainRes* terrainResource);
+  void EdRefreshWaterSurfaceMedium(IWldTerrainRes* terrainResource);
+  void EdRefreshWaterSurfaceLow(IWldTerrainRes* terrainResource);
+
+  void EdRefreshWaterSurfaces(IWldTerrainRes* const terrainResource)
+  {
+    EdRefreshWaterSurfaceHigh(terrainResource);
+    EdRefreshWaterSurfaceMedium(terrainResource);
+    EdRefreshWaterSurfaceLow(terrainResource);
+  }
 } // namespace moho
