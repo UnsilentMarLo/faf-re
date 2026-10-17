@@ -17,6 +17,9 @@
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/d3d/CD3DPrimBatcher.h"
 #include "moho/render/textures/CD3DBatchTexture.h"
+#include "moho/sim/CWldMap.h"
+#include "moho/sim/CWldSession.h"
+#include "moho/sim/STIMap.h"
 
 namespace
 {
@@ -71,6 +74,89 @@ namespace
 
   float gCam[16] = {};  // camera->viewport rows, for ed_overlay_stats
   float gDbg[8] = {};   // ed_overlay_stats: first vertex of the last drawn line (screen x, y, depth, half), viewport w, h, segments drawn, culled
+
+  // ---- slope view: the engine's own terrain ratings as a colour gradient over the ground ------------------------------------------------
+  //
+  // kind 0 "path": the rule a mobile footprint of `window` x `window` cells is checked with (STIMap::OccupancyCapsOfFootprintAt /
+  //   OCCUPY_MobileCheck): the largest height difference between neighbouring samples inside the window, in world units per cell,
+  //   against the footprint's MaxSlope (0.75 for every land, amphibious and hover footprint, lua/footprints.lua).
+  // kind 1 "build": the rule a structure is checked with (OCCUPY_CheckAreaFlatness): highest minus lowest sample over the skirt
+  //   (window x window cells, window + 1 samples per side), against the blueprint's Physics.MaxGroundVariation (1.1 for most).
+  struct SlopeLayer
+  {
+    bool on = false;
+    int kind = 0;
+    int x0 = 0, z0 = 0, x1 = 0, z1 = 0;   // cell rectangle [x0, x1) x [z0, z1)
+    int window = 1;
+    float limit = 0.75f;
+  };
+
+  SlopeLayer gSlope;
+
+  moho::CHeightField* ViewHeightField()
+  {
+    moho::CWldSession* const session = moho::WLD_GetActiveSession();
+    if (session == nullptr || session->mWldMap == nullptr || session->mWldMap->mTerrainRes == nullptr) {
+      return nullptr;
+    }
+    return session->mWldMap->mTerrainRes->GetHeightField();
+  }
+
+  // The rating of one cell from a sampler h(x, z) returning the height word of a sample.
+  template <class Sampler>
+  float SlopeMetric(const int kind, const int n, const int cx, const int cz, Sampler&& h)
+  {
+    if (kind == 0) {
+      int maxDelta = 0;
+      for (int z = cz; z <= cz + n; ++z) {
+        for (int x = cx; x < cx + n; ++x) {
+          maxDelta = std::max(maxDelta, std::abs(h(x + 1, z) - h(x, z)));
+        }
+      }
+      for (int x = cx; x <= cx + n; ++x) {
+        for (int z = cz; z < cz + n; ++z) {
+          maxDelta = std::max(maxDelta, std::abs(h(x, z + 1) - h(x, z)));
+        }
+      }
+      return static_cast<float>(maxDelta) / 128.0f;
+    }
+    int lo = 1 << 30;
+    int hi = -(1 << 30);
+    for (int z = cz; z <= cz + n; ++z) {
+      for (int x = cx; x <= cx + n; ++x) {
+        const int v = h(x, z);
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+      }
+    }
+    return static_cast<float>(hi - lo) / 128.0f;
+  }
+
+  // green (gentle) -> yellow -> red (at the limit), purple beyond it; flat ground stays clear so the terrain shows through
+  std::uint32_t SlopeColor(const float value, const float limit)
+  {
+    const float t = value / limit;
+    if (t > 1.0f) {
+      return 0xB8C018D8u;
+    }
+    if (t < 0.04f) {
+      return 0u;
+    }
+    float r, g, b;
+    if (t < 0.5f) {
+      const float f = t / 0.5f;
+      r = 60.0f + (240.0f - 60.0f) * f;
+      g = 200.0f + (220.0f - 200.0f) * f;
+      b = 70.0f + (40.0f - 70.0f) * f;
+    } else {
+      const float f = (t - 0.5f) / 0.5f;
+      r = 240.0f;
+      g = 220.0f + (50.0f - 220.0f) * f;
+      b = 40.0f;
+    }
+    const std::uint32_t a = 0x58u + static_cast<std::uint32_t>(0x40 * std::min(1.0f, t));
+    return (a << 24) | (static_cast<std::uint32_t>(r) << 16) | (static_cast<std::uint32_t>(g) << 8) | static_cast<std::uint32_t>(b);
+  }
 
   struct Pt
   {
@@ -250,6 +336,52 @@ namespace
     return 1;
   }
 
+  // ed_overlay_slope(kind, x0, z0, x1, z1, window, limit): show the slope gradient over the cell rectangle [x0, x1) x [z0, z1);
+  // kind 'path' (mobile footprint rule) or 'build' (structure ground variation).
+  int __cdecl cfunc_EdOverlaySlope(lua_State* const L)
+  {
+    const char* const kind = lua_tostring(L, 1);
+    if (kind == nullptr) {
+      lua_pushnil(L);
+      lua_pushstring(L, "ed_overlay_slope(kind, x0, z0, x1, z1, window, limit)");
+      return 2;
+    }
+    gSlope.kind = (std::strcmp(kind, "build") == 0) ? 1 : 0;
+    gSlope.x0 = static_cast<int>(lua_tonumber(L, 2));
+    gSlope.z0 = static_cast<int>(lua_tonumber(L, 3));
+    gSlope.x1 = static_cast<int>(lua_tonumber(L, 4));
+    gSlope.z1 = static_cast<int>(lua_tonumber(L, 5));
+    gSlope.window = std::max(1, std::min(16, static_cast<int>(lua_tonumber(L, 6))));
+    gSlope.limit = std::max(0.01f, static_cast<float>(lua_tonumber(L, 7)));
+    gSlope.on = true;
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+
+  int __cdecl cfunc_EdOverlaySlopeOff(lua_State* const)
+  {
+    gSlope.on = false;
+    return 0;
+  }
+
+  // ed_slope_at(kind, x, z, window) -> the engine's rating of the cell containing (x, z), or nil
+  int __cdecl cfunc_EdSlopeAt(lua_State* const L)
+  {
+    moho::CHeightField* const field = ViewHeightField();
+    const char* const kind = lua_tostring(L, 1);
+    if (field == nullptr || kind == nullptr) {
+      lua_pushnil(L);
+      return 1;
+    }
+    const int cx = static_cast<int>(std::floor(lua_tonumber(L, 2)));
+    const int cz = static_cast<int>(std::floor(lua_tonumber(L, 3)));
+    const int n = std::max(1, std::min(16, static_cast<int>(lua_tonumber(L, 4))));
+    const float v = SlopeMetric((std::strcmp(kind, "build") == 0) ? 1 : 0, n, cx, cz,
+                                [field](int x, int z) { return static_cast<int>(field->GetHeightAt(x, z)); });
+    lua_pushnumber(L, static_cast<lua_Number>(v));
+    return 1;
+  }
+
   int __cdecl cfunc_EdOverlayRemove(lua_State* const L)
   {
     if (const char* const id = lua_tostring(L, 1)) {
@@ -301,6 +433,11 @@ namespace
       auto& set = UserLuaInitSet();
       (void)new moho::CScrLuaBinder(set, "ed_overlay_set", &cfunc_EdOverlaySet, nullptr, "<global>",
                                     "ed_overlay_set(id, points, color [, worldWidth, minPx, maxPx, closed, halo]) -> true | nil, message");
+      (void)new moho::CScrLuaBinder(set, "ed_overlay_slope", &cfunc_EdOverlaySlope, nullptr, "<global>",
+                                    "ed_overlay_slope(kind, x0, z0, x1, z1, window, limit) -> true | nil, message");
+      (void)new moho::CScrLuaBinder(set, "ed_overlay_slope_off", &cfunc_EdOverlaySlopeOff, nullptr, "<global>", "ed_overlay_slope_off()");
+      (void)new moho::CScrLuaBinder(set, "ed_slope_at", &cfunc_EdSlopeAt, nullptr, "<global>",
+                                    "ed_slope_at(kind, x, z, window) -> rating of the cell, in the engine's units");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_decal", &cfunc_EdOverlayDecal, nullptr, "<global>",
                                     "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw]) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_icon", &cfunc_EdOverlayIcon, nullptr, "<global>",
@@ -321,7 +458,7 @@ namespace moho
   {
     void Render(GeomCamera3* const camera, CD3DPrimBatcher* const batcher)
     {
-      if ((Lines().empty() && Icons().empty() && Decals().empty()) || camera == nullptr || batcher == nullptr) {
+      if ((Lines().empty() && Icons().empty() && Decals().empty() && !gSlope.on) || camera == nullptr || batcher == nullptr) {
         return;
       }
       for (int r = 0; r < 4; ++r) {
@@ -380,6 +517,80 @@ namespace moho
         }
         (void)batcher->Setup("TAlphaBlendLinearSampleNoDepth");
         batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
+      }
+
+      // slope gradient over the ground (under every line and icon)
+      if (gSlope.on) {
+        if (moho::CHeightField* const field = ViewHeightField(); field != nullptr) {
+          const int mapW = field->Width();
+          const int mapH = field->Height();
+          const int x0 = std::max(0, gSlope.x0);
+          const int z0 = std::max(0, gSlope.z0);
+          const int x1 = std::min(mapW - 1, std::min(gSlope.x1, x0 + 192));
+          const int z1 = std::min(mapH - 1, std::min(gSlope.z1, z0 + 192));
+          const int n = gSlope.window;
+          if (x1 > x0 && z1 > z0) {
+            const int cw = x1 - x0;
+            const int ch = z1 - z0;
+            const int sw = cw + n + 1;
+            const int sh = ch + n + 1;
+            std::vector<int> hs(static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh));
+            for (int j = 0; j < sh; ++j) {
+              for (int i = 0; i < sw; ++i) {
+                hs[static_cast<std::size_t>(j) * static_cast<std::size_t>(sw) + static_cast<std::size_t>(i)] =
+                  static_cast<int>(field->GetHeightAt(x0 + i, z0 + j));
+              }
+            }
+            auto sample = [&](const int sx, const int sz) {
+              return hs[static_cast<std::size_t>(sz - z0) * static_cast<std::size_t>(sw) + static_cast<std::size_t>(sx - x0)];
+            };
+
+            // the surface nodes, projected once
+            struct Node { float x, y; bool ok; };
+            std::vector<Node> nodes(static_cast<std::size_t>(cw + 1) * static_cast<std::size_t>(ch + 1));
+            for (int j = 0; j <= ch; ++j) {
+              for (int i = 0; i <= cw; ++i) {
+                const Wm3::Vector3f p{static_cast<float>(x0 + i), static_cast<float>(sample(x0 + i, z0 + j)) / 128.0f + 0.12f, static_cast<float>(z0 + j)};
+                Node& nd = nodes[static_cast<std::size_t>(j) * static_cast<std::size_t>(cw + 1) + static_cast<std::size_t>(i)];
+                nd.ok = camera->viewport.ProjectViewportDepthRow1(p) >= 1.0f;
+                if (nd.ok) {
+                  const Wm3::Vector2f sp = camera->Project(p, 0.0f, vw, vh, 0.0f);
+                  nd.x = sp.x;
+                  nd.y = sp.y;
+                }
+              }
+            }
+
+            batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
+            using V = CD3DPrimBatcher::Vertex;
+            for (int j = 0; j < ch; ++j) {
+              for (int i = 0; i < cw; ++i) {
+                const Node& a = nodes[static_cast<std::size_t>(j) * static_cast<std::size_t>(cw + 1) + static_cast<std::size_t>(i)];
+                const Node& b = nodes[static_cast<std::size_t>(j) * static_cast<std::size_t>(cw + 1) + static_cast<std::size_t>(i + 1)];
+                const Node& c = nodes[static_cast<std::size_t>(j + 1) * static_cast<std::size_t>(cw + 1) + static_cast<std::size_t>(i + 1)];
+                const Node& d = nodes[static_cast<std::size_t>(j + 1) * static_cast<std::size_t>(cw + 1) + static_cast<std::size_t>(i)];
+                if (!(a.ok && b.ok && c.ok && d.ok)) {
+                  continue;
+                }
+                const float minX = std::min(std::min(a.x, b.x), std::min(c.x, d.x));
+                const float maxX = std::max(std::max(a.x, b.x), std::max(c.x, d.x));
+                const float minY = std::min(std::min(a.y, b.y), std::min(c.y, d.y));
+                const float maxY = std::max(std::max(a.y, b.y), std::max(c.y, d.y));
+                if (maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh) {
+                  continue;
+                }
+                const float value = SlopeMetric(gSlope.kind, n, x0 + i, z0 + j, sample);
+                const std::uint32_t color = SlopeColor(value, gSlope.limit);
+                if ((color >> 24) == 0u) {
+                  continue;
+                }
+                batcher->DrawQuad(V{a.x, a.y, 0.0f, color, 0.0f, 0.0f}, V{b.x, b.y, 0.0f, color, 1.0f, 0.0f},
+                                  V{c.x, c.y, 0.0f, color, 1.0f, 1.0f}, V{d.x, d.y, 0.0f, color, 0.0f, 1.0f});
+              }
+            }
+            batcher->Flush();
+          }
+        }
       }
 
       // dark halos first, then every line on top of all of them
