@@ -18,6 +18,22 @@
 //                                           returns the clamped x0,z0,x1,z1 after the array
 //   ed_terrain_write_rect(x0,z0,x1,z1, words) -> samples written   (words as returned by read_rect)
 //
+// Document and command stack (M1; moho/editor/MapDocument.h). The document owns the heights; edits are commands:
+//   ed_doc_attach()                      -> samplesX, samplesZ   (binds the document to the open session; a new
+//                                           session always calls it, see control.lua)
+//   ed_doc_height_write(x0,z0,x1,z1, words) -> samples that changed (undoable; words as read_rect returns them;
+//                                           unchanged samples are not recorded, 0 = no command)
+//   ed_cmd_begin(label) / ed_cmd_end()   edits in between merge into one undo step
+//   ed_cmd_undo() / ed_cmd_redo()        -> ok, x0, z0, x1, z1, label, verified   (rectangle that changed)
+//   ed_cmd_depth()                       -> undo steps, redo steps, dirty, revision
+//   ed_cmd_labels()                      -> undo label, redo label
+//   ed_cmd_clear()                       drops the history (the document keeps its state and dirty flag)
+//   ed_doc_mark_clean()                  the document equals what was saved
+//   ed_doc_checksum(x0,z0,x1,z1)         -> hex string, FNV-1a of the document's words over the rectangle
+//   (sim state) ed_sim_apply_pending()   -> n   applies queued height edits to the sim's field now (also done at
+//                                           the start of every beat)
+//   (sim state) ed_sim_checksum(x0,z0,x1,z1) -> hex string of the SIM's own field, comparable with ed_doc_checksum
+//
 // Map file:
 //   ed_map_save(path)                    -> bool   writes the live map as a .scmap (engine writer: terrain,
 //                                                  texturing, lighting, water, decals, props) to a disk path
@@ -65,6 +81,7 @@
 #include <vector>
 
 #include "lua/LuaRuntimeTypes.h"
+#include "moho/editor/EditorDocument.h"
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/path/PathTables.h"
 #include "moho/lua/CScrLuaInitForm.h"
@@ -219,38 +236,21 @@ namespace
     return static_cast<std::uint16_t>(v < 0.0f ? 0.0f : (v > 65535.0f ? 65535.0f : v));
   }
 
-  // Writes the inclusive sample rectangle [x0..x1] x [z0..z1] from `words` (row stride = x1 - x0 + 1) into
-  // both fields and refreshes error + normals.
+  // A write that is not an undoable command (tests, import): it goes through the document, which stays the truth and
+  // projects into the view field at once and into the sim's field between beats; the history is cleared (see
+  // MapDocument::WriteExternal). Undoable edits use ed_doc_height_write.
   void ApplyTerrainRect(const TerrainTargets& t, int x0, int z0, int x1, int z1, const std::vector<std::uint16_t>& words)
   {
-    gpg::Rect2i rect{};
+    (void)t;
+    if (!moho::editor::AttachDocument(false)) {
+      return;
+    }
+    moho::editor::CellRect rect;
     rect.x0 = x0;
     rect.z0 = z0;
     rect.x1 = x1;
     rect.z1 = z1;
-    const std::int32_t stride = x1 - x0 + 1;
-    moho::CHeightField* const fields[2] = {t.view, t.sim};
-    for (moho::CHeightField* const field : fields) {
-      if (field == nullptr) {
-        continue;
-      }
-      field->SetElevationRectRaw(rect, words.data(), stride);
-      field->UpdateError(rect);
-    }
-    // normals are rebuilt from the view field; one sample of margin so the edges blend
-    gpg::Rect2i dirty = rect;
-    dirty.x0 = std::max(0, x0 - 1);
-    dirty.z0 = std::max(0, z0 - 1);
-    dirty.x1 = x1 + 1;
-    dirty.z1 = z1 + 1;
-    t.res->NotifyMapChange(dirty);
-
-    // The renderer re-tessellates only when the camera moved, the terrain is in edit mode or the decal manager has
-    // pending changes (HighFidelityTerrain::UpdateRenderContext). Heights edited under a still camera would show as
-    // shading only (the normal map updates at once) until the camera moves, so request one rebuild.
-    if (moho::IDecalManager* const decals = t.res->GetDecalManager(); decals != nullptr) {
-      decals->MarkPendingChanges();
-    }
+    moho::editor::Document().WriteExternal(rect, words.data());
   }
 
   int __cdecl cfunc_EdTerrainInfo(lua_State* const state)
@@ -421,6 +421,159 @@ namespace
     return 1;
   }
 
+
+  // ---- document and command stack -------------------------------------------------------------------------
+
+  [[nodiscard]] moho::editor::CellRect RectArgs(lua_State* const state, const int first)
+  {
+    moho::editor::CellRect r;
+    r.x0 = static_cast<int>(luaL_checknumber(state, first));
+    r.z0 = static_cast<int>(luaL_checknumber(state, first + 1));
+    r.x1 = static_cast<int>(luaL_checknumber(state, first + 2));
+    r.z1 = static_cast<int>(luaL_checknumber(state, first + 3));
+    return r;
+  }
+
+  int __cdecl cfunc_EdDocAttach(lua_State* const state)
+  {
+    if (!moho::editor::AttachDocument(true)) {
+      lua_pushnil(state);
+      return 1;
+    }
+    lua_pushnumber(state, static_cast<lua_Number>(moho::editor::Document().Width()));
+    lua_pushnumber(state, static_cast<lua_Number>(moho::editor::Document().Height()));
+    return 2;
+  }
+
+  int __cdecl cfunc_EdDocHeightWrite(lua_State* const state)
+  {
+    const moho::editor::CellRect rect = RectArgs(state, 1);
+    luaL_checktype(state, 5, LUA_TTABLE);
+    if (!moho::editor::AttachDocument(false)) {
+      lua_pushnumber(state, 0);
+      return 1;
+    }
+    moho::editor::MapDocument& doc = moho::editor::Document();
+    if (rect.Empty() || rect.x0 < 0 || rect.z0 < 0 || rect.x1 >= doc.Width() || rect.z1 >= doc.Height()) {
+      lua_pushnumber(state, 0);
+      return 1;
+    }
+    const std::size_t count = rect.Count();
+    std::vector<std::uint16_t> words(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      lua_pushnumber(state, static_cast<lua_Number>(i + 1));
+      lua_gettable(state, 5);
+      words[i] = ClampWord(static_cast<float>(lua_tonumber(state, -1)));
+      lua_pop(state, 1);
+    }
+    lua_pushnumber(state, static_cast<lua_Number>(doc.EditHeights(rect, words.data())));
+    return 1;
+  }
+
+  int __cdecl cfunc_EdCmdBegin(lua_State* const state)
+  {
+    if (moho::editor::AttachDocument(false)) {
+      const char* const label = lua_tostring(state, 1);
+      moho::editor::Document().BeginStroke(label != nullptr ? label : "Edit");
+    }
+    return 0;
+  }
+
+  int __cdecl cfunc_EdCmdEnd(lua_State* const state)
+  {
+    (void)state;
+    if (moho::editor::Document().Valid()) {
+      moho::editor::Document().EndStroke();
+    }
+    return 0;
+  }
+
+  int HistoryStep(lua_State* const state, const bool undo)
+  {
+    if (!moho::editor::AttachDocument(false)) {
+      lua_pushboolean(state, 0);
+      return 1;
+    }
+    const moho::editor::HistoryResult r = undo ? moho::editor::Document().Undo() : moho::editor::Document().Redo();
+    lua_pushboolean(state, r.ok ? 1 : 0);
+    lua_pushnumber(state, r.bounds.x0);
+    lua_pushnumber(state, r.bounds.z0);
+    lua_pushnumber(state, r.bounds.x1);
+    lua_pushnumber(state, r.bounds.z1);
+    lua_pushstring(state, r.label.c_str());
+    lua_pushboolean(state, r.verified ? 1 : 0);
+    return 7;
+  }
+
+  int __cdecl cfunc_EdCmdUndo(lua_State* const state)
+  {
+    return HistoryStep(state, true);
+  }
+
+  int __cdecl cfunc_EdCmdRedo(lua_State* const state)
+  {
+    return HistoryStep(state, false);
+  }
+
+  int __cdecl cfunc_EdCmdDepth(lua_State* const state)
+  {
+    const moho::editor::MapDocument& doc = moho::editor::Document();
+    lua_pushnumber(state, static_cast<lua_Number>(doc.UndoDepth()));
+    lua_pushnumber(state, static_cast<lua_Number>(doc.RedoDepth()));
+    lua_pushboolean(state, doc.Dirty() ? 1 : 0);
+    lua_pushnumber(state, static_cast<lua_Number>(doc.Revision()));
+    return 4;
+  }
+
+  int __cdecl cfunc_EdCmdLabels(lua_State* const state)
+  {
+    const moho::editor::MapDocument& doc = moho::editor::Document();
+    lua_pushstring(state, doc.UndoLabel().c_str());
+    lua_pushstring(state, doc.RedoLabel().c_str());
+    return 2;
+  }
+
+  int __cdecl cfunc_EdCmdClear(lua_State* const state)
+  {
+    (void)state;
+    moho::editor::Document().ClearHistory();
+    return 0;
+  }
+
+  int __cdecl cfunc_EdDocMarkClean(lua_State* const state)
+  {
+    (void)state;
+    moho::editor::Document().MarkClean();
+    return 0;
+  }
+
+  int __cdecl cfunc_EdDocChecksum(lua_State* const state)
+  {
+    const moho::editor::CellRect rect = RectArgs(state, 1);
+    if (!moho::editor::AttachDocument(false)) {
+      lua_pushnil(state);
+      return 1;
+    }
+    const moho::editor::MapDocument& doc = moho::editor::Document();
+    lua_pushstring(state, moho::editor::HexChecksum(doc.Checksum(doc.Clamp(rect))).c_str());
+    return 1;
+  }
+
+  // sim state: lua_State -> Sim through the global user data, like ed_sim_terrain_changed
+  int __cdecl cfunc_EdSimApplyPending(lua_State* const state)
+  {
+    moho::Sim* const sim = (state != nullptr && state->l_G != nullptr) ? state->l_G->globalUserData : nullptr;
+    lua_pushnumber(state, static_cast<lua_Number>(moho::editor::ApplyPendingHeightEdits(sim)));
+    return 1;
+  }
+
+  int __cdecl cfunc_EdSimChecksum(lua_State* const state)
+  {
+    moho::Sim* const sim = (state != nullptr && state->l_G != nullptr) ? state->l_G->globalUserData : nullptr;
+    const moho::editor::CellRect rect = RectArgs(state, 1);
+    lua_pushstring(state, moho::editor::HexChecksum(moho::editor::SimFieldChecksum(sim, rect)).c_str());
+    return 1;
+  }
 
   int __cdecl cfunc_EdMapSave(lua_State* const state)
   {
@@ -825,6 +978,19 @@ namespace
       (void)BindGlobal("ed_prop_move", &cfunc_EdPropMove, "ed_prop_move(...)");
       (void)BindGlobal("ed_prop_remove", &cfunc_EdPropRemove, "ed_prop_remove(...)");
       (void)BindGlobal("ed_prop_scale", &cfunc_EdPropScale, "ed_prop_scale(...)");
+      (void)BindGlobal("ed_doc_attach", &cfunc_EdDocAttach, "ed_doc_attach() -> samplesX, samplesZ");
+      (void)BindGlobal("ed_doc_height_write", &cfunc_EdDocHeightWrite, "ed_doc_height_write(x0, z0, x1, z1, words) -> changed");
+      (void)BindGlobal("ed_cmd_begin", &cfunc_EdCmdBegin, "ed_cmd_begin(label)");
+      (void)BindGlobal("ed_cmd_end", &cfunc_EdCmdEnd, "ed_cmd_end()");
+      (void)BindGlobal("ed_cmd_undo", &cfunc_EdCmdUndo, "ed_cmd_undo() -> ok, x0, z0, x1, z1, label, verified");
+      (void)BindGlobal("ed_cmd_redo", &cfunc_EdCmdRedo, "ed_cmd_redo() -> ok, x0, z0, x1, z1, label, verified");
+      (void)BindGlobal("ed_cmd_depth", &cfunc_EdCmdDepth, "ed_cmd_depth() -> undo, redo, dirty, revision");
+      (void)BindGlobal("ed_cmd_labels", &cfunc_EdCmdLabels, "ed_cmd_labels() -> undoLabel, redoLabel");
+      (void)BindGlobal("ed_cmd_clear", &cfunc_EdCmdClear, "ed_cmd_clear()");
+      (void)BindGlobal("ed_doc_mark_clean", &cfunc_EdDocMarkClean, "ed_doc_mark_clean()");
+      (void)BindGlobal("ed_doc_checksum", &cfunc_EdDocChecksum, "ed_doc_checksum(x0, z0, x1, z1) -> hex");
+      (void)BindSimGlobal("ed_sim_apply_pending", &cfunc_EdSimApplyPending, "ed_sim_apply_pending() -> n");
+      (void)BindSimGlobal("ed_sim_checksum", &cfunc_EdSimChecksum, "ed_sim_checksum(x0, z0, x1, z1) -> hex");
       (void)BindGlobal("ed_decal_count", &cfunc_EdDecalCount, "ed_decal_count(...)");
       (void)BindGlobal("ed_decal_get", &cfunc_EdDecalGet, "ed_decal_get(...)");
       (void)BindGlobal("ed_decal_add", &cfunc_EdDecalAdd, "ed_decal_add(...)");

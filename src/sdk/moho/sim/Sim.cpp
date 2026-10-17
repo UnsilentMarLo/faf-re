@@ -9,6 +9,8 @@
 #include <array>
 #include <bit>
 #include <cmath>
+
+#include "moho/editor/EditorDocument.h"
 #include <cstdarg>
 #include <cstdio>
 #include <cstddef>
@@ -10483,6 +10485,10 @@ void Sim::AdvanceBeat(const int amt)
 
   Logf("********** beat %u **********\n", mCurBeat);
   RulesUpdateLuaState(mRules, mLuaState);
+
+  // EDITOR: height edits the editor committed since the last beat reach the sim's field here, on the sim thread
+  // (docs/projects/MAP_EDITOR_DESIGN.md, commit path); a single atomic read when nothing is queued.
+  (void)editor::ApplyPendingHeightEdits(this);
 
   if (IsDebugWindowEnabled() && mLuaState && mLuaState->m_state) {
     lua_sethook(mLuaState->m_state, GetDebugLuaHook(), 4, 0);

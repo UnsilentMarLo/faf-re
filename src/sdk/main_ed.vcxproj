@@ -1243,6 +1243,8 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q 
     <ClCompile Include="moho\ui\UiRuntimeTypeUpcastBridges.cpp" />
     <ClCompile Include="moho\misc\SessionStartup.cpp" />
     <ClCompile Include="moho\editor\EditorLua.cpp" />
+    <ClCompile Include="moho\editor\MapDocument.cpp" />
+    <ClCompile Include="moho\editor\EditorDocument.cpp" />
     <ClCompile Include="moho\editor\EdTextBackend.cpp" />
     <ClCompile Include="moho\editor\EdPopout.cpp" />
     <ClCompile Include="libpng\PngWriteRuntime.cpp">
