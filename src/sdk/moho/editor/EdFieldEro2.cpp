@@ -51,74 +51,140 @@ namespace moho::editor::field
 
     Grid Like(const Grid& g, const float fill = 0.0f) { return Grid(g.w, g.h, g.cell, g.ox, g.oz, fill); }
 
+    /** Buffers of Slide kept between calls (one call per iteration of an outer loop must not allocate and clear 12 MB every time). */
+    struct SlideScratch
+    {
+      std::vector<float> next, share, moved, surf;
+    };
+
     /**
      * Thermal slides of a loose layer over a bed. Surface = rock + loose (rock may be null: the loose layer is the whole surface and nothing caps the moved amount). The drop to a neighbour above
      * talus (rise per run, per source cell) slides; a cell never gives more than its loose layer holds. Order independent, conserves the total. `gain` / `lost` (optional) add what arrived /
-     * left in every step.
+     * left in every step. The inner cells run on a path without bounds checks (the neighbours are fixed offsets, the surface is formed once per step), the one cell wide border on the checked
+     * path; both compute every value with the same operations in the same order.
      */
-    void Slide(const int w, const int h, const float cell, const std::vector<float>* rock, std::vector<float>& loose, const std::vector<float>* talusMap, const float talusConst,
-               const std::vector<float>* rateMask, const float rate, const int iterations, std::vector<float>* gain, std::vector<float>* lost)
+    template <bool kRock, bool kMap>
+    void SlideT(const int w, const int h, const float cell, const float* const rock, std::vector<float>& loose, const float* const talusMap, const float talusConst, const float* const rateMask,
+                const float rate, const int iterations, float* const gain, float* const lost, SlideScratch& sc)
     {
       const std::size_t n = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
-      std::vector<float> next(loose), share(n, 0.0f), moved(n, 0.0f);
+      if (sc.next.size() != n) sc.next.assign(n, 0.0f);
+      if (sc.share.size() != n) sc.share.assign(n, 0.0f);
+      if (sc.moved.size() != n) sc.moved.assign(n, 0.0f);
+      if (kRock && sc.surf.size() != n) sc.surf.assign(n, 0.0f);
+      const std::ptrdiff_t off[8] = {-1, 1, -static_cast<std::ptrdiff_t>(w), static_cast<std::ptrdiff_t>(w), -static_cast<std::ptrdiff_t>(w) - 1, -static_cast<std::ptrdiff_t>(w) + 1,
+                                     static_cast<std::ptrdiff_t>(w) - 1, static_cast<std::ptrdiff_t>(w) + 1};
       for (int it = 0; it < iterations; ++it) {
+        float* const next = sc.next.data();
+        float* const share = sc.share.data();
+        float* const moved = sc.moved.data();
+        const float* const L = loose.data();
+        if (kRock) {
+          float* const sf = sc.surf.data();
+          Rows(h, [&](const int z0, const int z1) {
+            for (std::size_t i = static_cast<std::size_t>(z0) * static_cast<std::size_t>(w); i < static_cast<std::size_t>(z1) * static_cast<std::size_t>(w); ++i) sf[i] = rock[i] + L[i];
+          });
+        }
+        const float* const S = kRock ? sc.surf.data() : L;
+        // pass 1: what every cell gives away
+        const auto give = [&](const std::size_t i, const float c, const float talus, const float e0, const float e1, const float e2, const float e3, const float e4, const float e5, const float e6,
+                              const float e7) {
+          float maxEx = 0.0f, sumEx = 0.0f;
+          const float tA = talus * cell, tD = talus * cell * 1.41421356f;
+          const float ex[8] = {(c - e0) - tA, (c - e1) - tA, (c - e2) - tA, (c - e3) - tA, (c - e4) - tD, (c - e5) - tD, (c - e6) - tD, (c - e7) - tD};
+          for (int k = 0; k < 8; ++k) {
+            const float e = ex[k] > 0.0f ? ex[k] : 0.0f;   // adding 0 changes nothing: the same sums as with a branch
+            sumEx += e;
+            maxEx = std::max(maxEx, e);
+          }
+          float s = 0.0f, mv = 0.0f;
+          if (sumEx > 0.0f) {
+            float r = rate;
+            if (rateMask != nullptr) r *= Clamp01(rateMask[i]);
+            s = r * 0.5f * maxEx / sumEx;
+            mv = s * sumEx;
+            if (kRock && mv > L[i]) {
+              const float f = L[i] > 0.0f ? L[i] / mv : 0.0f;
+              s *= f;
+              mv = L[i];
+            }
+          }
+          share[i] = s;
+          moved[i] = mv;
+        };
         Rows(h, [&](const int z0, const int z1) {
           for (int z = z0; z < z1; ++z) {
+            const std::size_t row = static_cast<std::size_t>(z) * static_cast<std::size_t>(w);
             for (int x = 0; x < w; ++x) {
-              const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
-              const float c = (rock != nullptr ? (*rock)[i] : 0.0f) + loose[i];
-              const float talus = talusMap != nullptr ? (*talusMap)[i] : talusConst;
-              float maxEx = 0.0f, sumEx = 0.0f;
-              for (int k = 0; k < 8; ++k) {
-                const int nx = x + kDx[k], nz = z + kDz[k];
-                if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
-                const std::size_t j = static_cast<std::size_t>(nz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(nx);
-                const float hn = (rock != nullptr ? (*rock)[j] : 0.0f) + loose[j];
-                const float ex = (c - hn) - talus * cell * (k < 4 ? 1.0f : 1.41421356f);
-                if (ex > 0.0f) {
-                  sumEx += ex;
-                  maxEx = std::max(maxEx, ex);
+              const std::size_t i = row + static_cast<std::size_t>(x);
+              const float talus = kMap ? talusMap[i] : talusConst;
+              if (x > 0 && x < w - 1 && z > 0 && z < h - 1) {
+                const float* const p = S + i;
+                give(i, p[0], talus, p[off[0]], p[off[1]], p[off[2]], p[off[3]], p[off[4]], p[off[5]], p[off[6]], p[off[7]]);
+              } else {
+                // the border: a missing neighbour never gives or takes (its excess stays <= 0)
+                const float c = S[i];
+                const float big = 3.0e38f;
+                float e[8];
+                for (int k = 0; k < 8; ++k) {
+                  static const int dxs[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+                  static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+                  const int nx = x + dxs[k], nz = z + dzs[k];
+                  e[k] = (nx < 0 || nz < 0 || nx >= w || nz >= h) ? big : S[static_cast<std::size_t>(nz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(nx)];
                 }
+                give(i, c, talus, e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7]);
               }
-              float s = 0.0f, mv = 0.0f;
-              if (sumEx > 0.0f) {
-                float r = rate;
-                if (rateMask != nullptr) r *= Clamp01((*rateMask)[i]);
-                s = r * 0.5f * maxEx / sumEx;
-                mv = s * sumEx;
-                if (rock != nullptr && mv > loose[i]) {
-                  const float f = loose[i] > 0.0f ? loose[i] / mv : 0.0f;
-                  s *= f;
-                  mv = loose[i];
-                }
-              }
-              share[i] = s;
-              moved[i] = mv;
             }
           }
         });
+        // pass 2: what every cell receives
         Rows(h, [&](const int z0, const int z1) {
           for (int z = z0; z < z1; ++z) {
+            const std::size_t row = static_cast<std::size_t>(z) * static_cast<std::size_t>(w);
             for (int x = 0; x < w; ++x) {
-              const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
-              const float c = (rock != nullptr ? (*rock)[i] : 0.0f) + loose[i];
+              const std::size_t i = row + static_cast<std::size_t>(x);
+              const float c = S[i];
               float got = 0.0f;
-              for (int k = 0; k < 8; ++k) {
-                const int nx = x + kDx[k], nz = z + kDz[k];
-                if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
-                const std::size_t j = static_cast<std::size_t>(nz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(nx);
-                const float tj = talusMap != nullptr ? (*talusMap)[j] : talusConst;
-                const float hn = (rock != nullptr ? (*rock)[j] : 0.0f) + loose[j];
-                const float ex = (hn - c) - tj * cell * (k < 4 ? 1.0f : 1.41421356f);
-                if (ex > 0.0f) got += share[j] * ex;
+              const auto take = [&](const std::size_t j, const int k) {
+                const float tj = kMap ? talusMap[j] : talusConst;
+                const float ex = (S[j] - c) - tj * cell * (k < 4 ? 1.0f : 1.41421356f);
+                got += share[j] * (ex > 0.0f ? ex : 0.0f);
+              };
+              if (x > 0 && x < w - 1 && z > 0 && z < h - 1) {
+                for (int k = 0; k < 8; ++k) take(static_cast<std::size_t>(static_cast<std::ptrdiff_t>(i) + off[k]), k);
+              } else {
+                static const int dxs[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+                static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+                for (int k = 0; k < 8; ++k) {
+                  const int nx = x + dxs[k], nz = z + dzs[k];
+                  if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
+                  take(static_cast<std::size_t>(nz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(nx), k);
+                }
               }
-              next[i] = loose[i] - moved[i] + got;
-              if (gain != nullptr) (*gain)[i] += got;
-              if (lost != nullptr) (*lost)[i] += moved[i];
+              next[i] = L[i] - moved[i] + got;
+              if (gain != nullptr) gain[i] += got;
+              if (lost != nullptr) lost[i] += moved[i];
             }
           }
         });
-        std::swap(loose, next);
+        std::swap(loose, sc.next);
+      }
+    }
+
+    void Slide(const int w, const int h, const float cell, const std::vector<float>* rock, std::vector<float>& loose, const std::vector<float>* talusMap, const float talusConst,
+               const std::vector<float>* rateMask, const float rate, const int iterations, std::vector<float>* gain, std::vector<float>* lost, SlideScratch& sc)
+    {
+      const float* const rk = rock != nullptr ? rock->data() : nullptr;
+      const float* const tm = talusMap != nullptr ? talusMap->data() : nullptr;
+      const float* const rm = rateMask != nullptr ? rateMask->data() : nullptr;
+      float* const g = gain != nullptr ? gain->data() : nullptr;
+      float* const l = lost != nullptr ? lost->data() : nullptr;
+      if (rk != nullptr) {
+        if (tm != nullptr) SlideT<true, true>(w, h, cell, rk, loose, tm, talusConst, rm, rate, iterations, g, l, sc);
+        else SlideT<true, false>(w, h, cell, rk, loose, tm, talusConst, rm, rate, iterations, g, l, sc);
+      } else {
+        if (tm != nullptr) SlideT<false, true>(w, h, cell, rk, loose, tm, talusConst, rm, rate, iterations, g, l, sc);
+        else SlideT<false, false>(w, h, cell, rk, loose, tm, talusConst, rm, rate, iterations, g, l, sc);
       }
     }
 
@@ -144,7 +210,8 @@ namespace moho::editor::field
         for (std::size_t i = 0; i < n; ++i) talus[i] = lo + (hi - lo) * Clamp01(tmap->v[i]);
       }
       std::vector<float> loose = src->v, gain(n, 0.0f), lost(n, 0.0f);
-      Slide(w, h, src->cell, nullptr, loose, &talus, 0.0f, mask != nullptr ? &mask->v : nullptr, std::max(0.0f, std::min(1.0f, static_cast<float>(a.p.N("rate", 0.5)))), ItersOf(a, 30), &gain, &lost);
+      SlideScratch scratch;
+      Slide(w, h, src->cell, nullptr, loose, &talus, 0.0f, mask != nullptr ? &mask->v : nullptr, std::max(0.0f, std::min(1.0f, static_cast<float>(a.p.N("rate", 0.5)))), ItersOf(a, 30), &gain, &lost, scratch);
       const float sc = std::max(1e-4f, static_cast<float>(a.p.N("scree_scale", 1.0)));
       std::map<std::string, Grid> all;
       all["height"] = Like(*src);
@@ -183,6 +250,7 @@ namespace moho::editor::field
         rock[i] = src->v[i] - soil[i];
       }
       std::vector<float> lost(n, 0.0f);
+      SlideScratch sc;
       for (int it = 0; it < iterations; ++it) {
         Rows(h, [&](const int z0, const int z1) {
           for (int z = z0; z < z1; ++z) {
@@ -194,12 +262,10 @@ namespace moho::editor::field
             }
           }
         });
-        Slide(w, h, src->cell, &rock, soil, nullptr, soilTalus, nullptr, rate, 1, nullptr, &lost);
+        Slide(w, h, src->cell, &rock, soil, nullptr, soilTalus, nullptr, rate, 1, nullptr, &lost, sc);
         if (rockTalus > 0.0f && (it % rockEvery) == rockEvery - 1) {
-          std::vector<float> r2(rock);
           // the rock slides as a layer of its own (no cap); the soil rides along on top of it
-          Slide(w, h, src->cell, nullptr, r2, nullptr, rockTalus, nullptr, rate, 1, nullptr, nullptr);
-          rock = std::move(r2);
+          Slide(w, h, src->cell, nullptr, rock, nullptr, rockTalus, nullptr, rate, 1, nullptr, nullptr, sc);
         }
       }
       std::map<std::string, Grid> all;
@@ -245,7 +311,8 @@ namespace moho::editor::field
         }
       }
       std::vector<float> lost(n, 0.0f);
-      Slide(w, h, src->cell, &ground, snow, nullptr, talus, nullptr, rate, ItersOf(a, 40), nullptr, &lost);
+      SlideScratch sc;
+      Slide(w, h, src->cell, &ground, snow, nullptr, talus, nullptr, rate, ItersOf(a, 40), nullptr, &lost, sc);
       std::map<std::string, Grid> all;
       all["height"] = Like(*src);
       all["snow"] = Like(*src);
@@ -278,25 +345,28 @@ namespace moho::editor::field
       const float repose = std::max(0.05f, static_cast<float>(a.p.N("repose", 0.62)));
       const float sandConst = std::max(0.0f, static_cast<float>(a.p.N("sand", 0.5)));
       const int iterations = ItersOf(a, 40);
-      std::vector<float> sand(n), rock(n), wear(n, 0.0f);
+      std::vector<float> sand(n), rock(n), wear(n, 0.0f), surf(n), vel(n), take(n), next(n);
       for (std::size_t i = 0; i < n; ++i) {
         sand[i] = std::max(0.0f, sand0 != nullptr ? sand0->v[i] : sandConst);
         rock[i] = src->v[i] - sand[i];
       }
-      std::vector<float> flux(n, 0.0f), next(n);
       const float cell = src->cell;
+      const float awx = std::fabs(wx), awz = std::fabs(wz);
+      SlideScratch sc;
       for (int it = 0; it < iterations; ++it) {
-        // abrasion and the carrying speed from the slope along the wind (read-only pass, then the update: no cell reads what another thread writes)
-        std::vector<float> vel(n), take(n);
+        // the surface, then abrasion and the carrying speed from the slope along the wind (read-only pass, then the update: no cell reads what another thread writes)
+        Rows(h, [&](const int z0, const int z1) {
+          for (std::size_t i = static_cast<std::size_t>(z0) * static_cast<std::size_t>(w); i < static_cast<std::size_t>(z1) * static_cast<std::size_t>(w); ++i) surf[i] = rock[i] + sand[i];
+        });
         Rows(h, [&](const int z0, const int z1) {
           for (int z = z0; z < z1; ++z) {
+            const std::size_t row = static_cast<std::size_t>(z) * static_cast<std::size_t>(w);
+            const std::size_t rowU = static_cast<std::size_t>(std::max(0, z - 1)) * static_cast<std::size_t>(w);
+            const std::size_t rowD = static_cast<std::size_t>(std::min(h - 1, z + 1)) * static_cast<std::size_t>(w);
             for (int x = 0; x < w; ++x) {
-              const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
-              const auto H = [&](const int xx, const int zz) {
-                const std::size_t j = static_cast<std::size_t>(std::max(0, std::min(h - 1, zz))) * static_cast<std::size_t>(w) + static_cast<std::size_t>(std::max(0, std::min(w - 1, xx)));
-                return rock[j] + sand[j];
-              };
-              const float gx = (H(x + 1, z) - H(x - 1, z)) / (2.0f * cell), gz = (H(x, z + 1) - H(x, z - 1)) / (2.0f * cell);
+              const std::size_t i = row + static_cast<std::size_t>(x);
+              const std::size_t xl = static_cast<std::size_t>(std::max(0, x - 1)), xr = static_cast<std::size_t>(std::min(w - 1, x + 1));
+              const float gx = (surf[row + xr] - surf[row + xl]) / (2.0f * cell), gz = (surf[rowD + static_cast<std::size_t>(x)] - surf[rowU + static_cast<std::size_t>(x)]) / (2.0f * cell);
               const float ds = gx * wx + gz * wz;   // rise per run along the wind
               const float up = std::max(0.0f, ds);
               const float bare = 1.0f - SmoothStep(0.0f, 0.5f, sand[i]);
@@ -306,17 +376,13 @@ namespace moho::editor::field
           }
         });
         Rows(h, [&](const int z0, const int z1) {
-          for (int z = z0; z < z1; ++z) {
-            for (int x = 0; x < w; ++x) {
-              const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
-              rock[i] -= take[i];
-              sand[i] += take[i];
-              wear[i] += take[i];
-            }
+          for (std::size_t i = static_cast<std::size_t>(z0) * static_cast<std::size_t>(w); i < static_cast<std::size_t>(z1) * static_cast<std::size_t>(w); ++i) {
+            rock[i] -= take[i];
+            sand[i] += take[i];
+            wear[i] += take[i];
           }
         });
         // upwind transport of the sand (conservative, open downwind edges, nothing enters)
-        const float awx = std::fabs(wx), awz = std::fabs(wz);
         Rows(h, [&](const int z0, const int z1) {
           for (int z = z0; z < z1; ++z) {
             for (int x = 0; x < w; ++x) {
@@ -337,7 +403,8 @@ namespace moho::editor::field
           }
         });
         std::swap(sand, next);
-        Slide(w, h, cell, &rock, sand, nullptr, repose, nullptr, 0.5f, 1, nullptr, nullptr);
+        Slide(w, h, cell, &rock, sand, nullptr, repose, nullptr, 0.5f, 1, nullptr, nullptr, sc);
+        if (next.size() != n) next.assign(n, 0.0f);   // Slide trades its buffer with `sand`: keep our own scratch the right size
       }
       std::map<std::string, Grid> all;
       all["height"] = Like(*src);
@@ -373,22 +440,27 @@ namespace moho::editor::field
       const float maxCut = std::max(0.0f, static_cast<float>(a.p.N("max_cut", 25.0)));
       const float dtMax = std::max(1e-4f, static_cast<float>(a.p.N("dt", 1.0)));
       const int iterations = ItersOf(a, 200, 5000);
-      std::vector<float> bed = src->v, ice(n, 0.0f), cut(n, 0.0f), dif(n, 0.0f), gsl(n, 0.0f), next(n, 0.0f);
+      const int powKind = erodePow == 1.0f ? 1 : (erodePow == 2.0f ? 2 : (erodePow == 1.5f ? 3 : 0));
+      std::vector<float> bed = src->v, ice(n, 0.0f), cut(n, 0.0f), dif(n, 0.0f), gsl(n, 0.0f), next(n, 0.0f), surf(n, 0.0f);
+      const int chunks = (h + kChunk - 1) / kChunk;
+      std::vector<float> chunkMax(static_cast<std::size_t>(chunks), 0.0f);
+      const float cc = cell * cell;
       for (int it = 0; it < iterations; ++it) {
-        // diffusivity D = flow * H^5 * |grad s|^2 (n = 3) and the surface slope
-        const int chunks = (h + kChunk - 1) / kChunk;
-        std::vector<float> chunkMax(static_cast<std::size_t>(chunks), 0.0f);
+        // surface, then diffusivity D = flow * H^5 * |grad s|^2 (n = 3) and the surface slope
+        Rows(h, [&](const int z0, const int z1) {
+          for (std::size_t i = static_cast<std::size_t>(z0) * static_cast<std::size_t>(w); i < static_cast<std::size_t>(z1) * static_cast<std::size_t>(w); ++i) surf[i] = bed[i] + ice[i];
+        });
         ParallelFor(chunks, [&](const int c) {
           const int z0 = c * kChunk, z1 = std::min(h, z0 + kChunk);
           float mx = 0.0f;
           for (int z = z0; z < z1; ++z) {
+            const std::size_t row = static_cast<std::size_t>(z) * static_cast<std::size_t>(w);
+            const std::size_t rowU = static_cast<std::size_t>(std::max(0, z - 1)) * static_cast<std::size_t>(w);
+            const std::size_t rowD = static_cast<std::size_t>(std::min(h - 1, z + 1)) * static_cast<std::size_t>(w);
             for (int x = 0; x < w; ++x) {
-              const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
-              const auto S = [&](const int xx, const int zz) {
-                const std::size_t j = static_cast<std::size_t>(std::max(0, std::min(h - 1, zz))) * static_cast<std::size_t>(w) + static_cast<std::size_t>(std::max(0, std::min(w - 1, xx)));
-                return bed[j] + ice[j];
-              };
-              const float gx = (S(x + 1, z) - S(x - 1, z)) / (2.0f * cell), gz = (S(x, z + 1) - S(x, z - 1)) / (2.0f * cell);
+              const std::size_t i = row + static_cast<std::size_t>(x);
+              const std::size_t xl = static_cast<std::size_t>(std::max(0, x - 1)), xr = static_cast<std::size_t>(std::min(w - 1, x + 1));
+              const float gx = (surf[row + xr] - surf[row + xl]) / (2.0f * cell), gz = (surf[rowD + static_cast<std::size_t>(x)] - surf[rowU + static_cast<std::size_t>(x)]) / (2.0f * cell);
               const float s2 = gx * gx + gz * gz;
               const float hh = ice[i];
               const float h2 = hh * hh;
@@ -402,26 +474,26 @@ namespace moho::editor::field
         });
         float dmax = 0.0f;
         for (const float m : chunkMax) dmax = std::max(dmax, m);
-        const float dt = dmax > 0.0f ? std::min(dtMax, 0.2f * cell * cell / dmax) : dtMax;
+        const float dt = dmax > 0.0f ? std::min(dtMax, 0.2f * cc / dmax) : dtMax;
         Rows(h, [&](const int z0, const int z1) {
           for (int z = z0; z < z1; ++z) {
+            const std::size_t row = static_cast<std::size_t>(z) * static_cast<std::size_t>(w);
             for (int x = 0; x < w; ++x) {
-              const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
-              const float s = bed[i] + ice[i];
+              const std::size_t i = row + static_cast<std::size_t>(x);
+              const float s = surf[i];
               float div = 0.0f;
-              for (int k = 0; k < 4; ++k) {
-                const int nx = x + kDx[k], nz = z + kDz[k];
-                if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
-                const std::size_t j = static_cast<std::size_t>(nz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(nx);
-                div += 0.5f * (dif[i] + dif[j]) * ((bed[j] + ice[j]) - s) / (cell * cell);
-              }
+              if (x > 0) div += 0.5f * (dif[i] + dif[i - 1]) * (surf[i - 1] - s) / cc;
+              if (x < w - 1) div += 0.5f * (dif[i] + dif[i + 1]) * (surf[i + 1] - s) / cc;
+              if (z > 0) div += 0.5f * (dif[i] + dif[i - static_cast<std::size_t>(w)]) * (surf[i - static_cast<std::size_t>(w)] - s) / cc;
+              if (z < h - 1) div += 0.5f * (dif[i] + dif[i + static_cast<std::size_t>(w)]) * (surf[i + static_cast<std::size_t>(w)] - s) / cc;
               float b = grad * (s - ela);
               b = std::max(-ablMax, std::min(accMax * (accMask != nullptr ? Clamp01(accMask->v[i]) : 1.0f), b));
               const float nh = std::max(0.0f, std::min(maxIce, ice[i] + dt * (div + b)));
               next[i] = nh;
-              if (nh > 0.0f && erode > 0.0f) {
-                const float e = erode * std::pow(ice[i] * gsl[i], erodePow);
-                cut[i] = std::min(maxCut, cut[i] + dt * e);
+              if (nh > 0.0f && erode > 0.0f && ice[i] > 0.0f) {
+                const float v = ice[i] * gsl[i];
+                const float p = powKind == 1 ? v : (powKind == 2 ? v * v : (powKind == 3 ? v * std::sqrt(v) : std::pow(v, erodePow)));
+                cut[i] = std::min(maxCut, cut[i] + dt * (erode * p));
               }
             }
           }

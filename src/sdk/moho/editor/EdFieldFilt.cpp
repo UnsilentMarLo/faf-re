@@ -571,20 +571,19 @@ namespace moho::editor::field
         err = "wetness: mode must be wet, twi or area";
         return false;
       }
-      const double p = std::max(0.5, std::min(8.0, a.p.N("p", 1.1)));
+      const float pf = static_cast<float>(std::max(0.5, std::min(8.0, a.p.N("p", 1.1))));
       const float lo = static_cast<float>(a.p.N("lo", 3.0)), hi = static_cast<float>(a.p.N("hi", 11.0));
       const int w = src->w, h = src->h;
       const std::size_t n = src->Count();
-      std::vector<int> order(n);
-      std::iota(order.begin(), order.end(), 0);
+      std::vector<std::uint32_t> order;
+      SortDescending(src->v, order);
       const std::vector<float>& H = src->v;
-      std::sort(order.begin(), order.end(), [&](const int i, const int j) { return H[static_cast<std::size_t>(i)] != H[static_cast<std::size_t>(j)] ? H[static_cast<std::size_t>(i)] > H[static_cast<std::size_t>(j)] : i < j; });
       std::vector<float> area(n, 1.0f);
       static const int dxs[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
       static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
       const float cell = src->cell;
-      for (const int idx : order) {
-        const int x = idx % w, z = idx / w;
+      for (const std::uint32_t idx : order) {
+        const int x = static_cast<int>(idx % static_cast<std::uint32_t>(w)), z = static_cast<int>(idx / static_cast<std::uint32_t>(w));
         const float c = H[static_cast<std::size_t>(idx)];
         float wk[8];
         float sum = 0.0f;
@@ -595,7 +594,7 @@ namespace moho::editor::field
           const float drop = c - H[static_cast<std::size_t>(nz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(nx)];
           if (drop <= 0.0f) continue;
           const float dist = k < 4 ? 1.0f : 1.41421356f;
-          wk[k] = static_cast<float>(std::pow(static_cast<double>(drop / dist), p));
+          wk[k] = pf == 1.0f ? drop / dist : std::pow(drop / dist, pf);
           sum += wk[k];
         }
         if (sum <= 0.0f) continue;

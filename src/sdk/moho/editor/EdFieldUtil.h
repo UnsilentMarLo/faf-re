@@ -340,4 +340,32 @@ namespace moho::editor::field::t7
     if (mask == nullptr) return;
     Cells(out, [&](const int x, const int z) { return Lerp(src.At(x, z), out.At(x, z), Clamp01(mask->At(x, z))); });
   }
+
+  /** Cell indices by descending value, equal values by ascending index (LSD radix sort on the float bit patterns: stable, O(n), the same order as a sort by (value desc, index asc)). */
+  inline void SortDescending(const std::vector<float>& v, std::vector<std::uint32_t>& order)
+  {
+    const std::size_t n = v.size();
+    std::vector<std::uint32_t> key(n), tmpKey(n), tmpOrder(n);
+    order.resize(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      std::uint32_t u;
+      const float f = v[i] == 0.0f ? 0.0f : v[i];      // -0 and +0 are equal values
+      std::memcpy(&u, &f, sizeof(u));
+      u = (u & 0x80000000u) ? ~u : (u | 0x80000000u);   // ascending order of the float value
+      key[i] = ~u;                                      // descending
+      order[i] = static_cast<std::uint32_t>(i);
+    }
+    for (int shift = 0; shift < 32; shift += 8) {
+      std::size_t count[257] = {};
+      for (std::size_t i = 0; i < n; ++i) ++count[((key[i] >> shift) & 0xFF) + 1];
+      for (int b = 0; b < 256; ++b) count[b + 1] += count[b];
+      for (std::size_t i = 0; i < n; ++i) {
+        const std::size_t dst = count[(key[i] >> shift) & 0xFF]++;
+        tmpKey[dst] = key[i];
+        tmpOrder[dst] = order[i];
+      }
+      key.swap(tmpKey);
+      order.swap(tmpOrder);
+    }
+  }
 } // namespace moho::editor::field::t7

@@ -2,6 +2,7 @@
 #pragma fp_contract(off)
 
 #include "moho/editor/EdFieldCore.h"
+#include "moho/editor/EdFieldUtil.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1594,12 +1595,9 @@ namespace moho::editor::field
       const int w = src->w;
       const int h = src->h;
       const std::size_t count = src->Count();
-      std::vector<std::uint32_t> order(count);
-      for (std::size_t i = 0; i < count; ++i) {
-        order[i] = static_cast<std::uint32_t>(i);
-      }
+      std::vector<std::uint32_t> order;
       const std::vector<float>& hv = src->v;
-      std::sort(order.begin(), order.end(), [&hv](const std::uint32_t p, const std::uint32_t q) { return hv[p] != hv[q] ? hv[p] > hv[q] : p < q; });
+      t7::SortDescending(hv, order);      // the same order as sorting by (height desc, index asc), in O(n)
       std::vector<float> acc(count, 1.0f);
       static const int dxs[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
       static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
