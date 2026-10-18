@@ -72,11 +72,12 @@ namespace
     return decals;
   }
 
-  // A grid of values on the height samples (brush weights): node (x0 + i, z0 + j) carries `v[j * nw + i]` (0..255) as the alpha of
+  // A grid of values on the height samples (brush weights): node (x0 + i * step, z0 + j * step) carries `v[j * nw + i]` (0..255) as the alpha of
   // `rgb`, the cells between the nodes are drawn with smoothly interpolated alpha, draped over the terrain.
   struct NodeGrid
   {
     int x0 = 0, z0 = 0, nw = 0, nh = 0;
+    int step = 1;            // world units between neighbouring nodes (a coarse grid covers a big view)
     std::vector<std::uint8_t> v;
     std::uint32_t rgb = 0xFFFFFFu;
     std::uint32_t maxAlpha = 0xC0u;
@@ -497,7 +498,7 @@ namespace
     return 1;
   }
 
-  // ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha])  values: nw * nh numbers 0..255, row major
+  // ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha [, step]])  values: nw * nh numbers 0..255, row major; node (i, j) lies at world (x0 + i * step, z0 + j * step)
   int __cdecl cfunc_EdOverlayNodes(lua_State* const L)
   {
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 6) != LUA_TTABLE) {
@@ -527,6 +528,7 @@ namespace
       g.rgb = static_cast<std::uint32_t>(std::strtoul(text, nullptr, 16)) & 0xFFFFFFu;
     }
     if (lua_type(L, 8) == LUA_TNUMBER) g.maxAlpha = static_cast<std::uint32_t>(std::max(0.0, std::min(255.0, lua_tonumber(L, 8))));
+    if (lua_type(L, 9) == LUA_TNUMBER) g.step = std::max(1, std::min(64, static_cast<int>(lua_tonumber(L, 9))));
     NodeGrids()[lua_tostring(L, 1)] = std::move(g);
     lua_pushboolean(L, 1);
     return 1;
@@ -591,7 +593,7 @@ namespace
       (void)new moho::CScrLuaBinder(set, "ed_slope_at", &cfunc_EdSlopeAt, nullptr, "<global>",
                                     "ed_slope_at(kind, x, z, window) -> rating of the cell, in the engine's units");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_nodes", &cfunc_EdOverlayNodes, nullptr, "<global>",
-                                    "ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha]) -> true | nil, message");
+                                    "ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha [, step]]) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_decal", &cfunc_EdOverlayDecal, nullptr, "<global>",
                                     "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw]) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_icon", &cfunc_EdOverlayIcon, nullptr, "<global>",
@@ -751,8 +753,8 @@ namespace moho
             std::vector<GNode> nd(static_cast<std::size_t>(g.nw) * static_cast<std::size_t>(g.nh));
             for (int j = 0; j < g.nh; ++j) {
               for (int i = 0; i < g.nw; ++i) {
-                const int wx = g.x0 + i;
-                const int wz = g.z0 + j;
+                const int wx = std::max(0, std::min(field->Width() - 1, g.x0 + i * g.step));
+                const int wz = std::max(0, std::min(field->Height() - 1, g.z0 + j * g.step));
                 GNode& n = nd[static_cast<std::size_t>(j) * g.nw + i];
                 const std::uint32_t alpha = (static_cast<std::uint32_t>(g.v[static_cast<std::size_t>(j) * g.nw + i]) * g.maxAlpha) / 255u;
                 n.color = (alpha << 24) | g.rgb;

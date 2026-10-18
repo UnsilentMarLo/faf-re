@@ -4068,6 +4068,20 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
 
       FogOn(worldView->mView->CameraGetZoom());
       RenderCompositeTerrain(terrain);
+    } else if (terrain != nullptr && moho::ren_Water) {
+      // CRASHFIX (editor): a map that hides its terrain (3D maps run `ren_terrain 0` in OnStart) still draws water below, and the water
+      // passes (DrawWaterLine / DrawWaterTerrain) read the terrain's camera, which only UpdateRenderContext binds. In the stock game the
+      // first frames render before OnStart, so the camera is bound already; the editor can render its first frame with the terrain
+      // already off, which sent `&mCamera->view` (null + 0x5C) into d3dx9 SetMatrix and killed the load. Bind the camera without the
+      // terrain passes.
+      terrain->UpdateRenderContext(
+        moho::REN_GetGameTick(),
+        moho::REN_GetSimDeltaSeconds(),
+        mCam,
+        reinterpret_cast<const std::int32_t*>(&mScreenPos),
+        false,
+        0
+      );
     }
 
     // Range-ring pass for the normal (non-cartographic) world view, between the

@@ -16,6 +16,7 @@
 #include "lua/LuaRuntimeTypes.h"
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/lua/CScrLuaInitForm.h"
+#include "moho/editor/EdTerrainType.h"
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/ISTIDriver.h"
@@ -171,3 +172,33 @@ namespace
 
   const EdTerrainTypeLuaBootstrap gEdTerrainTypeLuaBootstrap{};
 } // namespace
+
+namespace moho::editor
+{
+  bool TerrainTypeRead(std::vector<std::uint8_t>& out, int& w, int& h)
+  {
+    const moho::STIMap* const m = SessionMap();
+    if (!HasGrid(m)) {
+      return false;
+    }
+    w = m->mTerrainType.width;
+    h = m->mTerrainType.height;
+    out.assign(m->mTerrainType.data, m->mTerrainType.data + static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
+    return true;
+  }
+
+  bool TerrainTypeWrite(const std::uint8_t* data, int w, int h)
+  {
+    moho::STIMap* const m = SessionMap();
+    if (!HasGrid(m) || m->mTerrainType.width != w || m->mTerrainType.height != h) {
+      return false;
+    }
+    const std::vector<std::uint8_t> values(data, data + static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
+    WriteGrid(m, 0, 0, w - 1, h - 1, values);
+    moho::STIMap* const sim = SimMap();
+    if (sim != nullptr && sim != m) {
+      WriteGrid(sim, 0, 0, w - 1, h - 1, values);
+    }
+    return true;
+  }
+} // namespace moho::editor

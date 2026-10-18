@@ -22,6 +22,8 @@
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/render/textures/CD3DDynamicTextureSheet.h"
 #include "moho/lua/CScrLuaInitForm.h"
+#include "moho/editor/EdStrata.h"
+#include "moho/editor/EditorDocument.h"
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
@@ -374,6 +376,7 @@ namespace
   {
     EdStrataLuaBootstrap()
     {
+      moho::editor::OnSessionEnd([] { gShadow = MaskShadow{}; });   // keyed by terrain / sheet pointers: stale after the session
       auto& set = UserLuaInitSet();
       (void)new moho::CScrLuaBinder(set, "ed_stratum_info", &cfunc_EdStratumInfo, nullptr, "<global>", "ed_stratum_info() -> maskWidth, maskHeight");
       (void)new moho::CScrLuaBinder(set, "ed_stratum_layer", &cfunc_EdStratumLayer, nullptr, "<global>",
@@ -392,3 +395,30 @@ namespace
 
   const EdStrataLuaBootstrap gEdStrataLuaBootstrap{};
 } // namespace
+
+// EDITOR: whole-mask access for the field engine (EdStrata.h).
+namespace moho::editor
+{
+  bool StratumMaskRead(const int stratum, std::vector<std::uint8_t>& out, int& w, int& h)
+  {
+    moho::IWldTerrainRes* const res = Terrain();
+    if (res == nullptr || stratum < 0 || stratum > 7 || !EnsureShadow(res, stratum / 4)) {
+      return false;
+    }
+    w = gShadow.w;
+    h = gShadow.h;
+    out = gShadow.lane[stratum];
+    return true;
+  }
+
+  bool StratumMaskWrite(const int stratum, const std::uint8_t* const data, const int w, const int h)
+  {
+    moho::IWldTerrainRes* const res = Terrain();
+    if (res == nullptr || data == nullptr || stratum < 0 || stratum > 7 || !EnsureShadow(res, stratum / 4) || w != gShadow.w || h != gShadow.h) {
+      return false;
+    }
+    gShadow.lane[stratum].assign(data, data + static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
+    UploadShadow(res, stratum / 4);
+    return true;
+  }
+} // namespace moho::editor

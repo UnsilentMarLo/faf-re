@@ -13,6 +13,8 @@
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
+#include "moho/sim/ISessionListener.h"
+#include "moho/sim/ISessionListener.h"
 #include "moho/sim/Sim.h"
 #include "moho/terrain/splat/CWldSplat.h"
 
@@ -67,8 +69,9 @@ namespace moho::editor
           gpg::Rect2i dirty = r;
           dirty.x0 = std::max(0, r.x0 - 1);
           dirty.z0 = std::max(0, r.z0 - 1);
-          dirty.x1 = r.x1 + 1;
-          dirty.z1 = r.z1 + 1;
+          // clamped to the field: SyncTerrain copies this rect (inclusive) out of the sim field later
+          dirty.x1 = std::min(r.x1 + 1, view->Width() - 1);
+          dirty.z1 = std::min(r.z1 + 1, view->Height() - 1);
           res->NotifyMapChange(dirty);
           // The renderer re-tessellates only when the camera moved, the terrain is in edit mode or the decal
           // manager has pending changes (HighFidelityTerrain::UpdateRenderContext): ask for one rebuild.
@@ -190,4 +193,48 @@ namespace moho::editor
     std::snprintf(text, sizeof(text), "%016llx", static_cast<unsigned long long>(value));
     return text;
   }
+
+  namespace
+  {
+    std::vector<void (*)()>& SessionEndHandlers()
+    {
+      static std::vector<void (*)()> handlers;
+      return handlers;
+    }
+  } // namespace
+
+  void OnSessionEnd(void (*const handler)())
+  {
+    SessionEndHandlers().push_back(handler);
+  }
+
+  void EndSession()
+  {
+    {
+      std::lock_guard<std::mutex> lock(gQueueMutex);
+      gQueue.clear();
+      gQueueSize.store(0, std::memory_order_release);
+    }
+    gAttachedTerrain = nullptr;
+    gViewField = nullptr;
+    for (void (*const handler)() : SessionEndHandlers()) {
+      handler();
+    }
+  }
+
+  namespace
+  {
+    /** Hooked into WLD_Teardown through the engine's teardown-callback vector (the lane SelectionListener uses). */
+    struct EditorSessionListener final : ISessionListener
+    {
+      void AttachToSessionListenerLane(CWldSession* /*session*/) override {}
+      void DetachFromSessionListenerLane(CWldSession* /*session*/) override { EndSession(); }
+    };
+
+    [[maybe_unused]] const bool kEditorSessionListenerInit = []() noexcept {
+      static EditorSessionListener listener;
+      (void)WLD_AddOnTeardownCallback(static_cast<ISessionListener*>(&listener));
+      return true;
+    }();
+  } // namespace
 } // namespace moho::editor

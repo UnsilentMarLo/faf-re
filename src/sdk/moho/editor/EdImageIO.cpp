@@ -655,3 +655,18 @@ namespace moho::edicon
     return true;
   }
 } // namespace moho::edicon
+
+// EDITOR: image reader for the field engine (EdField.cpp): 16-bit greyscale of any WIC format or a square raw file, no resampling.
+namespace moho::edfield
+{
+  bool ReadImage16(const std::string& utf8Path, std::vector<std::uint16_t>& out, int& w, int& h)
+  {
+    const std::wstring path = Widen(utf8Path.c_str());
+    const std::wstring ext = Extension(path);
+    if (ext == L"raw" || ext == L"r16") {
+      return ReadRaw(path, out, w, h);
+    }
+    ComScope com;
+    return ReadWic(path, out, w, h);
+  }
+} // namespace moho::edfield

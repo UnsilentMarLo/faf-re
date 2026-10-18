@@ -1,0 +1,1271 @@
+// EDITOR: the erosion suite, see EdErosion.h.
+//
+// Determinism: the grid solver is double buffered and gather style (every output sample is computed from the state at the start of the pass), the droplet solver
+// processes tiles of a fixed size in four colour phases (tiles of one colour never touch each other, each tile has its own random stream), and the stream power solver
+// is sequential. None of them depends on the thread count. The file pins fp_contract(off) like the core.
+#pragma fp_contract(off)
+
+#include "moho/editor/EdErosion.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <queue>
+#include <string>
+
+namespace moho::editor::field::erosion
+{
+  namespace
+  {
+    constexpr int kRowChunk = 8;
+    constexpr float kPi = 3.14159265358979f;
+
+    /** f(z0, z1) for fixed chunks of rows; small grids run inline (the result never depends on it). */
+    template <class F>
+    void Rows(const int w, const int h, F&& f)
+    {
+      if (static_cast<long long>(w) * h < 6000) {
+        f(0, h);
+        return;
+      }
+      const int chunks = (h + kRowChunk - 1) / kRowChunk;
+      ParallelFor(chunks, [&](const int c) {
+        const int z0 = c * kRowChunk;
+        f(z0, std::min(h, z0 + kRowChunk));
+      });
+    }
+
+    inline std::size_t Ix(const int x, const int z, const int w) { return static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x); }
+    inline float Clamp01(const float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+    /** Values this small are zero for the solver; flushing them keeps the arrays free of denormal numbers, which are very slow on x86. */
+    inline float Flush(const float v) { return v < 1e-9f ? 0.0f : v; }
+
+    // ---- random numbers (SplitMix64, one stream per tile and round) -------------------------------------------------------------------------
+
+    struct Rng
+    {
+      std::uint64_t s;
+      explicit Rng(const std::uint64_t seed) : s(seed) {}
+      std::uint32_t Next()
+      {
+        s += 0x9E3779B97F4A7C15ull;
+        std::uint64_t z = s;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        z ^= z >> 31;
+        return static_cast<std::uint32_t>(z >> 32);
+      }
+      float Unit() { return static_cast<float>(Next() >> 8) * (1.0f / 16777216.0f); }
+    };
+
+    std::uint64_t Mix(const std::uint64_t a, const std::uint64_t b, const std::uint64_t c)
+    {
+      std::uint64_t z = a * 0x9E3779B97F4A7C15ull + b * 0xC2B2AE3D27D4EB4Full + c * 0x165667B19E3779F9ull + 0x27D4EB2F165667C5ull;
+      z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+      z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+      return z ^ (z >> 31);
+    }
+
+    // ---- thermal slides ---------------------------------------------------------------------------------------------------------------------
+
+    struct ThermalScratch
+    {
+      std::vector<float> share, moved, next;
+    };
+
+    void ThermalImpl(std::vector<float>& t, const int w, const int h, const float cell, const float talus, const float rate, const std::vector<float>& rateMask,
+                     const bool pinBorder, ThermalScratch& sc)
+    {
+      static const int dxs[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+      static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+      const std::size_t n = t.size();
+      sc.share.assign(n, 0.0f);
+      sc.moved.assign(n, 0.0f);
+      sc.next.resize(n);
+      const float tAxis = talus * cell;
+      const float tDiag = talus * cell * 1.41421356f;
+      const int lo = pinBorder ? 1 : 0;
+      const bool useMask = !rateMask.empty();
+      const auto valid = [&](const int x, const int z) { return x >= lo && z >= lo && x < w - lo && z < h - lo; };
+      Rows(w, h, [&](const int z0, const int z1) {
+        for (int z = z0; z < z1; ++z) {
+          for (int x = 0; x < w; ++x) {
+            const std::size_t i = Ix(x, z, w);
+            if (!valid(x, z)) continue;
+            const float c = t[i];
+            float maxEx = 0.0f, sumEx = 0.0f;
+            for (int k = 0; k < 8; ++k) {
+              const int nx = x + dxs[k];
+              const int nz = z + dzs[k];
+              if (!valid(nx, nz)) continue;
+              const float ex = (c - t[Ix(nx, nz, w)]) - (k < 4 ? tAxis : tDiag);
+              if (ex > 0.0f) {
+                sumEx += ex;
+                maxEx = std::max(maxEx, ex);
+              }
+            }
+            if (sumEx > 0.0f) {
+              float r = rate;
+              if (useMask) r *= Clamp01(rateMask[i]);
+              const float s = r * 0.5f * maxEx / sumEx;
+              sc.share[i] = s;
+              sc.moved[i] = s * sumEx;
+            }
+          }
+        }
+      });
+      Rows(w, h, [&](const int z0, const int z1) {
+        for (int z = z0; z < z1; ++z) {
+          for (int x = 0; x < w; ++x) {
+            const std::size_t i = Ix(x, z, w);
+            const float c = t[i];
+            if (!valid(x, z)) {
+              sc.next[i] = c;
+              continue;
+            }
+            float gain = 0.0f;
+            for (int k = 0; k < 8; ++k) {
+              const int nx = x + dxs[k];
+              const int nz = z + dzs[k];
+              if (!valid(nx, nz)) continue;
+              const std::size_t j = Ix(nx, nz, w);
+              const float ex = (t[j] - c) - (k < 4 ? tAxis : tDiag);
+              if (ex > 0.0f) gain += sc.share[j] * ex;
+            }
+            sc.next[i] = c - sc.moved[i] + gain;
+          }
+        }
+      });
+      t.swap(sc.next);
+    }
+  } // namespace
+
+  void ThermalStep(std::vector<float>& t, const int w, const int h, const float cell, const float talus, const float rate, const std::vector<float>& rateMask,
+                   const bool pinBorder)
+  {
+    ThermalScratch sc;
+    ThermalImpl(t, w, h, cell, talus, rate, rateMask, pinBorder, sc);
+  }
+
+  // ---- grid hydraulic erosion -------------------------------------------------------------------------------------------------------------------
+
+  void HydroState::Allocate(const int width, const int height, const float cellSize)
+  {
+    w = width;
+    h = height;
+    cell = cellSize;
+    const std::size_t n = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
+    t.assign(n, 0.0f);
+    d.assign(n, 0.0f);
+    s.assign(n, 0.0f);
+    for (auto& a : f) a.assign(n, 0.0f);
+    wear.assign(n, 0.0f);
+    dep.assign(n, 0.0f);
+    flow.assign(n, 0.0f);
+  }
+
+  void RunHydro(HydroState& st, const HydroParams& p, const int iterations)
+  {
+    const int w = st.w;
+    const int h = st.h;
+    if (w < 3 || h < 3) return;
+    const std::size_t n = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
+    const bool track = p.track;
+    if (track) {
+      if (st.wear.size() != n) st.wear.assign(n, 0.0f);
+      if (st.dep.size() != n) st.dep.assign(n, 0.0f);
+      if (st.flow.size() != n) st.flow.assign(n, 0.0f);
+    }
+    std::vector<float> tn(n), sn(n), dold(n);
+    ThermalScratch tsc;
+    const float cell = st.cell;
+    const bool pin = p.pin_border;
+    const float gain = std::max(0.0f, std::min(0.5f, p.gain));
+    const float evap = Clamp01(p.evaporation);
+    const float depthMax = std::max(1e-4f, p.depth_max);
+    const bool hasRain = !st.rain_rate.empty();
+    const bool hasErode = !st.erode_rate.empty();
+    const bool hasRock = !st.rock.empty();
+    const float invDepthMax = 1.0f / depthMax;
+    const auto pinned = [&](const int x, const int z) { return pin && (x == 0 || z == 0 || x == w - 1 || z == h - 1); };
+    float* const D = st.d.data();
+    float* const S = st.s.data();
+    float* const F0 = st.f[0].data();
+    float* const F1 = st.f[1].data();
+    float* const F2 = st.f[2].data();
+    float* const F3 = st.f[3].data();
+
+    for (int it = 0; it < iterations; ++it) {
+      float* const T = st.t.data();   // st.t and tn trade places every iteration
+      // rain
+      if (p.rain > 0.0f) {
+        Rows(w, h, [&](const int z0, const int z1) {
+          for (int z = z0; z < z1; ++z) {
+            for (int x = 0; x < w; ++x) {
+              const std::size_t i = Ix(x, z, w);
+              D[i] += p.rain * (hasRain ? st.rain_rate[i] : 1.0f);
+            }
+          }
+        });
+      }
+      // A: outflow fluxes from the water surface differences, scaled so no cell gives away more water than it has
+      Rows(w, h, [&](const int z0, const int z1) {
+        for (int z = z0; z < z1; ++z) {
+          for (int x = 0; x < w; ++x) {
+            const std::size_t i = Ix(x, z, w);
+            if (pinned(x, z)) {
+              F0[i] = F1[i] = F2[i] = F3[i] = 0.0f;
+              continue;
+            }
+            const float H = T[i] + D[i];
+            float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
+            if (x > 0) a0 = std::max(0.0f, F0[i] + gain * (H - (T[i - 1] + D[i - 1])));
+            if (x < w - 1) a1 = std::max(0.0f, F1[i] + gain * (H - (T[i + 1] + D[i + 1])));
+            if (z > 0) a2 = std::max(0.0f, F2[i] + gain * (H - (T[i - w] + D[i - w])));
+            if (z < h - 1) a3 = std::max(0.0f, F3[i] + gain * (H - (T[i + w] + D[i + w])));
+            const float sum = a0 + a1 + a2 + a3;
+            if (sum > D[i]) {
+              const float k = sum > 0.0f ? D[i] / sum : 0.0f;
+              a0 *= k;
+              a1 *= k;
+              a2 *= k;
+              a3 *= k;
+            }
+            F0[i] = Flush(a0);
+            F1[i] = Flush(a1);
+            F2[i] = Flush(a2);
+            F3[i] = Flush(a3);
+          }
+        }
+      });
+      // B: water update, velocity, dissolving and settling
+      Rows(w, h, [&](const int z0, const int z1) {
+        for (int z = z0; z < z1; ++z) {
+          for (int x = 0; x < w; ++x) {
+            const std::size_t i = Ix(x, z, w);
+            if (pinned(x, z)) {
+              tn[i] = T[i];
+              sn[i] = 0.0f;
+              dold[i] = 0.0f;
+              D[i] = 0.0f;
+              continue;
+            }
+            const float inW = x > 0 ? F1[i - 1] : 0.0f;
+            const float inE = x < w - 1 ? F0[i + 1] : 0.0f;
+            const float inN = z > 0 ? F3[i - w] : 0.0f;
+            const float inS = z < h - 1 ? F2[i + w] : 0.0f;
+            const float out = F0[i] + F1[i] + F2[i] + F3[i];
+            const float dOld = D[i];
+            dold[i] = dOld;
+            const float dNew = std::max(0.0f, dOld + (inW + inE + inN + inS) - out);
+            const float dm = 0.5f * (dOld + dNew);
+            const float inv = 1.0f / std::max(dm, 0.002f);
+            float ux = 0.5f * (inW + F1[i] - inE - F0[i]) * inv;
+            float uz = 0.5f * (inN + F3[i] - inS - F2[i]) * inv;
+            float speed = std::sqrt(ux * ux + uz * uz);
+            if (speed > p.max_speed) {
+              const float k = p.max_speed / speed;
+              ux *= k;
+              uz *= k;
+              speed = p.max_speed;
+            }
+            D[i] = dNew;
+            if (track) st.flow[i] += speed * dNew;
+            // slope from the terrain at the start of the pass
+            const int xl = x > 0 ? x - 1 : x;
+            const int xr = x < w - 1 ? x + 1 : x;
+            const int zu = z > 0 ? z - 1 : z;
+            const int zd = z < h - 1 ? z + 1 : z;
+            const float gx = (T[Ix(xr, z, w)] - T[Ix(xl, z, w)]) / (static_cast<float>(xr - xl) * cell);
+            const float gz = (T[Ix(x, zd, w)] - T[Ix(x, zu, w)]) / (static_cast<float>(zd - zu) * cell);
+            const float g = std::sqrt(gx * gx + gz * gz);
+            const float sinA = g / std::sqrt(1.0f + g * g);
+            const float tilt = std::max(sinA, p.min_slope);
+            const float cap = p.capacity * tilt * speed * std::min(1.0f, dNew * invDepthMax);
+            const float s0 = S[i];
+            float erode = 0.0f, deposit = 0.0f;
+            if (cap > s0) {
+              float k = p.erosion * (hasErode ? st.erode_rate[i] : 1.0f) * (hasRock ? st.rock[i] : 1.0f);
+              erode = k * (cap - s0);
+              if (p.cut_limit > 0.0f) {
+                float low = T[i];
+                if (x > 0) low = std::min(low, T[i - 1]);
+                if (x < w - 1) low = std::min(low, T[i + 1]);
+                if (z > 0) low = std::min(low, T[i - w]);
+                if (z < h - 1) low = std::min(low, T[i + w]);
+                erode = std::min(erode, p.cut_limit * (T[i] - low));
+              }
+              erode = std::max(0.0f, erode);
+            } else {
+              deposit = p.deposition * (s0 - cap);
+            }
+            tn[i] = T[i] - erode + deposit;
+            sn[i] = s0 + erode - deposit;
+            if (track) {
+              st.wear[i] += erode;
+              st.dep[i] += deposit;
+            }
+          }
+        }
+      });
+      st.t.swap(tn);
+      // C: the sediment travels with the water through the same pipes (upwind, so the total is conserved), then the water evaporates
+      {
+        const float* const DO = dold.data();
+        const float* const SN = sn.data();
+        Rows(w, h, [&](const int z0, const int z1) {
+          for (int z = z0; z < z1; ++z) {
+            for (int x = 0; x < w; ++x) {
+              const std::size_t i = Ix(x, z, w);
+              if (pinned(x, z)) {
+                S[i] = 0.0f;
+                D[i] = 0.0f;
+                continue;
+              }
+              float v = SN[i];
+              if (DO[i] > 0.0f) v -= SN[i] * (F0[i] + F1[i] + F2[i] + F3[i]) / DO[i];
+              if (x > 0 && DO[i - 1] > 0.0f) v += SN[i - 1] * F1[i - 1] / DO[i - 1];
+              if (x < w - 1 && DO[i + 1] > 0.0f) v += SN[i + 1] * F0[i + 1] / DO[i + 1];
+              if (z > 0 && DO[i - w] > 0.0f) v += SN[i - w] * F3[i - w] / DO[i - w];
+              if (z < h - 1 && DO[i + w] > 0.0f) v += SN[i + w] * F2[i + w] / DO[i + w];
+              S[i] = Flush(v);
+              D[i] = Flush(D[i] * (1.0f - evap));
+            }
+          }
+        });
+      }
+      if (p.thermal > 0.0f && p.thermal_every > 0 && ((it + 1) % p.thermal_every) == 0) {
+        ThermalImpl(st.t, w, h, cell, p.talus, p.thermal, st.erode_rate, pin, tsc);
+      }
+    }
+    if (p.settle) {
+      Rows(w, h, [&](const int z0, const int z1) {
+        for (int z = z0; z < z1; ++z) {
+          for (int x = 0; x < w; ++x) {
+            const std::size_t i = Ix(x, z, w);
+            if (pinned(x, z)) continue;
+            st.t[i] += S[i];
+            if (track) st.dep[i] += S[i];
+            S[i] = 0.0f;
+          }
+        }
+      });
+    }
+  }
+
+  // ---- droplet erosion --------------------------------------------------------------------------------------------------------------------------
+
+  namespace
+  {
+    /** A queue of cell ids ordered by height in steps of 1/128 (the height word): O(1) push and pop. Cells of one step leave in the order they came in. */
+    class FloodQueue
+    {
+    public:
+      FloodQueue(const float lo, const float hi) : base_(lo), buckets_(static_cast<std::size_t>(std::max(1.0f, (hi - lo) * 128.0f)) + 2), read_(buckets_.size(), 0) {}
+
+      void Push(const float height, const std::uint32_t id)
+      {
+        const std::size_t b = Bucket(height);
+        buckets_[b].push_back(id);
+        if (b < cur_) cur_ = b;
+        ++count_;
+      }
+
+      bool Pop(std::uint32_t& id)
+      {
+        if (count_ == 0) return false;
+        while (read_[cur_] >= buckets_[cur_].size()) ++cur_;
+        id = buckets_[cur_][read_[cur_]++];
+        --count_;
+        return true;
+      }
+
+    private:
+      std::size_t Bucket(const float height) const
+      {
+        const float v = (height - base_) * 128.0f;
+        const std::size_t b = v <= 0.0f ? 0 : static_cast<std::size_t>(v);
+        return std::min(b, buckets_.size() - 1);
+      }
+
+      float base_;
+      std::vector<std::vector<std::uint32_t>> buckets_;
+      std::vector<std::size_t> read_;
+      std::size_t cur_ = 0;
+      std::size_t count_ = 0;
+    };
+
+    inline void MinMax(const std::vector<float>& v, float& lo, float& hi)
+    {
+      lo = v.empty() ? 0.0f : v[0];
+      hi = lo;
+      for (const float x : v) {
+        lo = std::min(lo, x);
+        hi = std::max(hi, x);
+      }
+    }
+
+    /** The terrain with every closed depression filled up to its spill height plus `eps` per step towards the outlet (priority flood, Barnes 2014): water on it always finds a way out. Sequential, deterministic. */
+    void FillSurface(const std::vector<float>& hv, const int w, const int h, const float eps, std::vector<float>& fill)
+    {
+      static const int dxs[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+      static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+      const std::size_t n = hv.size();
+      fill = hv;
+      std::vector<std::uint8_t> done(n, 0);
+      float lo, hi;
+      MinMax(hv, lo, hi);
+      FloodQueue open(lo, hi + eps * static_cast<float>(w + h));
+      for (int z = 0; z < h; ++z) {
+        for (int x = 0; x < w; ++x) {
+          if (x == 0 || z == 0 || x == w - 1 || z == h - 1) {
+            const std::uint32_t i = static_cast<std::uint32_t>(Ix(x, z, w));
+            done[i] = 1;
+            open.Push(fill[i], i);
+          }
+        }
+      }
+      std::uint32_t c = 0;
+      while (open.Pop(c)) {
+        const int cx = static_cast<int>(c % static_cast<std::uint32_t>(w));
+        const int cz = static_cast<int>(c / static_cast<std::uint32_t>(w));
+        for (int k = 0; k < 8; ++k) {
+          const int nx = cx + dxs[k], nz = cz + dzs[k];
+          if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
+          const std::uint32_t j = static_cast<std::uint32_t>(Ix(nx, nz, w));
+          if (done[j]) continue;
+          done[j] = 1;
+          fill[j] = std::max(hv[j], fill[c] + eps);
+          open.Push(fill[j], j);
+        }
+      }
+    }
+  } // namespace
+
+  namespace
+  {
+    /**
+     * Drains every closed depression by cutting its lowest rim instead of filling it (priority flood outwards from the edge, Barnes 2014, with carving): when the flood reaches a cell
+     * lower than the one it comes from, the chain of cells it came through is lowered to just below that cell until it is lower already. Only ever lowers the terrain. Deterministic.
+     */
+    void BreachPits(std::vector<float>& t, const int w, const int h, const float eps, std::vector<float>& fill, const float epsFill)
+    {
+      static const int dxs[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+      static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+      const std::size_t n = t.size();
+      fill = t;
+      std::vector<std::uint8_t> done(n, 0);
+      std::vector<std::uint32_t> parent(n, 0);
+      float lo, hi;
+      MinMax(t, lo, hi);
+      FloodQueue open(lo, hi + epsFill * static_cast<float>(w + h));
+      for (int z = 0; z < h; ++z) {
+        for (int x = 0; x < w; ++x) {
+          if (x == 0 || z == 0 || x == w - 1 || z == h - 1) {
+            const std::uint32_t i = static_cast<std::uint32_t>(Ix(x, z, w));
+            done[i] = 1;
+            parent[i] = i;
+            open.Push(fill[i], i);
+          }
+        }
+      }
+      std::uint32_t c = 0;
+      while (open.Pop(c)) {
+        const int cx = static_cast<int>(c % static_cast<std::uint32_t>(w));
+        const int cz = static_cast<int>(c / static_cast<std::uint32_t>(w));
+        for (int k = 0; k < 8; ++k) {
+          const int nx = cx + dxs[k], nz = cz + dzs[k];
+          if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
+          const std::uint32_t j = static_cast<std::uint32_t>(Ix(nx, nz, w));
+          if (done[j]) continue;
+          done[j] = 1;
+          parent[j] = c;
+          if (t[j] < t[c]) {
+            // j lies lower than the cell the flood reached it from: cut the way out from j through c and its ancestors
+            float level = t[j];
+            std::uint32_t a = c;
+            for (int step = 1; step < 100000; ++step) {
+              level -= eps;
+              if (t[a] <= level) break;
+              t[a] = level;
+              fill[a] = level;
+              if (parent[a] == a) break;      // (an outlet on the edge is lowered too when the way out needs it: the water has to be able to leave)
+              a = parent[a];
+            }
+          }
+          fill[j] = std::max(t[j], fill[c] + epsFill);
+          open.Push(fill[j], j);
+        }
+      }
+    }
+  } // namespace
+
+  namespace
+  {
+    struct DropParams
+    {
+      float density = 0.5f;      // droplets per cell
+      int lifetime = 30;         // steps
+      float inertia = 0.05f;
+      float capacity = 4.0f;
+      float min_slope = 0.01f;
+      float erode = 0.3f;
+      float deposit = 0.3f;
+      float evaporate = 0.01f;
+      float gravity = 4.0f;
+      int radius = 3;            // erosion brush radius (cells)
+      float speed = 1.0f;
+      float water = 1.0f;
+      float round_cut = 0.5f;    // a cell is dug at most this deep (world units) below the surface a round started with (a round is 1 / rounds of the droplets)
+      float drain_pits = 1.0f;   // 1: droplets steer on the pit filled terrain (they leave closed basins and carve their rims instead of filling them), 0: on the raw terrain
+      int rounds = 4;
+      std::uint32_t seed = 1;
+    };
+
+    struct DropGrids
+    {
+      std::vector<float>* wear = nullptr;
+      std::vector<float>* dep = nullptr;
+      std::vector<float>* flow = nullptr;
+    };
+
+    /** Lets a droplet drop `amount` of sediment on the four samples around (fx, fz) of cell i00, bilinear, but never above the spill surface plus a hair: a filled basin takes no more.
+     *  Returns what was actually dropped. */
+    float Settle(std::vector<float>& t, const std::vector<float>& hs, DropGrids& g, const int w, const std::size_t i00, const float fx, const float fz, const float amount,
+                 const float cell)
+    {
+      if (amount <= 0.0f) return 0.0f;
+      const std::size_t idx[4] = {i00, i00 + 1, i00 + static_cast<std::size_t>(w), i00 + static_cast<std::size_t>(w) + 1};
+      const float wgt[4] = {(1.0f - fx) * (1.0f - fz), fx * (1.0f - fz), (1.0f - fx) * fz, fx * fz};
+      float done = 0.0f;
+      for (int k = 0; k < 4; ++k) {
+        const float room = std::max(0.0f, hs[idx[k]] - t[idx[k]] + 0.02f * cell);
+        const float a = std::min(amount * wgt[k], room);
+        t[idx[k]] += a;
+        if (g.dep != nullptr) (*g.dep)[idx[k]] += a;
+        done += a;
+      }
+      return done;
+    }
+
+    /** One droplet; all reads and writes stay within `reach` cells of the start position (lifetime + radius + 2). */
+    void RunDroplet(std::vector<float>& t, const std::vector<float>& hs, const int w, const int h, const float cell, const DropParams& p, const std::vector<float>* rock, DropGrids& g,
+                    Rng& rng, const double x0, const double z0)
+    {
+      float px = static_cast<float>(x0);
+      float pz = static_cast<float>(z0);
+      float dx = 0.0f, dz = 0.0f;
+      float speed = p.speed;
+      float water = p.water;
+      float sediment = 0.0f;
+      const int R = p.radius;
+      for (int life = 0; life < p.lifetime; ++life) {
+        const int ix = static_cast<int>(px);
+        const int iz = static_cast<int>(pz);
+        if (ix < 0 || iz < 0 || ix >= w - 1 || iz >= h - 1) break;
+        const float fx = px - static_cast<float>(ix);
+        const float fz = pz - static_cast<float>(iz);
+        const std::size_t i00 = Ix(ix, iz, w);
+        const float h00 = hs[i00], h10 = hs[i00 + 1], h01 = hs[i00 + w], h11 = hs[i00 + w + 1];
+        const float gx = ((h10 - h00) * (1.0f - fz) + (h11 - h01) * fz) / cell;
+        const float gz = ((h01 - h00) * (1.0f - fx) + (h11 - h10) * fx) / cell;
+        const float height = h00 * (1.0f - fx) * (1.0f - fz) + h10 * fx * (1.0f - fz) + h01 * (1.0f - fx) * fz + h11 * fx * fz;
+        dx = dx * p.inertia - gx * (1.0f - p.inertia);
+        dz = dz * p.inertia - gz * (1.0f - p.inertia);
+        float len = std::sqrt(dx * dx + dz * dz);
+        if (len < 1e-6f) {
+          const float a = rng.Unit() * 2.0f * kPi;
+          dx = std::cos(a);
+          dz = std::sin(a);
+          len = 1.0f;
+        }
+        dx /= len;
+        dz /= len;
+        px += dx;
+        pz += dz;
+        const int nx = static_cast<int>(px);
+        const int nz = static_cast<int>(pz);
+        const bool leaves = px < 0.0f || pz < 0.0f || nx >= w - 1 || nz >= h - 1;
+        float newHeight;
+        if (leaves) {
+          newHeight = height;   // runs off the map: ends here
+        } else {
+          const float ex = px - static_cast<float>(nx);
+          const float ez = pz - static_cast<float>(nz);
+          const std::size_t j = Ix(nx, nz, w);
+          newHeight = hs[j] * (1.0f - ex) * (1.0f - ez) + hs[j + 1] * ex * (1.0f - ez) + hs[j + w] * (1.0f - ex) * ez + hs[j + w + 1] * ex * ez;
+        }
+        if (leaves) return;      // runs off the map with its sediment
+        const float dh = newHeight - height;
+        const float cap = std::max(-dh, p.min_slope * cell) * speed * water * p.capacity;
+        if (g.flow != nullptr) (*g.flow)[i00] += water;
+        if (sediment > cap || dh > 0.0f) {
+          const float amount = dh > 0.0f ? std::min(dh, sediment) : (sediment - cap) * p.deposit;
+          sediment -= Settle(t, hs, g, w, i00, fx, fz, amount, cell);
+        } else {
+          float amount = std::min((cap - sediment) * p.erode, -dh);
+          // inside a filled basin the droplet runs on the spill surface above the real ground: nothing to dissolve there (the rim at the outlet is eroded, so the basin drains)
+          const float ground = t[i00] * (1.0f - fx) * (1.0f - fz) + t[i00 + 1] * fx * (1.0f - fz) + t[i00 + w] * (1.0f - fx) * fz + t[i00 + w + 1] * fx * fz;
+          if (height - ground > 0.03f * cell || life < 2) amount = 0.0f;      // (a droplet picks up nothing in its first steps: no craters where it lands)
+          if (amount > 0.0f) {
+            float wsum = 0.0f;
+            for (int oz = -R; oz <= R; ++oz) {
+              for (int ox = -R; ox <= R; ++ox) {
+                const int cx = ix + ox, cz = iz + oz;
+                if (cx < 0 || cz < 0 || cx >= w || cz >= h) continue;
+                const float d = std::sqrt(static_cast<float>(ox * ox + oz * oz));
+                if (d < static_cast<float>(R) + 0.5f) wsum += static_cast<float>(R) + 0.5f - d;
+              }
+            }
+            if (wsum > 0.0f) {
+              float taken = 0.0f;
+              for (int oz = -R; oz <= R; ++oz) {
+                for (int ox = -R; ox <= R; ++ox) {
+                  const int cx = ix + ox, cz = iz + oz;
+                  if (cx < 0 || cz < 0 || cx >= w || cz >= h) continue;
+                  const float d = std::sqrt(static_cast<float>(ox * ox + oz * oz));
+                  if (d >= static_cast<float>(R) + 0.5f) continue;
+                  const std::size_t j = Ix(cx, cz, w);
+                  const float k = (rock != nullptr ? Clamp01((*rock)[j]) : 1.0f);
+                  // no cell goes deeper than `round_cut` below the surface the round started with: runaway holes where many droplets meet cannot form
+                  const float a = std::min(amount * (static_cast<float>(R) + 0.5f - d) / wsum * k, std::max(0.0f, t[j] - (hs[j] - p.round_cut * cell)));
+                  t[j] -= a;
+                  taken += a;
+                  if (g.wear != nullptr) (*g.wear)[j] += a;
+                }
+              }
+              sediment += taken;
+            }
+          }
+        }
+        speed = std::sqrt(std::max(0.0f, speed * speed + dh * p.gravity / cell));
+        water *= (1.0f - p.evaporate);
+      }
+      // the rest settles where the droplet stopped (within the room the spill surface leaves)
+      if (sediment > 0.0f) {
+        const int ix = std::max(0, std::min(w - 2, static_cast<int>(px)));
+        const int iz = std::max(0, std::min(h - 2, static_cast<int>(pz)));
+        Settle(t, hs, g, w, Ix(ix, iz, w), px - static_cast<float>(ix), pz - static_cast<float>(iz), sediment, cell);
+      }
+    }
+
+    void RunDroplets(std::vector<float>& t, const int w, const int h, const float cell, const DropParams& p, const std::vector<float>* rock, DropGrids& g)
+    {
+      if (w < 4 || h < 4) return;
+      const int reach = p.lifetime + p.radius + 3;
+      const int tile = std::max(48, 2 * reach + 2);
+      const int tx = (w + tile - 1) / tile;
+      const int tz = (h + tile - 1) / tile;
+      const int rounds = std::max(1, p.rounds);
+      std::vector<float> steer;
+      for (int round = 0; round < rounds; ++round) {
+        if (p.drain_pits > 0.0f) FillSurface(t, w, h, 0.004f * cell, steer);
+        const std::vector<float>& hs = p.drain_pits > 0.0f ? steer : t;
+        for (int colour = 0; colour < 4; ++colour) {
+          std::vector<int> tiles;
+          for (int j = 0; j < tz; ++j) {
+            for (int i = 0; i < tx; ++i) {
+              if ((i & 1) + 2 * (j & 1) == colour) tiles.push_back(j * tx + i);
+            }
+          }
+          ParallelFor(static_cast<int>(tiles.size()), [&](const int k) {
+            const int id = tiles[static_cast<std::size_t>(k)];
+            const int i = id % tx, j = id / tx;
+            const int bx0 = i * tile, bz0 = j * tile;
+            const int bw = std::min(tile, w - bx0), bh = std::min(tile, h - bz0);
+            const double want = static_cast<double>(p.density) * static_cast<double>(bw) * static_cast<double>(bh) / static_cast<double>(rounds);
+            Rng rng(Mix(p.seed, static_cast<std::uint64_t>(round), static_cast<std::uint64_t>(id)));
+            int count = static_cast<int>(want);
+            if (static_cast<double>(rng.Unit()) < want - count) ++count;
+            for (int c = 0; c < count; ++c) {
+              const double x0 = bx0 + static_cast<double>(rng.Unit()) * (bw - 1);
+              const double z0 = bz0 + static_cast<double>(rng.Unit()) * (bh - 1);
+              RunDroplet(t, hs, w, h, cell, p, rock, g, rng, x0, z0);
+            }
+          });
+        }
+      }
+    }
+
+    // ---- stream power incision ------------------------------------------------------------------------------------------------------------------
+
+    struct StreamParams
+    {
+      int iterations = 10;
+      float k = 0.05f;          // erodibility: incision per iteration = k * (drainage area - area_min)^m * slope, in world units
+      float m = 0.5f;           // drainage area exponent
+      float spread = 1.0f;      // multiple flow direction exponent: 1 spreads the water over all lower neighbours by slope, large = single steepest direction
+      float diffusion = 0.2f;   // thermal rate for the hillslopes between iterations
+      float talus = 0.7f;
+      float uplift = 0.0f;      // height added to the interior per iteration
+      float max_cut = 0.5f;     // at most this share of the drop to the lowest neighbour is removed per iteration
+      float area_min = 24.0f;   // drainage area (cells) below which nothing is incised: only real channels, the slopes keep their shape
+      int widen = 1;            // the incision is smoothed this many times (3 x 3 binomial) before it is applied: wider channels
+      bool breach = true;       // closed depressions are drained by cutting their lowest rim (false: they stay, and no river crosses them)
+    };
+
+    /** Cell indices by descending value, equal values by ascending index (LSD radix sort on the float bit patterns: stable, O(n)). */
+    void SortDescending(const std::vector<float>& v, std::vector<std::uint32_t>& order)
+    {
+      const std::size_t n = v.size();
+      std::vector<std::uint32_t> key(n), tmpKey(n), tmpOrder(n);
+      order.resize(n);
+      for (std::size_t i = 0; i < n; ++i) {
+        std::uint32_t u;
+        std::memcpy(&u, &v[i], sizeof(u));
+        u = (u & 0x80000000u) ? ~u : (u | 0x80000000u);     // ascending order of the float value
+        key[i] = ~u;                                        // descending
+        order[i] = static_cast<std::uint32_t>(i);
+      }
+      for (int shift = 0; shift < 32; shift += 8) {
+        std::size_t count[257] = {};
+        for (std::size_t i = 0; i < n; ++i) ++count[((key[i] >> shift) & 0xFF) + 1];
+        for (int b = 0; b < 256; ++b) count[b + 1] += count[b];
+        for (std::size_t i = 0; i < n; ++i) {
+          const std::size_t dst = count[(key[i] >> shift) & 0xFF]++;
+          tmpKey[dst] = key[i];
+          tmpOrder[dst] = order[i];
+        }
+        key.swap(tmpKey);
+        order.swap(tmpOrder);
+      }
+    }
+
+    /**
+     * Drainage network of the pit filled terrain: `fill` is the filled surface (FillSurface), cells are visited from the highest down (equal heights by index) and pass their catchment
+     * (1 + everything above) to their lower neighbours (multiple flow direction: shares proportional to slope^spread); `slope` receives the steepest drop per unit distance of every
+     * cell. Edge cells are outlets. Sequential and ordered: deterministic.
+     */
+    void Drainage(const std::vector<float>& fill, const int w, const int h, const float cell, const float spread, std::vector<float>& area, std::vector<float>& slope)
+    {
+      static const int dxs[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+      static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+      const std::size_t n = fill.size();
+      std::vector<std::uint32_t> order;
+      SortDescending(fill, order);
+      area.assign(n, 1.0f);
+      slope.assign(n, 0.0f);
+      for (std::size_t k = 0; k < n; ++k) {
+        const std::uint32_t c = order[k];
+        const int cx = static_cast<int>(c % static_cast<std::uint32_t>(w));
+        const int cz = static_cast<int>(c / static_cast<std::uint32_t>(w));
+        float s[8];
+        std::uint32_t id[8];
+        int count = 0;
+        float sum = 0.0f, best = 0.0f;
+        for (int d = 0; d < 8; ++d) {
+          const int nx = cx + dxs[d], nz = cz + dzs[d];
+          if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
+          const std::uint32_t j = static_cast<std::uint32_t>(Ix(nx, nz, w));
+          const float drop = (fill[c] - fill[j]) / (static_cast<float>(d < 4 ? 1.0 : 1.41421356) * cell);
+          if (drop <= 0.0f) continue;
+          best = std::max(best, drop);
+          const float wgt = spread == 1.0f ? drop : std::pow(drop, spread);
+          s[count] = wgt;
+          id[count] = j;
+          sum += wgt;
+          ++count;
+        }
+        slope[c] = best;
+        if (count > 0 && sum > 0.0f) {
+          const float a = area[c] / sum;
+          for (int q = 0; q < count; ++q) area[id[q]] += a * s[q];
+        }
+      }
+    }
+
+    void RunStream(std::vector<float>& t, const int w, const int h, const float cell, const StreamParams& p, const std::vector<float>* rock, std::vector<float>& wear,
+                   std::vector<float>& area)
+    {
+      if (w < 3 || h < 3) return;
+      const std::size_t n = t.size();
+      std::vector<float> fill, slope, inc(n), tmp(n);
+      ThermalScratch tsc;
+      const std::vector<float> none;
+      for (int it = 0; it <= p.iterations; ++it) {
+        if (p.breach) {
+          tmp = t;
+          BreachPits(t, w, h, 0.002f * cell, fill, 0.004f * cell);
+          for (std::size_t i = 0; i < n; ++i) wear[i] += tmp[i] - t[i];
+        } else {
+          FillSurface(t, w, h, 0.004f * cell, fill);
+        }
+        Drainage(fill, w, h, cell, p.spread, area, slope);
+        if (it == p.iterations) break;
+        // incision: where the ground lies on the (filled) surface and drains: k * area^m * slope, never more than a share of the drop to the lowest neighbour
+        Rows(w, h, [&](const int z0, const int z1) {
+          for (int z = z0; z < z1; ++z) {
+            for (int x = 0; x < w; ++x) {
+              const std::size_t i = Ix(x, z, w);
+              float v = 0.0f;
+              if (x > 0 && z > 0 && x < w - 1 && z < h - 1 && area[i] > p.area_min && fill[i] - t[i] < 0.03f * cell) {
+                float low = t[i];
+                low = std::min(low, std::min(std::min(t[i - 1], t[i + 1]), std::min(t[i - w], t[i + w])));
+                const float ad = area[i] - p.area_min;
+                float k = p.k * (p.m == 0.5f ? std::sqrt(ad) : std::pow(ad, p.m)) * slope[i];
+                if (rock != nullptr) k *= Clamp01((*rock)[i]);
+                v = std::min(k, p.max_cut * std::max(0.0f, t[i] - low));
+              }
+              inc[i] = v;
+            }
+          }
+        });
+        for (int pass = 0; pass < p.widen; ++pass) {
+          for (int z = 0; z < h; ++z) {
+            for (int x = 0; x < w; ++x) {
+              const int xl = std::max(0, x - 1), xr = std::min(w - 1, x + 1);
+              tmp[Ix(x, z, w)] = 0.25f * inc[Ix(xl, z, w)] + 0.5f * inc[Ix(x, z, w)] + 0.25f * inc[Ix(xr, z, w)];
+            }
+          }
+          for (int z = 0; z < h; ++z) {
+            const int zu = std::max(0, z - 1), zd = std::min(h - 1, z + 1);
+            for (int x = 0; x < w; ++x) inc[Ix(x, z, w)] = 0.25f * tmp[Ix(x, zu, w)] + 0.5f * tmp[Ix(x, z, w)] + 0.25f * tmp[Ix(x, zd, w)];
+          }
+        }
+        for (int z = 1; z < h - 1; ++z) {
+          for (int x = 1; x < w - 1; ++x) {
+            const std::size_t i = Ix(x, z, w);
+            // a cell never drops below its lowest neighbour: incision cannot go below base level and does not dig pits
+            const float low = std::min(std::min(std::min(t[i - 1], t[i + 1]), std::min(t[i - w], t[i + w])), t[i]);
+            const float cut = std::min(inc[i], t[i] - low);
+            t[i] += p.uplift - cut;
+            wear[i] += cut;
+          }
+        }
+        if (p.diffusion > 0.0f) ThermalImpl(t, w, h, cell, p.talus, p.diffusion, none, true, tsc);
+      }
+    }
+
+    /** Smooths the change `after - before` with a 3 x 3 binomial kernel, `amount` 0..1 blends the smoothed change in (1 = fully smoothed): takes the cell scale noise out of an erosion result and keeps its structure. */
+    void SmoothDelta(const std::vector<float>& before, std::vector<float>& after, const int w, const int h, const float amount, const int passes)
+    {
+      if (amount <= 0.0f || passes <= 0) return;
+      const std::size_t n = before.size();
+      std::vector<float> d(n), tmp(n);
+      for (std::size_t i = 0; i < n; ++i) d[i] = after[i] - before[i];
+      std::vector<float> sm = d;
+      for (int pass = 0; pass < passes; ++pass) {
+        Rows(w, h, [&](const int z0, const int z1) {
+          for (int z = z0; z < z1; ++z) {
+            for (int x = 0; x < w; ++x) {
+              const int xl = std::max(0, x - 1), xr = std::min(w - 1, x + 1);
+              tmp[Ix(x, z, w)] = 0.25f * sm[Ix(xl, z, w)] + 0.5f * sm[Ix(x, z, w)] + 0.25f * sm[Ix(xr, z, w)];
+            }
+          }
+        });
+        Rows(w, h, [&](const int z0, const int z1) {
+          for (int z = z0; z < z1; ++z) {
+            const int zu = std::max(0, z - 1), zd = std::min(h - 1, z + 1);
+            for (int x = 0; x < w; ++x) sm[Ix(x, z, w)] = 0.25f * tmp[Ix(x, zu, w)] + 0.5f * tmp[Ix(x, z, w)] + 0.25f * tmp[Ix(x, zd, w)];
+          }
+        });
+      }
+      for (int z = 0; z < h; ++z) {
+        for (int x = 0; x < w; ++x) {
+          const std::size_t i = Ix(x, z, w);
+          const bool edge = x == 0 || z == 0 || x == w - 1 || z == h - 1;      // the outer ring keeps its own change (a pinned edge stays untouched)
+          after[i] = before[i] + (edge ? d[i] : d[i] + amount * (sm[i] - d[i]));
+        }
+      }
+    }
+
+    // ---- ops --------------------------------------------------------------------------------------------------------------------------------------
+
+    struct Results
+    {
+      Grid height, wear, deposit, flow, water, sediment;
+    };
+
+    Grid Shaped(const Grid& like) { return Grid(like.w, like.h, like.cell, like.ox, like.oz); }
+
+    bool Emit(const OpArgs& a, Results& r, Grid& out, std::string& err)
+    {
+      const std::string which = a.p.S("output", "height");
+      if (a.extra != nullptr) {
+        // drainage accumulation of the result as a 0..1 mask: log2 of the catchment (cells) over log2 of `accum_range`
+        if (a.p.N("masks", 1.0) != 0.0) {
+          std::vector<float> fill, area, slope;
+          FillSurface(r.height.v, r.height.w, r.height.h, 0.004f * r.height.cell, fill);
+          Drainage(fill, r.height.w, r.height.h, r.height.cell, 1.0f, area, slope);
+          Grid acc = Shaped(r.height);
+          const float inv = 1.0f / std::log2(std::max(4.0f, static_cast<float>(a.p.N("accum_range", 4000.0))));
+          for (std::size_t i = 0; i < area.size(); ++i) acc.v[i] = Clamp01(std::log2(std::max(1.0f, area[i])) * inv);
+          (*a.extra)["accum"] = std::move(acc);
+        }
+        (*a.extra)["wear"] = r.wear;
+        (*a.extra)["deposit"] = r.deposit;
+        (*a.extra)["flow"] = r.flow;
+        (*a.extra)["water"] = r.water;
+        (*a.extra)["sediment"] = r.sediment;
+      }
+      if (which == "height") out = std::move(r.height);
+      else if (which == "wear") out = std::move(r.wear);
+      else if (which == "deposit") out = std::move(r.deposit);
+      else if (which == "flow") out = std::move(r.flow);
+      else if (which == "water") out = std::move(r.water);
+      else if (which == "sediment") out = std::move(r.sediment);
+      else {
+        err = "unknown output '" + which + "' (height wear deposit flow water sediment)";
+        return false;
+      }
+      return true;
+    }
+
+    const Grid* NeedA(const OpArgs& a, std::string& err)
+    {
+      const auto it = a.in.find("a");
+      if (it == a.in.end()) {
+        err = "missing input 'a'";
+        return nullptr;
+      }
+      const auto m = a.in.find("mask");
+      if (m != a.in.end() && !m->second->SameShape(*it->second)) {
+        err = "the mask differs in size";
+        return nullptr;
+      }
+      return it->second.get();
+    }
+
+    const std::vector<float>* RockOf(const OpArgs& a)
+    {
+      const auto m = a.in.find("mask");
+      return m != a.in.end() ? &m->second->v : nullptr;
+    }
+
+    HydroParams HydroOf(const OpArgs& a)
+    {
+      HydroParams p;
+      p.iterations = std::max(0, std::min(20000, static_cast<int>(a.p.N("iterations", p.iterations))));
+      p.rain = static_cast<float>(a.p.N("rain", p.rain));
+      p.evaporation = static_cast<float>(a.p.N("evaporation", p.evaporation));
+      p.gain = static_cast<float>(a.p.N("gain", p.gain));
+      p.capacity = static_cast<float>(a.p.N("capacity", p.capacity));
+      p.erosion = static_cast<float>(a.p.N("erosion", p.erosion));
+      p.deposition = static_cast<float>(a.p.N("deposition", p.deposition));
+      p.depth_max = static_cast<float>(a.p.N("depth_max", p.depth_max));
+      p.min_slope = static_cast<float>(a.p.N("min_slope", p.min_slope));
+      p.max_speed = static_cast<float>(a.p.N("max_speed", p.max_speed));
+      p.cut_limit = static_cast<float>(a.p.N("cut_limit", p.cut_limit));
+      p.talus = static_cast<float>(a.p.N("talus", p.talus));
+      p.thermal = static_cast<float>(a.p.N("thermal", p.thermal));
+      p.thermal_every = static_cast<int>(a.p.N("thermal_every", p.thermal_every));
+      p.pin_border = a.p.S("edge", "open") != "closed";
+      p.settle = a.p.N("settle", 1.0) != 0.0;
+      p.track = a.p.N("masks", 1.0) != 0.0;
+      return p;
+    }
+
+    bool OpHydraulic(const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = NeedA(a, err);
+      if (src == nullptr) return false;
+      const HydroParams p = HydroOf(a);
+      HydroState st;
+      st.Allocate(src->w, src->h, src->cell);
+      st.t = src->v;
+      if (const std::vector<float>* rock = RockOf(a)) st.rock = *rock;
+      RunHydro(st, p, p.iterations);
+      SmoothDelta(src->v, st.t, src->w, src->h, static_cast<float>(a.p.N("smooth", 1.0)), static_cast<int>(a.p.N("smooth_passes", 1)));
+      Results r;
+      r.height = Shaped(*src);
+      r.height.v = st.t;
+      r.wear = Shaped(*src);
+      r.wear.v = st.wear;
+      r.deposit = Shaped(*src);
+      r.deposit.v = st.dep;
+      r.flow = Shaped(*src);
+      r.flow.v = st.flow;
+      r.water = Shaped(*src);
+      r.water.v = st.d;
+      r.sediment = Shaped(*src);
+      r.sediment.v = st.s;
+      return Emit(a, r, out, err);
+    }
+
+    bool OpDroplet(const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = NeedA(a, err);
+      if (src == nullptr) return false;
+      DropParams p;
+      p.density = static_cast<float>(a.p.N("density", p.density));
+      p.lifetime = std::max(1, std::min(200, static_cast<int>(a.p.N("lifetime", p.lifetime))));
+      p.inertia = Clamp01(static_cast<float>(a.p.N("inertia", p.inertia)));
+      p.capacity = static_cast<float>(a.p.N("capacity", p.capacity));
+      p.min_slope = static_cast<float>(a.p.N("min_slope", p.min_slope));
+      p.erode = static_cast<float>(a.p.N("erode", p.erode));
+      p.deposit = static_cast<float>(a.p.N("deposit", p.deposit));
+      p.evaporate = static_cast<float>(a.p.N("evaporate", p.evaporate));
+      p.gravity = static_cast<float>(a.p.N("gravity", p.gravity));
+      p.radius = std::max(1, std::min(8, static_cast<int>(a.p.N("radius", p.radius))));
+      p.speed = static_cast<float>(a.p.N("speed", p.speed));
+      p.water = static_cast<float>(a.p.N("water", p.water));
+      p.drain_pits = Clamp01(static_cast<float>(a.p.N("drain_pits", p.drain_pits)));
+      p.round_cut = std::max(0.01f, static_cast<float>(a.p.N("round_cut", p.round_cut)));
+      p.rounds = std::max(1, std::min(64, static_cast<int>(a.p.N("rounds", p.rounds))));
+      p.seed = static_cast<std::uint32_t>(a.p.N("seed", 1.0));
+      Results r;
+      r.height = *src;
+      r.wear = Shaped(*src);
+      r.deposit = Shaped(*src);
+      r.flow = Shaped(*src);
+      r.water = Shaped(*src);
+      r.sediment = Shaped(*src);
+      DropGrids g{&r.wear.v, &r.deposit.v, &r.flow.v};
+      RunDroplets(r.height.v, src->w, src->h, src->cell, p, RockOf(a), g);
+      SmoothDelta(src->v, r.height.v, src->w, src->h, static_cast<float>(a.p.N("smooth", 1.0)), static_cast<int>(a.p.N("smooth_passes", 2)));
+      const float thermal = static_cast<float>(a.p.N("thermal", 0.0));
+      const int steps = std::max(0, std::min(1000, static_cast<int>(a.p.N("thermal_steps", 0.0))));
+      if (thermal > 0.0f && steps > 0) {
+        ThermalScratch sc;
+        const std::vector<float> none;
+        for (int i = 0; i < steps; ++i) ThermalImpl(r.height.v, src->w, src->h, src->cell, static_cast<float>(a.p.N("talus", 0.8)), thermal, none, false, sc);
+      }
+      return Emit(a, r, out, err);
+    }
+
+    bool OpStream(const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = NeedA(a, err);
+      if (src == nullptr) return false;
+      StreamParams p;
+      p.iterations = std::max(0, std::min(1000, static_cast<int>(a.p.N("iterations", p.iterations))));
+      p.k = static_cast<float>(a.p.N("k", p.k));
+      p.m = static_cast<float>(a.p.N("m", p.m));
+      p.diffusion = static_cast<float>(a.p.N("diffusion", p.diffusion));
+      p.talus = static_cast<float>(a.p.N("talus", p.talus));
+      p.uplift = static_cast<float>(a.p.N("uplift", p.uplift));
+      p.max_cut = static_cast<float>(a.p.N("max_cut", p.max_cut));
+      p.area_min = static_cast<float>(a.p.N("area_min", p.area_min));
+      p.widen = std::max(0, std::min(8, static_cast<int>(a.p.N("widen", p.widen))));
+      p.spread = std::max(0.1f, static_cast<float>(a.p.N("spread", p.spread)));
+      p.breach = a.p.N("breach", 1.0) != 0.0;
+      Results r;
+      r.height = *src;
+      r.wear = Shaped(*src);
+      r.deposit = Shaped(*src);
+      r.flow = Shaped(*src);
+      r.water = Shaped(*src);
+      r.sediment = Shaped(*src);
+      std::vector<float> area;
+      RunStream(r.height.v, src->w, src->h, src->cell, p, RockOf(a), r.wear.v, area);
+      if (area.size() == r.flow.v.size()) r.flow.v = area;
+      return Emit(a, r, out, err);
+    }
+
+
+    /**
+     * Slope-area relation of the terrain (a quality statistic): on the pit filled surface the drainage area A of every cell and its steepest drop S are binned by log2(A);
+     * the result is a `bins` x 3 grid: row 0 = log2 of the bin's lowest area, row 1 = mean S, row 2 = number of cells. Eroded terrain follows S ~ A^-theta with theta around
+     * 0.45 (Flint's law) in the channel range; noise terrain has theta near 0.
+     */
+    bool OpSlopeArea(const OpArgs& a, Grid& out, std::string& err)
+    {
+      const auto it = a.in.find("a");
+      if (it == a.in.end()) {
+        err = "missing input 'a'";
+        return false;
+      }
+      const Grid& src = *it->second;
+      const int bins = std::max(2, std::min(24, static_cast<int>(a.p.N("bins", 12))));
+      const int first = std::max(0, std::min(10, static_cast<int>(a.p.N("first", 1))));
+      std::vector<float> fill, area, slope;
+      FillSurface(src.v, src.w, src.h, 0.004f * src.cell, fill);
+      Drainage(fill, src.w, src.h, src.cell, static_cast<float>(a.p.N("spread", 1.1)), area, slope);
+      out = Grid(bins, 3, 1.0f, 0.0f, 0.0f);
+      std::vector<double> sum(static_cast<std::size_t>(bins), 0.0), cnt(static_cast<std::size_t>(bins), 0.0);
+      for (std::size_t i = 0; i < area.size(); ++i) {
+        const int x = i % static_cast<std::size_t>(src.w), z = static_cast<int>(i / static_cast<std::size_t>(src.w));
+        if (x == 0 || z == 0 || x == src.w - 1 || z == src.h - 1) continue;
+        const int b = static_cast<int>(std::floor(std::log2(std::max(1.0f, area[i])))) - first;
+        if (b < 0 || b >= bins) continue;
+        sum[static_cast<std::size_t>(b)] += slope[i];
+        cnt[static_cast<std::size_t>(b)] += 1.0;
+      }
+      for (int b = 0; b < bins; ++b) {
+        out.At(b, 0) = static_cast<float>(b + first);
+        out.At(b, 1) = cnt[static_cast<std::size_t>(b)] > 0.0 ? static_cast<float>(sum[static_cast<std::size_t>(b)] / cnt[static_cast<std::size_t>(b)]) : 0.0f;
+        out.At(b, 2) = static_cast<float>(cnt[static_cast<std::size_t>(b)]);
+      }
+      return true;
+    }
+
+
+    /** Depth of the closed depressions: the pit filled surface minus the terrain (0 on ground that drains). A quality statistic and a mask source (lakes). */
+    bool OpBasinDepth(const OpArgs& a, Grid& out, std::string& err)
+    {
+      const auto it = a.in.find("a");
+      if (it == a.in.end()) {
+        err = "missing input 'a'";
+        return false;
+      }
+      const Grid& src = *it->second;
+      std::vector<float> fill;
+      FillSurface(src.v, src.w, src.h, 0.0f, fill);
+      out = Grid(src.w, src.h, src.cell, src.ox, src.oz);
+      for (std::size_t i = 0; i < fill.size(); ++i) out.v[i] = fill[i] - src.v[i];
+      return true;
+    }
+
+    struct Registrar
+    {
+      Registrar()
+      {
+        RegisterOp("erode_hydraulic", &OpHydraulic);
+        RegisterOp("erode_droplet", &OpDroplet);
+        RegisterOp("erode_stream", &OpStream);
+        RegisterOp("slope_area", &OpSlopeArea);
+        RegisterOp("basin_depth", &OpBasinDepth);
+      }
+    };
+    const Registrar gRegistrar{};
+  } // namespace
+
+  // ---- the local erosion brush ------------------------------------------------------------------------------------------------------------------
+
+  namespace
+  {
+    float RoundWeight(const double dist, const double radius, const double falloff)
+    {
+      if (dist >= radius) return 0.0f;
+      const double f = std::max(0.0, std::min(1.0, falloff));
+      const double width = std::min(radius, std::max(radius * f, 1.0));
+      const double inner = radius - width;
+      if (dist <= inner) return 1.0f;
+      return static_cast<float>(0.5 * (1.0 + std::cos(static_cast<double>(kPi) * (dist - inner) / width)));
+    }
+
+    std::uint16_t Word(const float height)
+    {
+      const float v = std::floor(height * 128.0f + 0.5f);
+      return static_cast<std::uint16_t>(v < 0.0f ? 0.0f : (v > 65535.0f ? 65535.0f : v));
+    }
+  } // namespace
+
+  void ErodeSession::Begin(const int w, const int h, const std::uint16_t* words, const HydroParams& params)
+  {
+    w_ = w;
+    h_ = h;
+    params_ = params;
+    const std::size_t n = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
+    t_.resize(n);
+    for (std::size_t i = 0; i < n; ++i) t_[i] = static_cast<float>(words[i]) * (1.0f / 128.0f);
+    d_.assign(n, 0.0f);
+    s_.assign(n, 0.0f);
+    for (auto& a : f_) a.assign(n, 0.0f);
+    dx0_ = w;
+    dz0_ = h;
+    dx1_ = -1;
+    dz1_ = -1;
+    active_ = w >= 3 && h >= 3;
+  }
+
+  void ErodeSession::End()
+  {
+    active_ = false;
+    t_.clear();
+    t_.shrink_to_fit();
+    d_.clear();
+    d_.shrink_to_fit();
+    s_.clear();
+    s_.shrink_to_fit();
+    for (auto& a : f_) {
+      a.clear();
+      a.shrink_to_fit();
+    }
+  }
+
+  bool ErodeSession::Dab(const BrushDab& dab, int& x0, int& z0, int& x1, int& z1, std::vector<std::uint16_t>& words)
+  {
+    if (!active_) return false;
+    const double radius = std::max(1.0, dab.radius);
+    double margin = dab.margin;
+    if (margin < 0.0) margin = (dab.mode == 1 ? 0.8 : 0.35) * radius + 3.0;
+    x0 = std::max(0, static_cast<int>(std::floor(dab.cx - radius - margin)) - 1);
+    z0 = std::max(0, static_cast<int>(std::floor(dab.cz - radius - margin)) - 1);
+    x1 = std::min(w_ - 1, static_cast<int>(std::ceil(dab.cx + radius + margin)) + 1);
+    z1 = std::min(h_ - 1, static_cast<int>(std::ceil(dab.cz + radius + margin)) + 1);
+    const int ww = x1 - x0 + 1;
+    const int wh = z1 - z0 + 1;
+    if (ww < 3 || wh < 3) return false;
+    const std::size_t n = static_cast<std::size_t>(ww) * static_cast<std::size_t>(wh);
+    HydroState st;
+    st.w = ww;
+    st.h = wh;
+    st.cell = 1.0f;
+    st.t.resize(n);
+    st.d.resize(n);
+    st.s.resize(n);
+    for (auto& a : st.f) a.resize(n);
+    st.rain_rate.resize(n);
+    st.erode_rate.resize(n);
+    const bool custom = dab.weights.size() == n;
+    for (int z = 0; z < wh; ++z) {
+      for (int x = 0; x < ww; ++x) {
+        const std::size_t i = Ix(x, z, ww);
+        const std::size_t m = Ix(x0 + x, z0 + z, w_);
+        st.t[i] = t_[m];
+        st.d[i] = d_[m];
+        st.s[i] = s_[m];
+        for (int k = 0; k < 4; ++k) st.f[k][i] = f_[k][m];
+        const double ddx = static_cast<double>(x0 + x) - dab.cx;
+        const double ddz = static_cast<double>(z0 + z) - dab.cz;
+        const double dist = std::sqrt(ddx * ddx + ddz * ddz);
+        const float wgt = custom ? dab.weights[i] : RoundWeight(dist, radius, dab.falloff);
+        st.rain_rate[i] = wgt;
+        st.erode_rate[i] = dab.mode == 1 ? RoundWeight(dist, radius + 0.9 * margin, 1.0) : wgt;
+        if (dab.mode == 2 && !(x == 0 || z == 0 || x == ww - 1 || z == wh - 1)) {
+          st.s[i] += static_cast<float>(dab.amount * dab.strength) * wgt;
+        }
+      }
+    }
+    HydroParams p = params_;
+    const float k = static_cast<float>(dab.strength);
+    p.rain *= k;
+    p.erosion = std::min(1.0f, p.erosion * k);
+    p.thermal = std::min(1.0f, p.thermal * k);
+    p.pin_border = true;
+    p.settle = false;
+    p.track = false;
+    if (dab.mode == 2) p.rain *= 0.5f;
+    RunHydro(st, p, std::max(0, dab.iterations));
+    words.resize(n);
+    for (int z = 0; z < wh; ++z) {
+      for (int x = 0; x < ww; ++x) {
+        const std::size_t i = Ix(x, z, ww);
+        const std::size_t m = Ix(x0 + x, z0 + z, w_);
+        t_[m] = st.t[i];
+        d_[m] = st.d[i];
+        s_[m] = st.s[i];
+        for (int q = 0; q < 4; ++q) f_[q][m] = st.f[q][i];
+        words[i] = Word(st.t[i]);
+      }
+    }
+    dx0_ = std::min(dx0_, x0);
+    dz0_ = std::min(dz0_, z0);
+    dx1_ = std::max(dx1_, x1);
+    dz1_ = std::max(dz1_, z1);
+    return true;
+  }
+
+  bool ErodeSession::Finish(int& x0, int& z0, int& x1, int& z1, std::vector<std::uint16_t>& words)
+  {
+    if (!active_ || dx1_ < dx0_ || dz1_ < dz0_) return false;
+    x0 = dx0_;
+    z0 = dz0_;
+    x1 = dx1_;
+    z1 = dz1_;
+    const int ww = x1 - x0 + 1;
+    const int wh = z1 - z0 + 1;
+    words.resize(static_cast<std::size_t>(ww) * static_cast<std::size_t>(wh));
+    for (int z = 0; z < wh; ++z) {
+      for (int x = 0; x < ww; ++x) {
+        const std::size_t m = Ix(x0 + x, z0 + z, w_);
+        t_[m] += s_[m];
+        s_[m] = 0.0f;
+        words[Ix(x, z, ww)] = Word(t_[m]);
+      }
+    }
+    return true;
+  }
+} // namespace moho::editor::field::erosion

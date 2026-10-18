@@ -1,4 +1,5 @@
 #include "moho/terrain/HighFidelityTerrain.h"
+#include "gpg/core/utils/Logging.h"
 #include <cstdio>
 
 #include <algorithm>
@@ -1422,6 +1423,11 @@ namespace moho
     const boost::shared_ptr<ID3DRenderTarget> refractionTexture,
     const boost::shared_ptr<ID3DRenderTarget> reflectionTexture)
   {
+    // CRASHFIX (editor): no camera bound yet (see DrawWaterLine): nothing to draw the water with.
+    if (mCamera == nullptr || mTerrainResource == nullptr || sHighFidelityWaterSurface == nullptr) {
+      return;
+    }
+
     const float inverseRenderWidth = 1.0F / static_cast<float>(mViewportRenderWidth);
     const float inverseRenderHeight = 1.0F / static_cast<float>(mViewportRenderHeight);
 
@@ -1459,6 +1465,26 @@ namespace moho
    */
   void HighFidelityTerrain::DrawWaterLine(const std::int32_t /*gameTick*/, const float /*deltaSeconds*/)
   {
+    // CRASHFIX (editor): a terrain that was created before the session's map existed (AddWorldView ran with a null terrain
+    // resource) never gets a camera from UpdateRenderContext, which returns early without a resource; the water mask then
+    // read `mCamera->view` through a null pointer inside d3dx9 (SetMatrix). Skip the water line of such a terrain.
+    if (mCamera == nullptr || mTerrainResource == nullptr || sHighFidelityWaterSurface == nullptr) {
+      static int sDiagBudget = 0;
+      if (sDiagBudget < 8) {
+        ++sDiagBudget;
+        gpg::Warnf(
+          "[WATERDIAG] DrawWaterLine skipped: camera=%p terrainRes=%p water=%p this=%p ren_Terrain=%d res=%dx%d",
+          static_cast<const void*>(mCamera),
+          static_cast<const void*>(mTerrainResource),
+          static_cast<const void*>(sHighFidelityWaterSurface),
+          static_cast<const void*>(this),
+          static_cast<int>(ren_Terrain),
+          mViewportWidth,
+          mViewportHeight);
+      }
+      return;
+    }
+
     (void)sHighFidelityWaterSurface->RenderWaterLayerAlphaMask(mCamera);
     DrawShoreline(&mShoreline, mCamera);
   }

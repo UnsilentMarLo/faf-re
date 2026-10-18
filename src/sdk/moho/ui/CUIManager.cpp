@@ -22,6 +22,9 @@ namespace
    */
   std::vector<boost::shared_ptr<moho::CMauiFrame>> gRetiredFrames;
 
+  /** Editor: key handlers of closed pop-out windows whose delete had to wait for the end of an event dispatch (same rule as the frames). */
+  std::vector<wxEvtHandler*> gRetiredHandlers;
+
   /**
    * Address: 0x0084E6F0 (FUN_0084E6F0, funcReleaseRange_WeakPtrFrame)
    *
@@ -67,6 +70,11 @@ namespace
     // queued) and must not mutate the container being iterated.
     std::vector<boost::shared_ptr<moho::CMauiFrame>> retired;
     retired.swap(gRetiredFrames);
+    std::vector<wxEvtHandler*> retiredHandlers;
+    retiredHandlers.swap(gRetiredHandlers);
+    for (wxEvtHandler* const handler : retiredHandlers) {
+      delete handler;
+    }
   }
 
   /**
@@ -264,9 +272,20 @@ void moho::CUIManager::RemovePopoutFrame(const int index)
   if (head < mFrames.Size() && mFrames[head]) {
     (void)window->PopEventHandler(false); // the frame's event mapper (pushed last)
     mFrames[head]->Destroy();
+    // CRASHFIX (editor): closing a pop-out from one of its own controls / keys runs here inside the event dispatch that still holds
+    // the frame: park the owner and the key handler until the next UI tick (see ReleaseFrameSharedPtrRange).
+    if (MAUI_EventDispatchInProgress()) {
+      gRetiredFrames.push_back(mFrames[head]);
+    }
     mFrames[head] = boost::shared_ptr<CMauiFrame>();
   }
-  delete window->PopEventHandler(false);  // the key handler pushed by AddPopoutFrame
+  if (wxEvtHandler* const keyHandler = window->PopEventHandler(false)) {  // the key handler pushed by AddPopoutFrame
+    if (MAUI_EventDispatchInProgress()) {
+      gRetiredHandlers.push_back(keyHandler);
+    } else {
+      delete keyHandler;
+    }
+  }
 
   mInputWindows[head] = nullptr;
   mHostWindows[head] = nullptr;
