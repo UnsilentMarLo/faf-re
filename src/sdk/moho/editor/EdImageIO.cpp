@@ -24,6 +24,7 @@
 #include "lua/LuaRuntimeTypes.h"
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/lua/CScrLuaInitForm.h"
+#include "moho/editor/EdIcon.h"
 
 namespace
 {
@@ -640,3 +641,17 @@ namespace
 
   const EdImageIOLuaBootstrap gEdImageIOLuaBootstrap{};
 } // namespace
+
+// EDITOR: file reader of EdImageIO (plain files and entries inside the game's archives) for the icon natives (EdIcon.cpp).
+namespace moho::edicon
+{
+  bool ReadAllBytes(const std::string& path, std::string& out)
+  {
+    std::vector<std::uint8_t> bytes;
+    if (!ReadAll(path, bytes)) {
+      return false;
+    }
+    out.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return true;
+  }
+} // namespace moho::edicon
