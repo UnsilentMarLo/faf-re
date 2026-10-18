@@ -6,8 +6,9 @@
 //   ed_icon_status()               -> "idle" | "pending" | "done" | "error", message
 //   ed_icon_result(outSize[, cx, cy, side]) -> pixels, w, h | nil, message     the two pictures matted into one RGBA picture (alpha from the black / white difference),
 //                                  the square (cx, cy, side in render pixels; default all) reduced to outSize x outSize by averaging; `pixels` is a flat table r, g, b, a, r, g, b, a ... of 0..255 (not premultiplied)
-//   ed_icon_bounds(threshold[, keepFraction]) -> minx, miny, maxx, maxy, count, size   box of the pixels with matted alpha above threshold (render pixels); separate areas smaller than
-//                                  keepFraction (default 0.1) of the largest one are ignored here and in ed_icon_result (its 5th argument)
+//   ed_icon_bounds(threshold[, keepFraction[, fx, fy, minProj]]) -> minx, miny, maxx, maxy, count, size   box of the pixels with matted alpha above threshold (render pixels); separate areas smaller than
+//                                  keepFraction (default 0.1) of the largest one are ignored here and in ed_icon_result (its 5th argument); with a screen direction (fx, fy) only the pixels in front of
+//                                  the middle of the body along it count (minProj: -1 all .. 0 the front half .. 1 nothing); ed_icon_result reduces with a Lanczos 3 filter
 //   ed_dds_write(path, w, h, pixels, mips) -> bytes | nil, message    DXT5 DDS (the layout of the shipped unit icons: no mip maps unless mips > 1)
 //   ed_dds_read(path)              -> pixels, w, h, mips, fourcc, bytes | nil, message    DXT1 / DXT3 / DXT5 / 32 bit DDS, mip 0; `path` is a disk path or a VFS
 //                                  path resolved by ed_vfs_to_disk (entries inside .scd archives work)
@@ -595,51 +596,121 @@ namespace
     std::vector<float> matte;
     std::vector<std::uint8_t> keep;
     MatteOf(onBlack, onWhite, size, 0.05f, keepFraction, matte, keep);
-    // matting: on black c * a, on white c * a + (1 - a) * 255, so a = 1 - (white - black) / 255 and the black picture is the premultiplied colour
+    // matting: on black c * a, on white c * a + (1 - a) * 255, so a = 1 - (white - black) / 255 and the black picture is the premultiplied colour.
+    // Reduction: separable Lanczos 3 on the premultiplied picture (sharper than a box average, and every output pixel is normalised by its own weights, so no moire from a
+    // non-integer ratio); render pixels outside the picture or outside the main body count as transparent.
     const float left = cx - side * 0.5f;
     const float top = cy - side * 0.5f;
     const float step = side / static_cast<float>(outSize);
-    std::vector<double> sumA(static_cast<std::size_t>(outSize) * static_cast<std::size_t>(outSize), 0.0);
-    std::vector<double> sumC(sumA.size() * 3, 0.0);
-    const int x0 = std::max(0, static_cast<int>(std::floor(left)));
-    const int x1 = std::min(size, static_cast<int>(std::ceil(left + side)));
-    const int y0 = std::max(0, static_cast<int>(std::floor(top)));
-    const int y1 = std::min(size, static_cast<int>(std::ceil(top + side)));
-    for (int y = y0; y < y1; ++y) {
-      const int oy = static_cast<int>(std::floor((static_cast<float>(y) + 0.5f - top) / step));
-      if (oy < 0 || oy >= outSize) {
+    const float scale = std::max(1.0f, step);                // filter width in source pixels per tap unit
+    const int support = static_cast<int>(std::ceil(3.0f * scale));
+    const auto lanczos = [](const float x) {
+      const float ax = std::fabs(x);
+      if (ax >= 3.0f) {
+        return 0.0f;
+      }
+      if (ax < 1e-5f) {
+        return 1.0f;
+      }
+      const float px = 3.14159265f * ax;
+      return 3.0f * std::sin(px) * std::sin(px / 3.0f) / (px * px);
+    };
+    const auto sample = [&](const int sx, const int sy, float* const out) {       // premultiplied r, g, b, a (0..255 / 0..1) of one render pixel
+      out[0] = out[1] = out[2] = out[3] = 0.0f;
+      if (sx < 0 || sy < 0 || sx >= size || sy >= size) {
+        return;
+      }
+      const std::size_t mi = static_cast<std::size_t>(sy) * static_cast<std::size_t>(size) + static_cast<std::size_t>(sx);
+      if (keep[mi] == 0) {
+        return;
+      }
+      const std::size_t sb = (static_cast<std::size_t>(sy) * static_cast<std::size_t>(onBlack.w) + static_cast<std::size_t>(sx)) * 4;
+      out[0] = onBlack.bgra[sb + 2];
+      out[1] = onBlack.bgra[sb + 1];
+      out[2] = onBlack.bgra[sb + 0];
+      out[3] = matte[mi] * 255.0f;
+    };
+    // horizontal pass over the rows the vertical pass will need
+    const int rowFirst = static_cast<int>(std::floor(top)) - support - 1;
+    const int rowLast = static_cast<int>(std::ceil(top + side)) + support + 1;
+    const int rowCount = rowLast - rowFirst + 1;
+    std::vector<float> horiz(static_cast<std::size_t>(rowCount) * static_cast<std::size_t>(outSize) * 4, 0.0f);
+    for (int ox = 0; ox < outSize; ++ox) {
+      const float centre = left + (static_cast<float>(ox) + 0.5f) * step;
+      const int first = static_cast<int>(std::floor(centre - static_cast<float>(support)));
+      const int last = static_cast<int>(std::ceil(centre + static_cast<float>(support)));
+      std::vector<float> weights;
+      float wsum = 0.0f;
+      for (int sx = first; sx <= last; ++sx) {
+        const float w = lanczos((static_cast<float>(sx) + 0.5f - centre) / scale);
+        weights.push_back(w);
+        wsum += w;
+      }
+      if (wsum < 1e-6f) {
         continue;
       }
-      for (int x = x0; x < x1; ++x) {
-        const int ox = static_cast<int>(std::floor((static_cast<float>(x) + 0.5f - left) / step));
-        if (ox < 0 || ox >= outSize) {
+      for (int r = 0; r < rowCount; ++r) {
+        const int sy = rowFirst + r;
+        if (sy < 0 || sy >= size) {
           continue;
         }
-        const std::size_t mi = static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x);
-        if (keep[mi] == 0) {
-          continue;
+        float acc[4] = {0, 0, 0, 0};
+        float px[4];
+        for (int sx = first; sx <= last; ++sx) {
+          const float w = weights[static_cast<std::size_t>(sx - first)];
+          if (w == 0.0f) {
+            continue;
+          }
+          sample(sx, sy, px);
+          for (int c = 0; c < 4; ++c) {
+            acc[c] += w * px[c];
+          }
         }
-        const std::size_t sb = (static_cast<std::size_t>(y) * static_cast<std::size_t>(onBlack.w) + static_cast<std::size_t>(x)) * 4;
-        const std::size_t o = static_cast<std::size_t>(oy) * static_cast<std::size_t>(outSize) + static_cast<std::size_t>(ox);
-        sumA[o] += matte[mi];
-        sumC[o * 3 + 0] += onBlack.bgra[sb + 2];       // premultiplied colour = the picture on black
-        sumC[o * 3 + 1] += onBlack.bgra[sb + 1];
-        sumC[o * 3 + 2] += onBlack.bgra[sb + 0];
+        float* const dst = &horiz[(static_cast<std::size_t>(r) * static_cast<std::size_t>(outSize) + static_cast<std::size_t>(ox)) * 4];
+        for (int c = 0; c < 4; ++c) {
+          dst[c] = acc[c] / wsum;
+        }
       }
     }
     Image img;
     img.w = outSize;
     img.h = outSize;
-    img.px.resize(sumA.size());
-    const double cell = static_cast<double>(step) * static_cast<double>(step);      // source pixels per output pixel (whole render area counts: outside is transparent)
-    for (std::size_t i = 0; i < img.px.size(); ++i) {
-      const double a = std::min(1.0, sumA[i] / cell);
-      Rgba& p = img.px[i];
-      p.a = static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, a * 255.0 + 0.5)));
-      if (a > 0.004) {
-        for (int c = 0; c < 3; ++c) {
-          const double v = (sumC[i * 3 + static_cast<std::size_t>(c)] / cell) / a;
-          (&p.r)[c] = static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, v + 0.5)));
+    img.px.resize(static_cast<std::size_t>(outSize) * static_cast<std::size_t>(outSize));
+    for (int oy = 0; oy < outSize; ++oy) {
+      const float centre = top + (static_cast<float>(oy) + 0.5f) * step;
+      const int first = static_cast<int>(std::floor(centre - static_cast<float>(support)));
+      const int last = static_cast<int>(std::ceil(centre + static_cast<float>(support)));
+      std::vector<float> weights;
+      float wsum = 0.0f;
+      for (int sy = first; sy <= last; ++sy) {
+        const float w = lanczos((static_cast<float>(sy) + 0.5f - centre) / scale);
+        weights.push_back(w);
+        wsum += w;
+      }
+      if (wsum < 1e-6f) {
+        continue;
+      }
+      for (int ox = 0; ox < outSize; ++ox) {
+        float acc[4] = {0, 0, 0, 0};
+        for (int sy = first; sy <= last; ++sy) {
+          const int r = sy - rowFirst;
+          if (r < 0 || r >= rowCount) {
+            continue;
+          }
+          const float w = weights[static_cast<std::size_t>(sy - first)];
+          const float* const src = &horiz[(static_cast<std::size_t>(r) * static_cast<std::size_t>(outSize) + static_cast<std::size_t>(ox)) * 4];
+          for (int c = 0; c < 4; ++c) {
+            acc[c] += w * src[c];
+          }
+        }
+        const float a = std::max(0.0f, std::min(255.0f, acc[3] / wsum));
+        Rgba& p = img.px[static_cast<std::size_t>(oy) * static_cast<std::size_t>(outSize) + static_cast<std::size_t>(ox)];
+        p.a = static_cast<std::uint8_t>(a + 0.5f);
+        if (a > 1.0f) {
+          for (int c = 0; c < 3; ++c) {
+            const float v = (acc[c] / wsum) * 255.0f / a;       // un-premultiply (the colours are premultiplied 0..255, the alpha 0..255)
+            (&p.r)[c] = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, v + 0.5f)));
+          }
         }
       }
     }
@@ -673,6 +744,29 @@ namespace
     std::vector<float> matte;
     std::vector<std::uint8_t> keep;
     MatteOf(onBlack, onWhite, size, threshold, keepFraction, matte, keep);
+    // optional: only the front half. (fx, fy) is the direction on the screen the unit's front points to; pixels behind the middle of the body along it (middle + minProj * half extent) are left out
+    const float fdx = NumArg(L, 3, 0.0f);
+    const float fdy = NumArg(L, 4, 0.0f);
+    const float minProj = NumArg(L, 5, 0.0f);
+    float cut = -1e30f;
+    const float flen = std::sqrt(fdx * fdx + fdy * fdy);
+    if (flen > 1e-6f) {
+      float pmin = 1e30f;
+      float pmax = -1e30f;
+      for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+          const std::size_t mi = static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x);
+          if (matte[mi] > threshold && keep[mi] != 0) {
+            const float p = (static_cast<float>(x) * fdx + static_cast<float>(y) * fdy) / flen;
+            pmin = std::min(pmin, p);
+            pmax = std::max(pmax, p);
+          }
+        }
+      }
+      if (pmax > pmin) {
+        cut = (pmin + pmax) * 0.5f + minProj * (pmax - pmin) * 0.5f;
+      }
+    }
     int minx = size;
     int miny = size;
     int maxx = -1;
@@ -682,6 +776,9 @@ namespace
       for (int x = 0; x < size; ++x) {
         const std::size_t mi = static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x);
         if (matte[mi] > threshold && keep[mi] != 0) {
+          if (flen > 1e-6f && (static_cast<float>(x) * fdx + static_cast<float>(y) * fdy) / flen < cut) {
+            continue;
+          }
           minx = std::min(minx, x);
           maxx = std::max(maxx, x);
           miny = std::min(miny, y);
