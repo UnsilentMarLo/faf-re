@@ -10,12 +10,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include <windows.h>
 #include <commdlg.h>
 #include <wincodec.h>
+
+#include <zlib.h>
 
 #include "lua/LuaPrimitives.h"
 #include "lua/LuaRuntimeTypes.h"
@@ -274,6 +277,301 @@ namespace
     return 3;
   }
 
+  // ---- files inside the game's archives ---------------------------------------------------------------------------------------------------
+
+  // The virtual file system resolves a texture of the game data to a path like `...\gamedata\env.scd\env\evergreen\layers\x.dds`: a name inside a zip archive. This
+  // reads such a path (or a plain file) into memory: finds the archive part (.scd / .nx2 / .zip), looks the entry up in the zip central directory and inflates it.
+  bool ReadAll(const std::string& path, std::vector<std::uint8_t>& out)
+  {
+    std::string p = path;
+    for (char& c : p) {
+      if (c == '\\') c = '/';
+    }
+    std::string lower = p;
+    for (char& c : lower) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+
+    const auto readPlain = [&](const std::string& file) {
+      HANDLE h = CreateFileW(Widen(file.c_str()).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (h == INVALID_HANDLE_VALUE) {
+        return false;
+      }
+      LARGE_INTEGER size{};
+      GetFileSizeEx(h, &size);
+      out.resize(static_cast<std::size_t>(size.QuadPart));
+      DWORD read = 0;
+      const BOOL ok = ReadFile(h, out.data(), static_cast<DWORD>(out.size()), &read, nullptr);
+      CloseHandle(h);
+      return ok && read == out.size();
+    };
+
+    std::size_t split = std::string::npos;
+    for (const char* ext : {".scd/", ".nx2/", ".zip/"}) {
+      const std::size_t at = lower.find(ext);
+      if (at != std::string::npos && (split == std::string::npos || at < split)) {
+        split = at + 4;           // the archive path ends after the extension
+      }
+    }
+    if (split == std::string::npos) {
+      return readPlain(p);
+    }
+    const std::string archive = p.substr(0, split);
+    std::string inner = lower.substr(split + 1);
+
+    HANDLE h = CreateFileW(Widen(archive.c_str()).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+      return false;
+    }
+    const auto readAt = [&](const std::uint64_t offset, void* const dst, const DWORD count) {
+      LARGE_INTEGER li{};
+      li.QuadPart = static_cast<LONGLONG>(offset);
+      if (!SetFilePointerEx(h, li, nullptr, FILE_BEGIN)) {
+        return false;
+      }
+      DWORD got = 0;
+      return ReadFile(h, dst, count, &got, nullptr) != 0 && got == count;
+    };
+    LARGE_INTEGER total{};
+    GetFileSizeEx(h, &total);
+    const std::uint64_t size = static_cast<std::uint64_t>(total.QuadPart);
+    bool done = false;
+    const std::uint64_t tailSize = std::min<std::uint64_t>(size, 70000);
+    std::vector<std::uint8_t> tail(static_cast<std::size_t>(tailSize));
+    if (readAt(size - tailSize, tail.data(), static_cast<DWORD>(tailSize))) {
+      std::int64_t eocd = -1;
+      for (std::int64_t i = static_cast<std::int64_t>(tail.size()) - 22; i >= 0; --i) {
+        if (tail[i] == 0x50 && tail[i + 1] == 0x4b && tail[i + 2] == 5 && tail[i + 3] == 6) {
+          eocd = i;
+          break;
+        }
+      }
+      if (eocd >= 0) {
+        std::uint32_t cdSize = 0;
+        std::uint32_t cdOffset = 0;
+        std::memcpy(&cdSize, tail.data() + eocd + 12, 4);
+        std::memcpy(&cdOffset, tail.data() + eocd + 16, 4);
+        std::vector<std::uint8_t> cd(cdSize);
+        if (readAt(cdOffset, cd.data(), cdSize)) {
+          std::size_t pos = 0;
+          while (pos + 46 <= cd.size() && !done) {
+            std::uint32_t sig = 0;
+            std::memcpy(&sig, cd.data() + pos, 4);
+            if (sig != 0x02014b50u) {
+              break;
+            }
+            std::uint16_t method = 0;
+            std::uint32_t csize = 0;
+            std::uint32_t usize = 0;
+            std::uint16_t nameLen = 0;
+            std::uint16_t extraLen = 0;
+            std::uint16_t commentLen = 0;
+            std::uint32_t local = 0;
+            std::memcpy(&method, cd.data() + pos + 10, 2);
+            std::memcpy(&csize, cd.data() + pos + 20, 4);
+            std::memcpy(&usize, cd.data() + pos + 24, 4);
+            std::memcpy(&nameLen, cd.data() + pos + 28, 2);
+            std::memcpy(&extraLen, cd.data() + pos + 30, 2);
+            std::memcpy(&commentLen, cd.data() + pos + 32, 2);
+            std::memcpy(&local, cd.data() + pos + 42, 4);
+            std::string name(reinterpret_cast<const char*>(cd.data() + pos + 46), nameLen);
+            for (char& c : name) {
+              if (c == '\\') c = '/';
+              c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+            }
+            if (name == inner) {
+              std::uint8_t lh[30] = {};
+              if (readAt(local, lh, 30)) {
+                std::uint16_t ln = 0;
+                std::uint16_t le = 0;
+                std::memcpy(&ln, lh + 26, 2);
+                std::memcpy(&le, lh + 28, 2);
+                std::vector<std::uint8_t> raw(csize);
+                if (readAt(static_cast<std::uint64_t>(local) + 30 + ln + le, raw.data(), csize)) {
+                  if (method == 0) {
+                    out = raw;
+                    done = true;
+                  } else if (method == 8) {
+                    out.assign(usize, 0);
+                    z_stream zs{};
+                    if (inflateInit2(&zs, -15) == Z_OK) {
+                      zs.next_in = raw.data();
+                      zs.avail_in = csize;
+                      zs.next_out = out.data();
+                      zs.avail_out = usize;
+                      const int rc = inflate(&zs, Z_FINISH);
+                      inflateEnd(&zs);
+                      done = (rc == Z_STREAM_END);
+                    }
+                  }
+                }
+              }
+              break;
+            }
+            pos += 46u + nameLen + extraLen + commentLen;
+          }
+        }
+      }
+    }
+    CloseHandle(h);
+    return done;
+  }
+
+  // ---- ed_image_avg ----------------------------------------------------------------------------------------------------------------------
+
+  // ed_image_avg(path) -> r, g, b   the average colour (0..255) of an image (alpha-weighted); nil when it cannot be read
+  int __cdecl cfunc_EdImageAvg(lua_State* const L)
+  {
+    const char* const utf8 = lua_tostring(L, 1);
+    if (utf8 == nullptr) {
+      return Fail(L, "bad arguments");
+    }
+    ComScope com;
+    Ptr<IWICImagingFactory> factory;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)))) {
+      return Fail(L, "WIC is not available");
+    }
+    std::vector<std::uint8_t> bytes;
+    if (!ReadAll(utf8, bytes) || bytes.empty()) {
+      return Fail(L, "cannot read the file");
+    }
+    Ptr<IWICStream> memory;
+    Ptr<IWICBitmapDecoder> decoder;
+    Ptr<IWICBitmapFrameDecode> frame;
+    Ptr<IWICFormatConverter> converter;
+    if (FAILED(factory->CreateStream(&memory)) || FAILED(memory->InitializeFromMemory(bytes.data(), static_cast<DWORD>(bytes.size()))) ||
+        FAILED(factory->CreateDecoderFromStream(memory.p, nullptr, WICDecodeMetadataCacheOnDemand, &decoder)) ||
+        FAILED(decoder->GetFrame(0, &frame)) || FAILED(factory->CreateFormatConverter(&converter)) ||
+        FAILED(converter->Initialize(frame.p, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) {
+      return Fail(L, "cannot decode the image");
+    }
+    UINT w = 0;
+    UINT h = 0;
+    if (FAILED(converter->GetSize(&w, &h)) || w == 0 || h == 0 || static_cast<unsigned long long>(w) * h > 64ULL * 1024 * 1024) {
+      return Fail(L, "bad image size");
+    }
+    std::vector<std::uint8_t> px(static_cast<std::size_t>(w) * h * 4);
+    if (FAILED(converter->CopyPixels(nullptr, w * 4U, static_cast<UINT>(px.size()), px.data()))) {
+      return Fail(L, "cannot copy the pixels");
+    }
+    double r = 0;
+    double g = 0;
+    double b = 0;
+    double weight = 0;
+    for (std::size_t i = 0; i < px.size(); i += 4) {
+      const double a = px[i + 3] / 255.0;
+      b += px[i] * a;
+      g += px[i + 1] * a;
+      r += px[i + 2] * a;
+      weight += a;
+    }
+    if (weight <= 0.0) {
+      weight = 1.0;
+    }
+    lua_pushnumber(L, static_cast<lua_Number>(std::floor(r / weight + 0.5)));
+    lua_pushnumber(L, static_cast<lua_Number>(std::floor(g / weight + 0.5)));
+    lua_pushnumber(L, static_cast<lua_Number>(std::floor(b / weight + 0.5)));
+    return 3;
+  }
+
+  // ---- ed_scmap_set_preview --------------------------------------------------------------------------------------------------------------
+
+  void Put32(std::string& out, const std::uint32_t v)
+  {
+    for (int i = 0; i < 4; ++i) {
+      out.push_back(static_cast<char>((v >> (8 * i)) & 0xFFu));
+    }
+  }
+
+  // ed_scmap_set_preview(path, w, h, pixels) -> true | nil, message
+  // Replaces the preview image of an .scmap file (the blob after the 30 byte header: an i32 byte count and an uncompressed ARGB DDS) by w x h pixels,
+  // `pixels` being numbers 0xRRGGBB, row major. The rest of the file is copied unchanged.
+  int __cdecl cfunc_EdScmapSetPreview(lua_State* const L)
+  {
+    const char* const utf8 = lua_tostring(L, 1);
+    const int w = static_cast<int>(luaL_checknumber(L, 2));
+    const int h = static_cast<int>(luaL_checknumber(L, 3));
+    luaL_checktype(L, 4, LUA_TTABLE);
+    if (utf8 == nullptr || w < 1 || h < 1 || w > 4096 || h > 4096) {
+      return Fail(L, "bad arguments");
+    }
+    const std::wstring path = Widen(utf8);
+    std::string file;
+    {
+      HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (f == INVALID_HANDLE_VALUE) {
+        return Fail(L, "cannot open the map file");
+      }
+      LARGE_INTEGER size{};
+      GetFileSizeEx(f, &size);
+      file.resize(static_cast<std::size_t>(size.QuadPart));
+      DWORD read = 0;
+      const BOOL ok = ReadFile(f, file.data(), static_cast<DWORD>(file.size()), &read, nullptr);
+      CloseHandle(f);
+      if (!ok || read != file.size()) {
+        return Fail(L, "cannot read the map file");
+      }
+    }
+    if (file.size() < 40) {
+      return Fail(L, "not a map file");
+    }
+    std::uint32_t signature = 0;
+    std::memcpy(&signature, file.data(), 4);
+    std::uint32_t oldBytes = 0;
+    std::memcpy(&oldBytes, file.data() + 30, 4);
+    if (signature != 0x1A70614Du || 34ull + oldBytes > file.size()) {
+      return Fail(L, "not a version 2 map file");
+    }
+
+    std::string dds;
+    dds.append("DDS ", 4);
+    Put32(dds, 124);
+    Put32(dds, 0x1u | 0x2u | 0x4u | 0x1000u | 0x8u);
+    Put32(dds, static_cast<std::uint32_t>(h));
+    Put32(dds, static_cast<std::uint32_t>(w));
+    Put32(dds, static_cast<std::uint32_t>(w) * 4u);
+    Put32(dds, 0);
+    Put32(dds, 0);
+    dds.append(44, '\0');
+    Put32(dds, 32);
+    Put32(dds, 0x41);
+    Put32(dds, 0);
+    Put32(dds, 32);
+    Put32(dds, 0x00FF0000u);
+    Put32(dds, 0x0000FF00u);
+    Put32(dds, 0x000000FFu);
+    Put32(dds, 0xFF000000u);
+    Put32(dds, 0x1000u);
+    Put32(dds, 0);
+    Put32(dds, 0);
+    Put32(dds, 0);
+    Put32(dds, 0);
+    const std::size_t count = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
+    for (std::size_t i = 0; i < count; ++i) {
+      lua_rawgeti(L, 4, static_cast<int>(i + 1));
+      const std::uint32_t rgb = static_cast<std::uint32_t>(std::max(0.0, lua_tonumber(L, -1))) & 0xFFFFFFu;
+      lua_settop(L, -2);
+      Put32(dds, 0xFF000000u | rgb);        // B, G, R, A in memory = 0xAARRGGBB little endian
+    }
+
+    std::string out;
+    out.append(file, 0, 30);
+    Put32(out, static_cast<std::uint32_t>(dds.size()));
+    out.append(dds);
+    out.append(file, 34ull + oldBytes, std::string::npos);
+
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) {
+      return Fail(L, "cannot write the map file");
+    }
+    DWORD written = 0;
+    const BOOL ok = WriteFile(f, out.data(), static_cast<DWORD>(out.size()), &written, nullptr);
+    CloseHandle(f);
+    if (!ok || written != out.size()) {
+      return Fail(L, "write failed");
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+
   // ---- ed_file_dialog --------------------------------------------------------------------------------------------------------------------
 
   int __cdecl cfunc_EdFileDialog(lua_State* const L)
@@ -334,6 +632,8 @@ namespace
       auto& set = UserLuaInitSet();
       (void)new moho::CScrLuaBinder(set, "ed_image_write16", &cfunc_EdImageWrite16, nullptr, "<global>", "ed_image_write16(path, w, h, values) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_image_read16", &cfunc_EdImageRead16, nullptr, "<global>", "ed_image_read16(path[, tw, th]) -> values, w, h | nil, message");
+      (void)new moho::CScrLuaBinder(set, "ed_image_avg", &cfunc_EdImageAvg, nullptr, "<global>", "ed_image_avg(path) -> r, g, b");
+      (void)new moho::CScrLuaBinder(set, "ed_scmap_set_preview", &cfunc_EdScmapSetPreview, nullptr, "<global>", "ed_scmap_set_preview(path, w, h, pixels) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_file_dialog", &cfunc_EdFileDialog, nullptr, "<global>", "ed_file_dialog(save, title, filter, name) -> path | nil");
     }
   };
