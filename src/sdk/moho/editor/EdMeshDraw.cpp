@@ -26,6 +26,8 @@
 #include "moho/render/Shadow.h"
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/d3d/CD3DDevice.h"
+#include "moho/misc/StartupHelpers.h"
+#include "moho/render/WRenViewport.h"
 #include "moho/render/d3d/CD3DRenderTarget.h"
 #include "moho/sim/STIMap.h"
 #include "moho/terrain/water/CWaterShaderProperties.h"
@@ -558,6 +560,23 @@ float4 PS() : COLOR {
     void ReleaseGpu()
     {
       ReleaseAll();
+    }
+
+    void ApplyHeightBands()
+    {
+      float low = 0.0f, high = 0.0f;
+      if (!gMap.Loaded() || !gMap.HeightRange(32.0f, low, high)) {
+        return;
+      }
+      // (the engine's names are swapped: `patch_maxMapHeight` holds the bottom of the band, `patch_minMapHeight` its top, see Sim_Create_exxt)
+      moho::patch_maxMapHeight = std::min(moho::patch_maxMapHeight, low - 5.0f);
+      moho::patch_minMapHeight = std::max(moho::patch_minMapHeight, high + 30.0f);
+      if (CD3DDevice* const device = D3D_GetDevice(); device != nullptr) {
+        if (WRenViewport* const viewport = device->GetViewport(); viewport != nullptr) {
+          viewport->mRangeRenderer.Init();
+          viewport->mVisionRenderer.Init();
+        }
+      }
     }
 
     // ---- the surface pass -----------------------------------------------------------------------------------------------------------

@@ -50,6 +50,10 @@ namespace moho
     /// The ray under a pixel of the world view (`px`, `py` from the view's top left, `vw` x `vh` its size): origin and unit direction. False before the first frame.
     bool CameraRay(float px, float py, float vw, float vh, float origin[3], float dir[3]);
 
+    /// Widens the height band of the range ring and vision volumes to the mesh (lowest vertex in the playable area - 5 .. highest + 30; the retail patch does
+    /// the same with the manifest's ground_low / mesh_high) and rebuilds those volumes. They read the height field's range once, when the sim is created.
+    void ApplyHeightBands();
+
     /// Frees the GPU copies (map unload, device reset).
     void ReleaseGpu();
 

@@ -51,6 +51,7 @@ namespace
       lua_pushstring(L, moho::edmesh::Map().error.c_str());
       return 2;
     }
+    moho::edmesh::ApplyHeightBands();
     lua_pushboolean(L, 1);
     return 1;
   }
