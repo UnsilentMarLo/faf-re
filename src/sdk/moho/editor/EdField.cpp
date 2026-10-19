@@ -7,6 +7,7 @@
 //   ed_field_stratum(stratum[, raw])           -> f      paint mask of engine stratum 0..7 as 0..1 (the effective value the shader uses) or raw bytes 0..255;
 //                                                       one sample per mask cell, cell = world size of a mask cell
 //   ed_field_tt()                              -> f      the terrain-type grid as TypeCodes (stage T2); ed_field_commit_tt(f[, {mask}]) -> before, changed writes codes back
+//   ed_field_wmask(kind)                       -> f      a water mask (0 foam, 1 flatness, 2 depth bias) as 0..1 (bytes / 255), (map / 2)^2 samples; ed_field_commit_wmask(f, kind[, {mask, strength}]) -> before, changed
 //   ed_field_new(w, h, value[, cell, ox, oz])  -> f      constant field
 //   ed_field_from_table(w, h, values[, cell, ox, oz]) -> f
 //   ed_field_image(path[, {as='unit'|'height', width, height, cell}]) -> f   16-bit greyscale image (PNG, TIFF, raw); 'unit' = 0..1 (default), 'height' = words / 128
@@ -42,6 +43,7 @@
 #include "lua/LuaRuntimeTypes.h"
 #include "moho/editor/EdFieldCore.h"
 #include "moho/editor/EdStrata.h"
+#include "moho/editor/EdEnv.h"
 #include "moho/editor/EdTerrainType.h"
 #include "moho/editor/EditorDocument.h"
 #include "moho/lua/CScrLuaBinder.h"
@@ -746,6 +748,82 @@ namespace
     return 2;
   }
 
+  /** A water mask as a field (0..255 bytes scaled to 0..1; one sample per mask cell, cell = 2 world units). */
+  int __cdecl cfunc_WaterMask(lua_State* const L)
+  {
+    const int kind = static_cast<int>(luaL_checknumber(L, 1));
+    if (!moho::editor::AttachDocument(false)) {
+      return Fail(L, "no terrain");
+    }
+    std::vector<std::uint8_t> bytes;
+    int mw = 0;
+    int mh = 0;
+    if (!moho::editor::WaterMaskRead(kind, bytes, mw, mh)) {
+      return Fail(L, "no water mask");
+    }
+    const float ps = static_cast<float>(moho::editor::Document().Width() - 1) / static_cast<float>(mw);
+    Grid g(mw, mh, ps, 0.5f * ps, 0.5f * ps);
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+      g.v[i] = static_cast<float>(bytes[i]) / 255.0f;
+    }
+    lua_pushnumber(L, Store(std::move(g)));
+    return 1;
+  }
+
+  /** ed_field_commit_wmask(f, kind[, {mask, strength}]) -> before, changed: writes a field (0..1) into a water mask; `before` is a field of the old values (commit it again to undo). */
+  int __cdecl cfunc_CommitWaterMask(lua_State* const L)
+  {
+    const GridPtr f = Arg(L, 1);
+    const int kind = static_cast<int>(luaL_checknumber(L, 2));
+    if (!moho::editor::AttachDocument(false)) {
+      return Fail(L, "no terrain");
+    }
+    std::vector<std::uint8_t> bytes;
+    int mw = 0;
+    int mh = 0;
+    if (!moho::editor::WaterMaskRead(kind, bytes, mw, mh)) {
+      return Fail(L, "no water mask");
+    }
+    GridPtr mask;
+    if (lua_type(L, 3) == LUA_TTABLE) {
+      lua_pushstring(L, "mask");
+      lua_gettable(L, 3);
+      if (lua_type(L, -1) == LUA_TNUMBER) {
+        mask = Find(static_cast<int>(lua_tonumber(L, -1)));
+      }
+      lua_settop(L, -2);
+    }
+    const float strength = static_cast<float>(OptField(L, 3, "strength", 1.0));
+    const float ps = static_cast<float>(moho::editor::Document().Width() - 1) / static_cast<float>(mw);
+    Grid before(mw, mh, ps, 0.5f * ps, 0.5f * ps);
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+      before.v[i] = static_cast<float>(bytes[i]) / 255.0f;
+    }
+    const bool same = f->w == mw && f->h == mh;
+    std::vector<std::uint8_t> next(bytes.size());
+    std::size_t changed = 0;
+    for (int z = 0; z < mh; ++z) {
+      for (int x = 0; x < mw; ++x) {
+        const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(mw) + static_cast<std::size_t>(x);
+        const double wx = (x + 0.5) * ps;
+        const double wz = (z + 0.5) * ps;
+        float v = same ? f->At(x, z) : fld::SampleWorld(*f, wx, wz);
+        const float old = static_cast<float>(bytes[i]) / 255.0f;
+        float m = strength;
+        if (mask) m *= std::max(0.0f, std::min(1.0f, fld::SampleWorld(*mask, wx, wz)));
+        if (m < 1.0f) v = old + (v - old) * m;
+        next[i] = static_cast<std::uint8_t>(std::floor(std::max(0.0f, std::min(1.0f, v)) * 255.0f + 0.5f));
+        if (next[i] != bytes[i]) ++changed;
+      }
+    }
+    if (changed > 0 && !moho::editor::WaterMaskWrite(kind, next.data(), mw, mh)) {
+      return Fail(L, "cannot write the water mask");
+    }
+    lua_pushnumber(L, Store(std::move(before)));
+    lua_pushnumber(L, static_cast<lua_Number>(changed));
+    return 2;
+  }
+
   // ---- housekeeping --------------------------------------------------------------------------------------------------------------------------
 
   int __cdecl cfunc_Copy(lua_State* const L)
@@ -830,6 +908,8 @@ namespace
       bind("ed_field_commit_mask", &cfunc_CommitMask, "ed_field_commit_mask(f, stratum[, opts]) -> before, changed");
       bind("ed_field_tt", &cfunc_TerrainType, "ed_field_tt() -> field of the terrain-type grid (TypeCodes)");
       bind("ed_field_commit_tt", &cfunc_CommitTerrainType, "ed_field_commit_tt(f[, {mask}]) -> before, changed");
+      bind("ed_field_wmask", &cfunc_WaterMask, "ed_field_wmask(kind) -> field of a water mask");
+      bind("ed_field_commit_wmask", &cfunc_CommitWaterMask, "ed_field_commit_wmask(f, kind[, opts]) -> before, changed");
       bind("ed_field_copy", &cfunc_Copy, "ed_field_copy(f) -> f2");
       bind("ed_field_free", &cfunc_Free, "ed_field_free(f)");
       bind("ed_field_free_all", &cfunc_FreeAll, "ed_field_free_all()");
