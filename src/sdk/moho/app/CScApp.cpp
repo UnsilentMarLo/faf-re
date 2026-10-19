@@ -1166,7 +1166,8 @@ bool CScApp::CreateDevice()
   moho::sDeviceLock = true;
   DeviceLockGuard lockGuard{};
 
-  msvc8::string title("Forged Alliance");
+  // editor: an editor session names its window from the start (the loading screen shows it); ed_app_set_title changes it later
+  msvc8::string title(moho::CFG_GetArgOption("/editor", 0, nullptr) ? "FAF Studio" : "Forged Alliance");
   msvc8::vector<msvc8::string> options;
   moho::IUserPrefs* const preferences = moho::USER_GetPreferences();
 

@@ -55,7 +55,7 @@ namespace
     }
     wchar_t title[256] = {};
     ::GetWindowTextW(h, title, 255);
-    const bool engineTitle = (std::wstring(title) == L"Forged Alliance");
+    const bool engineTitle = (std::wstring(title) == L"Forged Alliance") || (std::wstring(title) == L"FAF Studio");
     if (st->best == nullptr || (engineTitle && !st->bestIsEngineTitle)) {
       st->best = h;
       st->bestIsEngineTitle = engineTitle;
