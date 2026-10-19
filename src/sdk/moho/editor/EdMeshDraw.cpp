@@ -168,6 +168,24 @@ float4 PS(float2 uv : TEXCOORD0, float facing : TEXCOORD1) : COLOR {
 }
 )";
 
+      // The void fill: one huge rectangle drawn at the far plane, so it only shows where nothing else was drawn (water to the horizon, or the colour of a canyon map's void).
+      const char kFillVertexShader[] = R"(
+row_major float4x4 ViewProj : register(c0);
+float4 VS(float3 pos : POSITION) : POSITION {
+    float4 p = mul(float4(pos, 1.0), ViewProj);
+    p.z = p.w * 0.99999;
+    return p;
+}
+)";
+
+      const char kFillPixelShader[] = R"(
+float4 Fill : register(c0);        // rgb colour, w 1: take the deep end of FA's water ramp instead
+sampler WaterRamp : register(s6);
+float4 PS() : COLOR {
+    return float4(lerp(Fill.rgb, tex2D(WaterRamp, float2(0.97, 0.5)).rgb, Fill.w), 0.0);
+}
+)";
+
       // ---- state -----------------------------------------------------------------------------------------------------------------------
 
       MeshMap gMap;
@@ -194,7 +212,10 @@ float4 PS(float2 uv : TEXCOORD0, float facing : TEXCOORD1) : COLOR {
         IDirect3DPixelShader9* depthPs = nullptr;
         IDirect3DVertexShader9* skyVs = nullptr;
         IDirect3DPixelShader9* skyPs = nullptr;
+        IDirect3DVertexShader9* fillVs = nullptr;
+        IDirect3DPixelShader9* fillPs = nullptr;
         IDirect3DVertexDeclaration9* decl = nullptr;
+        IDirect3DVertexDeclaration9* fillDecl = nullptr;
         IDirect3DTexture9* white = nullptr;
         IDirect3DTexture9* gray = nullptr;
         IDirect3DTexture9* flatNormal = nullptr;
@@ -231,6 +252,9 @@ float4 PS(float2 uv : TEXCOORD0, float facing : TEXCOORD1) : COLOR {
         Release(gGpu.depthPs);
         Release(gGpu.skyVs);
         Release(gGpu.skyPs);
+        Release(gGpu.fillVs);
+        Release(gGpu.fillPs);
+        Release(gGpu.fillDecl);
         Release(gGpu.decl);
         Release(gGpu.white);
         Release(gGpu.gray);
@@ -325,7 +349,12 @@ float4 PS(float2 uv : TEXCOORD0, float facing : TEXCOORD1) : COLOR {
         gGpu.device = dev;
         if (!Compile(dev, kVertexShader, "vs_3_0", &gGpu.vs, nullptr) || !CompilePs(dev, kPixelShader, "ps_3_0", &gGpu.ps) ||
             !Compile(dev, kDepthVertexShader, "vs_2_0", &gGpu.depthVs, nullptr) || !CompilePs(dev, kDepthPixelShader, "ps_2_0", &gGpu.depthPs) ||
-            !Compile(dev, kSkyVertexShader, "vs_2_0", &gGpu.skyVs, nullptr) || !CompilePs(dev, kSkyPixelShader, "ps_2_0", &gGpu.skyPs)) {
+            !Compile(dev, kSkyVertexShader, "vs_2_0", &gGpu.skyVs, nullptr) || !CompilePs(dev, kSkyPixelShader, "ps_2_0", &gGpu.skyPs) ||
+            !Compile(dev, kFillVertexShader, "vs_2_0", &gGpu.fillVs, nullptr) || !CompilePs(dev, kFillPixelShader, "ps_2_0", &gGpu.fillPs)) {
+          return false;
+        }
+        const D3DVERTEXELEMENT9 fillElements[] = {{0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0}, D3DDECL_END()};
+        if (FAILED(dev->CreateVertexDeclaration(fillElements, &gGpu.fillDecl))) {
           return false;
         }
         const D3DVERTEXELEMENT9 elements[] = {
@@ -591,6 +620,16 @@ float4 PS(float2 uv : TEXCOORD0, float facing : TEXCOORD1) : COLOR {
       }
       dev->SetTexture(5, shadowTexture != nullptr ? shadowTexture : gGpu.white);
       dev->SetTexture(6, gGpu.ramp != nullptr ? gGpu.ramp : gGpu.white);
+      if (gMode == Mode::Both) {
+        // both surfaces: the mesh is pulled a little towards the camera, so the height field shows only where it lies above the mesh (where the sim's ground and
+        // the visible ground disagree) instead of the two z-fighting over every flat part
+        const float bias = -0.002f, slope = -4.0f;
+        DWORD biasBits, slopeBits;
+        std::memcpy(&biasBits, &bias, 4);
+        std::memcpy(&slopeBits, &slope, 4);
+        dev->SetRenderState(D3DRS_DEPTHBIAS, biasBits);
+        dev->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, slopeBits);
+      }
 
       // slots: manifest order diffuse a, b, mask 0..2, normal a, b, specular a, b -> samplers 0, 1, 2, 3, 4, 7, 8
       static const DWORD kSampler[7] = {0, 1, 2, 3, 4, 7, 8};
@@ -619,6 +658,20 @@ float4 PS(float2 uv : TEXCOORD0, float facing : TEXCOORD1) : COLOR {
         dev->SetStreamSource(0, g.vb, 0, 68);
         dev->SetIndices(g.ib);
         dev->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, p.vertexCount, 0, p.triangleCount);
+      }
+
+      // where no ground was drawn: water to the horizon, or the haze a canyon map fades into (the quad sits at the far plane)
+      if ((hasWater && gGpu.ramp != nullptr) || hazeOn) {
+        const float y = hasWater ? s.water : s.haze - s.hazeSpan, lo = -8.0f * s.size, hi = 9.0f * s.size;
+        const float quad[4][3] = {{lo, y, lo}, {hi, y, lo}, {lo, y, hi}, {hi, y, hi}};
+        const float fill[4] = {s.voidColor[0], s.voidColor[1], s.voidColor[2], hasWater && gGpu.ramp != nullptr ? 1.0f : 0.0f};
+        dev->SetVertexDeclaration(gGpu.fillDecl);
+        dev->SetVertexShader(gGpu.fillVs);
+        dev->SetPixelShader(gGpu.fillPs);
+        dev->SetVertexShaderConstantF(0, viewProj, 4);
+        dev->SetPixelShaderConstantF(0, fill, 1);
+        dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+        dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof quad[0]);
       }
 
       // SC2's sky, only where nothing else is: painted in the manifest's order without depth writes
