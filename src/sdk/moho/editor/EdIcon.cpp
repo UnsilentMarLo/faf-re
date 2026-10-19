@@ -12,6 +12,7 @@
 //   ed_dds_write(path, w, h, pixels, mips) -> bytes | nil, message    DXT5 DDS (the layout of the shipped unit icons: no mip maps unless mips > 1)
 //   ed_dds_read(path)              -> pixels, w, h, mips, fourcc, bytes | nil, message    DXT1 / DXT3 / DXT5 / 32 bit DDS, mip 0; `path` is a disk path or a VFS
 //                                  path resolved by ed_vfs_to_disk (entries inside .scd archives work)
+//   ed_dds_thumb(src, dst, size)  -> srcW, srcH, srcBytes | nil, message    src reduced to size x size (area average) and written as DXT5 DDS (the asset browser's thumbnail cache)
 
 #include <algorithm>
 #include <cmath>
@@ -860,6 +861,76 @@ namespace
     return 6;
   }
 
+  // ed_dds_thumb(src, dst, size): the DDS `src` (any format DecodeDds reads) reduced to size x size by area averaging and written as a DXT5 DDS: the asset browser's thumbnail cache.
+  // Returns srcWidth, srcHeight, srcBytes | nil, message. Done natively because a 2048 x 2048 texture is 16 million numbers as a Lua table.
+  int __cdecl cfunc_EdDdsThumb(lua_State* const L)
+  {
+    const char* const src = lua_tostring(L, 1);
+    const char* const dst = lua_tostring(L, 2);
+    const int size = static_cast<int>(NumArg(L, 3, 64.0f));
+    if (src == nullptr || dst == nullptr || size < 4 || size > 512) {
+      return Fail(L, "bad arguments");
+    }
+    std::string data;
+    if (!moho::edicon::ReadAllBytes(src, data)) {
+      return Fail(L, "cannot read the file");
+    }
+    Image img;
+    int mips = 0;
+    std::string fourcc;
+    if (!DecodeDds(data, img, mips, fourcc) || img.w < 1 || img.h < 1) {
+      return Fail(L, "unsupported DDS");
+    }
+    Image out;
+    out.w = size;
+    out.h = size;
+    out.px.resize(static_cast<std::size_t>(size) * static_cast<std::size_t>(size));
+    for (int y = 0; y < size; ++y) {
+      const int y0 = static_cast<int>(static_cast<std::int64_t>(y) * img.h / size);
+      const int y1 = std::max(y0 + 1, static_cast<int>(static_cast<std::int64_t>(y + 1) * img.h / size));
+      for (int x = 0; x < size; ++x) {
+        const int x0 = static_cast<int>(static_cast<std::int64_t>(x) * img.w / size);
+        const int x1 = std::max(x0 + 1, static_cast<int>(static_cast<std::int64_t>(x + 1) * img.w / size));
+        std::uint32_t sum[4] = {0, 0, 0, 0};
+        std::uint32_t count = 0;
+        for (int sy = y0; sy < y1 && sy < img.h; ++sy) {
+          for (int sx = x0; sx < x1 && sx < img.w; ++sx) {
+            const Rgba& p = img.px[static_cast<std::size_t>(sy) * static_cast<std::size_t>(img.w) + static_cast<std::size_t>(sx)];
+            sum[0] += p.r;
+            sum[1] += p.g;
+            sum[2] += p.b;
+            sum[3] += p.a;
+            ++count;
+          }
+        }
+        if (count == 0) {
+          count = 1;
+        }
+        Rgba& d = out.px[static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x)];
+        d.r = static_cast<std::uint8_t>((sum[0] + count / 2) / count);
+        d.g = static_cast<std::uint8_t>((sum[1] + count / 2) / count);
+        d.b = static_cast<std::uint8_t>((sum[2] + count / 2) / count);
+        d.a = static_cast<std::uint8_t>((sum[3] + count / 2) / count);
+      }
+    }
+    const std::string bytes = EncodeDds(out, 1);
+    CreateParents(dst);
+    HANDLE f = CreateFileA(dst, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) {
+      return Fail(L, "cannot create the file");
+    }
+    DWORD written = 0;
+    const BOOL ok = WriteFile(f, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
+    CloseHandle(f);
+    if (!ok || written != bytes.size()) {
+      return Fail(L, "write failed");
+    }
+    lua_pushnumber(L, img.w);
+    lua_pushnumber(L, img.h);
+    lua_pushnumber(L, static_cast<lua_Number>(data.size()));
+    return 3;
+  }
+
   [[nodiscard]] moho::CScrLuaInitFormSet& UserLuaInitSet()
   {
     if (moho::CScrLuaInitFormSet* const set = moho::SCR_FindLuaInitFormSet("User"); set != nullptr) {
@@ -880,6 +951,7 @@ namespace
       (void)new moho::CScrLuaBinder(set, "ed_icon_bounds", &cfunc_EdIconBounds, nullptr, "<global>", "ed_icon_bounds(threshold) -> minx, miny, maxx, maxy, count, size | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_dds_write", &cfunc_EdDdsWrite, nullptr, "<global>", "ed_dds_write(path, w, h, pixels, mips) -> bytes | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_dds_read", &cfunc_EdDdsRead, nullptr, "<global>", "ed_dds_read(path) -> pixels, w, h, mips, fourcc, bytes | nil, message");
+      (void)new moho::CScrLuaBinder(set, "ed_dds_thumb", &cfunc_EdDdsThumb, nullptr, "<global>", "ed_dds_thumb(src, dst, size) -> srcW, srcH, srcBytes | nil, message");
     }
   };
 
