@@ -13,8 +13,10 @@
 //   ed_dds_read(path)              -> pixels, w, h, mips, fourcc, bytes | nil, message    DXT1 / DXT3 / DXT5 / 32 bit DDS, mip 0; `path` is a disk path or a VFS
 //                                  path resolved by ed_vfs_to_disk (entries inside .scd archives work)
 //   ed_dds_thumb(src, dst, size)  -> srcW, srcH, srcBytes | nil, message    src reduced to size x size (area average) and written as DXT5 DDS (the asset browser's thumbnail cache)
+//   ed_file_delete(path)           -> true | nil, message    deletes one .dds / .png file (the thumbnail cache's pruning)
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -931,6 +933,28 @@ namespace
     return 3;
   }
 
+  // ed_file_delete(path): removes one picture file (.dds / .png only: the thumbnail cache's pruning). Returns true | nil, message.
+  int __cdecl cfunc_EdFileDelete(lua_State* const L)
+  {
+    const char* const path = lua_tostring(L, 1);
+    if (path == nullptr) {
+      return Fail(L, "bad arguments");
+    }
+    std::string p(path);
+    std::string ext = p.size() >= 4 ? p.substr(p.size() - 4) : std::string();
+    for (char& c : ext) {
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    if (ext != ".dds" && ext != ".png") {
+      return Fail(L, "only .dds and .png files can be deleted");
+    }
+    if (!DeleteFileA(path)) {
+      return Fail(L, "cannot delete the file");
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+
   [[nodiscard]] moho::CScrLuaInitFormSet& UserLuaInitSet()
   {
     if (moho::CScrLuaInitFormSet* const set = moho::SCR_FindLuaInitFormSet("User"); set != nullptr) {
@@ -952,6 +976,7 @@ namespace
       (void)new moho::CScrLuaBinder(set, "ed_dds_write", &cfunc_EdDdsWrite, nullptr, "<global>", "ed_dds_write(path, w, h, pixels, mips) -> bytes | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_dds_read", &cfunc_EdDdsRead, nullptr, "<global>", "ed_dds_read(path) -> pixels, w, h, mips, fourcc, bytes | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_dds_thumb", &cfunc_EdDdsThumb, nullptr, "<global>", "ed_dds_thumb(src, dst, size) -> srcW, srcH, srcBytes | nil, message");
+      (void)new moho::CScrLuaBinder(set, "ed_file_delete", &cfunc_EdFileDelete, nullptr, "<global>", "ed_file_delete(path) -> true | nil, message");
     }
   };
 
