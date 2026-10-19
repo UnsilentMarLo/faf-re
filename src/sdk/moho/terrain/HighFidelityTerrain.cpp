@@ -1,4 +1,5 @@
 #include "moho/terrain/HighFidelityTerrain.h"
+#include "moho/editor/EdMeshTerrain.h"
 #include "gpg/core/utils/Logging.h"
 #include <cstdio>
 
@@ -644,6 +645,9 @@ namespace moho
     }
 
     mCamera = camera;
+    if (!minimapPass) {
+      edmesh::NoteCamera(*camera);   // editor: picking rays against the mesh terrain
+    }
     mViewportOriginX = viewportBlock[0];
     mViewportOriginY = viewportBlock[1];
     mViewportWidth = viewportBlock[2];
@@ -1318,7 +1322,17 @@ namespace moho
     (void)terrainRes->IsInEditMode();
 
     LoadShaderVars(terrainNormalTexture);
-    DrawTriangles();
+    // editor: a mesh terrain map (EdMeshTerrain) is drawn in place of (or over) the height field's surface
+    if (edmesh::MeshWanted()) {
+      if (edmesh::HeightFieldWanted()) {
+        DrawTriangles();
+      }
+      if (!edmesh::DrawSurface(*mCamera, shadowContext, waterProperties) && !edmesh::HeightFieldWanted()) {
+        DrawTriangles();
+      }
+    } else {
+      DrawTriangles();
+    }
 
     DrawDecalPass(gameTick, deltaSeconds, WldTerrainDecalType_GlowMask, "TDecalGlowMask");
     DrawDecalPass(gameTick, deltaSeconds, WldTerrainDecalType_Albedo, "TDecals");
@@ -1522,6 +1536,16 @@ namespace moho
       shaderVars.heightScale.SetFloat(mTesselator->GetHeightScale());
     }
 
+    // editor: the mesh terrain is the shadow caster of a mesh map
+    if (edmesh::MeshWanted()) {
+      if (edmesh::HeightFieldWanted()) {
+        DrawTriangles();
+      }
+      if (!edmesh::DrawDepth(camera) && !edmesh::HeightFieldWanted()) {
+        DrawTriangles();
+      }
+      return;
+    }
     DrawTriangles();
   }
 
@@ -1536,6 +1560,10 @@ namespace moho
   void HighFidelityTerrain::DrawTerrainSkirt()
   {
     if (!ren_Terrain || !ren_Skirt) {
+      return;
+    }
+    // editor: no height field skirt around a mesh terrain
+    if (edmesh::MeshWanted() && !edmesh::HeightFieldWanted()) {
       return;
     }
 
