@@ -38,6 +38,9 @@
 #include "moho/console/CConCommand.h"
 #include "moho/console/CConFunc.h"
 #include "moho/misc/StartupHelpers.h"
+#if defined(FAF_STUDIO_EDITOR)
+#include "moho/editor/EdBootstrap.h"
+#endif
 
 // crashtest lua_table_corrupt builds a raw VM; lua_open is recovered in
 // lua/LuaObject.cpp inside `extern "C"`.
@@ -432,6 +435,9 @@ namespace
 
 } // namespace
 
+extern int __argc;
+extern char** __argv;
+
 /**
  * Address: 0x008D44A0 (FUN_008D44A0)
  * Mangled: _WinMain@16
@@ -448,6 +454,39 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
   (void)hPrevInstance;
   (void)lpCmdLine;
   (void)nShowCmd;
+
+#if defined(FAF_STUDIO_EDITOR)
+  // EDITOR: an editor start without arguments (a double click, no script) completes its arguments, makes the process DPI aware and sets up the FAF data it needs;
+  // when that is impossible a message is shown and the process ends cleanly (moho/editor/EdBootstrap.h).
+  {
+    std::vector<std::string> given;
+    for (int i = 1; i < __argc; ++i) {
+      if (__argv != nullptr && __argv[i] != nullptr) {
+        given.emplace_back(__argv[i]);
+      }
+    }
+    wchar_t exePath[MAX_PATH * 4] = {};
+    (void)::GetModuleFileNameW(nullptr, exePath, static_cast<DWORD>(sizeof(exePath) / sizeof(exePath[0]) - 1));
+    const moho::editor::BootResult boot = moho::editor::PrepareEditorStart(exePath, given);
+    if (boot.exitNow) {
+      return boot.exitCode;
+    }
+    if (boot.changed) {
+      static std::vector<std::string> sArgs;
+      static std::vector<char*> sArgv;
+      sArgs.clear();
+      sArgs.emplace_back((__argv != nullptr && __argv[0] != nullptr) ? __argv[0] : "");
+      sArgs.insert(sArgs.end(), boot.args.begin(), boot.args.end());
+      sArgv.clear();
+      for (std::string& a : sArgs) {
+        sArgv.push_back(a.data());
+      }
+      sArgv.push_back(nullptr);
+      __argc = static_cast<int>(sArgs.size());
+      __argv = sArgv.data();
+    }
+  }
+#endif
 
   gpg::time::Timer runTimer{};
 
