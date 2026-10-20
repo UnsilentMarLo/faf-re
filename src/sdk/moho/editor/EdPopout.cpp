@@ -506,6 +506,15 @@ namespace moho
       Popout* const p = new Popout();
       p->frame = new EdPopoutFrame(wxString(Widen(title).c_str()), wxPoint(x, y), wxSize(w, h), p);
       p->view = new EdPopoutView(p->frame, p);
+      // EDITOR: the main window owns the pop-out (a Win32 owner, not a wx parent: wx would delete the frame with its parent behind our back). An owned window always stays in front of
+      // its owner and goes away with it, so a pop-out that opens while the main window takes the focus (the Run window of a test run) no longer ends up behind it with nothing to bring it back.
+      if (sMainWindow != nullptr) {
+        const HWND owner = reinterpret_cast<HWND>(sMainWindow->GetHWND());
+        const HWND self = reinterpret_cast<HWND>(p->frame->GetHWND());
+        if (owner != nullptr && self != nullptr && owner != self) {
+          (void)::SetWindowLongPtrW(self, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(owner));
+        }
+      }
       p->frame->Show(true);
       p->view->SetSize(p->frame->GetClientSize());
 
@@ -572,6 +581,28 @@ namespace moho
       }
       p->frame->SetSize(static_cast<int>(lua_tonumber(state, 2)), static_cast<int>(lua_tonumber(state, 3)),
                         static_cast<int>(lua_tonumber(state, 4)), static_cast<int>(lua_tonumber(state, 5)));
+      p->dirty = kDirtyFrames;
+      lua_pushboolean(state, 1);
+      return 1;
+    }
+
+    // ed_window_raise(id) -> bool   (restores the window when it is minimised and brings it to the front, with the keyboard focus)
+    int __cdecl cfunc_EdWindowRaise(lua_State* const state)
+    {
+      Popout* const p = Find(state, 1);
+      if (p == nullptr || p->frame == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+      }
+      const HWND hwnd = reinterpret_cast<HWND>(p->frame->GetHWND());
+      if (hwnd != nullptr) {
+        if (::IsIconic(hwnd)) {
+          ::ShowWindow(hwnd, SW_RESTORE);
+        }
+        ::SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        (void)::SetForegroundWindow(hwnd);
+      }
+      p->frame->Raise();
       p->dirty = kDirtyFrames;
       lua_pushboolean(state, 1);
       return 1;
@@ -726,6 +757,7 @@ namespace moho
         Bind("ed_window_get_rect", &cfunc_EdWindowGetRect,
              "ed_window_get_rect(id) -> x, y, w, h, clientW, clientH, chainW, chainH, framesDrawn, lastError, monitor");
         Bind("ed_window_set_rect", &cfunc_EdWindowSetRect, "ed_window_set_rect(id, x, y, w, h) -> bool");
+        Bind("ed_window_raise", &cfunc_EdWindowRaise, "ed_window_raise(id) -> bool");
         Bind("ed_window_capture", &cfunc_EdWindowCapture, "ed_window_capture(id, absolutePath) -> bool");
         Bind("ed_window_invalidate", &cfunc_EdWindowInvalidate, "ed_window_invalidate(id) -> bool");
         Bind("ed_window_set_title", &cfunc_EdWindowSetTitle, "ed_window_set_title(id, title) -> bool");
