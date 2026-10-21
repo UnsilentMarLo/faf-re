@@ -125,17 +125,26 @@ namespace moho::editor
       {
         mBounds.Unite(rect);
         std::size_t i = 0;
+        // consecutive samples of a row mostly share a tile: look the tile up in the map only when it changes (a dab of radius 50 has ~8000 changed
+        // samples in ~9 tiles; one map lookup per sample was a measurable part of a brush dab)
+        Tile* tile = nullptr;
+        int tileX = -1;
+        int tileZ = -1;
         for (int z = rect.z0; z <= rect.z1; ++z) {
           for (int x = rect.x0; x <= rect.x1; ++x, ++i) {
             const std::int32_t d = delta[i];
             if (d == 0) {
               continue;
             }
-            Tile& tile = mTiles[TileKey(x / kTile, z / kTile)];
-            if (tile.raw.empty()) {
-              tile.raw.assign(static_cast<std::size_t>(kTileCells), 0);
+            if (tile == nullptr || x / kTile != tileX || z / kTile != tileZ) {
+              tileX = x / kTile;
+              tileZ = z / kTile;
+              tile = &mTiles[TileKey(tileX, tileZ)];
+              if (tile->raw.empty()) {
+                tile->raw.assign(static_cast<std::size_t>(kTileCells), 0);
+              }
             }
-            tile.raw[static_cast<std::size_t>((z % kTile) * kTile + (x % kTile))] += d;
+            tile->raw[static_cast<std::size_t>((z % kTile) * kTile + (x % kTile))] += d;
           }
         }
       }

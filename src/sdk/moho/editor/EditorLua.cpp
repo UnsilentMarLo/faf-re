@@ -17,6 +17,8 @@
 //   ed_terrain_read_rect(x0,z0,x1,z1)    -> array of height words, row major (x fastest), rect clamped
 //                                           returns the clamped x0,z0,x1,z1 after the array
 //   ed_terrain_write_rect(x0,z0,x1,z1, words) -> samples written   (words as returned by read_rect)
+//   ed_terrain_brush(cx,cz,r,mode,strength,dir,falloff,level,seed) -> changed,x0,z0,x1,z1,level   one round brush dab on the document
+//                                           (raise / lower / plateau / flatten / smooth / noise; EdBrush.cpp, math in EdBrush.h)
 //
 // Document and command stack (M1; moho/editor/MapDocument.h). The document owns the heights; edits are commands:
 //   ed_doc_attach()                      -> samplesX, samplesZ   (binds the document to the open session; a new
