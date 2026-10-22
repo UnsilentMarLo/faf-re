@@ -12,7 +12,8 @@
 //   ed_dds_write(path, w, h, pixels, mips) -> bytes | nil, message    DXT5 DDS (the layout of the shipped unit icons: no mip maps unless mips > 1)
 //   ed_dds_read(path)              -> pixels, w, h, mips, fourcc, bytes | nil, message    DXT1 / DXT3 / DXT5 / 32 bit DDS, mip 0; `path` is a disk path or a VFS
 //                                  path resolved by ed_vfs_to_disk (entries inside .scd archives work)
-//   ed_dds_thumb(src, dst, size)  -> srcW, srcH, srcBytes | nil, message    src reduced to size x size (area average) and written as DXT5 DDS (the asset browser's thumbnail cache)
+//   ed_dds_thumb(src, dst, size[, mips]) -> srcW, srcH, srcBytes, usedW | nil, message    src reduced to size x size (area average) and written as DXT5 DDS (the asset browser's thumbnail cache);
+//                                  with mips > 0 the reduction starts from the smallest mip level that is still twice `size` wide (usedW = the width decoded; = srcW when the file has no mips)
 //   ed_file_delete(path)           -> true | nil, message    deletes one .dds / .png file (the thumbnail cache's pruning)
 
 #include <algorithm>
@@ -28,6 +29,7 @@
 
 #include "lua/LuaPrimitives.h"
 #include "lua/LuaRuntimeTypes.h"
+#include "moho/editor/EdDdsDecode.h"
 #include "moho/editor/EdIcon.h"
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/lua/CScrLuaInitForm.h"
@@ -49,10 +51,7 @@ namespace
   Request gRequest;
   std::string gMessage;
 
-  struct Rgba
-  {
-    std::uint8_t r = 0, g = 0, b = 0, a = 0;
-  };
+  using Rgba = moho::editor::dds::Px;
 
   int Fail(lua_State* const L, const char* const message)
   {
@@ -390,124 +389,13 @@ namespace
     return out;
   }
 
-  int Rgb565(const std::uint16_t c, int& r, int& g, int& b)
-  {
-    Unpack565(c, r, g, b);
-    return 0;
-  }
-
   bool DecodeDds(const std::string& data, Image& out, int& mips, std::string& fourcc)
   {
-    if (data.size() < 128 || std::memcmp(data.data(), "DDS ", 4) != 0) {
-      return false;
-    }
-    const auto u32 = [&](const std::size_t at) {
-      std::uint32_t v = 0;
-      std::memcpy(&v, data.data() + at, 4);
-      return v;
-    };
-    const int h = static_cast<int>(u32(12));
-    const int w = static_cast<int>(u32(16));
-    mips = static_cast<int>(u32(28));
-    const std::uint32_t pfFlags = u32(80);
-    fourcc.assign(data.data() + 84, 4);
-    const std::uint32_t bits = u32(88);
-    if (w < 1 || h < 1 || w > 4096 || h > 4096) {
-      return false;
-    }
-    out.w = w;
-    out.h = h;
-    out.px.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), Rgba{});
-    std::size_t off = 128;
-    if ((pfFlags & 0x4) != 0 && (fourcc == "DXT1" || fourcc == "DXT3" || fourcc == "DXT5")) {
-      const bool dxt1 = fourcc == "DXT1";
-      const std::size_t blockBytes = dxt1 ? 8 : 16;
-      const int bw = (w + 3) / 4;
-      const int bh = (h + 3) / 4;
-      if (data.size() < off + blockBytes * static_cast<std::size_t>(bw) * static_cast<std::size_t>(bh)) {
-        return false;
-      }
-      const auto* const bytes = reinterpret_cast<const std::uint8_t*>(data.data());
-      for (int by = 0; by < bh; ++by) {
-        for (int bx = 0; bx < bw; ++bx) {
-          const std::uint8_t* blk = bytes + off;
-          off += blockBytes;
-          int alpha[16];
-          if (fourcc == "DXT5") {
-            const int a0 = blk[0];
-            const int a1 = blk[1];
-            std::uint64_t ab = 0;
-            for (int i = 0; i < 6; ++i) {
-              ab |= static_cast<std::uint64_t>(blk[2 + i]) << (8 * i);
-            }
-            int pal[8];
-            pal[0] = a0;
-            pal[1] = a1;
-            if (a0 > a1) {
-              for (int i = 1; i < 7; ++i) {
-                pal[1 + i] = ((7 - i) * a0 + i * a1) / 7;
-              }
-            } else {
-              for (int i = 1; i < 5; ++i) {
-                pal[1 + i] = ((5 - i) * a0 + i * a1) / 5;
-              }
-              pal[6] = 0;
-              pal[7] = 255;
-            }
-            for (int i = 0; i < 16; ++i) {
-              alpha[i] = pal[(ab >> (3 * i)) & 7];
-            }
-            blk += 8;
-          } else if (fourcc == "DXT3") {
-            for (int i = 0; i < 16; ++i) {
-              alpha[i] = ((blk[i / 2] >> ((i & 1) * 4)) & 15) * 17;
-            }
-            blk += 8;
-          } else {
-            for (int& a : alpha) {
-              a = 255;
-            }
-          }
-          std::uint16_t c0 = 0;
-          std::uint16_t c1 = 0;
-          std::uint32_t idx = 0;
-          std::memcpy(&c0, blk, 2);
-          std::memcpy(&c1, blk + 2, 2);
-          std::memcpy(&idx, blk + 4, 4);
-          int col[4][3];
-          Rgb565(c0, col[0][0], col[0][1], col[0][2]);
-          Rgb565(c1, col[1][0], col[1][1], col[1][2]);
-          const bool four = c0 > c1 || !dxt1;
-          for (int k = 0; k < 3; ++k) {
-            if (four) {
-              col[2][k] = (2 * col[0][k] + col[1][k]) / 3;
-              col[3][k] = (col[0][k] + 2 * col[1][k]) / 3;
-            } else {
-              col[2][k] = (col[0][k] + col[1][k]) / 2;
-              col[3][k] = 0;
-            }
-          }
-          for (int i = 0; i < 16; ++i) {
-            const int x = bx * 4 + (i & 3);
-            const int y = by * 4 + (i >> 2);
-            if (x < w && y < h) {
-              const int k = static_cast<int>((idx >> (2 * i)) & 3);
-              out.px[static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] =
-                Rgba{static_cast<std::uint8_t>(col[k][0]), static_cast<std::uint8_t>(col[k][1]), static_cast<std::uint8_t>(col[k][2]), static_cast<std::uint8_t>(alpha[i])};
-            }
-          }
-        }
-      }
-      return true;
-    }
-    if (bits == 32 && data.size() >= off + static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4) {
-      const auto* const bytes = reinterpret_cast<const std::uint8_t*>(data.data()) + off;
-      for (std::size_t i = 0; i < out.px.size(); ++i) {
-        out.px[i] = Rgba{bytes[i * 4 + 2], bytes[i * 4 + 1], bytes[i * 4 + 0], bytes[i * 4 + 3]};
-      }
-      return true;
-    }
-    return false;
+    moho::editor::dds::Header header;
+    const bool ok = moho::editor::dds::ParseHeader(data, header);
+    mips = header.mips;
+    fourcc = header.fourcc;
+    return ok && moho::editor::dds::DecodeLevel(data, header, 0, out.px, out.w, out.h);
   }
 
   void PushPixels(lua_State* const L, const Image& img)
@@ -863,8 +751,8 @@ namespace
     return 6;
   }
 
-  // ed_dds_thumb(src, dst, size): the DDS `src` (any format DecodeDds reads) reduced to size x size by area averaging and written as a DXT5 DDS: the asset browser's thumbnail cache.
-  // Returns srcWidth, srcHeight, srcBytes | nil, message. Done natively because a 2048 x 2048 texture is 16 million numbers as a Lua table.
+  // ed_dds_thumb(src, dst, size[, mips]): the DDS `src` (any format DecodeDds reads) reduced to size x size by area averaging and written as a DXT5 DDS: the asset browser's thumbnail cache.
+  // Returns srcWidth, srcHeight, srcBytes, decodedWidth | nil, message. Done natively because a 2048 x 2048 texture is 16 million numbers as a Lua table.
   int __cdecl cfunc_EdDdsThumb(lua_State* const L)
   {
     const char* const src = lua_tostring(L, 1);
@@ -877,10 +765,22 @@ namespace
     if (!moho::edicon::ReadAllBytes(src, data)) {
       return Fail(L, "cannot read the file");
     }
+    // the fourth argument (a number above 0) lets the reduction start from a mip level of the file: the smallest level that is still twice the thumbnail on its shorter side
+    // (a 2048 x 2048 texture is read as 256 x 256 for a 96 x 96 picture: 64 times fewer texels to decode and average). Without it the base level is reduced, as before.
+    namespace dds = moho::editor::dds;
+    dds::Header header;
     Image img;
-    int mips = 0;
-    std::string fourcc;
-    if (!DecodeDds(data, img, mips, fourcc) || img.w < 1 || img.h < 1) {
+    int level = 0;
+    if (!dds::ParseHeader(data, header)) {
+      return Fail(L, "unsupported DDS");
+    }
+    if (NumArg(L, 4, 0.0f) > 0.0f) {
+      level = dds::PickLevel(header, size * 2);
+    }
+    if (!dds::DecodeLevel(data, header, level, img.px, img.w, img.h) && (level == 0 || !dds::DecodeLevel(data, header, 0, img.px, img.w, img.h))) {
+      return Fail(L, "unsupported DDS");
+    }
+    if (img.w < 1 || img.h < 1) {
       return Fail(L, "unsupported DDS");
     }
     Image out;
@@ -927,10 +827,11 @@ namespace
     if (!ok || written != bytes.size()) {
       return Fail(L, "write failed");
     }
-    lua_pushnumber(L, img.w);
-    lua_pushnumber(L, img.h);
+    lua_pushnumber(L, header.w);
+    lua_pushnumber(L, header.h);
     lua_pushnumber(L, static_cast<lua_Number>(data.size()));
-    return 3;
+    lua_pushnumber(L, img.w);
+    return 4;
   }
 
   // ed_file_delete(path): removes one picture file (.dds / .png only: the thumbnail cache's pruning). Returns true | nil, message.
