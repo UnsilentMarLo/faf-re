@@ -8,7 +8,7 @@
 //     erode_stream      stream power incision on a drainage network (pit filled flow routing, implicit solver): river valleys with branching channels
 //   edge (erode_hydraulic): open (default) = the edge cells are ordinary cells, water and sediment run out over the map edge, and the outermost cells take the change of their inner neighbour
 //     (no step is left at the border); closed = reflecting walls; pinned = the outer ring keeps its height (the old behaviour, which left a wall of untouched ground at the border).
-//     The droplets reflect their digging brush at the map edge; the stream solver raises the edge cells with the uplift. The brush session solves the map-edge sides of its window as open.
+//     The droplets reflect their digging brush at the map edge; the stream solver raises the edge cells with the uplift. The local brush is not a grid solve: see ErodeSession.
 //   settings every erosion op takes (all off by default except where noted): vary / vary_scale (hard and soft ground: noise on the erodibility), rain_vary (wetter and drier patches: hydraulic
 //     rain, droplet release probability, stream catchment), protect (ridges and summits are harder, and slide less), seed (of these patterns), conserve (0..1: puts the lost volume back where
 //     sediment settles), keep_range (1: stretch the result back to the input's height range), max_change (units: no sample moves further than this); droplets: drop_vary (every droplet its own
@@ -16,8 +16,10 @@
 //   every op returns the new height (`output=height`, the default) or, with `output=` wear | deposit | flow | water | sediment, one of the other results (the editor asks for all at
 //   once through OpArgs::extra). Inputs: a (the height field), mask (erodibility 0..1, optional), like.
 //
-//   ErodeSession: the local erosion brush. It keeps a float copy of the map heights and the water / sediment / flux of the whole map for the length of a stroke; every dab runs a few
-//   iterations of the hydraulic kernels on a window around the brush (border fixed), weighted by the brush falloff, so water keeps flowing from dab to dab.
+//   ErodeSession: the local erosion brush. It keeps a float copy of the map heights for the length of a stroke; every dab releases water droplets (Beyer / Lague) at random positions inside
+//   the brush, they run downhill on the bilinear surface with inertia, dig where they are fast on a slope and settle where they slow down. Everything a droplet digs or settles is
+//   multiplied by the brush weight of the sample, so the change is exactly zero outside the brush and follows its falloff inside (rain brush: digs on to a wider reach). The grid solver is not
+//   used any more: its four flow directions drew a diamond and parallel rills, and its water state stood still outside the dab's window.
 #pragma once
 
 #include <cstdint>
@@ -44,12 +46,15 @@ namespace moho::editor::field::erosion
     float thermal = 0.0f;         // thermal rate 0..1 per slide step (0 = no thermal coupling)
     int thermal_every = 2;        // a thermal step after this many hydraulic iterations
     bool pin_border = true;       // the sides in pin_sides keep their height and drain water (the other sides: open_edge or closed walls)
-    int pin_sides = 15;           // bit 0 / 1 = the -x / +x column, bit 2 / 3 = the -z / +z row of the rectangle (a brush window pins only the sides inside the map)
+    int pin_sides = 15;           // bit 0 / 1 = the -x / +x column, bit 2 / 3 = the -z / +z row of the rectangle
     bool open_edge = false;       // a side that is not pinned lets water and sediment run out over the edge (the edge cells are ordinary cells); false: a closed wall
     bool settle = true;           // at the end the remaining sediment settles where it is (conserves mass)
     bool track = true;            // keep the wear, deposit and flow masks (off: the brush and previews do not need them)
-    float vary = 0.0f;            // brush only: 0..1, hard and soft ground under the brush (noise on the erodibility and the rain), the same pattern for every dab of a map
+    float vary = 0.0f;            // brush only: 0..1, hard and soft ground under the brush (noise on the erodibility and the release of droplets), the same pattern for every dab of a map
     float vary_scale = 40.0f;     // feature size of that pattern (samples)
+    float conserve = 0.7f;        // brush only: 0..1, the share of the sediment that runs out of the brush that is put back inside it (valleys, the foot of the slope): the mountain keeps its mass
+    float inertia = 0.3f;         // brush only: how much a droplet keeps its direction instead of following the slope (0 straight down the steepest way, 0.9 hardly turns)
+    std::uint32_t seed = 1;       // brush only: seed of the droplet positions (the stroke's first dab position is mixed in, so a stroke is repeatable)
   };
 
   /** The state of the grid solver on a rectangle. Arrays are row major w * h; empty optional arrays mean 1. */
@@ -89,7 +94,8 @@ namespace moho::editor::field::erosion
     int iterations = 8;
     double strength = 1.0;        // scales the dissolving, rain and thermal rates
     int mode = 0;                 // 0 erode, 1 rain (water only under the brush, erodes downstream), 2 deposit (sediment dumped under the brush)
-    double margin = -1;           // extra window around the brush (samples); < 0: automatic
+    double margin = -1;           // extra window around the brush (samples); < 0: BrushDefaultMargin. Only the rain brush uses it: it digs up to 0.9 * margin past the radius, the other brushes never touch a sample
+                                  // outside the radius
     double amount = 0.5;          // deposit mode: sediment depth dumped at the centre per dab
     std::vector<float> weights;   // optional brush weights for the window (row major, window size); empty = round falloff
   };
@@ -102,7 +108,7 @@ namespace moho::editor::field::erosion
     [[nodiscard]] bool Active() const { return active_; }
     /** One dab. On success `x0..z1` is the inclusive window and `words` its new height words (row major); returns false when nothing was done. */
     bool Dab(const BrushDab& dab, int& x0, int& z0, int& x1, int& z1, std::vector<std::uint16_t>& words);
-    /** Settles the remaining sediment into the terrain; returns the changed window like Dab. */
+    /** Nothing is held back between dabs any more (a droplet settles its own load), so this always returns false; kept for the callers that settled the water state of the old brush. */
     bool Finish(int& x0, int& z0, int& x1, int& z1, std::vector<std::uint16_t>& words);
     void End();
     [[nodiscard]] HydroParams& Params() { return params_; }
@@ -112,7 +118,12 @@ namespace moho::editor::field::erosion
     int w_ = 0, h_ = 0;
     HydroParams params_;
     std::vector<float> t_;                    // float copy of the heights (world units)
-    std::vector<float> d_, s_, f_[4];         // water, sediment, fluxes of the whole map
-    int dx0_ = 0, dz0_ = 0, dx1_ = -1, dz1_ = -1;   // dirty rectangle (where state may be non-zero)
+    std::uint64_t dabs_ = 0;                  // dabs of this stroke so far (every dab has its own droplet streams)
+    std::uint32_t seed_ = 0;
   };
+
+  /** The inclusive window ErodeSession::Dab works on (and that `weights` must be sized for): the brush plus its margin, one sample more, clamped to the map. */
+  void BrushWindow(const BrushDab& dab, int w, int h, int& x0, int& z0, int& x1, int& z1);
+  /** The margin a dab with margin < 0 uses: 0 for erode and deposit, 0.8 * radius + 3 for rain. */
+  double BrushDefaultMargin(int mode, double radius);
 } // namespace moho::editor::field::erosion

@@ -594,6 +594,506 @@ static void TestBrushBoundary()
 }
 
 
+// ---- the local brush: locality, falloff, isotropy, relief ---------------------------------------------------------------------------------------
+//
+// What the erosion brush must do (the user's report: it went beyond its circle, left a square patch with a straight edge, dug only in the centre and at the rim, drew parallel
+// comb grooves along a ridge and flattened the mountain): change nothing outside the radius (exactly), follow the brush weight inside, not depend on the window it was solved in,
+// have no preferred direction on the grid, make branching uneven relief and keep the height, spread and mass of the mountain.
+
+#ifdef OLD_BRUSH
+// (building this test against the brush of commit 009f88a / ef5c44a for before / after numbers: the window rule it had)
+namespace moho::editor::field::erosion
+{
+  inline void BrushWindow(const BrushDab& dab, const int w, const int h, int& x0, int& z0, int& x1, int& z1)
+  {
+    const double radius = std::max(1.0, dab.radius);
+    const double margin = dab.margin >= 0.0 ? dab.margin : (dab.mode == 1 ? 0.8 : 0.35) * radius + 3.0;
+    x0 = std::max(0, static_cast<int>(std::floor(dab.cx - radius - margin)) - 1);
+    z0 = std::max(0, static_cast<int>(std::floor(dab.cz - radius - margin)) - 1);
+    x1 = std::min(w - 1, static_cast<int>(std::ceil(dab.cx + radius + margin)) + 1);
+    z1 = std::min(h - 1, static_cast<int>(std::ceil(dab.cz + radius + margin)) + 1);
+  }
+}
+#endif
+
+namespace
+{
+  using Words = std::vector<std::uint16_t>;
+
+  Words ToWords(const std::vector<float>& h)
+  {
+    Words w(h.size());
+    for (std::size_t i = 0; i < w.size(); ++i) w[i] = static_cast<std::uint16_t>(std::floor(h[i] * 128.0f + 0.5f));
+    return w;
+  }
+
+  /** Smooth value noise 0..1 of feature size `scale` samples (a hash lattice with smoothstep blending: no periodic pattern a comb detector could lock onto). */
+  double ValueNoise(const double x, const double z, const double scale, const unsigned seed)
+  {
+    const auto lat = [seed](const int ix, const int iz) {
+      unsigned u = static_cast<unsigned>(ix) * 73856093u ^ static_cast<unsigned>(iz) * 19349663u ^ seed * 83492791u;
+      u ^= u >> 13;
+      u *= 0x5bd1e995u;
+      u ^= u >> 15;
+      return static_cast<double>(u & 0xffffu) / 65535.0;
+    };
+    const double u = x / scale, v = z / scale;
+    const int ix = static_cast<int>(std::floor(u)), iz = static_cast<int>(std::floor(v));
+    double fx = u - ix, fz = v - iz;
+    fx = fx * fx * (3.0 - 2.0 * fx);
+    fz = fz * fz * (3.0 - 2.0 * fz);
+    const double a = lat(ix, iz) * (1.0 - fx) + lat(ix + 1, iz) * fx, b = lat(ix, iz + 1) * (1.0 - fx) + lat(ix + 1, iz + 1) * fx;
+    return a * (1.0 - fz) + b * fz;
+  }
+
+  /** A round mountain: `height` over a base of 10, gaussian of `sigma` samples, centred on the field; `ripple` adds soft bumps (value noise of 24 and 10 samples, amplitude `ripple`). */
+  std::vector<float> RoundMountain(const int n, const double height, const double sigma, const double ripple)
+  {
+    std::vector<float> h(static_cast<std::size_t>(n) * n);
+    const double c = 0.5 * (n - 1);
+    for (int z = 0; z < n; ++z) {
+      for (int x = 0; x < n; ++x) {
+        const double r2 = ((x - c) * (x - c) + (z - c) * (z - c)) / (sigma * sigma);
+        const double bump = ripple * ((ValueNoise(x, z, 24.0, 5u) - 0.5) * 2.0 + 0.5 * (ValueNoise(x, z, 10.0, 9u) - 0.5) * 2.0);
+        h[static_cast<std::size_t>(z) * n + x] = static_cast<float>(10.0 + height * std::exp(-r2) + bump);
+      }
+    }
+    return h;
+  }
+
+  /** A ridge along x (crest at the middle row) with a wavy crest and soft bumps. */
+  std::vector<float> RidgeField(const int n, const double height, const double halfWidth, const double ripple)
+  {
+    std::vector<float> h = RoundMountain(n, 0.0, 1.0, ripple);
+    const double c = 0.5 * (n - 1);
+    for (int z = 0; z < n; ++z) {
+      for (int x = 0; x < n; ++x) {
+        const double dz = (z - c) / halfWidth;
+        const double crest = 1.0 + 0.12 * std::sin(x * 0.11) + 0.08 * std::sin(x * 0.037 + 1.0);
+        h[static_cast<std::size_t>(z) * n + x] += static_cast<float>(height * crest * std::exp(-dz * dz));
+      }
+    }
+    return h;
+  }
+
+  /** A tilted plane with soft bumps (every point has the same slope: only the brush weights can make the profile). */
+  std::vector<float> SlopeField(const int n, const double slope, const double ripple)
+  {
+    std::vector<float> h = RoundMountain(n, 0.0, 1.0, ripple);
+    for (int z = 0; z < n; ++z)
+      for (int x = 0; x < n; ++x) h[static_cast<std::size_t>(z) * n + x] += static_cast<float>(100.0 - slope * 0.8 * (x - 0.5 * (n - 1)) - slope * 0.6 * (z - 0.5 * (n - 1)));
+    return h;
+  }
+
+  struct StrokeSpec
+  {
+    int mode = 0;
+    double radius = 12;
+    double falloff = 1.0;
+    int iterations = 8;
+    double margin = -1;
+    double strength = 1.0;
+    double amount = 0.5;
+    er::HydroParams hp;
+    std::vector<std::pair<double, double>> centres;
+    int shape = 0;                  // 1: an elliptic mask weight (a shaped brush), 2: the same plus a 1e-3 perturbation
+  };
+
+  /** The brush values of erosionbrush.lua. */
+  er::HydroParams EditorParams()
+  {
+    er::HydroParams hp;
+    hp.rain = 0.006f;
+    hp.evaporation = 0.02f;
+    hp.gain = 0.08f;
+    hp.capacity = 1.0f;
+    hp.erosion = 0.2f;
+    hp.deposition = 0.1f;
+    hp.thermal = 0.15f;
+    hp.talus = 0.8f;
+    hp.vary = 0.3f;
+    hp.vary_scale = 30.0f;
+    return hp;
+  }
+
+  Words RunStroke(const int n, const Words& start, const StrokeSpec& s)
+  {
+    er::ErodeSession se;
+    se.Begin(n, n, start.data(), s.hp);
+    Words cur = start;
+    for (const auto& c : s.centres) {
+      er::BrushDab d;
+      d.mode = s.mode;
+      d.cx = c.first;
+      d.cz = c.second;
+      d.radius = s.radius;
+      d.falloff = s.falloff;
+      d.iterations = s.iterations;
+      d.margin = s.margin;
+      d.strength = s.strength;
+      d.amount = s.amount;
+      int x0, z0, x1, z1;
+      if (s.shape != 0) {
+        er::BrushWindow(d, n, n, x0, z0, x1, z1);
+        for (int z = z0; z <= z1; ++z) {
+          for (int x = x0; x <= x1; ++x) {
+            const double dx = x - d.cx, dz = z - d.cz;
+            const double u = std::sqrt((dx * dx) / 1.0 + (dz * dz) / 0.45) / s.radius;      // an ellipse: wider than high
+            float w = u >= 1.0 ? 0.0f : static_cast<float>(0.5 * (1.0 + std::cos(3.14159265358979 * u)));
+            if (s.shape == 2 && w > 0.0f) w = std::max(0.0f, w * (1.0f + 1e-3f * static_cast<float>(std::sin(1.7 * x + 2.3 * z))));
+            d.weights.push_back(w);
+          }
+        }
+      }
+      std::vector<std::uint16_t> w;
+      if (!se.Dab(d, x0, z0, x1, z1, w)) continue;
+      for (int z = z0; z <= z1; ++z)
+        for (int x = x0; x <= x1; ++x) cur[static_cast<std::size_t>(z) * n + x] = w[static_cast<std::size_t>(z - z0) * (x1 - x0 + 1) + (x - x0)];
+    }
+    int x0, z0, x1, z1;
+    std::vector<std::uint16_t> w;
+    if (se.Finish(x0, z0, x1, z1, w)) {
+      for (int z = z0; z <= z1; ++z)
+        for (int x = x0; x <= x1; ++x) cur[static_cast<std::size_t>(z) * n + x] = w[static_cast<std::size_t>(z - z0) * (x1 - x0 + 1) + (x - x0)];
+    }
+    return cur;
+  }
+
+  /** Dab centres along a horizontal line through (cx, cz), `count` of them `spacing` apart, centred on cx. */
+  std::vector<std::pair<double, double>> Line(const double cx, const double cz, const int count, const double spacing)
+  {
+    std::vector<std::pair<double, double>> v;
+    for (int k = 0; k < count; ++k) v.push_back({cx + (k - 0.5 * (count - 1)) * spacing, cz});
+    return v;
+  }
+
+  /** Distance of (x, z) to the segment the dab centres lie on. */
+  double DistToCentres(const std::vector<std::pair<double, double>>& c, const int x, const int z)
+  {
+    double best = 1e30;
+    for (std::size_t i = 0; i + 1 <= c.size(); ++i) {
+      const double ax = c[i].first, az = c[i].second;
+      const double bx = i + 1 < c.size() ? c[i + 1].first : ax, bz = i + 1 < c.size() ? c[i + 1].second : az;
+      const double vx = bx - ax, vz = bz - az, l2 = vx * vx + vz * vz;
+      double t = l2 > 0.0 ? ((x - ax) * vx + (z - az) * vz) / l2 : 0.0;
+      t = std::max(0.0, std::min(1.0, t));
+      best = std::min(best, std::hypot(x - (ax + t * vx), z - (az + t * vz)));
+    }
+    return best;
+  }
+
+  double Cv(const std::vector<double>& v)
+  {
+    double m = 0.0, m2 = 0.0;
+    for (const double x : v) {
+      m += x;
+      m2 += x * x;
+    }
+    m /= static_cast<double>(v.size());
+    m2 /= static_cast<double>(v.size());
+    return std::sqrt(std::max(0.0, m2 - m * m)) / std::max(1e-12, m);
+  }
+
+  /** Mean |laplacian| over the samples within `radius` of the dab centres: the high frequency relief. */
+  double Roughness(const Words& w, const int n, const std::vector<std::pair<double, double>>& c, const double radius)
+  {
+    double s = 0.0;
+    int k = 0;
+    for (int z = 1; z < n - 1; ++z) {
+      for (int x = 1; x < n - 1; ++x) {
+        if (DistToCentres(c, x, z) > radius) continue;
+        const std::size_t i = static_cast<std::size_t>(z) * n + x;
+        s += std::fabs(static_cast<double>(w[i - 1]) + w[i + 1] + w[i - n] + w[i + n] - 4.0 * w[i]) / 128.0;
+        ++k;
+      }
+    }
+    return s / std::max(1, k);
+  }
+
+  struct Change
+  {
+    int outside = 0;          // samples beyond `limit` of the centres that differ
+    double maxOutside = 0.0;
+    double meanAbs = 0.0;     // inside
+    double cv = 0.0;          // coefficient of variation of the block means of |change| inside
+    double net = 0.0;         // sum of the change inside (volume)
+    double gross = 0.0;       // sum of |change|
+    double peakDrop = 0.0;    // highest sample before - after
+    double sdBefore = 0.0, sdAfter = 0.0;
+  };
+
+  Change Compare(const Words& before, const Words& after, const int n, const std::vector<std::pair<double, double>>& c, const double radius, const double limit)
+  {
+    Change r;
+    std::vector<double> blocks;
+    double cnt = 0.0, mb = 0.0, ma = 0.0;
+    for (int z = 0; z < n; ++z) {
+      for (int x = 0; x < n; ++x) {
+        const std::size_t i = static_cast<std::size_t>(z) * n + x;
+        const double d = DistToCentres(c, x, z);
+        const double ch = (static_cast<double>(after[i]) - before[i]) / 128.0;
+        if (d > limit) {
+          if (ch != 0.0) {
+            ++r.outside;
+            r.maxOutside = std::max(r.maxOutside, std::fabs(ch));
+          }
+        } else if (d <= radius) {
+          r.meanAbs += std::fabs(ch);
+          r.net += ch;
+          cnt += 1.0;
+          mb += before[i] / 128.0;
+          ma += after[i] / 128.0;
+        }
+      }
+    }
+    r.gross = r.meanAbs;
+    r.meanAbs /= std::max(1.0, cnt);
+    mb /= std::max(1.0, cnt);
+    ma /= std::max(1.0, cnt);
+    for (int z = 0; z < n; ++z) {
+      for (int x = 0; x < n; ++x) {
+        if (DistToCentres(c, x, z) > radius) continue;
+        const std::size_t i = static_cast<std::size_t>(z) * n + x;
+        r.sdBefore += (before[i] / 128.0 - mb) * (before[i] / 128.0 - mb);
+        r.sdAfter += (after[i] / 128.0 - ma) * (after[i] / 128.0 - ma);
+        r.peakDrop = std::max(r.peakDrop, (static_cast<double>(before[i]) - after[i]) / 128.0);
+      }
+    }
+    r.sdBefore = std::sqrt(r.sdBefore / std::max(1.0, cnt));
+    r.sdAfter = std::sqrt(r.sdAfter / std::max(1.0, cnt));
+    // 4 x 4 blocks wholly inside 0.8 of the radius
+    for (int z = 0; z + 4 <= n; z += 4) {
+      for (int x = 0; x + 4 <= n; x += 4) {
+        bool in = true;
+        for (int q = 0; q < 4 && in; ++q)
+          for (int p = 0; p < 4; ++p)
+            if (DistToCentres(c, x + p, z + q) > 0.8 * radius) {
+              in = false;
+              break;
+            }
+        if (!in) continue;
+        double s = 0.0;
+        for (int q = 0; q < 4; ++q)
+          for (int p = 0; p < 4; ++p) s += std::fabs(static_cast<double>(after[static_cast<std::size_t>(z + q) * n + x + p]) - before[static_cast<std::size_t>(z + q) * n + x + p]) / 128.0;
+        blocks.push_back(s / 16.0);
+      }
+    }
+    r.cv = blocks.empty() ? 0.0 : Cv(blocks);
+    return r;
+  }
+
+  double Peak(const Words& w)
+  {
+    return *std::max_element(w.begin(), w.end()) / 128.0;
+  }
+} // namespace
+
+static void TestBrushQuality()
+{
+  SetThreads(2);
+  const int n = 161;
+  const double c = 0.5 * (n - 1);
+  // 1. the change is exactly zero outside the brush, whatever the radius, falloff, slope, mode, window margin or brush shape
+  {
+    struct Terrain { const char* name; std::vector<float> h; };
+    const Terrain terrains[] = {{"mountain", RoundMountain(n, 40.0, 22.0, 0.4)}, {"slope", SlopeField(n, 0.9, 0.3)}, {"ridge", RidgeField(n, 35.0, 14.0, 0.5)}};
+    int worstOutside = 0;
+    for (const Terrain& t : terrains) {
+      const Words base = ToWords(t.h);
+      for (const double radius : {3.0, 12.0, 40.0}) {
+        for (const double falloff : {0.0, 0.5, 1.0}) {
+          for (int mode = 0; mode < 3; ++mode) {
+            StrokeSpec s;
+            s.mode = mode;
+            s.radius = radius;
+            s.falloff = falloff;
+            s.hp = EditorParams();
+            s.centres = Line(c + 3.0, c - 4.0, 5, radius / 3.0);
+            const double reach = mode == 1 ? 0.9 * (0.8 * radius + 3.0) : 0.0;
+            const Words after = RunStroke(n, base, s);
+            const Change ch = Compare(base, after, n, s.centres, radius, radius + reach + 0.5);
+            worstOutside = std::max(worstOutside, ch.outside);
+            CHECK(ch.outside == 0, "%s r=%g falloff=%g mode %d: %d samples changed outside the brush (max %.3f)", t.name, radius, falloff, mode, ch.outside, ch.maxOutside);
+            CHECK(ch.gross > 0.0 || radius < 4.0, "%s r=%g falloff=%g mode %d: the brush changed nothing", t.name, radius, falloff, mode);
+          }
+        }
+      }
+    }
+    // a shaped brush (weights from a mask), and one whose weights differ by 1e-3: the result differs a little, not chaotically (no threshold on the weights)
+    const Words base = ToWords(RoundMountain(n, 40.0, 22.0, 0.4));
+    StrokeSpec s;
+    s.radius = 14;
+    s.hp = EditorParams();
+    s.centres = Line(c, c, 6, 4.0);
+    s.shape = 1;
+    const Words a = RunStroke(n, base, s);
+    s.shape = 2;
+    const Words b = RunStroke(n, base, s);
+    const Change ca = Compare(base, a, n, s.centres, 14.0, 14.5);
+    double worst = 0.0;
+    for (std::size_t i = 0; i < a.size(); ++i) worst = std::max(worst, std::fabs(static_cast<double>(a[i]) - b[i]) / 128.0);
+    std::printf("brush shape: outside %d, mean |change| %.4f, worst change under a 1e-3 mask change %.4f\n", ca.outside, ca.meanAbs, worst);
+    CHECK(ca.outside == 0, "a shaped brush changed %d samples outside its mask", ca.outside);
+    CHECK(worst < 0.1, "a 1e-3 change of the brush mask changed the result by %.3f (chaotic)", worst);
+  }
+  // 2. no window artifact: the result does not depend on the window the dab is solved in (the old brush solved a square window with a fixed rim: straight edges, stranded water)
+  {
+    const Words base = ToWords(RoundMountain(n, 40.0, 22.0, 0.4));
+    for (const int mode : {0, 2}) {      // (the rain brush's margin is its reach: a different margin is a different brush)
+      StrokeSpec s;
+      s.mode = mode;
+      s.radius = 12;
+      s.hp = EditorParams();
+      s.centres = Line(c, c, 12, 4.0);
+      s.margin = 0.0;
+      const Words tight = RunStroke(n, base, s);
+      s.margin = 17.0;
+      const Words wide = RunStroke(n, base, s);
+      int differ = 0;
+      for (std::size_t i = 0; i < tight.size(); ++i) differ += tight[i] != wide[i] ? 1 : 0;
+      CHECK(differ == 0, "mode %d: the result depends on the size of the window (%d samples differ)", mode, differ);
+    }
+  }
+  // 3. the change follows the brush falloff: on a plane (the same slope everywhere) the radial profile of the change, averaged over many independent dabs, is smooth and spread over the
+  //    brush (the old brush dug in the centre and at the rim and left the middle out)
+  {
+    const Words base = ToWords(SlopeField(n, 0.7, 0.35));
+    double sum[5] = {}, cnt[5] = {};
+    for (int k = 0; k < 40; ++k) {
+      StrokeSpec s;
+      s.radius = 20;
+      s.hp = EditorParams();
+      s.iterations = 16;
+      s.centres.push_back({c + std::fmod(0.37 * k, 3.0), c + std::fmod(0.61 * k, 3.0)});
+#ifndef OLD_BRUSH
+      s.hp.seed = static_cast<std::uint32_t>(k + 1);
+#endif
+      const Words after = RunStroke(n, base, s);
+      for (int z = 0; z < n; ++z) {
+        for (int x = 0; x < n; ++x) {
+          const double d = std::hypot(x - s.centres[0].first, z - s.centres[0].second) / s.radius;
+          if (d >= 1.0) continue;
+          const int b = static_cast<int>(d * 5.0);
+          sum[b] += std::fabs(static_cast<double>(after[static_cast<std::size_t>(z) * n + x]) - base[static_cast<std::size_t>(z) * n + x]) / 128.0;
+          cnt[b] += 1.0;
+        }
+      }
+    }
+    double prof[5];
+    for (int b = 0; b < 5; ++b) prof[b] = sum[b] / cnt[b];
+    std::printf("radial profile of |change| (plane, 5 rings of the radius): %.4f %.4f %.4f %.4f %.4f\n", prof[0], prof[1], prof[2], prof[3], prof[4]);
+    // the brush weight of the rings: 0.97 0.80 0.52 0.22 0.04. The change may not be much steeper than that, may not leave a ring out and may not pile up at the rim
+    const double top = std::max(prof[0], std::max(prof[1], prof[2]));
+    CHECK(prof[2] > 0.3 * top && prof[1] > 0.3 * top && prof[0] > 0.3 * top, "a ring in the middle of the brush is hardly eroded (%.4f %.4f %.4f)", prof[0], prof[1], prof[2]);
+    CHECK(prof[4] < 0.3 * top && prof[3] < 0.9 * top, "the rim of the brush is dug as much as its middle (rings 4 / 5: %.4f %.4f, top %.4f)", prof[3], prof[4], top);
+    for (int b = 1; b < 5; ++b) CHECK(prof[b] < prof[b - 1] * 1.7 + 1e-4, "the profile is not smooth: ring %d %.4f after %.4f", b + 1, prof[b], prof[b - 1]);
+  }
+  // 4. no preferred direction on the grid: a round mountain, the same brush on its flank from many dabs: the change in the sectors along the axes and along the diagonals is alike
+  {
+    const Words base = ToWords(RoundMountain(n, 40.0, 22.0, 0.0));
+    StrokeSpec s;
+    s.radius = 24;
+    s.hp = EditorParams();
+    s.hp.vary = 0.0f;
+    s.hp.thermal = 0.0f;
+    s.iterations = 8;
+    for (int k = 0; k < 60; ++k) s.centres.push_back({c, c});
+    const Words after = RunStroke(n, base, s);
+    double axis = 0.0, diag = 0.0, na = 0.0, nd = 0.0;
+    for (int z = 0; z < n; ++z) {
+      for (int x = 0; x < n; ++x) {
+        const double dx = x - c, dz = z - c, r = std::hypot(dx, dz) / s.radius;
+        if (r < 0.25 || r > 0.85) continue;
+        const double ang = std::fmod(std::atan2(dz, dx) + 2.0 * 3.14159265358979, 3.14159265358979 / 2.0) / (3.14159265358979 / 2.0);   // 0 .. 1 within a quadrant: 0 and 1 = along an axis
+        const double ch = std::fabs(static_cast<double>(after[static_cast<std::size_t>(z) * n + x]) - base[static_cast<std::size_t>(z) * n + x]) / 128.0;
+        if (ang < 0.17 || ang > 0.83) { axis += ch; na += 1.0; }
+        else if (ang > 0.33 && ang < 0.67) { diag += ch; nd += 1.0; }
+      }
+    }
+    const double ratio = (axis / na) / std::max(1e-9, diag / nd);
+    std::printf("isotropy: mean |change| along the axes / along the diagonals = %.2f\n", ratio);
+    CHECK(ratio > 0.7 && ratio < 1.43, "the erosion has a preferred direction on the grid: axes / diagonals = %.2f", ratio);
+  }
+  // 5. a stroke over a mountain: it keeps its summit, spread and mass, makes uneven relief, and no comb: the high pass of the change has no regular period along the stroke
+  {
+    for (int kind = 0; kind < 3; ++kind) {
+      const Words base = ToWords(kind == 0 ? RoundMountain(n, 40.0, 24.0, 1.2) : (kind == 1 ? RidgeField(n, 35.0, 14.0, 1.2) : RidgeField(n, 35.0, 14.0, 0.12)));
+      StrokeSpec s;
+      s.radius = 12;
+      s.hp = EditorParams();
+      s.centres = Line(c, c, 40, 4.0);      // 40 dabs, spacing radius / 3: what a stroke of the editor does
+      const Words after = RunStroke(n, base, s);
+      const Change ch = Compare(base, after, n, s.centres, 12.0, 12.5);
+      const double r0 = Roughness(base, n, s.centres, 12.0), r1 = Roughness(after, n, s.centres, 12.0);
+      const double peak0 = Peak(base), peak1 = Peak(after);
+      std::printf("stroke over a %s: outside %d, peak %.2f -> %.2f, sd in the brush %.3f -> %.3f (%.1f%%), mean|change| %.3f, cv %.2f, net %.1f gross %.1f, relief %.4f -> %.4f\n",
+                  kind == 0 ? "mountain" : (kind == 1 ? "ridge" : "smooth ridge"), ch.outside, peak0, peak1, ch.sdBefore, ch.sdAfter, 100.0 * (ch.sdAfter - ch.sdBefore) / ch.sdBefore, ch.meanAbs, ch.cv, ch.net,
+                  ch.gross, r0, r1);
+      CHECK(ch.outside == 0, "the stroke changed %d samples outside the brush", ch.outside);
+      CHECK(peak0 - peak1 < 0.01 * (peak0 - 10.0), "the summit dropped by %.3f (%.2f%% of the mountain)", peak0 - peak1, 100.0 * (peak0 - peak1) / (peak0 - 10.0));
+      CHECK(std::fabs(ch.sdAfter - ch.sdBefore) < 0.04 * ch.sdBefore, "the spread of the heights in the brush changed from %.3f to %.3f", ch.sdBefore, ch.sdAfter);
+      CHECK(r1 > 1.15 * r0, "the relief did not increase (%.4f -> %.4f)", r0, r1);
+      CHECK(ch.cv > (kind == 0 ? 0.6 : 0.35), "the erosion is too even: cv %.2f", ch.cv);
+      CHECK(ch.meanAbs > 0.02 && ch.meanAbs < 0.6, "the stroke strength is off: mean |change| %.3f", ch.meanAbs);
+      double volume = 0.0;      // the mountain above its base inside the brush
+      for (int z = 0; z < n; ++z)
+        for (int x = 0; x < n; ++x)
+          if (DistToCentres(s.centres, x, z) <= 12.0) volume += (static_cast<double>(base[static_cast<std::size_t>(z) * n + x]) / 128.0 - 10.0);
+      CHECK(ch.net > -0.015 * volume, "the stroke lost too much mass: net %.1f of the %.0f in the brush (%.2f%%)", ch.net, volume, 100.0 * ch.net / volume);
+      std::printf("   mass: net %.1f of the %.0f above the base in the brush (%.2f%%)\n", ch.net, volume, 100.0 * ch.net / volume);
+      // comb: the change along x on the rows of the stroke, high passed; the strongest correlation at a lag of 3 .. 12 samples
+      double best = 0.0;
+      for (int zr = static_cast<int>(c) - 8; zr <= static_cast<int>(c) + 8; zr += 4) {
+        std::vector<double> d;
+        for (int x = 40; x < n - 40; ++x) d.push_back((static_cast<double>(after[static_cast<std::size_t>(zr) * n + x]) - base[static_cast<std::size_t>(zr) * n + x]) / 128.0);
+        std::vector<double> hp(d.size(), 0.0);
+        for (std::size_t i = 4; i + 4 < d.size(); ++i) { double m = 0.0; for (int k = -4; k <= 4; ++k) m += d[i + k]; hp[i] = d[i] - m / 9.0; }
+        double v0 = 0.0;
+        for (const double x : hp) v0 += x * x;
+        for (int lag = 3; lag <= 12; ++lag) {
+          double a = 0.0;
+          for (std::size_t i = 8; i + lag + 8 < hp.size(); ++i) a += hp[i] * hp[i + lag];
+          best = std::max(best, a / std::max(1e-12, v0));
+        }
+      }
+      std::printf("   comb: strongest correlation of the high passed change at a lag of 3 .. 12 samples: %.2f\n", best);
+      CHECK(best < 0.5, "the change along the stroke repeats at a regular spacing (correlation %.2f): a comb", best);
+    }
+  }
+  // 6. determinism, and a different stroke position gives a different pattern
+  {
+    const Words base = ToWords(RoundMountain(n, 40.0, 24.0, 1.2));
+    StrokeSpec s;
+    s.hp = EditorParams();
+    s.centres = Line(c, c, 10, 4.0);
+    SetThreads(1);
+    const Words a = RunStroke(n, base, s);
+    SetThreads(5);
+    const Words b = RunStroke(n, base, s);
+    CHECK(a == b, "the brush depends on the thread count");
+    SetThreads(2);
+  }
+  // 7. the brush at the map border keeps working (corner dabs): no samples outside the radius even there
+  {
+    const Words base = ToWords(RoundMountain(n, 40.0, 60.0, 0.4));
+    StrokeSpec s;
+    s.radius = 14;
+    s.hp = EditorParams();
+    s.centres = {{1.0, 1.0}, {3.0, 2.0}, {5.0, 2.0}, {n - 2.0, n - 2.0}, {n - 5.0, n - 3.0}};
+    for (int mode = 0; mode < 3; ++mode) {
+      s.mode = mode;
+      const Words after = RunStroke(n, base, s);
+      int out = 0;
+      const double reach = mode == 1 ? 0.9 * (0.8 * 14 + 3.0) : 0.0;
+      for (int z = 0; z < n; ++z)
+        for (int x = 0; x < n; ++x)
+          if (after[static_cast<std::size_t>(z) * n + x] != base[static_cast<std::size_t>(z) * n + x] && DistToCentres(s.centres, x, z) > 14.0 + reach + 0.5) ++out;
+      CHECK(out == 0, "mode %d at the map border: %d samples changed outside the brush", mode, out);
+    }
+  }
+}
+
+
 // ---- variation, height preservation, conservation ---------------------------------------------------------------------------------------------
 
 /** How unevenly the erosion is spread over the map: the coefficient of variation of the mean |change| of 8 x 8 blocks (0 = every block is changed alike, the evenly spaced look of uniform rain and identical droplets). */
@@ -878,6 +1378,7 @@ int main(const int argc, char** argv)
   TestProperties();
   TestBoundary();
   TestBrushBoundary();
+  TestBrushQuality();
   TestVariation();
   TestSolverExtras();
   if (update && gFailures == 0) {

@@ -2,7 +2,10 @@
 //
 //   ed_erode_begin([params])                      -> ok | nil, message   starts a stroke session: copies the map heights as floats, water / sediment start empty.
 //                                                 params (all optional numbers): rain evaporation gain capacity erosion deposition depth_max min_slope cut_limit talus thermal thermal_every max_speed vary vary_scale
-//   ed_erode_window(cx, cz, radius[, {mode, margin}])  -> x0, z0, x1, z1    the inclusive sample window a dab would use (for building shaped brush weights)
+//                                                 inertia conserve seed. The brush runs water droplets (EdErosion.h): rain scales how many are released per round, capacity / erosion / deposition / evaporation /
+//                                                 min_slope / cut_limit / inertia are theirs, thermal / talus / thermal_every the slides after them; gain, depth_max and max_speed belong to the grid solver and are ignored
+//   ed_erode_window(cx, cz, radius[, {mode, margin}])  -> x0, z0, x1, z1    the inclusive sample window a dab would use (for building shaped brush weights); the erode and deposit brushes
+//                                                 never change a sample outside the radius, the rain brush up to 0.9 * margin past it
 //   ed_erode_dab(cx, cz, radius[, opts])          -> changed, x0, z0, x1, z1   one dab inside the open stroke of the document (ed_cmd_begin): runs the kernels on the window and writes
 //                                                 the new heights. opts: iterations strength falloff margin amount weights (list for the window, row major), mode = 'erode' | 'rain' | 'deposit',
 //                                                 shape (handle of ed_brush_shape_set, EdBrush.h) + angle (degrees): a shaped brush, the weights are made natively from the mask (cut at the radius)
@@ -80,6 +83,9 @@ namespace
     p.max_speed = static_cast<float>(OptNum(L, index, "max_speed", p.max_speed));
     p.vary = std::max(0.0f, std::min(1.0f, static_cast<float>(OptNum(L, index, "vary", p.vary))));
     p.vary_scale = std::max(2.0f, static_cast<float>(OptNum(L, index, "vary_scale", p.vary_scale)));
+    p.inertia = std::max(0.0f, std::min(0.95f, static_cast<float>(OptNum(L, index, "inertia", p.inertia))));
+    p.conserve = std::max(0.0f, std::min(1.0f, static_cast<float>(OptNum(L, index, "conserve", p.conserve))));
+    p.seed = static_cast<std::uint32_t>(OptNum(L, index, "seed", static_cast<double>(p.seed)));
     return p;
   }
 
@@ -106,26 +112,20 @@ namespace
     return 1;
   }
 
-  /** The window rule of ErodeSession::Dab, without running it: the brush plus a margin, one sample more, clamped to the map. */
-  void DabWindow(const double cx, const double cz, const double radius, const double margin, const int w, const int h, int& x0, int& z0, int& x1, int& z1)
-  {
-    x0 = std::max(0, static_cast<int>(std::floor(cx - radius - margin)) - 1);
-    z0 = std::max(0, static_cast<int>(std::floor(cz - radius - margin)) - 1);
-    x1 = std::min(w - 1, static_cast<int>(std::ceil(cx + radius + margin)) + 1);
-    z1 = std::min(h - 1, static_cast<int>(std::ceil(cz + radius + margin)) + 1);
-  }
-
   int __cdecl cfunc_Window(lua_State* const L)
   {
     // the window rule of ErodeSession::Dab, without running it
     const double cx = luaL_checknumber(L, 1), cz = luaL_checknumber(L, 2);
     const double radius = std::max(1.0, luaL_checknumber(L, 3));
-    const int mode = ModeOf(OptStr(L, 4, "mode", "erode"));
-    double margin = OptNum(L, 4, "margin", -1.0);
-    if (margin < 0.0) margin = (mode == 1 ? 0.8 : 0.35) * radius + 3.0;
+    er::BrushDab probe;
+    probe.cx = cx;
+    probe.cz = cz;
+    probe.radius = radius;
+    probe.mode = ModeOf(OptStr(L, 4, "mode", "erode"));
+    probe.margin = OptNum(L, 4, "margin", -1.0);
     moho::editor::MapDocument& doc = moho::editor::Document();
     int x0, z0, x1, z1;
-    DabWindow(cx, cz, radius, margin, doc.Width(), doc.Height(), x0, z0, x1, z1);
+    er::BrushWindow(probe, doc.Width(), doc.Height(), x0, z0, x1, z1);
     lua_pushnumber(L, x0);
     lua_pushnumber(L, z0);
     lua_pushnumber(L, x1);
@@ -188,12 +188,9 @@ namespace
       const int shapeHandle = static_cast<int>(OptNum(L, 4, "shape", 0.0));
       const moho::editor::brush::Shape* const shape = shapeHandle > 0 ? moho::editor::brush::FindShape(shapeHandle) : nullptr;
       if (shape != nullptr) {
-        const double radiusWindow = std::max(1.0, dab.radius);
-        double margin = dab.margin;       // the same rule as ErodeSession::Dab
-        if (margin < 0.0) margin = (dab.mode == 1 ? 0.8 : 0.35) * radiusWindow + 3.0;
         moho::editor::MapDocument& doc = moho::editor::Document();
         int wx0, wz0, wx1, wz1;
-        DabWindow(dab.cx, dab.cz, radiusWindow, margin, doc.Width(), doc.Height(), wx0, wz0, wx1, wz1);
+        er::BrushWindow(dab, doc.Width(), doc.Height(), wx0, wz0, wx1, wz1);       // the same rule as ErodeSession::Dab
         moho::editor::brush::FillShapeWeights(*shape, static_cast<float>(OptNum(L, 4, "angle", 0.0)), static_cast<float>(dab.cx), static_cast<float>(dab.cz),
                                               static_cast<float>(dab.radius), wx0, wz0, wx1, wz1, dab.weights);
       }

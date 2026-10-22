@@ -1475,6 +1475,15 @@ namespace moho::editor::field::erosion
   } // namespace
 
   // ---- the local erosion brush ------------------------------------------------------------------------------------------------------------------
+  //
+  // The brush runs water droplets on the real terrain (Beyer / Lague): every dab releases a few hundred droplets at random positions inside the brush, they run downhill on the bilinear
+  // surface with inertia, dissolve ground where they are fast on a slope and settle it where they slow down. All writes are multiplied by the brush weight of the cell they land on, so the
+  // change is exactly zero outside the brush radius and follows its falloff inside; the heights, not a window copy, are what the droplets read (no pinned rim, no frozen water state at the
+  // edge of a window). The earlier brush solved the pipe model of the grid solver on a square window: four flow directions (a diamond of settled sediment and parallel rills along the axes),
+  // settling and water not weighted by the brush, and water / sediment left standing outside the window between dabs (the straight edges).
+  //
+  // Continuity: nothing the dab does is a threshold of the brush weights (a droplet's water and load are proportional to its start weight, its random numbers come from its own stream), so a
+  // brush mask that differs a little gives a result that differs a little.
 
   namespace
   {
@@ -1493,7 +1502,272 @@ namespace moho::editor::field::erosion
       const float v = std::floor(height * 128.0f + 0.5f);
       return static_cast<std::uint16_t>(v < 0.0f ? 0.0f : (v > 65535.0f ? 65535.0f : v));
     }
+
+    constexpr float kBrushCapacity = 1.5f;       // sediment capacity of a droplet per unit of slope * speed * water, at HydroParams::capacity = 1 (heights in world units, the sample spacing is 1)
+    constexpr float kBrushPileKernel = 3.5f;     // radius of the cone a droplet dumps its sediment with (deposit brush)
+    constexpr float kBrushDensity = 0.03f;       // droplets per sample of the brush's bounding square per round (HydroParams::rain / 0.006 scales it)
+    constexpr float kBrushVary = 0.5f;           // every droplet its own lifetime, inertia, load and dissolving rate (breaks the evenly spaced parallel rills of identical droplets)
+    constexpr float kBrushKernel = 2.0f;         // radius of the cone the droplet digs with, in samples (the digging is centred on the exact position, not on a cell)
+    constexpr float kBrushRollCut = 0.4f;        // no sample is dug deeper than this below its height at the start of the dab
+    constexpr int kBrushMaxDrops = 3000;         // (a bigger brush gets the same water in fewer, bigger droplets: the cost stays bounded)
+
+    /** The window a dab works on and its per sample brush weights. */
+    struct BrushCtx
+    {
+      int w = 0, h = 0;                 // the map
+      int x0 = 0, z0 = 0, ww = 0, wh = 0;   // the window (inclusive corner, size)
+      const std::vector<float>* start = nullptr;    // where droplets are released and how much water they get
+      const std::vector<float>* write = nullptr;    // the brush weight of a sample: what is dug and settled there is multiplied with it (0 = never touched)
+      const std::vector<float>* rock = nullptr;     // optional: erodibility factor of a sample
+      const std::vector<float>* base = nullptr;     // the window's heights at the start of the dab
+      bool pile = false;                // deposit brush: a droplet may build above its surroundings
+    };
+
+    inline float WinAt(const std::vector<float>* a, const BrushCtx& c, const int x, const int z)
+    {
+      if (a == nullptr) return 1.0f;
+      const int ix = x - c.x0, iz = z - c.z0;
+      if (ix < 0 || iz < 0 || ix >= c.ww || iz >= c.wh) return 0.0f;
+      return (*a)[Ix(ix, iz, c.ww)];
+    }
+
+    /** The weights bilinear at a continuous position (the samples outside the window count 0). */
+    inline float WinBilinear(const std::vector<float>& a, const BrushCtx& c, const float px, const float pz)
+    {
+      const int ix = static_cast<int>(std::floor(px)), iz = static_cast<int>(std::floor(pz));
+      const float fx = px - static_cast<float>(ix), fz = pz - static_cast<float>(iz);
+      return WinAt(&a, c, ix, iz) * (1.0f - fx) * (1.0f - fz) + WinAt(&a, c, ix + 1, iz) * fx * (1.0f - fz) + WinAt(&a, c, ix, iz + 1) * (1.0f - fx) * fz + WinAt(&a, c, ix + 1, iz + 1) * fx * fz;
+    }
+
+    struct BrushDrop
+    {
+      float inertia = 0.3f;
+      float capacity = 1.0f;
+      float erode = 0.2f;
+      float deposit = 0.1f;
+      float evaporate = 0.02f;
+      float min_slope = 0.02f;
+      float cut_limit = 0.5f;
+      float gravity = 4.0f;
+      float speed = 1.0f;
+      int lifetime = 30;
+    };
+
+    inline float LowestAround(const std::vector<float>& t, const int w, const int h, const int x, const int z, float* highest = nullptr)
+    {
+      float lo = t[Ix(x, z, w)], hi = lo;
+      for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+          const int nx = x + dx, nz = z + dz;
+          if ((dx == 0 && dz == 0) || nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
+          const float v = t[Ix(nx, nz, w)];
+          lo = std::min(lo, v);
+          hi = std::max(hi, v);
+        }
+      }
+      if (highest != nullptr) *highest = hi;
+      return lo;
+    }
+
+    struct Kernel
+    {
+      float kw[64];
+      int cx[64], cz[64];
+      int count = 0;
+      float wsum = 0.0f;
+    };
+
+    /** The samples within kBrushKernel of (px, pz) with their cone weights (a continuous centre: no cell quantisation); samples past the map edge are mirrored back (so the border takes as much
+     *  as the inside: no lip). `wsum` is the sum over the whole cone, also the part that falls outside the map or the brush. */
+    void GatherKernel(const BrushCtx& c, const float px, const float pz, Kernel& k, const float radius = kBrushKernel)
+    {
+      const int r = static_cast<int>(std::ceil(radius));
+      const int ix = static_cast<int>(std::floor(px)), iz = static_cast<int>(std::floor(pz));
+      k.count = 0;
+      k.wsum = 0.0f;
+      for (int oz = -r + 1; oz <= r; ++oz) {
+        for (int ox = -r + 1; ox <= r; ++ox) {
+          const float ddx = static_cast<float>(ix + ox) - px, ddz = static_cast<float>(iz + oz) - pz;
+          const float d = std::sqrt(ddx * ddx + ddz * ddz);
+          if (d >= radius) continue;
+          const float wk = radius - d;
+          k.wsum += wk;
+          const int mx = Reflect(ix + ox, c.w), mz = Reflect(iz + oz, c.h);
+          if (mx < 0 || mz < 0) continue;
+          k.kw[k.count] = wk;
+          k.cx[k.count] = mx;
+          k.cz[k.count] = mz;
+          ++k.count;
+        }
+      }
+    }
+
+    /** Digs `amount` out of the samples around (px, pz) with the cone; each sample gives its share times its brush weight (and erodibility), never more than a share of its drop to the lowest
+     *  neighbour (no pits) and never below its start height minus kBrushRollCut. Returns what was dug. */
+    float BrushDig(std::vector<float>& t, const BrushCtx& c, const BrushDrop& p, const float px, const float pz, const float amount)
+    {
+      Kernel k;
+      GatherKernel(c, px, pz, k);
+      if (k.wsum <= 0.0f) return 0.0f;
+      float taken = 0.0f;
+      for (int q = 0; q < k.count; ++q) {
+        const float wt = WinAt(c.write, c, k.cx[q], k.cz[q]);
+        if (wt <= 0.0f) continue;
+        const std::size_t j = Ix(k.cx[q], k.cz[q], c.w);
+        float a = amount * k.kw[q] / k.wsum * wt;
+        if (c.rock != nullptr) a *= WinAt(c.rock, c, k.cx[q], k.cz[q]);
+        const float low = LowestAround(t, c.w, c.h, k.cx[q], k.cz[q]);
+        if (p.cut_limit > 0.0f) a = std::min(a, p.cut_limit * std::max(0.0f, t[j] - low));
+        const int bx = k.cx[q] - c.x0, bz = k.cz[q] - c.z0;
+        if (bx >= 0 && bz >= 0 && bx < c.ww && bz < c.wh) a = std::min(a, std::max(0.0f, t[j] - ((*c.base)[Ix(bx, bz, c.ww)] - kBrushRollCut)));
+        if (a <= 0.0f) continue;
+        t[j] -= a;
+        taken += a;
+      }
+      return taken;
+    }
+
+    /** The deposit brush's dump: `amount` of sediment on the samples around (px, pz) with the cone, times their brush weight. */
+    void BrushPile(std::vector<float>& t, const BrushCtx& c, const float px, const float pz, const float amount)
+    {
+      Kernel k;
+      GatherKernel(c, px, pz, k, kBrushPileKernel);
+      if (k.wsum <= 0.0f) return;
+      for (int q = 0; q < k.count; ++q) {
+        const float wt = WinAt(c.write, c, k.cx[q], k.cz[q]);
+        if (wt > 0.0f) t[Ix(k.cx[q], k.cz[q], c.w)] += amount * k.kw[q] / k.wsum * wt;
+      }
+    }
+
+    /** Settles `amount` on the four samples around (px, pz), bilinear, times their brush weight; a sample takes no more than the room up to its highest neighbour (a droplet fills a hollow, it
+     *  does not build spikes) unless the brush builds. Returns what was settled. */
+    float BrushSettle(std::vector<float>& t, const BrushCtx& c, const float px, const float pz, const float amount)
+    {
+      if (amount <= 0.0f) return 0.0f;
+      const int ix = std::max(0, std::min(c.w - 2, static_cast<int>(std::floor(px)))), iz = std::max(0, std::min(c.h - 2, static_cast<int>(std::floor(pz))));
+      const float fx = px - static_cast<float>(ix), fz = pz - static_cast<float>(iz);
+      const float bw[4] = {(1.0f - fx) * (1.0f - fz), fx * (1.0f - fz), (1.0f - fx) * fz, fx * fz};
+      float done = 0.0f;
+      for (int k = 0; k < 4; ++k) {
+        const int x = ix + (k & 1), z = iz + (k >> 1);
+        const float wt = WinAt(c.write, c, x, z);
+        if (wt <= 0.0f) continue;
+        const std::size_t j = Ix(x, z, c.w);
+        // (the erode and rain brushes settle with the weight squared: the load that runs out past the brush is carried away, it does not pile up as a ring along its edge)
+        float a = amount * bw[k] * (c.pile ? wt : wt * wt);
+        if (!c.pile) {
+          float hi;
+          LowestAround(t, c.w, c.h, x, z, &hi);
+          a = std::min(a, std::max(0.0f, hi - t[j]) + 0.01f);
+        }
+        t[j] += a;
+        done += a;
+      }
+      return done;
+    }
+
+    /** One droplet of the brush: released at (sx, sz) with `water` (its start weight) and `load` sediment; runs on t. Returns the sediment it still carried when it ended (off the map, or what
+     *  the weights did not let it settle). */
+    float BrushDroplet(std::vector<float>& t, const BrushCtx& c, const BrushDrop& base, Rng& rng, const float sx, const float sz, const float water0, const float load0)
+    {
+      BrushDrop p = base;
+      {
+        const auto sgn = [&rng]() { return rng.Unit() * 2.0f - 1.0f; };
+        p.lifetime = std::max(4, static_cast<int>(std::floor(static_cast<float>(base.lifetime) * (1.0f + 0.4f * kBrushVary * sgn()) + 0.5f)));
+        p.inertia = Clamp01(std::min(0.95f, base.inertia * (1.0f + kBrushVary * sgn())));
+        p.capacity = base.capacity * (1.0f + 0.6f * kBrushVary * sgn());
+        p.erode = base.erode * (1.0f + 0.4f * kBrushVary * sgn());
+      }
+      float water = water0 * (1.0f + 0.5f * kBrushVary * (rng.Unit() * 2.0f - 1.0f));
+      float px = sx, pz = sz, dx = 0.0f, dz = 0.0f, speed = p.speed, sediment = load0;
+      const int w = c.w, h = c.h;
+      for (int life = 0; life < p.lifetime; ++life) {
+        const int ix = static_cast<int>(std::floor(px)), iz = static_cast<int>(std::floor(pz));
+        if (px < 0.0f || pz < 0.0f || ix >= w - 1 || iz >= h - 1) return sediment;      // off the map: the load goes with it
+        const float fx = px - static_cast<float>(ix), fz = pz - static_cast<float>(iz);
+        const std::size_t i00 = Ix(ix, iz, w);
+        const float h00 = t[i00], h10 = t[i00 + 1], h01 = t[i00 + static_cast<std::size_t>(w)], h11 = t[i00 + static_cast<std::size_t>(w) + 1];
+        const float gx = (h10 - h00) * (1.0f - fz) + (h11 - h01) * fz;
+        const float gz = (h01 - h00) * (1.0f - fx) + (h11 - h10) * fx;
+        const float height = h00 * (1.0f - fx) * (1.0f - fz) + h10 * fx * (1.0f - fz) + h01 * (1.0f - fx) * fz + h11 * fx * fz;
+        dx = dx * p.inertia - gx * (1.0f - p.inertia);
+        dz = dz * p.inertia - gz * (1.0f - p.inertia);
+        float len = std::sqrt(dx * dx + dz * dz);
+        if (len < 1e-6f) {
+          const float a = rng.Unit() * 2.0f * kPi;
+          dx = std::cos(a);
+          dz = std::sin(a);
+          len = 1.0f;
+        }
+        dx /= len;
+        dz /= len;
+        const float ox = px, oz = pz;
+        px += dx;
+        pz += dz;
+        const int nx = static_cast<int>(std::floor(px)), nz = static_cast<int>(std::floor(pz));
+        if (px < 0.0f || pz < 0.0f || nx >= w - 1 || nz >= h - 1) return sediment;
+        const float ex = px - static_cast<float>(nx), ez = pz - static_cast<float>(nz);
+        const std::size_t j = Ix(nx, nz, w);
+        const float newHeight = t[j] * (1.0f - ex) * (1.0f - ez) + t[j + 1] * ex * (1.0f - ez) + t[j + static_cast<std::size_t>(w)] * (1.0f - ex) * ez + t[j + static_cast<std::size_t>(w) + 1] * ex * ez;
+        const float dh = newHeight - height;
+        const float cap = std::max(-dh, p.min_slope) * speed * water * p.capacity * kBrushCapacity;
+        if (sediment > cap || dh > 0.0f) {
+          const float amount = dh > 0.0f ? std::min(dh, sediment) : (sediment - cap) * p.deposit;
+          sediment -= BrushSettle(t, c, ox, oz, amount);
+        } else if (life >= 1) {
+          sediment += BrushDig(t, c, p, ox, oz, std::min((cap - sediment) * p.erode, -dh));
+        }
+        speed = std::min(4.0f, std::sqrt(std::max(0.0f, speed * speed - dh * p.gravity)));
+        water *= (1.0f - p.evaporate);
+      }
+      if (sediment > 0.0f) sediment -= BrushSettle(t, c, px, pz, sediment);
+      return std::max(0.0f, sediment);
+    }
+
+    /** Puts `volume` of the sediment that left the brush back inside it: spread over the part of the brush that lies below the brush's mean ground, by brush weight and depth below that mean (the
+     *  foot of the slope and the hollows take it, summits and ridges do not), so the brush moves material instead of only removing it and the mountain keeps its mass. */
+    void BrushReturn(std::vector<float>& t, const BrushCtx& c, const std::vector<float>& write, const double volume)
+    {
+      double sumW = 0.0, sumH = 0.0;
+      for (int z = 0; z < c.wh; ++z) {
+        for (int x = 0; x < c.ww; ++x) {
+          const float wt = write[Ix(x, z, c.ww)];
+          if (wt <= 0.0f) continue;
+          sumW += wt;
+          sumH += static_cast<double>(wt) * t[Ix(c.x0 + x, c.z0 + z, c.w)];
+        }
+      }
+      if (sumW <= 1e-9) return;
+      const float mean = static_cast<float>(sumH / sumW);
+      std::vector<float> wt(write.size(), 0.0f);
+      double sum = 0.0;
+      for (int z = 0; z < c.wh; ++z) {
+        for (int x = 0; x < c.ww; ++x) {
+          const std::size_t i = Ix(x, z, c.ww);
+          if (write[i] <= 0.0f) continue;
+          wt[i] = write[i] * std::max(0.0f, mean - t[Ix(c.x0 + x, c.z0 + z, c.w)]);
+          sum += wt[i];
+        }
+      }
+      if (sum <= 1e-12) return;
+      const double k = volume / sum;
+      for (int z = 0; z < c.wh; ++z)
+        for (int x = 0; x < c.ww; ++x) t[Ix(c.x0 + x, c.z0 + z, c.w)] += static_cast<float>(k * wt[Ix(x, z, c.ww)]);
+    }
   } // namespace
+
+  void BrushWindow(const BrushDab& dab, const int w, const int h, int& x0, int& z0, int& x1, int& z1)
+  {
+    const double radius = std::max(1.0, dab.radius);
+    double margin = dab.margin;
+    if (margin < 0.0) margin = BrushDefaultMargin(dab.mode, radius);
+    x0 = std::max(0, static_cast<int>(std::floor(dab.cx - radius - margin)) - 1);
+    z0 = std::max(0, static_cast<int>(std::floor(dab.cz - radius - margin)) - 1);
+    x1 = std::min(w - 1, static_cast<int>(std::ceil(dab.cx + radius + margin)) + 1);
+    z1 = std::min(h - 1, static_cast<int>(std::ceil(dab.cz + radius + margin)) + 1);
+  }
+
+  double BrushDefaultMargin(const int mode, const double radius) { return mode == 1 ? 0.8 * radius + 3.0 : 0.0; }
 
   void ErodeSession::Begin(const int w, const int h, const std::uint16_t* words, const HydroParams& params)
   {
@@ -1503,13 +1777,8 @@ namespace moho::editor::field::erosion
     const std::size_t n = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
     t_.resize(n);
     for (std::size_t i = 0; i < n; ++i) t_[i] = static_cast<float>(words[i]) * (1.0f / 128.0f);
-    d_.assign(n, 0.0f);
-    s_.assign(n, 0.0f);
-    for (auto& a : f_) a.assign(n, 0.0f);
-    dx0_ = w;
-    dz0_ = h;
-    dx1_ = -1;
-    dz1_ = -1;
+    dabs_ = 0;
+    seed_ = 0;
     active_ = w >= 3 && h >= 3;
   }
 
@@ -1518,14 +1787,6 @@ namespace moho::editor::field::erosion
     active_ = false;
     t_.clear();
     t_.shrink_to_fit();
-    d_.clear();
-    d_.shrink_to_fit();
-    s_.clear();
-    s_.shrink_to_fit();
-    for (auto& a : f_) {
-      a.clear();
-      a.shrink_to_fit();
-    }
   }
 
   bool ErodeSession::Dab(const BrushDab& dab, int& x0, int& z0, int& x1, int& z1, std::vector<std::uint16_t>& words)
@@ -1533,111 +1794,143 @@ namespace moho::editor::field::erosion
     if (!active_) return false;
     const double radius = std::max(1.0, dab.radius);
     double margin = dab.margin;
-    if (margin < 0.0) margin = (dab.mode == 1 ? 0.8 : 0.35) * radius + 3.0;
-    x0 = std::max(0, static_cast<int>(std::floor(dab.cx - radius - margin)) - 1);
-    z0 = std::max(0, static_cast<int>(std::floor(dab.cz - radius - margin)) - 1);
-    x1 = std::min(w_ - 1, static_cast<int>(std::ceil(dab.cx + radius + margin)) + 1);
-    z1 = std::min(h_ - 1, static_cast<int>(std::ceil(dab.cz + radius + margin)) + 1);
+    if (margin < 0.0) margin = BrushDefaultMargin(dab.mode, radius);
+    BrushWindow(dab, w_, h_, x0, z0, x1, z1);
     const int ww = x1 - x0 + 1;
     const int wh = z1 - z0 + 1;
     if (ww < 3 || wh < 3) return false;
     const std::size_t n = static_cast<std::size_t>(ww) * static_cast<std::size_t>(wh);
-    HydroState st;
-    st.w = ww;
-    st.h = wh;
-    st.cell = 1.0f;
-    st.t.resize(n);
-    st.d.resize(n);
-    st.s.resize(n);
-    for (auto& a : st.f) a.resize(n);
-    st.rain_rate.resize(n);
-    st.erode_rate.resize(n);
+    if (dabs_ == 0) seed_ = static_cast<std::uint32_t>(Mix(params_.seed, static_cast<std::uint64_t>(static_cast<std::int64_t>(std::floor(dab.cx * 4.0))), static_cast<std::uint64_t>(static_cast<std::int64_t>(std::floor(dab.cz * 4.0)))) >> 32);
+    const std::uint64_t dabId = dabs_++;
     const bool custom = dab.weights.size() == n;
     std::vector<float> vary;
     if (params_.vary > 0.0f) NoiseField(vary, ww, wh, 1.0f, std::max(2.0f, params_.vary_scale), 17u, 3, true, x0, z0);
-    // the window sides that lie inside the map stay fixed (the brush weights are zero there); the sides on the map edge are open: the edge cells are solved like all the others, so no
-    // fixed column is left standing next to cells that were eroded (that was the wall at the map border)
+    std::vector<float> start(n), write(n), rock, base(n);
+    if (params_.vary > 0.0f) rock.assign(n, 1.0f);
+    // the window sides that lie inside the map are not touched (the brush weights are zero there); a side on the map edge is an ordinary row of samples
     int sides = 0;
     if (x0 > 0) sides |= 1;
     if (x1 < w_ - 1) sides |= 2;
     if (z0 > 0) sides |= 4;
     if (z1 < h_ - 1) sides |= 8;
+    const double reach = radius + 0.9 * margin;       // rain brush: the ground is dug this far from the centre (the water runs on beyond the brush)
     for (int z = 0; z < wh; ++z) {
       for (int x = 0; x < ww; ++x) {
         const std::size_t i = Ix(x, z, ww);
-        const std::size_t m = Ix(x0 + x, z0 + z, w_);
-        st.t[i] = t_[m];
-        st.d[i] = d_[m];
-        st.s[i] = s_[m];
-        for (int k = 0; k < 4; ++k) st.f[k][i] = f_[k][m];
         const double ddx = static_cast<double>(x0 + x) - dab.cx;
         const double ddz = static_cast<double>(z0 + z) - dab.cz;
         const double dist = std::sqrt(ddx * ddx + ddz * ddz);
-        const float wgt = custom ? dab.weights[i] : RoundWeight(dist, radius, dab.falloff);
-        st.rain_rate[i] = wgt;
-        st.erode_rate[i] = dab.mode == 1 ? RoundWeight(dist, radius + 0.9 * margin, 1.0) : wgt;
+        const bool rim = ((sides & 1) != 0 && x == 0) || ((sides & 4) != 0 && z == 0) || ((sides & 2) != 0 && x == ww - 1) || ((sides & 8) != 0 && z == wh - 1);
+        const float wgt = rim ? 0.0f : (custom ? dab.weights[i] : RoundWeight(dist, radius, dab.falloff));
+        base[i] = t_[Ix(x0 + x, z0 + z, w_)];
+        float rainW = wgt;
+        const float dig = dab.mode == 1 ? (rim ? 0.0f : RoundWeight(dist, reach, 1.0)) : wgt;
         if (!vary.empty()) {
-          const float c = Clamp01((vary[i] - 0.2f) * (1.0f / 0.6f));
-          const float hard = c * c * (3.0f - 2.0f * c);
-          st.erode_rate[i] *= 1.0f - params_.vary * hard;
-          st.rain_rate[i] *= 1.0f + params_.vary * (1.0f - 2.0f * hard) * 0.7f;
+          const float cv = Clamp01((vary[i] - 0.2f) * (1.0f / 0.6f));
+          const float hard = cv * cv * (3.0f - 2.0f * cv);
+          rock[i] = 1.0f - params_.vary * hard;
+          rainW *= 1.0f + params_.vary * (1.0f - 2.0f * hard) * 0.7f;
         }
-        if (dab.mode == 2 && !(((sides & 1) != 0 && x == 0) || ((sides & 4) != 0 && z == 0) || ((sides & 2) != 0 && x == ww - 1) || ((sides & 8) != 0 && z == wh - 1))) {
-          st.s[i] += static_cast<float>(dab.amount * dab.strength) * wgt;
-        }
+        start[i] = rainW;
+        write[i] = dig;
       }
     }
-    HydroParams p = params_;
-    const float k = static_cast<float>(dab.strength);
-    p.rain *= k;
-    p.erosion = std::min(1.0f, p.erosion * k);
-    p.thermal = std::min(1.0f, p.thermal * k);
-    p.pin_border = sides != 0;
-    p.pin_sides = sides;
-    p.open_edge = true;
-    p.settle = false;
-    p.track = false;
-    if (dab.mode == 2) p.rain *= 0.5f;
-    const std::vector<float> before = st.t;
-    RunHydro(st, p, std::max(0, dab.iterations));
-    MirrorEdgeChange(before, st.t, ww, wh, sides);
+    BrushCtx c;
+    c.w = w_;
+    c.h = h_;
+    c.x0 = x0;
+    c.z0 = z0;
+    c.ww = ww;
+    c.wh = wh;
+    c.start = &start;
+    c.write = &write;
+    c.rock = rock.empty() ? nullptr : &rock;
+    c.base = &base;
+    c.pile = dab.mode == 2;
+    BrushDrop p;
+    p.inertia = Clamp01(params_.inertia);
+    p.capacity = params_.capacity;
+    p.erode = params_.erosion * static_cast<float>(dab.strength);
+    p.deposit = params_.deposition;
+    p.evaporate = params_.evaporation;
+    p.min_slope = params_.min_slope;
+    p.cut_limit = params_.cut_limit;
+    p.lifetime = static_cast<int>(std::max(16.0, std::min(48.0, 18.0 + 1.5 * radius)) * (dab.mode == 1 ? 1.5 : 1.0));
+    // the droplets: released over the bounding square of the brush (fixed, independent of the weights), each with the water of its start weight
+    const double side = 2.0 * radius;
+    const double rainK = static_cast<double>(params_.rain) / 0.006;
+    double wantD = static_cast<double>(std::max(0, dab.iterations)) * kBrushDensity * rainK * side * side * dab.strength;
+    int drops = static_cast<int>(std::min(static_cast<double>(kBrushMaxDrops), std::ceil(wantD)));
+    const int grid = std::max(1, static_cast<int>(std::ceil(std::sqrt(static_cast<double>(std::max(1, drops))))));
+    if (dab.mode == 2) drops = grid * grid;
+    if (dab.mode == 2) wantD *= 0.5;      // (the deposit brush runs with half the water: the pile slides, it is not washed away)
+    const double loadPerArea = dab.amount * dab.strength * side * side / std::max(1, drops);
+    const float waterScale = static_cast<float>(wantD / std::max(1.0, static_cast<double>(drops)));
+    const float cdx = static_cast<float>(dab.cx), cdz = static_cast<float>(dab.cz);
+    double lost = 0.0;
+    for (int k = 0; k < drops; ++k) {
+      Rng rng(Mix(seed_, dabId, static_cast<std::uint64_t>(k)));
+      float ux = rng.Unit(), uz = rng.Unit();
+      if (dab.mode == 2) {
+        // the deposit brush lays its pile on a jittered grid (one droplet per cell of a grid, anywhere inside it): an even heap, not the clumps independent random positions make
+        ux = (static_cast<float>(k % grid) + ux) / static_cast<float>(grid);
+        uz = (static_cast<float>(k / grid) + uz) / static_cast<float>(grid);
+      }
+      const float sx = cdx + (ux * 2.0f - 1.0f) * static_cast<float>(radius);
+      const float sz = cdz + (uz * 2.0f - 1.0f) * static_cast<float>(radius);
+      const float sw = WinBilinear(start, c, sx, sz);
+      if (sw <= 0.0f) continue;
+      // deposit brush: the droplet first dumps its share of the sediment where it is released (the pile), then runs and carries what it takes up from the loose heap downhill
+      if (dab.mode == 2) BrushPile(t_, c, sx, sz, static_cast<float>(loadPerArea));
+      lost += BrushDroplet(t_, c, p, rng, sx, sz, sw * waterScale, 0.0f);
+    }
+    if (dab.mode != 2 && lost > 0.0 && params_.conserve > 0.0f) BrushReturn(t_, c, write, lost * static_cast<double>(params_.conserve));
+    // thermal slides, weighted by the brush; only samples whose whole neighbourhood is under the brush take part (nothing is handed to a sample outside it)
+    if (params_.thermal > 0.0f && params_.thermal_every > 0) {
+      const int steps = std::max(0, dab.iterations) / params_.thermal_every;
+      if (steps > 0) {
+        std::vector<float> wt(n, 0.0f), tw(n);
+        for (int z = 0; z < wh; ++z) {
+          for (int x = 0; x < ww; ++x) {
+            float m = write[Ix(x, z, ww)];
+            for (int dz = -1; dz <= 1 && m > 0.0f; ++dz) {
+              for (int dx = -1; dx <= 1; ++dx) {
+                const int gx = x0 + x + dx, gz = z0 + z + dz;
+                if (gx < 0 || gz < 0 || gx >= w_ || gz >= h_) continue;      // (past the map edge: nothing there to hand material to)
+                const int lx = x + dx, lz = z + dz;
+                if (lx < 0 || lz < 0 || lx >= ww || lz >= wh || write[Ix(lx, lz, ww)] <= 0.0f) { m = 0.0f; break; }
+              }
+            }
+            wt[Ix(x, z, ww)] = m;
+          }
+        }
+        for (int z = 0; z < wh; ++z)
+          for (int x = 0; x < ww; ++x) tw[Ix(x, z, ww)] = t_[Ix(x0 + x, z0 + z, w_)];
+        ThermalScratch sc;
+        const float rate = std::min(1.0f, params_.thermal * static_cast<float>(dab.strength));
+        for (int s = 0; s < steps; ++s) ThermalImpl(tw, ww, wh, 1.0f, params_.talus, rate, wt, sides, sc);
+        for (int z = 0; z < wh; ++z)
+          for (int x = 0; x < ww; ++x)
+            if (wt[Ix(x, z, ww)] > 0.0f || write[Ix(x, z, ww)] > 0.0f) {
+              // (a sample that only receives is in the brush too: its whole neighbourhood of givers has weight)
+              t_[Ix(x0 + x, z0 + z, w_)] = tw[Ix(x, z, ww)];
+            }
+      }
+    }
     words.resize(n);
-    for (int z = 0; z < wh; ++z) {
-      for (int x = 0; x < ww; ++x) {
-        const std::size_t i = Ix(x, z, ww);
-        const std::size_t m = Ix(x0 + x, z0 + z, w_);
-        t_[m] = st.t[i];
-        d_[m] = st.d[i];
-        s_[m] = st.s[i];
-        for (int q = 0; q < 4; ++q) f_[q][m] = st.f[q][i];
-        words[i] = Word(st.t[i]);
-      }
-    }
-    dx0_ = std::min(dx0_, x0);
-    dz0_ = std::min(dz0_, z0);
-    dx1_ = std::max(dx1_, x1);
-    dz1_ = std::max(dz1_, z1);
+    for (int z = 0; z < wh; ++z)
+      for (int x = 0; x < ww; ++x) words[Ix(x, z, ww)] = Word(t_[Ix(x0 + x, z0 + z, w_)]);
     return true;
   }
 
   bool ErodeSession::Finish(int& x0, int& z0, int& x1, int& z1, std::vector<std::uint16_t>& words)
   {
-    if (!active_ || dx1_ < dx0_ || dz1_ < dz0_) return false;
-    x0 = dx0_;
-    z0 = dz0_;
-    x1 = dx1_;
-    z1 = dz1_;
-    const int ww = x1 - x0 + 1;
-    const int wh = z1 - z0 + 1;
-    words.resize(static_cast<std::size_t>(ww) * static_cast<std::size_t>(wh));
-    for (int z = 0; z < wh; ++z) {
-      for (int x = 0; x < ww; ++x) {
-        const std::size_t m = Ix(x0 + x, z0 + z, w_);
-        t_[m] += s_[m];
-        s_[m] = 0.0f;
-        words[Ix(x, z, ww)] = Word(t_[m]);
-      }
-    }
-    return true;
+    // nothing is held back: every dab wrote what it did (the droplets settle their own load)
+    (void)x0;
+    (void)z0;
+    (void)x1;
+    (void)z1;
+    (void)words;
+    return false;
   }
 } // namespace moho::editor::field::erosion
