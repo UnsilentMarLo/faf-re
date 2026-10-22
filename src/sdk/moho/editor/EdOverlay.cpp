@@ -1,4 +1,5 @@
 #include "moho/editor/EdOverlay.h"
+#include "moho/editor/EdOverlayGeom.h"
 
 #include <algorithm>
 #include <cmath>
@@ -88,6 +89,11 @@ namespace
     static std::map<std::string, NodeGrid> grids;
     return grids;
   }
+
+  // scratch buffers of the decal drawing (one decal at a time; kept so a frame with many splats does not allocate for each)
+  std::vector<moho::editor::overlaygeom::DecalPoint> gDecalPoints;
+  std::vector<Wm3::Vector2f> gDecalScreen;
+  std::vector<char> gDecalVisible;
 
   float gCam[16] = {};  // camera->viewport rows, for ed_overlay_stats
   float gDbg[8] = {};   // ed_overlay_stats: first vertex of the last drawn line (screen x, y, depth, half), viewport w, h, segments drawn, culled
@@ -647,27 +653,80 @@ namespace moho
           }
           batcher->SetTexture(texture);
           for (const Decal* const d : group.second) {
+            // The corners of the flat square: they decide whether the decal is on screen at all, and how big it is there (how finely it is cut up).
             const float h = d->size * 0.5f;
             const float cs = std::cos(d->yaw);
             const float sn = std::sin(d->yaw);
             const float cornersX[4] = {-h, h, h, -h};
             const float cornersZ[4] = {-h, -h, h, h};
             Wm3::Vector2f s[4];
-            bool visible = true;
+            bool allVisible = true;
             for (int i = 0; i < 4; ++i) {
               const Wm3::Vector3f p{d->x + cornersX[i] * cs - cornersZ[i] * sn, d->y, d->z + cornersX[i] * sn + cornersZ[i] * cs};
               if (camera->viewport.ProjectViewportDepthRow1(p) < 1.0f) {
-                visible = false;
-                break;
+                allVisible = false;
+                continue;
               }
               s[i] = camera->Project(p, 0.0f, vw, vh, 0.0f);
             }
-            if (!visible) {
-              continue;
+            float screenPx = 0.0f;   // widest extent on screen; 0 = a corner is behind the camera (cut up by the terrain alone)
+            if (allVisible) {
+              if ((s[0].x < -64.0f && s[1].x < -64.0f && s[2].x < -64.0f && s[3].x < -64.0f) ||
+                  (s[0].x > vw + 64.0f && s[1].x > vw + 64.0f && s[2].x > vw + 64.0f && s[3].x > vw + 64.0f) ||
+                  (s[0].y < -64.0f && s[1].y < -64.0f && s[2].y < -64.0f && s[3].y < -64.0f) ||
+                  (s[0].y > vh + 64.0f && s[1].y > vh + 64.0f && s[2].y > vh + 64.0f && s[3].y > vh + 64.0f)) {
+                continue;
+              }
+              for (int i = 0; i < 4; ++i) {
+                for (int k = i + 1; k < 4; ++k) {
+                  screenPx = std::max(screenPx, std::max(std::fabs(s[i].x - s[k].x), std::fabs(s[i].y - s[k].y)));
+                }
+              }
+              screenPx = std::max(screenPx, 1.0f);
+            }
+
+            // Laid onto the terrain in cells (moho/editor/EdOverlayGeom.h): it lies on the slope, and a decal seen from close by is not skewed by the linear
+            // interpolation of its picture over one big quad. Without a height field (no terrain loaded) the flat square is drawn as one cell.
+            moho::CHeightField* const field = ViewHeightField();
+            const int fw = (field != nullptr) ? field->Width() : 0;
+            const int fh = (field != nullptr) ? field->Height() : 0;
+            std::vector<moho::editor::overlaygeom::DecalPoint>& pts = gDecalPoints;
+            if (fw >= 2 && fh >= 2) {
+              const auto height = [field](const int x, const int z) { return static_cast<float>(field->GetHeightAt(x, z)) / 128.0f; };
+              moho::editor::overlaygeom::BuildDecal(height, fw, fh, d->x, d->y, d->z, d->size, d->yaw,
+                                                    moho::editor::overlaygeom::DecalCells(d->size, screenPx), pts);
+            } else {
+              const auto flat = [](const int, const int) { return 0.0f; };
+              moho::editor::overlaygeom::BuildDecal(flat, 2, 2, d->x, d->y, d->z, d->size, d->yaw, 1, pts);
+            }
+            const int n = static_cast<int>(std::lround(std::sqrt(static_cast<double>(pts.size())))) - 1;
+            std::vector<Wm3::Vector2f>& screen = gDecalScreen;
+            std::vector<char>& visible = gDecalVisible;
+            screen.assign(pts.size(), Wm3::Vector2f{0.0f, 0.0f});
+            visible.assign(pts.size(), 0);
+            for (std::size_t i = 0; i < pts.size(); ++i) {
+              const Wm3::Vector3f p{pts[i].x, pts[i].y, pts[i].z};
+              if (camera->viewport.ProjectViewportDepthRow1(p) >= 1.0f) {
+                screen[i] = camera->Project(p, 0.0f, vw, vh, 0.0f);
+                visible[i] = 1;
+              }
             }
             using V = CD3DPrimBatcher::Vertex;
-            batcher->DrawQuad(V{s[0].x, s[0].y, 0.0f, d->argb, 0.0f, 0.0f}, V{s[1].x, s[1].y, 0.0f, d->argb, 1.0f, 0.0f},
-                              V{s[2].x, s[2].y, 0.0f, d->argb, 1.0f, 1.0f}, V{s[3].x, s[3].y, 0.0f, d->argb, 0.0f, 1.0f});
+            for (int j = 0; j < n; ++j) {
+              for (int i = 0; i < n; ++i) {
+                const std::size_t i00 = static_cast<std::size_t>(j) * (n + 1) + i;
+                const std::size_t i10 = i00 + 1;
+                const std::size_t i11 = i00 + (n + 1) + 1;
+                const std::size_t i01 = i00 + (n + 1);
+                if (!visible[i00] || !visible[i10] || !visible[i11] || !visible[i01]) {
+                  continue;
+                }
+                batcher->DrawQuad(V{screen[i00].x, screen[i00].y, 0.0f, d->argb, pts[i00].u, pts[i00].v},
+                                  V{screen[i10].x, screen[i10].y, 0.0f, d->argb, pts[i10].u, pts[i10].v},
+                                  V{screen[i11].x, screen[i11].y, 0.0f, d->argb, pts[i11].u, pts[i11].v},
+                                  V{screen[i01].x, screen[i01].y, 0.0f, d->argb, pts[i01].u, pts[i01].v});
+              }
+            }
           }
           batcher->Flush();
         }
