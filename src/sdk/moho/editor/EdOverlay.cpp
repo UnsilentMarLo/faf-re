@@ -1,7 +1,11 @@
 #include "moho/editor/EdOverlay.h"
 #include "moho/editor/EdOverlayGeom.h"
+#include "moho/editor/EdOverlayNodes.h"
+#include "moho/editor/EdOverlaySlope.h"
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -82,6 +86,8 @@ namespace
     std::vector<std::uint8_t> v;
     std::uint32_t rgb = 0xFFFFFFu;
     std::uint32_t maxAlpha = 0xC0u;
+    std::vector<moho::editor::overlaynodes::Run> runs;   // the cells that draw anything (EdOverlayNodes.h), rebuilt when the values change
+    bool runsDirty = true;
   };
 
   std::map<std::string, NodeGrid>& NodeGrids()
@@ -105,6 +111,10 @@ namespace
   //   against the footprint's MaxSlope (0.75 for every land, amphibious and hover footprint, lua/footprints.lua).
   // kind 1 "build": the rule a structure is checked with (OCCUPY_CheckAreaFlatness): highest minus lowest sample over the skirt
   //   (window x window cells, window + 1 samples per side), against the blueprint's Physics.MaxGroundVariation (1.1 for most).
+  //
+  // The ratings are kept in a tile cache (EdOverlaySlope.h) until the heights under a tile change (NotifyHeights, called by the document's height sink) or
+  // the rule / window changes; a frame only rates tiles that were never rated or went stale, within a time budget, and draws at most kMaxBlocks blocks
+  // per side whatever the zoom.
   struct SlopeLayer
   {
     bool on = false;
@@ -116,6 +126,34 @@ namespace
 
   SlopeLayer gSlope;
 
+  unsigned gHeightEpoch = 1;                       // moves with every change of the height field (NotifyHeights)
+  moho::editor::overlayslope::Store gSlopeStore;
+  unsigned gSlopeFrame = 0;
+  constexpr int kSlopeMaxBlocks = 160;             // blocks per side drawn at most
+  constexpr double kSlopeBudgetMs = 5.0;           // rating time per frame
+
+  // numbers for ed_overlay_perf (last frame)
+  struct OverlayPerf
+  {
+    double slopeRateMs = 0.0;       // time spent rating tiles
+    double slopeDrawMs = 0.0;       // time to project and draw the slope blocks (without the rating)
+    int slopeTilesRated = 0;
+    int slopePending = 0;           // tiles in view that still wait for their rating
+    int slopeQuads = 0;
+    int slopeLevel = 0;
+    int slopeNodesProjected = 0;
+    double gridsMs = 0.0;
+    int gridQuads = 0;
+    int gridNodesProjected = 0;
+    int gridGroups = 0;
+  };
+  OverlayPerf gPerf;
+
+  double NowMs()
+  {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  }
+
   moho::CHeightField* ViewHeightField()
   {
     moho::CWldSession* const session = moho::WLD_GetActiveSession();
@@ -125,145 +163,94 @@ namespace
     return session->mWldMap->mTerrainRes->GetHeightField();
   }
 
-  // The rating of one cell from a sampler h(x, z) returning the height word of a sample.
-  template <class Sampler>
-  float SlopeMetric(const int kind, const int n, const int cx, const int cz, Sampler&& h)
+  // What the camera looked like when a projection was made: the rows of its viewport matrix and the size of the view. A cached projection is good while this is equal.
+  struct CamStamp
   {
-    if (kind == 0) {
-      int maxDelta = 0;
-      for (int z = cz; z <= cz + n; ++z) {
-        for (int x = cx; x < cx + n; ++x) {
-          maxDelta = std::max(maxDelta, std::abs(h(x + 1, z) - h(x, z)));
-        }
-      }
-      for (int x = cx; x <= cx + n; ++x) {
-        for (int z = cz; z < cz + n; ++z) {
-          maxDelta = std::max(maxDelta, std::abs(h(x, z + 1) - h(x, z)));
-        }
-      }
-      return static_cast<float>(maxDelta) / 128.0f;
-    }
-    int lo = 1 << 30;
-    int hi = -(1 << 30);
-    for (int z = cz; z <= cz + n; ++z) {
-      for (int x = cx; x <= cx + n; ++x) {
-        const int v = h(x, z);
-        lo = std::min(lo, v);
-        hi = std::max(hi, v);
-      }
-    }
-    return static_cast<float>(hi - lo) / 128.0f;
-  }
-
-  // Ratings of a whole region, computed with the same rules in separable passes (cost ~ cells x window), then reduced to blocks of
-  // `stride` x `stride` cells (the steepest cell of a block wins, so a thin cliff never disappears when zoomed far out).
-  struct SlopeCache
-  {
-    bool valid = false;
-    int kind = -1, x0 = 0, z0 = 0, x1 = 0, z1 = 0, window = 0;
-    unsigned builtAt = 0;
-    int stride = 1, bw = 0, bh = 0;
-    std::vector<float> block;   // bw x bh, row major
+    float m[18] = {};
+    bool operator==(const CamStamp& o) const { return std::memcmp(m, o.m, sizeof(m)) == 0; }
+    bool operator!=(const CamStamp& o) const { return !(*this == o); }
   };
 
-  SlopeCache gSlopeCache;
-  unsigned gSlopeFrame = 0;
-
-  void RebuildSlopeCache(moho::CHeightField& field, const SlopeLayer& L, const int x0, const int z0, const int x1, const int z1)
+  CamStamp MakeStamp(const moho::GeomCamera3& camera, const float vw, const float vh)
   {
-    SlopeCache& c = gSlopeCache;
-    const int n = L.window;
-    const int cw = x1 - x0;
-    const int ch = z1 - z0;
-    const int sw = cw + n + 1;
-    const int sh = ch + n + 1;
-    std::vector<int> hs(static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh));
-    for (int j = 0; j < sh; ++j) {
-      for (int i = 0; i < sw; ++i) {
-        hs[static_cast<std::size_t>(j) * sw + i] = static_cast<int>(field.GetHeightAt(x0 + i, z0 + j));
-      }
+    CamStamp s;
+    for (int r = 0; r < 4; ++r) {
+      s.m[r * 4 + 0] = camera.viewport.r[r].x;
+      s.m[r * 4 + 1] = camera.viewport.r[r].y;
+      s.m[r * 4 + 2] = camera.viewport.r[r].z;
+      s.m[r * 4 + 3] = camera.viewport.r[r].w;
     }
-    auto H = [&](const int i, const int j) { return hs[static_cast<std::size_t>(j) * sw + i]; };
-
-    std::vector<float> val(static_cast<std::size_t>(cw) * ch, 0.0f);
-    if (L.kind == 0) {
-      // neighbouring-sample deltas inside the window: rows z in [j, j+n] of horizontal deltas over x in [i, i+n-1], and the same for columns
-      std::vector<int> a(static_cast<std::size_t>(cw) * sh, 0);        // a[z][i] = max over x in [i, i+n-1] of |h(x+1,z) - h(x,z)|
-      for (int z = 0; z < sh; ++z) {
-        for (int i = 0; i < cw; ++i) {
-          int m = 0;
-          for (int x = i; x < i + n; ++x) m = std::max(m, std::abs(H(x + 1, z) - H(x, z)));
-          a[static_cast<std::size_t>(z) * cw + i] = m;
-        }
-      }
-      std::vector<int> b(static_cast<std::size_t>(sw) * ch, 0);        // b[j][x] = max over z in [j, j+n-1] of |h(x,z+1) - h(x,z)|
-      for (int j = 0; j < ch; ++j) {
-        for (int x = 0; x < sw; ++x) {
-          int m = 0;
-          for (int z = j; z < j + n; ++z) m = std::max(m, std::abs(H(x, z + 1) - H(x, z)));
-          b[static_cast<std::size_t>(j) * sw + x] = m;
-        }
-      }
-      for (int j = 0; j < ch; ++j) {
-        for (int i = 0; i < cw; ++i) {
-          int m = 0;
-          for (int z = j; z <= j + n; ++z) m = std::max(m, a[static_cast<std::size_t>(z) * cw + i]);
-          for (int x = i; x <= i + n; ++x) m = std::max(m, b[static_cast<std::size_t>(j) * sw + x]);
-          val[static_cast<std::size_t>(j) * cw + i] = static_cast<float>(m) / 128.0f;
-        }
-      }
-    } else {
-      std::vector<int> rmax(static_cast<std::size_t>(cw) * sh), rmin(static_cast<std::size_t>(cw) * sh);
-      for (int z = 0; z < sh; ++z) {
-        for (int i = 0; i < cw; ++i) {
-          int hi = -(1 << 30), lo = 1 << 30;
-          for (int x = i; x <= i + n; ++x) {
-            hi = std::max(hi, H(x, z));
-            lo = std::min(lo, H(x, z));
-          }
-          rmax[static_cast<std::size_t>(z) * cw + i] = hi;
-          rmin[static_cast<std::size_t>(z) * cw + i] = lo;
-        }
-      }
-      for (int j = 0; j < ch; ++j) {
-        for (int i = 0; i < cw; ++i) {
-          int hi = -(1 << 30), lo = 1 << 30;
-          for (int z = j; z <= j + n; ++z) {
-            hi = std::max(hi, rmax[static_cast<std::size_t>(z) * cw + i]);
-            lo = std::min(lo, rmin[static_cast<std::size_t>(z) * cw + i]);
-          }
-          val[static_cast<std::size_t>(j) * cw + i] = static_cast<float>(hi - lo) / 128.0f;
-        }
-      }
-    }
-
-    c.stride = std::max(1, (std::max(cw, ch) + 189) / 190);
-    c.bw = (cw + c.stride - 1) / c.stride;
-    c.bh = (ch + c.stride - 1) / c.stride;
-    c.block.assign(static_cast<std::size_t>(c.bw) * c.bh, 0.0f);
-    for (int j = 0; j < ch; ++j) {
-      for (int i = 0; i < cw; ++i) {
-        float& blockValue = c.block[static_cast<std::size_t>(j / c.stride) * c.bw + (i / c.stride)];
-        blockValue = std::max(blockValue, val[static_cast<std::size_t>(j) * cw + i]);
-      }
-    }
-    c.kind = L.kind;
-    c.x0 = x0; c.z0 = z0; c.x1 = x1; c.z1 = z1;
-    c.window = n;
-    c.builtAt = gSlopeFrame;
-    c.valid = true;
+    s.m[16] = vw;
+    s.m[17] = vh;
+    return s;
   }
 
-  // green (gentle) -> yellow -> red (at the limit), purple beyond it; flat ground stays clear so the terrain shows through
-  std::uint32_t SlopeColor(const float value, const float limit)
+  // Screen positions of a grid of ground points (x0 + i * step, z0 + j * step), projected when first asked for and kept while the camera, the heights and the grid
+  // stay the same: a static view costs no projection at all, and only the nodes that a drawn cell needs are ever projected.
+  struct ProjGrid
   {
-    const float t = value / limit;
-    if (t > 1.0f) {
+    int x0 = 0, z0 = 0, nw = 0, nh = 0, step = 1;
+    float lift = 0.0f;
+    unsigned heightEpoch = 0;
+    CamStamp stamp;
+    bool valid = false;
+    std::vector<float> sx, sy;
+    std::vector<std::uint8_t> state;   // 0 not projected yet, 1 on screen side, 2 behind the camera
+    unsigned usedFrame = 0;
+
+    void Prepare(const int px0, const int pz0, const int pnw, const int pnh, const int pstep, const float plift, const CamStamp& cs)
+    {
+      if (valid && x0 == px0 && z0 == pz0 && nw == pnw && nh == pnh && step == pstep && lift == plift && heightEpoch == gHeightEpoch && stamp == cs) {
+        return;
+      }
+      x0 = px0; z0 = pz0; nw = pnw; nh = pnh; step = pstep; lift = plift;
+      heightEpoch = gHeightEpoch;
+      stamp = cs;
+      valid = true;
+      const std::size_t n = static_cast<std::size_t>(nw) * static_cast<std::size_t>(nh);
+      sx.resize(n);
+      sy.resize(n);
+      state.assign(n, 0);
+    }
+
+    // Node (i, j): true when it is in front of the camera; its screen position in (x, y).
+    bool Get(moho::CHeightField& field, moho::GeomCamera3& camera, const float vw, const float vh, const int i, const int j, float& x, float& y, int& projected)
+    {
+      const std::size_t k = static_cast<std::size_t>(j) * static_cast<std::size_t>(nw) + static_cast<std::size_t>(i);
+      if (state[k] == 0) {
+        const int wx = std::max(0, std::min(field.Width() - 1, x0 + i * step));
+        const int wz = std::max(0, std::min(field.Height() - 1, z0 + j * step));
+        const Wm3::Vector3f p{static_cast<float>(wx), static_cast<float>(field.GetHeightAt(wx, wz)) / 128.0f + lift, static_cast<float>(wz)};
+        if (camera.viewport.ProjectViewportDepthRow1(p) >= 1.0f) {
+          const Wm3::Vector2f sp = camera.Project(p, 0.0f, vw, vh, 0.0f);
+          sx[k] = sp.x;
+          sy[k] = sp.y;
+          state[k] = 1;
+        } else {
+          state[k] = 2;
+        }
+        ++projected;
+      }
+      x = sx[k];
+      y = sy[k];
+      return state[k] == 1;
+    }
+  };
+
+  ProjGrid gSlopeProj;
+  std::map<std::array<int, 5>, ProjGrid> gGridProj;   // by window (x0, z0, nw, nh, step): shared by every grid that has it
+
+  // green (gentle) -> yellow -> red (at the limit), purple beyond it; flat ground stays clear so the terrain shows through. `step` is a ColorStep
+  // (EdOverlaySlope.h): 0 flat, 1 .. kSteps up to the limit, kSteps + 1 beyond.
+  std::uint32_t SlopeColor(const int step)
+  {
+    if (step > moho::editor::overlayslope::kSteps) {
       return 0xB8C018D8u;
     }
-    if (t < 0.04f) {
+    if (step <= 0) {
       return 0u;
     }
+    const float t = static_cast<float>(step) / static_cast<float>(moho::editor::overlayslope::kSteps);
     float r, g, b;
     if (t < 0.5f) {
       const float f = t / 0.5f;
@@ -498,9 +485,9 @@ namespace
     const int cx = static_cast<int>(std::floor(lua_tonumber(L, 2)));
     const int cz = static_cast<int>(std::floor(lua_tonumber(L, 3)));
     const int n = std::max(1, std::min(16, static_cast<int>(lua_tonumber(L, 4))));
-    const float v = SlopeMetric((std::strcmp(kind, "build") == 0) ? 1 : 0, n, cx, cz,
-                                [field](int x, int z) { return static_cast<int>(field->GetHeightAt(x, z)); });
-    lua_pushnumber(L, static_cast<lua_Number>(v));
+    const int v = moho::editor::overlayslope::CellRating((std::strcmp(kind, "build") == 0) ? 1 : 0, n, cx, cz,
+                                                         [field](int x, int z) { return static_cast<int>(field->GetHeightAt(x, z)); });
+    lua_pushnumber(L, static_cast<lua_Number>(static_cast<float>(v) / 128.0f));
     return 1;
   }
 
@@ -535,9 +522,83 @@ namespace
     }
     if (lua_type(L, 8) == LUA_TNUMBER) g.maxAlpha = static_cast<std::uint32_t>(std::max(0.0, std::min(255.0, lua_tonumber(L, 8))));
     if (lua_type(L, 9) == LUA_TNUMBER) g.step = std::max(1, std::min(64, static_cast<int>(lua_tonumber(L, 9))));
+    // the same grid again (a caller that sends its layers every time): keep what is there, with its cell runs and projections
+    const auto existing = NodeGrids().find(lua_tostring(L, 1));
+    if (existing != NodeGrids().end()) {
+      const NodeGrid& e = existing->second;
+      if (e.x0 == g.x0 && e.z0 == g.z0 && e.nw == g.nw && e.nh == g.nh && e.step == g.step && e.rgb == g.rgb && e.maxAlpha == g.maxAlpha && e.v == g.v) {
+        lua_pushboolean(L, 1);
+        return 1;
+      }
+    }
     NodeGrids()[lua_tostring(L, 1)] = std::move(g);
     lua_pushboolean(L, 1);
     return 1;
+  }
+
+  // ed_overlay_nodes_rect(id, i0, j0, w, h, values): replaces the nodes [i0, i0 + w) x [j0, j0 + h) of a grid that is already there with `values` (w * h numbers
+  // 0..255, row major): the cheap way to send a change of a few nodes instead of the whole grid. nil, message when there is no such grid or the rectangle is outside it.
+  int __cdecl cfunc_EdOverlayNodesRect(lua_State* const L)
+  {
+    if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 6) != LUA_TTABLE) {
+      lua_pushnil(L);
+      lua_pushstring(L, "ed_overlay_nodes_rect(id, i0, j0, w, h, values)");
+      return 2;
+    }
+    const auto it = NodeGrids().find(lua_tostring(L, 1));
+    if (it == NodeGrids().end()) {
+      lua_pushnil(L);
+      lua_pushstring(L, "ed_overlay_nodes_rect: no such grid");
+      return 2;
+    }
+    NodeGrid& g = it->second;
+    const int i0 = static_cast<int>(lua_tonumber(L, 2));
+    const int j0 = static_cast<int>(lua_tonumber(L, 3));
+    const int w = static_cast<int>(lua_tonumber(L, 4));
+    const int h = static_cast<int>(lua_tonumber(L, 5));
+    if (i0 < 0 || j0 < 0 || w < 1 || h < 1 || i0 + w > g.nw || j0 + h > g.nh) {
+      lua_pushnil(L);
+      lua_pushstring(L, "ed_overlay_nodes_rect: rectangle outside the grid");
+      return 2;
+    }
+    bool changed = false;
+    int k = 1;
+    for (int j = 0; j < h; ++j) {
+      for (int i = 0; i < w; ++i, ++k) {
+        lua_rawgeti(L, 6, k);
+        const double value = lua_tonumber(L, -1);
+        lua_settop(L, -2);
+        const std::uint8_t b = static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, value)));
+        std::uint8_t& dst = g.v[static_cast<std::size_t>(j0 + j) * static_cast<std::size_t>(g.nw) + static_cast<std::size_t>(i0 + i)];
+        if (dst != b) {
+          dst = b;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      g.runsDirty = true;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+
+  // ed_overlay_perf() -> slopeRateMs, slopeDrawMs, slopeTilesRated, slopePending, slopeQuads, slopeBlockLevel, slopeNodesProjected, gridsMs, gridQuads,
+  //   gridNodesProjected, gridGroups   (what the last frame spent on the slope view and the node grids)
+  int __cdecl cfunc_EdOverlayPerf(lua_State* const L)
+  {
+    lua_pushnumber(L, gPerf.slopeRateMs);
+    lua_pushnumber(L, gPerf.slopeDrawMs);
+    lua_pushnumber(L, gPerf.slopeTilesRated);
+    lua_pushnumber(L, gPerf.slopePending);
+    lua_pushnumber(L, gPerf.slopeQuads);
+    lua_pushnumber(L, gPerf.slopeLevel);
+    lua_pushnumber(L, gPerf.slopeNodesProjected);
+    lua_pushnumber(L, gPerf.gridsMs);
+    lua_pushnumber(L, gPerf.gridQuads);
+    lua_pushnumber(L, gPerf.gridNodesProjected);
+    lua_pushnumber(L, gPerf.gridGroups);
+    return 11;
   }
 
   int __cdecl cfunc_EdOverlayRemove(lua_State* const L)
@@ -600,6 +661,10 @@ namespace
                                     "ed_slope_at(kind, x, z, window) -> rating of the cell, in the engine's units");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_nodes", &cfunc_EdOverlayNodes, nullptr, "<global>",
                                     "ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha [, step]]) -> true | nil, message");
+      (void)new moho::CScrLuaBinder(set, "ed_overlay_nodes_rect", &cfunc_EdOverlayNodesRect, nullptr, "<global>",
+                                    "ed_overlay_nodes_rect(id, i0, j0, w, h, values) -> true | nil, message");
+      (void)new moho::CScrLuaBinder(set, "ed_overlay_perf", &cfunc_EdOverlayPerf, nullptr, "<global>",
+                                    "ed_overlay_perf() -> slopeRateMs, slopeDrawMs, slopeTilesRated, slopePending, slopeQuads, slopeBlockLevel, slopeNodesProjected, gridsMs, gridQuads, gridNodesProjected, gridGroups");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_decal", &cfunc_EdOverlayDecal, nullptr, "<global>",
                                     "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw]) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_icon", &cfunc_EdOverlayIcon, nullptr, "<global>",
@@ -618,6 +683,18 @@ namespace moho
 {
   namespace edoverlay
   {
+    void NotifyHeights(const int x0, const int z0, const int x1, const int z1)
+    {
+      ++gHeightEpoch;
+      gSlopeStore.Invalidate(x0, z0, x1, z1);
+    }
+
+    void NotifyHeightsAll()
+    {
+      ++gHeightEpoch;
+      gSlopeStore.InvalidateAll();
+    }
+
     void Render(GeomCamera3* const camera, CD3DPrimBatcher* const batcher)
     {
       if ((Lines().empty() && Icons().empty() && Decals().empty() && NodeGrids().empty() && !gSlope.on) || camera == nullptr || batcher == nullptr) {
@@ -735,116 +812,211 @@ namespace moho
       }
 
       // slope gradient over the ground (under every line and icon)
+      gPerf.slopeRateMs = 0.0;
+      gPerf.slopeDrawMs = 0.0;
+      gPerf.slopeTilesRated = 0;
+      gPerf.slopePending = 0;
+      gPerf.slopeQuads = 0;
+      gPerf.slopeNodesProjected = 0;
+      gPerf.gridsMs = 0.0;
+      gPerf.gridQuads = 0;
+      gPerf.gridNodesProjected = 0;
+      gPerf.gridGroups = 0;
+      const CamStamp stamp = MakeStamp(*camera, vw, vh);
+      {
+        // a new map (another height field): every projection and rating is stale
+        static const void* lastField = nullptr;
+        static int lastW = 0, lastH = 0;
+        moho::CHeightField* const f = ViewHeightField();
+        const int fw = (f != nullptr) ? f->Width() : 0;
+        const int fh = (f != nullptr) ? f->Height() : 0;
+        if (f != lastField || fw != lastW || fh != lastH) {
+          lastField = f;
+          lastW = fw;
+          lastH = fh;
+          ++gHeightEpoch;
+          gSlopeStore.Reset(fw, fh);
+        }
+      }
       if (gSlope.on) {
         ++gSlopeFrame;
         if (moho::CHeightField* const field = ViewHeightField(); field != nullptr) {
+          namespace sl = moho::editor::overlayslope;
           const int mapW = field->Width();
           const int mapH = field->Height();
           const int x0 = std::max(0, gSlope.x0);
           const int z0 = std::max(0, gSlope.z0);
-          const int x1 = std::min(mapW - 1, std::min(gSlope.x1, x0 + 1100));
-          const int z1 = std::min(mapH - 1, std::min(gSlope.z1, z0 + 1100));
+          const int x1 = std::min(mapW - 1, gSlope.x1);
+          const int z1 = std::min(mapH - 1, gSlope.z1);
           if (x1 > x0 && z1 > z0) {
-            SlopeCache& c = gSlopeCache;
-            // re-rate when something changed, and now and then so terrain edits show
-            if (!c.valid || c.kind != gSlope.kind || c.x0 != x0 || c.z0 != z0 || c.x1 != x1 || c.z1 != z1 || c.window != gSlope.window ||
-                gSlopeFrame - c.builtAt > 20u) {
-              RebuildSlopeCache(*field, gSlope, x0, z0, x1, z1);
+            if (gSlopeStore.Width() != mapW || gSlopeStore.Height() != mapH) {
+              gSlopeStore.Reset(mapW, mapH);
             }
+            gSlopeStore.SetKey(gSlope.kind, gSlope.window);
 
-            const int stride = c.stride;
-            struct Node { float x, y; bool ok; };
-            std::vector<Node> nodes(static_cast<std::size_t>(c.bw + 1) * static_cast<std::size_t>(c.bh + 1));
-            for (int j = 0; j <= c.bh; ++j) {
-              for (int i = 0; i <= c.bw; ++i) {
-                const int wx = std::min(x1, x0 + i * stride);
-                const int wz = std::min(z1, z0 + j * stride);
-                const Wm3::Vector3f p{static_cast<float>(wx), static_cast<float>(field->GetHeightAt(wx, wz)) / 128.0f + 0.12f, static_cast<float>(wz)};
-                Node& nd = nodes[static_cast<std::size_t>(j) * (c.bw + 1) + i];
-                nd.ok = camera->viewport.ProjectViewportDepthRow1(p) >= 1.0f;
-                if (nd.ok) {
-                  const Wm3::Vector2f sp = camera->Project(p, 0.0f, vw, vh, 0.0f);
-                  nd.x = sp.x;
-                  nd.y = sp.y;
+            // the block size: a power of two of cells, so that at most kSlopeMaxBlocks blocks per side are drawn; blocks are aligned to multiples of their size, so
+            // they do not shift while the camera pans
+            const int level = sl::LevelForView(std::max(x1 - x0, z1 - z0), kSlopeMaxBlocks);
+            const int stride = 1 << level;
+            const int bx0 = x0 >> level;
+            const int bz0 = z0 >> level;
+            const int bw = ((x1 + stride - 1) >> level) - bx0;
+            const int bh = ((z1 + stride - 1) >> level) - bz0;
+
+            // rate the tiles of the view that were never rated or went stale (the dirty ones first, then the ones nearest the middle of the view), within a time budget
+            const double tRate = NowMs();
+            {
+              const int tx0 = (bx0 << level) / sl::kTile;
+              const int tz0 = (bz0 << level) / sl::kTile;
+              const int tx1 = std::min(gSlopeStore.TilesX() - 1, ((bx0 + bw) << level) / sl::kTile);
+              const int tz1 = std::min(gSlopeStore.TilesZ() - 1, ((bz0 + bh) << level) / sl::kTile);
+              struct Todo { double key; int tx, tz; };
+              std::vector<Todo> todo;
+              const double mx = 0.5 * (x0 + x1) / sl::kTile;
+              const double mz = 0.5 * (z0 + z1) / sl::kTile;
+              for (int tz = tz0; tz <= tz1; ++tz) {
+                for (int tx = tx0; tx <= tx1; ++tx) {
+                  gSlopeStore.Touch(tx, tz, gSlopeFrame);
+                  if (gSlopeStore.NeedsRating(tx, tz)) {
+                    const sl::Tile* const t = gSlopeStore.Find(tx, tz);
+                    const bool stale = t != nullptr && !t->data.empty();
+                    const double dx = tx + 0.5 - mx, dz = tz + 0.5 - mz;
+                    todo.push_back(Todo{(stale ? -1.0e9 : 0.0) + dx * dx + dz * dz, tx, tz});
+                  }
                 }
+              }
+              std::sort(todo.begin(), todo.end(), [](const Todo& a, const Todo& b) { return a.key < b.key; });
+              const auto sampler = [field](const int x, const int z) { return static_cast<int>(field->GetHeightAt(x, z)); };
+              std::size_t done = 0;
+              for (; done < todo.size(); ++done) {
+                gSlopeStore.Rate(todo[done].tx, todo[done].tz, sampler, gSlopeFrame);
+                ++gPerf.slopeTilesRated;
+                if (NowMs() - tRate > kSlopeBudgetMs) {
+                  ++done;
+                  break;
+                }
+              }
+              gPerf.slopePending = static_cast<int>(todo.size() - done);
+              if (gSlopeStore.Built() > 2600u) {
+                gSlopeStore.Trim(gSlopeFrame, 300u);   // an explored 80 km map keeps the tiles near the camera, not all 4096
+              }
+            }
+            const double tDraw = NowMs();
+            gPerf.slopeRateMs = tDraw - tRate;
+            gPerf.slopeLevel = level;
+
+            std::vector<std::uint8_t> steps(static_cast<std::size_t>(bw) * static_cast<std::size_t>(bh));
+            for (int j = 0; j < bh; ++j) {
+              for (int i = 0; i < bw; ++i) {
+                const float value = static_cast<float>(gSlopeStore.Block(level, bx0 + i, bz0 + j)) / 128.0f;
+                steps[static_cast<std::size_t>(j) * bw + i] = static_cast<std::uint8_t>(sl::ColorStep(value, gSlope.limit));
               }
             }
 
+            gSlopeProj.Prepare(bx0 << level, bz0 << level, bw + 1, bh + 1, stride, 0.12f, stamp);
             batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
             using V = CD3DPrimBatcher::Vertex;
-            for (int j = 0; j < c.bh; ++j) {
-              for (int i = 0; i < c.bw; ++i) {
-                const std::uint32_t color = SlopeColor(c.block[static_cast<std::size_t>(j) * c.bw + i], gSlope.limit);
-                if ((color >> 24) == 0u) {
+            constexpr int kMaxRunBlocks = 8;
+            for (int j = 0; j < bh; ++j) {
+              int i = 0;
+              while (i < bw) {
+                const int st = steps[static_cast<std::size_t>(j) * bw + i];
+                float ax, ay, bxs, bys, cx, cy, dx, dy;
+                if (st == 0 || !gSlopeProj.Get(*field, *camera, vw, vh, i, j, ax, ay, gPerf.slopeNodesProjected) ||
+                    !gSlopeProj.Get(*field, *camera, vw, vh, i, j + 1, dx, dy, gPerf.slopeNodesProjected)) {
+                  ++i;
                   continue;
                 }
-                const Node& a = nodes[static_cast<std::size_t>(j) * (c.bw + 1) + i];
-                const Node& b = nodes[static_cast<std::size_t>(j) * (c.bw + 1) + i + 1];
-                const Node& cc = nodes[static_cast<std::size_t>(j + 1) * (c.bw + 1) + i + 1];
-                const Node& d = nodes[static_cast<std::size_t>(j + 1) * (c.bw + 1) + i];
-                if (!(a.ok && b.ok && cc.ok && d.ok)) {
-                  continue;
+                // a run of neighbouring blocks with the same colour is one quad
+                int len = 1;
+                bool ok = gSlopeProj.Get(*field, *camera, vw, vh, i + 1, j, bxs, bys, gPerf.slopeNodesProjected) &&
+                          gSlopeProj.Get(*field, *camera, vw, vh, i + 1, j + 1, cx, cy, gPerf.slopeNodesProjected);
+                while (ok && len < kMaxRunBlocks && i + len < bw && steps[static_cast<std::size_t>(j) * bw + i + len] == st) {
+                  float nbx, nby, ncx, ncy;
+                  if (!gSlopeProj.Get(*field, *camera, vw, vh, i + len + 1, j, nbx, nby, gPerf.slopeNodesProjected) ||
+                      !gSlopeProj.Get(*field, *camera, vw, vh, i + len + 1, j + 1, ncx, ncy, gPerf.slopeNodesProjected)) {
+                    break;
+                  }
+                  bxs = nbx; bys = nby; cx = ncx; cy = ncy;
+                  ++len;
                 }
-                const float minX = std::min(std::min(a.x, b.x), std::min(cc.x, d.x));
-                const float maxX = std::max(std::max(a.x, b.x), std::max(cc.x, d.x));
-                const float minY = std::min(std::min(a.y, b.y), std::min(cc.y, d.y));
-                const float maxY = std::max(std::max(a.y, b.y), std::max(cc.y, d.y));
-                if (maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh) {
-                  continue;
+                if (ok) {
+                  const float minX = std::min(std::min(ax, bxs), std::min(cx, dx));
+                  const float maxX = std::max(std::max(ax, bxs), std::max(cx, dx));
+                  const float minY = std::min(std::min(ay, bys), std::min(cy, dy));
+                  const float maxY = std::max(std::max(ay, bys), std::max(cy, dy));
+                  if (!(maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh)) {
+                    const std::uint32_t color = SlopeColor(st);
+                    batcher->DrawQuad(V{ax, ay, 0.0f, color, 0.0f, 0.0f}, V{bxs, bys, 0.0f, color, 1.0f, 0.0f}, V{cx, cy, 0.0f, color, 1.0f, 1.0f},
+                                      V{dx, dy, 0.0f, color, 0.0f, 1.0f});
+                    ++gPerf.slopeQuads;
+                  }
                 }
-                batcher->DrawQuad(V{a.x, a.y, 0.0f, color, 0.0f, 0.0f}, V{b.x, b.y, 0.0f, color, 1.0f, 0.0f},
-                                  V{cc.x, cc.y, 0.0f, color, 1.0f, 1.0f}, V{d.x, d.y, 0.0f, color, 0.0f, 1.0f});
+                i += len;
               }
             }
             batcher->Flush();
+            gPerf.slopeDrawMs = NowMs() - tDraw;
           }
         }
       }
 
-      // value grids (brush weights) draped over the ground
-      if (!NodeGrids().empty()) {
-        if (moho::CHeightField* const field = ViewHeightField(); field != nullptr) {
-          batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
-          using V = CD3DPrimBatcher::Vertex;
-          for (const auto& entry : NodeGrids()) {
-            const NodeGrid& g = entry.second;
-            struct GNode { float x, y; bool ok; std::uint32_t color; };
-            std::vector<GNode> nd(static_cast<std::size_t>(g.nw) * static_cast<std::size_t>(g.nh));
-            for (int j = 0; j < g.nh; ++j) {
-              for (int i = 0; i < g.nw; ++i) {
-                const int wx = std::max(0, std::min(field->Width() - 1, g.x0 + i * g.step));
-                const int wz = std::max(0, std::min(field->Height() - 1, g.z0 + j * g.step));
-                GNode& n = nd[static_cast<std::size_t>(j) * g.nw + i];
-                const std::uint32_t alpha = (static_cast<std::uint32_t>(g.v[static_cast<std::size_t>(j) * g.nw + i]) * g.maxAlpha) / 255u;
-                n.color = (alpha << 24) | g.rgb;
-                const Wm3::Vector3f p{static_cast<float>(wx), static_cast<float>(field->GetHeightAt(wx, wz)) / 128.0f + 0.14f, static_cast<float>(wz)};
-                n.ok = camera->viewport.ProjectViewportDepthRow1(p) >= 1.0f;
-                if (n.ok) {
-                  const Wm3::Vector2f sp = camera->Project(p, 0.0f, vw, vh, 0.0f);
-                  n.x = sp.x;
-                  n.y = sp.y;
-                }
-              }
-            }
-            for (int j = 0; j + 1 < g.nh; ++j) {
-              for (int i = 0; i + 1 < g.nw; ++i) {
-                const GNode& a = nd[static_cast<std::size_t>(j) * g.nw + i];
-                const GNode& b = nd[static_cast<std::size_t>(j) * g.nw + i + 1];
-                const GNode& c = nd[static_cast<std::size_t>(j + 1) * g.nw + i + 1];
-                const GNode& d = nd[static_cast<std::size_t>(j + 1) * g.nw + i];
-                if (!(a.ok && b.ok && c.ok && d.ok)) {
-                  continue;
-                }
-                if (((a.color | b.color | c.color | d.color) >> 24) == 0u) {
-                  continue;
-                }
-                batcher->DrawQuad(V{a.x, a.y, 0.0f, a.color, 0.0f, 0.0f}, V{b.x, b.y, 0.0f, b.color, 1.0f, 0.0f},
-                                  V{c.x, c.y, 0.0f, c.color, 1.0f, 1.0f}, V{d.x, d.y, 0.0f, d.color, 0.0f, 1.0f});
-              }
-            }
+      // value grids (brush weights, terrain type layers) draped over the ground
+      static unsigned gridFrame = 0;
+      if (NodeGrids().empty()) {
+        gGridProj.clear();
+      } else if (moho::CHeightField* const field = ViewHeightField(); field != nullptr) {
+        ++gridFrame;
+        const double tGrids = NowMs();
+        batcher->SetTexture(CD3DBatchTexture::FromSolidColor(0xFFFFFFFFu));
+        using V = CD3DPrimBatcher::Vertex;
+        for (auto& entry : NodeGrids()) {
+          NodeGrid& g = entry.second;
+          if (g.runsDirty) {
+            moho::editor::overlaynodes::CollectRuns(g.v.data(), g.nw, g.nh, g.maxAlpha, g.runs);
+            g.runsDirty = false;
           }
-          batcher->Flush();
+          if (g.runs.empty()) {
+            continue;
+          }
+          // grids with the same window share their projected nodes
+          ProjGrid& pg = gGridProj[std::array<int, 5>{g.x0, g.z0, g.nw, g.nh, g.step}];
+          pg.Prepare(g.x0, g.z0, g.nw, g.nh, g.step, 0.14f, stamp);
+          pg.usedFrame = gridFrame;
+          const auto colorAt = [&g](const int i, const int j) {
+            return (moho::editor::overlaynodes::NodeAlpha(g.v[static_cast<std::size_t>(j) * g.nw + i], g.maxAlpha) << 24) | g.rgb;
+          };
+          for (const moho::editor::overlaynodes::Run& run : g.runs) {
+            const int i = run.i, j = run.j, len = run.len;
+            float ax, ay, bx, by, cx, cy, dx, dy;
+            if (!pg.Get(*field, *camera, vw, vh, i, j, ax, ay, gPerf.gridNodesProjected) ||
+                !pg.Get(*field, *camera, vw, vh, i + len, j, bx, by, gPerf.gridNodesProjected) ||
+                !pg.Get(*field, *camera, vw, vh, i + len, j + 1, cx, cy, gPerf.gridNodesProjected) ||
+                !pg.Get(*field, *camera, vw, vh, i, j + 1, dx, dy, gPerf.gridNodesProjected)) {
+              continue;
+            }
+            const float minX = std::min(std::min(ax, bx), std::min(cx, dx));
+            const float maxX = std::max(std::max(ax, bx), std::max(cx, dx));
+            const float minY = std::min(std::min(ay, by), std::min(cy, dy));
+            const float maxY = std::max(std::max(ay, by), std::max(cy, dy));
+            if (maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh) {
+              continue;
+            }
+            const std::uint32_t ca = colorAt(i, j), cb = colorAt(i + len, j), cc = colorAt(i + len, j + 1), cd = colorAt(i, j + 1);
+            batcher->DrawQuad(V{ax, ay, 0.0f, ca, 0.0f, 0.0f}, V{bx, by, 0.0f, cb, 1.0f, 0.0f}, V{cx, cy, 0.0f, cc, 1.0f, 1.0f}, V{dx, dy, 0.0f, cd, 0.0f, 1.0f});
+            ++gPerf.gridQuads;
+          }
         }
+        batcher->Flush();
+        for (auto it = gGridProj.begin(); it != gGridProj.end();) {
+          if (it->second.usedFrame != gridFrame) {
+            it = gGridProj.erase(it);
+          } else {
+            ++it;
+          }
+        }
+        gPerf.gridGroups = static_cast<int>(gGridProj.size());
+        gPerf.gridsMs = NowMs() - tGrids;
       }
 
       // dark halos first, then every line on top of all of them

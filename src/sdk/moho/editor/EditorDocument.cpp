@@ -1,5 +1,6 @@
 // Engine side of the editor's MapDocument, see EditorDocument.h.
 #include "moho/editor/EditorDocument.h"
+#include "moho/editor/EdOverlay.h"
 
 #include <algorithm>
 #include <atomic>
@@ -61,6 +62,7 @@ namespace moho::editor
     // The projection: view field, shading, mesh refresh now; sim field later through the queue.
     void ProjectHeights(const CellRect& rect, const std::uint16_t* const words)
     {
+      moho::edoverlay::NotifyHeights(rect.x0, rect.z0, rect.x1, rect.z1);   // the slope view re-rates what looks at these samples
       if (IWldTerrainRes* const res = ActiveTerrain(); res != nullptr) {
         if (CHeightField* const view = res->GetHeightField(); view != nullptr) {
           const gpg::Rect2i r = ToRect2i(rect);
@@ -120,6 +122,7 @@ namespace moho::editor
       gQueueSize.store(0, std::memory_order_release);
     }
     gDocument.Reset(width, height, std::move(words), &ProjectHeights);
+    moho::edoverlay::NotifyHeightsAll();
     gAttachedTerrain = res;
     gViewField = view;
     return true;

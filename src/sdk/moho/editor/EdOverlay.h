@@ -16,5 +16,11 @@ namespace moho
   namespace edoverlay
   {
     void Render(GeomCamera3* camera, CD3DPrimBatcher* batcher);
+
+    /** The height samples [x0, x1] x [z0, z1] were written (the document's height sink): the slope view re-rates what looks at them, projected overlay grids move with the ground. */
+    void NotifyHeights(int x0, int z0, int x1, int z1);
+
+    /** Every height may have changed (a document was attached anew). */
+    void NotifyHeightsAll();
   } // namespace edoverlay
 } // namespace moho
