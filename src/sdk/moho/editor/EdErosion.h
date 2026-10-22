@@ -12,7 +12,9 @@
 //   settings every erosion op takes (all off by default except where noted): vary / vary_scale (hard and soft ground: noise on the erodibility), rain_vary (wetter and drier patches: hydraulic
 //     rain, droplet release probability, stream catchment), protect (ridges and summits are harder, and slide less), seed (of these patterns), conserve (0..1: puts the lost volume back where
 //     sediment settles), keep_range (1: stretch the result back to the input's height range), max_change (units: no sample moves further than this); droplets: drop_vary (every droplet its own
-//     size / life / inertia / load), accel (1 = speeds up downhill, the default; 0 = the old rule that slowed droplets down on slopes); stream: jitter (flow routed over ground + noise).
+//     size / life / inertia / load), accel (1 = speeds up downhill, the default; 0 = the old rule that slowed droplets down on slopes), creep (passes of hillslope creep per round, default 2: after every
+//     round the change made so far is smoothed, so the ridges between two grooves slump into them: without it the droplets comb the terrain, see TERRAIN_GEN_DESIGN.md; 0 = off);
+//     stream: jitter (flow routed over ground + noise).
 //   every op returns the new height (`output=height`, the default) or, with `output=` wear | deposit | flow | water | sediment, one of the other results (the editor asks for all at
 //   once through OpArgs::extra). Inputs: a (the height field), mask (erodibility 0..1, optional), like.
 //

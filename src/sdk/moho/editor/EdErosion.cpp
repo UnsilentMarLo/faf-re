@@ -664,6 +664,7 @@ namespace moho::editor::field::erosion
       float drop_vary = 0.0f;    // 0..1: every droplet draws its own radius, lifetime, inertia, capacity, dissolving rate and water (breaks the evenly spaced parallel rills of identical droplets)
       const std::vector<float>* demand = nullptr;   // optional per cell factor 0..1 on what a droplet dissolves (hard ground takes up less, instead of the droplet just digging on further downstream)
       const std::vector<float>* accept = nullptr;   // optional per cell probability 0..1 that a droplet starting there is released (spatially varying rain)
+      float creep = 2.0f;        // hillslope creep: after every round the change made so far is smoothed by this many 3 x 3 binomial passes (for density 2 and 32 rounds; scales with density / rounds, see Creep), 0 = off
     };
 
     struct DropGrids
@@ -819,6 +820,34 @@ namespace moho::editor::field::erosion
       }
     }
 
+    void BlurPass(std::vector<float>& v, std::vector<float>& tmp, int w, int h);
+
+    /**
+     * Hillslope creep: diffuses the change `t - t0` the droplets have made so far (a few binomial smoothing passes, fractions blend the next pass in); the input's own relief is not touched, and
+     * `rock` (erodibility 0..1, optional) keeps protected ground as it is. Without it the droplets dig lines and nothing ever lowers the ground between two lines: the ridges between the
+     * grooves stay at their old height, the next round's droplets are caught by the deepened grooves, and the terrain turns into a comb (a main ridge with evenly spaced parallel
+     * grooves, razor thin, which grow deeper and deeper with every run while the rest of the slope stays smooth). With creep the walls slump into the groove as they steepen, so a groove
+     * widens into a rounded valley, spurs between valleys round off, and the erosion spreads over the whole slope.
+     */
+    void Creep(std::vector<float>& t, const std::vector<float>& t0, const std::vector<float>* rock, const int w, const int h, const float passes, std::vector<float>& d, std::vector<float>& sm,
+               std::vector<float>& tmp)
+    {
+      const std::size_t n = t.size();
+      d.resize(n);
+      tmp.resize(n);
+      for (std::size_t i = 0; i < n; ++i) d[i] = t[i] - t0[i];
+      sm = d;
+      const int whole = static_cast<int>(passes);
+      for (int b = 0; b < whole; ++b) BlurPass(sm, tmp, w, h);
+      const float frac = passes - static_cast<float>(whole);
+      if (frac > 0.0f) {
+        std::vector<float> prev = sm;
+        BlurPass(sm, tmp, w, h);
+        for (std::size_t i = 0; i < n; ++i) sm[i] = prev[i] + frac * (sm[i] - prev[i]);
+      }
+      for (std::size_t i = 0; i < n; ++i) t[i] += (rock != nullptr ? Clamp01((*rock)[i]) : 1.0f) * (sm[i] - d[i]);
+    }
+
     void RunDroplets(std::vector<float>& t, const int w, const int h, const float cell, const DropParams& p, const std::vector<float>* rock, DropGrids& g)
     {
       if (w < 4 || h < 4) return;
@@ -828,6 +857,10 @@ namespace moho::editor::field::erosion
       const int tz = (h + tile - 1) / tile;
       const int rounds = std::max(1, p.rounds);
       std::vector<float> steer;
+      // creep per round: the share of the change a round adds is density / rounds, so the smoothing per round follows it (density 2 and 32 rounds = p.creep passes); at most 48 passes
+      const float creepPasses = std::min(48.0f, std::max(0.0f, p.creep) * (p.density * 0.5f) * (32.0f / static_cast<float>(rounds)));
+      std::vector<float> t0, cd, cs, ct;
+      if (creepPasses > 0.0f) t0 = t;
       for (int round = 0; round < rounds; ++round) {
         if (p.drain_pits > 0.0f) FillSurface(t, w, h, 0.004f * cell, steer);
         const std::vector<float>& hs = p.drain_pits > 0.0f ? steer : t;
@@ -858,6 +891,7 @@ namespace moho::editor::field::erosion
             }
           });
         }
+        if (creepPasses > 0.0f) Creep(t, t0, rock, w, h, creepPasses, cd, cs, ct);
       }
     }
 
@@ -1380,6 +1414,7 @@ namespace moho::editor::field::erosion
       p.seed = static_cast<std::uint32_t>(a.p.N("seed", 1.0));
       p.drop_vary = Clamp01(static_cast<float>(a.p.N("drop_vary", 0.0)));
       p.accel = Clamp01(static_cast<float>(a.p.N("accel", p.accel)));
+      p.creep = std::max(0.0f, std::min(8.0f, static_cast<float>(a.p.N("creep", p.creep))));
       Factors fac;
       BuildFactors(a, *src, fac);
       p.demand = fac.softPtr;

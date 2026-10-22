@@ -252,10 +252,10 @@ static const Preset kPresets[] = {
   {"droplet", "erode_droplet", "density=1.0"},
   {"stream", "erode_stream", "iterations=12"},
   // the presets of erosion.lua (keep in sync)
-  {"mountain", "erode_droplet", "density=4,lifetime=70,inertia=0.3,capacity=8,erode=0.6,deposit=0.15,gravity=6,thermal=0.4,thermal_steps=3,talus=0.9"},
+  {"mountain", "erode_droplet", "density=4,lifetime=70,inertia=0.3,capacity=8,erode=0.6,deposit=0.15,gravity=6,thermal=0.4,thermal_steps=3,talus=0.9,creep=1"},
   {"hills", "erode_hydraulic", "iterations=100,rain=0.006,erosion=0.08,deposition=0.08,thermal=0.25,talus=0.9"},
   {"canyon", "erode_stream", "iterations=14,k=1.5,max_cut=0.7,diffusion=0.05,widen=2,talus=1.2,area_min=40"},
-  {"alpine", "erode_droplet", "density=3,lifetime=80,inertia=0.2,capacity=6,erode=0.5,deposit=0.05,gravity=8,thermal=0.6,thermal_steps=6,talus=0.7"},
+  {"alpine", "erode_droplet", "density=3,lifetime=80,inertia=0.2,capacity=6,erode=0.5,deposit=0.05,gravity=8,thermal=0.6,thermal_steps=6,talus=0.7,creep=0.75"},
   {"desert", "erode_droplet", "density=0.6,lifetime=60,capacity=6,erode=0.4,deposit=0.2,thermal=0.6,thermal_steps=6,talus=0.7,drop_vary=0.8"},
   {"river", "erode_stream", "iterations=20,k=0.5,m=0.5,diffusion=0.3,widen=2,area_min=60,talus=0.5"},
 };
@@ -381,7 +381,8 @@ static void TestProperties()
   for (const Preset& p : kPresets) {
     const GridPtr r = Make(p.op, p.params, {{"a", flat}});
     const Stats s = Measure(*r);
-    CHECK(r && std::fabs(s.min - 10.0f) < 0.1f && std::fabs(s.max - 10.0f) < 0.1f, "%s: a flat plate changed (%f .. %f)", p.name, s.min, s.max);
+    // (hillslope creep spreads what the droplets take at the border over the plate: a smooth sag of a few percent, no relief)
+    CHECK(r && std::fabs(s.min - 10.0f) < 0.25f && std::fabs(s.max - 10.0f) < 0.25f, "%s: a flat plate changed (%f .. %f)", p.name, s.min, s.max);
   }
   // 2. mass: the hydraulic solver with closed edges and settling keeps the total height (rain evaporates, sediment settles)
   {
@@ -1308,8 +1309,9 @@ static void TestFeedbackAndHierarchy()
     const GridPtr P = Make("perlin", "width=161,height=161,seed=7,scale=60,octaves=2", {});
     const GridPtr S = Make("affine", "mul=14,add=20", {{"a", P}});
     const double base = MeanAbsLaplacian(*S);
-    const GridPtr few = Make("erode_droplet", "density=2,seed=3,rounds=4", {{"a", S}});
-    const GridPtr many = Make("erode_droplet", "density=2,seed=3,rounds=32", {{"a", S}});
+    // (without creep: what the feedback does on its own; TestVeins is about what creep does to it)
+    const GridPtr few = Make("erode_droplet", "density=2,seed=3,rounds=4,creep=0", {{"a", S}});
+    const GridPtr many = Make("erode_droplet", "density=2,seed=3,rounds=32,creep=0", {{"a", S}});
     const double rf = MeanAbsLaplacian(*few), rm = MeanAbsLaplacian(*many);
     const double mf = ShareMoved(*S, *few, 0.5f), mm = ShareMoved(*S, *many, 0.5f);
     std::printf("droplet rounds 4 -> 32 on smooth hills: fine relief %.4f -> %.4f (input %.4f), samples moved > 0.5: %.3f -> %.3f\n", rf, rm, base, mf, mm);
@@ -1341,6 +1343,199 @@ static void TestFeedbackAndHierarchy()
     std::printf("stream route_every 1 vs 3: mean difference %.4f of a mean change %.4f\n", diff, change);
     CHECK(diff < 0.5 * change, "recomputing the rivers every 3 steps changes the result too much: %.4f vs %.4f", diff, change);
   }
+}
+
+// ---- veins: the comb along crests and mound edges ------------------------------------------------------------------------------------------------
+
+/** Smooth mounds (a Gaussian each, slopes up to ~0.4 near the rim, relief 18): the droplets' flow diverges on every one of them, which is where the comb shows (rendered: radial fungus like ribs). */
+static GridPtr Mounds(const int n)
+{
+  auto g = std::make_shared<Grid>(n, n, 1.0f, 0.0f, 0.0f);
+  struct M { double x, z, w, a; };
+  static const M mounds[] = {{0.28, 0.34, 0.12, 14.0}, {0.60, 0.28, 0.095, 10.0}, {0.72, 0.62, 0.14, 16.0}, {0.35, 0.72, 0.105, 11.0}, {0.50, 0.50, 0.08, 8.0}};
+  for (int z = 0; z < n; ++z) {
+    for (int x = 0; x < n; ++x) {
+      double h = 0.0;
+      for (const M& m : mounds) {
+        const double dx = x - m.x * n, dz = z - m.z * n, w = m.w * n;
+        h += m.a * std::exp(-(dx * dx + dz * dz) / (w * w));
+      }
+      // a little smooth undulation, so the flanks are not perfectly symmetric
+      h += 1.5 * std::sin(0.045 * x + 0.5) * std::cos(0.037 * z) + 0.8 * std::sin(0.11 * x + 0.17 * z);
+      g->At(x, z) = static_cast<float>(h + 3.0);
+    }
+  }
+  return g;
+}
+
+/** Binomial blur of a field, `passes` times (variance passes / 2 per axis). */
+static std::vector<float> BlurField(std::vector<float> v, const int w, const int h, const int passes)
+{
+  std::vector<float> tmp(v.size());
+  for (int p = 0; p < passes; ++p) {
+    for (int z = 0; z < h; ++z)
+      for (int x = 0; x < w; ++x) tmp[z * w + x] = 0.25f * v[z * w + std::max(0, x - 1)] + 0.5f * v[z * w + x] + 0.25f * v[z * w + std::min(w - 1, x + 1)];
+    for (int z = 0; z < h; ++z)
+      for (int x = 0; x < w; ++x) v[z * w + x] = 0.25f * tmp[std::max(0, z - 1) * w + x] + 0.5f * tmp[z * w + x] + 0.25f * tmp[std::min(h - 1, z + 1) * w + x];
+  }
+  return v;
+}
+
+struct VeinStats
+{
+  double lap1 = 0.0;       // mean |Laplacian at 1 cell| of the change over the mean |change|: grooves of 1 cell width are all Laplacian (a groove 2 cells wide has 1/4 of it)
+  double band = 0.0;       // share of the change's energy in the 1 .. 4 cell band (difference of two blurs): the comb (evenly spaced thin grooves), a smooth valley has none of it
+  double cover = 0.0;      // (sum |change|)^2 / (n * sum change^2) over the eroded ground: 1 = the change is the same everywhere, small = it sits in a few lines
+  double axes = 0.0, diagonals = 0.0;      // orientation of the fine change: mean power in the 10 degrees around the grid axes / diagonals over the mean (1 = no grid direction preferred)
+};
+
+static VeinStats MeasureVeins(const Grid& before, const Grid& after)
+{
+  const int w = before.w, h = before.h, m = 8;
+  std::vector<float> d(before.v.size());
+  for (std::size_t i = 0; i < d.size(); ++i) d[i] = before.v[i] - after.v[i];
+  VeinStats r;
+  double sumAbs = 0.0, sumLap = 0.0, sumSq = 0.0, sumAbsSlope = 0.0;
+  std::size_t n = 0, nl = 0;
+  for (int z = m; z < h - m; ++z) {
+    for (int x = m; x < w - m; ++x) {
+      const std::size_t i = static_cast<std::size_t>(z) * w + x;
+      sumAbs += std::fabs(d[i]);
+      sumSq += static_cast<double>(d[i]) * d[i];
+      sumLap += std::fabs(4.0 * (after.v[i] - before.v[i]) - (after.v[i - 1] - before.v[i - 1]) - (after.v[i + 1] - before.v[i + 1]) - (after.v[i - w] - before.v[i - w]) - (after.v[i + w] - before.v[i + w]));
+      ++nl;
+      if (std::fabs(d[i]) > 0.0f) ++n;
+      (void)sumAbsSlope;
+    }
+  }
+  r.lap1 = (sumLap / std::max<std::size_t>(1, nl)) / std::max(1e-9, sumAbs / std::max<std::size_t>(1, nl));
+  const std::vector<float> b1 = BlurField(d, w, h, 2), b4 = BlurField(d, w, h, 32);
+  double band = 0.0;
+  for (int z = m; z < h - m; ++z)
+    for (int x = m; x < w - m; ++x) {
+      const std::size_t i = static_cast<std::size_t>(z) * w + x;
+      const double v = static_cast<double>(b1[i]) - b4[i];
+      band += v * v;
+    }
+  r.band = band / std::max(1e-9, sumSq);
+  const double cnt = static_cast<double>(std::max<std::size_t>(1, nl));
+  r.cover = (sumAbs * sumAbs) / std::max(1e-9, cnt * sumSq);
+  // orientation of the fine change (gradient of the high passed change, power weighted)
+  std::vector<float> hp(d.size());
+  const std::vector<float> b3 = BlurField(d, w, h, 18);
+  for (std::size_t i = 0; i < d.size(); ++i) hp[i] = d[i] - b3[i];
+  double hist[36] = {};
+  double total = 0.0;
+  for (int z = m + 1; z < h - m - 1; ++z)
+    for (int x = m + 1; x < w - m - 1; ++x) {
+      const std::size_t i = static_cast<std::size_t>(z) * w + x;
+      const double gx = 0.5 * (hp[i + 1] - hp[i - 1]), gz = 0.5 * (hp[i + w] - hp[i - w]);
+      const double p = gx * gx + gz * gz;
+      double a = std::atan2(gz, gx) * 180.0 / 3.14159265358979323846;
+      if (a < 0.0) a += 180.0;
+      if (a >= 180.0) a -= 180.0;
+      hist[std::min(35, static_cast<int>(a / 5.0))] += p;
+      total += p;
+    }
+  if (total > 0.0) {
+    for (double& x : hist) x = x / total * 36.0;
+    r.axes = 0.25 * (hist[0] + hist[17] + hist[18] + hist[35]);
+    r.diagonals = 0.25 * (hist[8] + hist[9] + hist[26] + hist[27]);
+  }
+  return r;
+}
+
+/**
+ * Terrain "veins": repeated droplet erosion of a smooth mound or mountain used to leave a comb: a main ridge (the crest) with evenly spaced razor thin grooves running off it on both
+ * sides (a fungus like radial comb on every mound), while the broad slopes between stayed smooth. Seen on rendered hillshades (docs/projects/editor/TERRAIN_GEN_DESIGN.md, update "veins"):
+ * (1) droplets dig lines; the ridge between two lines is dug by nothing (no water runs on a divide), so it keeps its old height while both sides sink: that spine is the vein, and the
+ * next round's droplets are caught by the deepened grooves (the feedback of the 32 rounds), which deepens them more with every pass; (2) the spacing of the grooves is the width of the
+ * digging brush, whatever the steering (blurring the steering surface, random turns, a smoother or wider brush, multi scale steering only move the spacing); (3) there is no hillslope
+ * creep: the walls never slump. The fix is creep (diffusion of the change made so far, after every round). Measured here on mounds after three passes (seed 1, 2, 3) with creep 0
+ * (the old behaviour) and the default: the 1 cell Laplacian of the change, the share of the change in the 1 .. 4 cell band, and that neither the grid axes nor the diagonals are preferred.
+ */
+static void TestVeins()
+{
+  SetThreads(4);
+  const GridPtr M = Mounds(161);
+  const char* creepOff = "density=2,creep=0";
+  const char* creepOn = "density=2";
+  GridPtr cur[2] = {M, M};
+  const char* mode[2] = {creepOff, creepOn};
+  VeinStats vs[2][3];
+  double mass[2] = {0.0, 0.0};
+  for (int pass = 0; pass < 3; ++pass) {
+    for (int k = 0; k < 2; ++k) {
+      cur[k] = Make("erode_droplet", (std::string(mode[k]) + ",seed=" + std::to_string(pass + 1)).c_str(), {{"a", cur[k]}});
+      vs[k][pass] = MeasureVeins(*M, *cur[k]);
+    }
+  }
+  for (int k = 0; k < 2; ++k) mass[k] = MeanChange(*M, *cur[k]);
+  for (int k = 0; k < 2; ++k)
+    std::printf("veins %-10s pass 1/2/3: 1 cell Laplacian share %.3f %.3f %.3f, 1..4 cell band %.3f %.3f %.3f, cover %.2f %.2f %.2f, axes %.2f diagonals %.2f (mean change %.3f)\n", k == 0 ? "creep 0" : "creep 2",
+                vs[k][0].lap1, vs[k][1].lap1, vs[k][2].lap1, vs[k][0].band, vs[k][1].band, vs[k][2].band, vs[k][0].cover, vs[k][1].cover, vs[k][2].cover, vs[k][2].axes, vs[k][2].diagonals, mass[k]);
+  // grooves at least 2 cells wide: the 1 cell Laplacian of the change is a clear fraction of what the old grooves had, on every pass
+  for (int pass = 0; pass < 3; ++pass) {
+    CHECK(vs[1][pass].lap1 < 0.4 * vs[0][pass].lap1, "pass %d: creep leaves razor thin grooves (1 cell Laplacian share %.3f vs %.3f without)", pass + 1, vs[1][pass].lap1, vs[0][pass].lap1);
+    CHECK(vs[1][pass].band < 0.5 * vs[0][pass].band, "pass %d: the comb band keeps its energy (%.3f vs %.3f without creep)", pass + 1, vs[1][pass].band, vs[0][pass].band);
+  }
+  // the grooves do not get sharper pass after pass (they used to): the fine share of the third pass is not above the first one's by more than a little
+  CHECK(vs[1][2].lap1 < 1.3 * vs[1][0].lap1 + 0.01, "the veins deepen with every pass (1 cell Laplacian share %.3f -> %.3f)", vs[1][0].lap1, vs[1][2].lap1);
+  // creep does not take the erosion away: about as much ground is moved, and it is not packed into fewer places
+  CHECK(mass[1] > 0.7 * mass[0] && mass[1] < 1.6 * mass[0], "creep changed the amount of erosion too much (mean change %.3f vs %.3f)", mass[1], mass[0]);
+  CHECK(vs[1][2].cover > 0.9 * vs[0][2].cover, "the erosion is packed into fewer places with creep (cover %.2f vs %.2f)", vs[1][2].cover, vs[0][2].cover);
+  // no grid direction: the fine change points as much along the diagonals and the axes as anywhere (a grid walk would pile it up there)
+  CHECK(vs[1][2].axes > 0.6 && vs[1][2].axes < 1.6 && vs[1][2].diagonals > 0.6 && vs[1][2].diagonals < 1.6, "the fine change prefers a grid direction (axes %.2f, diagonals %.2f)", vs[1][2].axes, vs[1][2].diagonals);
+  // creep is a setting: more creep, smoother grooves; and its smoothing scales with the droplet count (twice the droplets, twice the passes per round: the groove sharpness stays)
+  {
+    const GridPtr c1 = Make("erode_droplet", "density=2,seed=1,creep=1", {{"a", M}});
+    const GridPtr c4 = Make("erode_droplet", "density=2,seed=1,creep=4", {{"a", M}});
+    const GridPtr d4 = Make("erode_droplet", "density=4,seed=1,creep=2", {{"a", M}});
+    const double a1 = MeasureVeins(*M, *c1).lap1, a4 = MeasureVeins(*M, *c4).lap1, ad = MeasureVeins(*M, *d4).lap1, a2 = vs[1][0].lap1;
+    std::printf("veins creep 1 / 2 / 4: 1 cell Laplacian share %.3f %.3f %.3f; density 4 creep 2: %.3f\n", a1, a2, a4, ad);
+    CHECK(a1 > a2 && a2 > a4, "more creep does not smooth the grooves more (%.3f %.3f %.3f)", a1, a2, a4);
+    CHECK(ad < 2.0 * a2 + 0.02, "with twice the droplets the grooves get much sharper (%.3f vs %.3f): creep does not follow the density", ad, a2);
+  }
+  // the ground the droplets did not touch is not smoothed: a plain far from the mounds keeps its small scale detail (the creep works on the change only)
+  {
+    const GridPtr P = Make("perlin", "width=97,height=97,seed=5,scale=6,octaves=2", {});
+    const GridPtr S = Make("affine", "mul=0.6,add=30", {{"a", P}});
+    const GridPtr r = Make("erode_droplet", "density=0.05,seed=1,creep=8", {{"a", S}});
+    const double before = MeanAbsLaplacian(*S), after = MeanAbsLaplacian(*r);
+    std::printf("veins creep leaves the input's own relief: fine relief %.4f -> %.4f\n", before, after);
+    CHECK(after > 0.9 * before, "creep smoothed the input's own detail (%.4f -> %.4f)", before, after);
+  }
+  // creep 0 is the old solver: the golden `droplet_creep0` carries the checksum `droplet` had before creep existed
+}
+
+/** How much of the erosion of a smooth mountain lands on the crest, the upper and the lower flank (by height rank of the input): the erosion has to cover the slopes, not only the crest area. */
+static void TestFlankShare()
+{
+  SetThreads(4);
+  const GridPtr M = Mounds(161);
+  GridPtr cur = M;
+  for (int pass = 0; pass < 3; ++pass) cur = Make("erode_droplet", ("density=2,seed=" + std::to_string(pass + 1)).c_str(), {{"a", cur}});
+  // rank by height among the ground above 12% of the range (the mounds), crest = top 15%, upper flank = next 30%, lower flank = the rest
+  float lo = M->v[0], hi = M->v[0];
+  for (const float x : M->v) { lo = std::min(lo, x); hi = std::max(hi, x); }
+  std::vector<float> sel;
+  for (const float x : M->v) if (x > lo + 0.12f * (hi - lo)) sel.push_back(x);
+  std::vector<float> sorted = sel;
+  std::sort(sorted.begin(), sorted.end());
+  const float t1 = sorted[static_cast<std::size_t>(0.55 * (sorted.size() - 1))], t2 = sorted[static_cast<std::size_t>(0.85 * (sorted.size() - 1))];
+  double cut[3] = {}, area[3] = {}, tot = 0.0;
+  for (std::size_t i = 0; i < M->v.size(); ++i) {
+    if (!(M->v[i] > lo + 0.12f * (hi - lo))) continue;
+    const int c = M->v[i] >= t2 ? 0 : (M->v[i] >= t1 ? 1 : 2);
+    const double d = std::max(0.0, static_cast<double>(M->v[i]) - cur->v[i]);
+    cut[c] += d;
+    area[c] += 1.0;
+    tot += d;
+  }
+  std::printf("flank share after 3 passes: crest %.2f (of the area %.2f), upper flank %.2f (%.2f), lower flank %.2f (%.2f)\n", cut[0] / tot, area[0] / sel.size(), cut[1] / tot, area[1] / sel.size(), cut[2] / tot,
+              area[2] / sel.size());
+  CHECK(cut[1] / tot + cut[2] / tot > 0.7, "the crest takes too much of the erosion (%.2f)", cut[0] / tot);
+  CHECK(cut[2] / tot > 0.8 * area[2] / sel.size() * 0.5, "the lower flank is hardly eroded (share %.2f of the cut, %.2f of the area)", cut[2] / tot, area[2] / sel.size());
 }
 
 static void Lab(const std::string& dir, const int n, const std::string& only, const std::string& extraParams)
@@ -1461,6 +1656,8 @@ int main(const int argc, char** argv)
   TestVariation();
   TestSolverExtras();
   TestFeedbackAndHierarchy();
+  TestVeins();
+  TestFlankShare();
   if (update && gFailures == 0) {
     std::ofstream out(argv[1], std::ios::binary);
     for (const std::string& l : gLines) out << l << "\n";
