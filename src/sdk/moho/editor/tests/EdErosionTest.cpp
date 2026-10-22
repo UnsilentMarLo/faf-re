@@ -253,10 +253,10 @@ static const Preset kPresets[] = {
   {"stream", "erode_stream", "iterations=12"},
   // the presets of erosion.lua (keep in sync)
   {"mountain", "erode_droplet", "density=4,lifetime=70,inertia=0.3,capacity=8,erode=0.6,deposit=0.15,gravity=6,thermal=0.4,thermal_steps=3,talus=0.9"},
-  {"hills", "erode_hydraulic", "iterations=150,rain=0.004,erosion=0.08,deposition=0.08,thermal=0.3,talus=0.6"},
+  {"hills", "erode_hydraulic", "iterations=100,rain=0.006,erosion=0.08,deposition=0.08,thermal=0.25,talus=0.9"},
   {"canyon", "erode_stream", "iterations=14,k=1.5,max_cut=0.7,diffusion=0.05,widen=2,talus=1.2,area_min=40"},
   {"alpine", "erode_droplet", "density=3,lifetime=80,inertia=0.2,capacity=6,erode=0.5,deposit=0.05,gravity=8,thermal=0.6,thermal_steps=6,talus=0.7"},
-  {"desert", "erode_hydraulic", "iterations=120,rain=0.002,evaporation=0.05,capacity=0.5,deposition=0.2,thermal=0.6,talus=0.35"},
+  {"desert", "erode_droplet", "density=0.6,lifetime=60,capacity=6,erode=0.4,deposit=0.2,thermal=0.6,thermal_steps=6,talus=0.7,drop_vary=0.8"},
   {"river", "erode_stream", "iterations=20,k=0.5,m=0.5,diffusion=0.3,widen=2,area_min=60,talus=0.5"},
 };
 
@@ -1264,6 +1264,85 @@ static void TestSolverExtras()
   }
 }
 
+/** Mean |Laplacian| over the interior: how much fine relief (gullies, ridges) a terrain has. */
+static double MeanAbsLaplacian(const Grid& g)
+{
+  double sum = 0.0;
+  std::size_t count = 0;
+  for (int z = 1; z < g.h - 1; ++z) {
+    for (int x = 1; x < g.w - 1; ++x) {
+      sum += std::fabs(4.0 * g.At(x, z) - g.At(x - 1, z) - g.At(x + 1, z) - g.At(x, z - 1) - g.At(x, z + 1));
+      ++count;
+    }
+  }
+  return count > 0 ? sum / static_cast<double>(count) : 0.0;
+}
+
+/** Share of the samples that moved by more than `limit` units. */
+static double ShareMoved(const Grid& before, const Grid& after, const float limit)
+{
+  std::size_t n = 0;
+  for (std::size_t i = 0; i < before.v.size(); ++i) if (std::fabs(after.v[i] - before.v[i]) > limit) ++n;
+  return static_cast<double>(n) / static_cast<double>(std::max<std::size_t>(1, before.v.size()));
+}
+
+static double MeanChange(const Grid& before, const Grid& after)
+{
+  double s = 0.0;
+  for (std::size_t i = 0; i < before.v.size(); ++i) s += std::fabs(after.v[i] - before.v[i]);
+  return s / static_cast<double>(std::max<std::size_t>(1, before.v.size()));
+}
+
+/**
+ * The droplet feedback rounds and the stream power law. Seen on rendered test terrains (hillshade of rolling hills with cliffs and of a rough mountain field, before / after in the
+ * design document): (1) with 4 rounds every droplet digs a lone groove (a smear of short worms, few samples moved by more than half a unit, little fine relief); with 32 rounds
+ * the droplets of a round follow the valleys the earlier rounds dug (a dozen times more of the terrain is dissected and the fine relief doubles). (2) The stream solver used to
+ * cut at its cap everywhere (k = 0.5 and k = 4 gave the same result); now the cut share is F / (1 + F) with F = k * catchment^m, so k scales the change.
+ */
+static void TestFeedbackAndHierarchy()
+{
+  SetThreads(4);
+  const GridPtr H = LabTerrain(161, 19.0);
+  {
+    // smooth rolling hills (the stock maps' ground): there the gullies of a droplet run are the only fine relief
+    const GridPtr P = Make("perlin", "width=161,height=161,seed=7,scale=60,octaves=2", {});
+    const GridPtr S = Make("affine", "mul=14,add=20", {{"a", P}});
+    const double base = MeanAbsLaplacian(*S);
+    const GridPtr few = Make("erode_droplet", "density=2,seed=3,rounds=4", {{"a", S}});
+    const GridPtr many = Make("erode_droplet", "density=2,seed=3,rounds=32", {{"a", S}});
+    const double rf = MeanAbsLaplacian(*few), rm = MeanAbsLaplacian(*many);
+    const double mf = ShareMoved(*S, *few, 0.5f), mm = ShareMoved(*S, *many, 0.5f);
+    std::printf("droplet rounds 4 -> 32 on smooth hills: fine relief %.4f -> %.4f (input %.4f), samples moved > 0.5: %.3f -> %.3f\n", rf, rm, base, mf, mm);
+    CHECK(rm > 1.3 * rf, "32 feedback rounds do not give more fine relief than 4: %.4f vs %.4f", rm, rf);
+    CHECK(rm > 1.5 * base, "32 feedback rounds add too little relief to the input: %.4f vs %.4f", rm, base);
+    CHECK(mm > 2.0 * mf, "32 rounds do not reach more of the terrain than 4: %.3f vs %.3f", mm, mf);
+  }
+  {
+    double change[3];
+    const char* params[3] = {"iterations=8,area_min=20,k=0.02", "iterations=8,area_min=20,k=0.1", "iterations=8,area_min=20,k=0.5"};
+    for (int i = 0; i < 3; ++i) change[i] = MeanChange(*H, *Make("erode_stream", params[i], {{"a", H}}));
+    std::printf("stream k 0.02 / 0.1 / 0.5: mean change %.4f %.4f %.4f\n", change[0], change[1], change[2]);
+    CHECK(change[1] > 1.15 * change[0] && change[2] > 1.15 * change[1], "the stream erodibility no longer scales the change: %.4f %.4f %.4f", change[0], change[1], change[2]);
+  }
+  {
+    const GridPtr narrow = Make("erode_stream", "iterations=8,area_min=20,k=0.1,width_vary=0", {{"a", H}});
+    const GridPtr wide = Make("erode_stream", "iterations=8,area_min=20,k=0.1,width_vary=1", {{"a", H}});
+    const double sn = ShareMoved(*H, *narrow, 0.02f), sw = ShareMoved(*H, *wide, 0.02f);
+    std::printf("stream valley width growth 0 -> 1: samples moved > 0.02: %.3f -> %.3f\n", sn, sw);
+    CHECK(sw > 1.05 * sn, "valleys of big rivers are not wider with width_vary: %.3f vs %.3f", sw, sn);
+  }
+  {
+    const GridPtr every1 = Make("erode_stream", "iterations=8,area_min=20,k=0.1,route_every=1", {{"a", H}});
+    const GridPtr every3 = Make("erode_stream", "iterations=8,area_min=20,k=0.1,route_every=3", {{"a", H}});
+    double diff = 0.0;
+    for (std::size_t i = 0; i < every1->v.size(); ++i) diff += std::fabs(every1->v[i] - every3->v[i]);
+    diff /= static_cast<double>(every1->v.size());
+    const double change = MeanChange(*H, *every1);
+    std::printf("stream route_every 1 vs 3: mean difference %.4f of a mean change %.4f\n", diff, change);
+    CHECK(diff < 0.5 * change, "recomputing the rivers every 3 steps changes the result too much: %.4f vs %.4f", diff, change);
+  }
+}
+
 static void Lab(const std::string& dir, const int n, const std::string& only, const std::string& extraParams)
 {
   const GridPtr H = LabTerrain(n, 60.0 * n / 513.0);
@@ -1381,6 +1460,7 @@ int main(const int argc, char** argv)
   TestBrushQuality();
   TestVariation();
   TestSolverExtras();
+  TestFeedbackAndHierarchy();
   if (update && gFailures == 0) {
     std::ofstream out(argv[1], std::ios::binary);
     for (const std::string& l : gLines) out << l << "\n";

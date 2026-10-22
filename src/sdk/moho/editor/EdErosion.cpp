@@ -658,7 +658,7 @@ namespace moho::editor::field::erosion
       float water = 1.0f;
       float round_cut = 0.5f;    // a cell is dug at most this deep (world units) below the surface a round started with (a round is 1 / rounds of the droplets)
       float drain_pits = 1.0f;   // 1: droplets steer on the pit filled terrain (they leave closed basins and carve their rims instead of filling them), 0: on the raw terrain
-      int rounds = 4;
+      int rounds = 32;           // the steering surface is refreshed this often: the more rounds, the more the droplets of one round see the valleys the earlier ones dug (feedback: gullies that capture their neighbours and branch)
       std::uint32_t seed = 1;
       float accel = 1.0f;        // 1: speeds up downhill (physical), 0: the old rule (slows down downhill), in between: blend (0.5 = constant speed)
       float drop_vary = 0.0f;    // 0..1: every droplet draws its own radius, lifetime, inertia, capacity, dissolving rate and water (breaks the evenly spaced parallel rills of identical droplets)
@@ -866,7 +866,8 @@ namespace moho::editor::field::erosion
     struct StreamParams
     {
       int iterations = 10;
-      float k = 0.05f;          // erodibility: incision per iteration = k * (drainage area - area_min)^m * slope, in world units
+      float k = 0.05f;          // erodibility: F = k * (drainage area - area_min)^m; one iteration removes F / (1 + F) * max_cut of the drop to the lowest neighbour (small streams a little, big rivers up to
+                                // max_cut: the share saturates smoothly, so a river twice the size cuts visibly faster instead of every channel cutting at max_cut like a hard cap would)
       float m = 0.5f;           // drainage area exponent
       float spread = 1.0f;      // multiple flow direction exponent: 1 spreads the water over all lower neighbours by slope, large = single steepest direction
       float diffusion = 0.2f;   // thermal rate for the hillslopes between iterations
@@ -874,7 +875,11 @@ namespace moho::editor::field::erosion
       float uplift = 0.0f;      // height added to the interior per iteration
       float max_cut = 0.5f;     // at most this share of the drop to the lowest neighbour is removed per iteration
       float area_min = 24.0f;   // drainage area (cells) below which nothing is incised: only real channels, the slopes keep their shape
-      int widen = 1;            // the incision is smoothed this many times (3 x 3 binomial) before it is applied: wider channels
+      int widen = 1;            // the incision is smoothed this many times (3 x 3 binomial) before it is applied: wider channels (the smallest streams)
+      float width_vary = 1.0f;  // 0..1: bigger rivers get a wider valley: one more smoothing pass for a catchment of 48 cells, two for 240, three for 1008, four for 4080 (1 = all four, 0.5 = the first two,
+                                // 0 = none): small streams stay narrow gullies, rivers get valleys
+      int route_every = 1;      // the drainage network (pit breaching, flow routing, catchments) is recomputed every this many iterations; in between the incision follows the network of the last one
+                                // (the channels move slowly: 2 - 3 give nearly the same result at half the cost)
       bool breach = true;       // closed depressions are drained by cutting their lowest rim (false: they stay, and no river crosses them)
       float jitter = 0.0f;      // the flow is routed over the terrain plus smooth noise of this height (in cells of rise per cell): rivers pick their own paths, branch and meander instead of running
                                 // straight down smooth slopes side by side; the ground itself gets no noise
@@ -953,62 +958,98 @@ namespace moho::editor::field::erosion
       }
     }
 
+    /** One 3 x 3 binomial smoothing pass of `v` (rows then columns, edge samples clamp); `tmp` is scratch. */
+    void BlurPass(std::vector<float>& v, std::vector<float>& tmp, const int w, const int h)
+    {
+      Rows(w, h, [&](const int z0, const int z1) {
+        for (int z = z0; z < z1; ++z) {
+          for (int x = 0; x < w; ++x) {
+            const int xl = std::max(0, x - 1), xr = std::min(w - 1, x + 1);
+            tmp[Ix(x, z, w)] = 0.25f * v[Ix(xl, z, w)] + 0.5f * v[Ix(x, z, w)] + 0.25f * v[Ix(xr, z, w)];
+          }
+        }
+      });
+      Rows(w, h, [&](const int z0, const int z1) {
+        for (int z = z0; z < z1; ++z) {
+          const int zu = std::max(0, z - 1), zd = std::min(h - 1, z + 1);
+          for (int x = 0; x < w; ++x) v[Ix(x, z, w)] = 0.25f * tmp[Ix(x, zu, w)] + 0.5f * tmp[Ix(x, z, w)] + 0.25f * tmp[Ix(x, zd, w)];
+        }
+      });
+    }
+
     void RunStream(std::vector<float>& t, const int w, const int h, const float cell, const StreamParams& p, const std::vector<float>* rock, std::vector<float>& wear,
                    std::vector<float>& area, const std::vector<float>* rain = nullptr, const std::vector<float>* slideRate = nullptr)
     {
       if (w < 3 || h < 3) return;
       const std::size_t n = t.size();
-      std::vector<float> fill, slope, inc(n), tmp(n), jit, noisy;
+      std::vector<float> fill, slope, inc(n), tmp(n), jit, noisy, accum;
+      std::vector<std::uint8_t> band(n);
       if (p.jitter > 0.0f) NoiseField(jit, w, h, cell, 4.0f * cell, p.seed * 7u + 3u, 2);
       const std::vector<float>* ref = &t;      // the surface the flow is routed on and the filled surface is compared with
       ThermalScratch tsc;
       const std::vector<float> none;
       const std::vector<float>& slide = slideRate != nullptr ? *slideRate : none;
+      // the centre weight of the 1D binomial kernel after j passes: a line smoothed j times keeps this share of its depth, the amount is scaled back up so `k` keeps its meaning (depth)
+      static const float kCentre[9] = {1.0f, 0.5f, 0.375f, 0.3125f, 0.2734375f, 0.24609375f, 0.2255859375f, 0.20947265625f, 0.196380615234375f};
+      const int widen = std::max(0, std::min(8, p.widen));
+      const int grow = std::min(8 - widen, static_cast<int>(std::floor(4.0f * p.width_vary + 0.5f)));      // the most extra smoothing passes of the biggest rivers
+      const int passesMax = widen + grow;
+      const int every = std::max(1, p.route_every);
       for (int it = 0; it <= p.iterations; ++it) {
-        if (p.breach) {
-          tmp = t;
-          BreachPits(t, w, h, 0.002f * cell, fill, 0.004f * cell);
-          for (std::size_t i = 0; i < n; ++i) wear[i] += tmp[i] - t[i];
-        } else {
-          FillSurface(t, w, h, 0.004f * cell, fill);
+        if (it % every == 0 || it == p.iterations) {
+          if (p.breach) {
+            tmp = t;
+            BreachPits(t, w, h, 0.002f * cell, fill, 0.004f * cell);
+            for (std::size_t i = 0; i < n; ++i) wear[i] += tmp[i] - t[i];
+          } else {
+            FillSurface(t, w, h, 0.004f * cell, fill);
+          }
+          if (p.jitter > 0.0f) {
+            noisy.resize(n);
+            for (std::size_t i = 0; i < n; ++i) noisy[i] = t[i] + (jit[i] - 0.5f) * p.jitter * cell;
+            FillSurface(noisy, w, h, 0.004f * cell, fill);
+            ref = &noisy;
+          }
+          Drainage(fill, w, h, cell, p.spread, area, slope, rain);
         }
-        if (p.jitter > 0.0f) {
-          noisy.resize(n);
-          for (std::size_t i = 0; i < n; ++i) noisy[i] = t[i] + (jit[i] - 0.5f) * p.jitter * cell;
-          FillSurface(noisy, w, h, 0.004f * cell, fill);
-          ref = &noisy;
-        }
-        Drainage(fill, w, h, cell, p.spread, area, slope, rain);
         if (it == p.iterations) break;
-        // incision: where the ground lies on the (filled) surface and drains: k * area^m * slope, never more than a share of the drop to the lowest neighbour
+        // incision: where the ground lies on the (filled) surface and drains. F = k * (area - area_min)^m grows with the catchment; the share F / (1 + F) of max_cut of the drop to the lowest
+        // neighbour is removed (a graded river: it can never dig below its neighbours)
         Rows(w, h, [&](const int z0, const int z1) {
           for (int z = z0; z < z1; ++z) {
             for (int x = 0; x < w; ++x) {
               const std::size_t i = Ix(x, z, w);
               float v = 0.0f;
+              std::uint8_t b = 0;
               if (x > 0 && z > 0 && x < w - 1 && z < h - 1 && area[i] > p.area_min && fill[i] - (*ref)[i] < 0.03f * cell) {
                 float low = t[i];
                 low = std::min(low, std::min(std::min(t[i - 1], t[i + 1]), std::min(t[i - w], t[i + w])));
                 const float ad = area[i] - p.area_min;
-                float k = p.k * (p.m == 0.5f ? std::sqrt(ad) : std::pow(ad, p.m)) * slope[i];
-                if (rock != nullptr) k *= Clamp01((*rock)[i]);
-                v = std::min(k, p.max_cut * std::max(0.0f, t[i] - low));
+                const float f = p.k * (p.m == 0.5f ? std::sqrt(ad) : std::pow(ad, p.m));
+                float share = p.max_cut * f / (1.0f + f);
+                if (rock != nullptr) share *= Clamp01((*rock)[i]);
+                v = share * std::max(0.0f, t[i] - low);
+                if (grow > 0) b = static_cast<std::uint8_t>((ad >= 48.0f ? 1 : 0) + (ad >= 240.0f ? 1 : 0) + (ad >= 1008.0f ? 1 : 0) + (ad >= 4080.0f ? 1 : 0));      // = floor(log4(1 + ad / 16)): no libm in the golden
+                if (b > grow) b = static_cast<std::uint8_t>(grow);
               }
               inc[i] = v;
+              band[i] = b;
             }
           }
         });
-        for (int pass = 0; pass < p.widen; ++pass) {
-          for (int z = 0; z < h; ++z) {
-            for (int x = 0; x < w; ++x) {
-              const int xl = std::max(0, x - 1), xr = std::min(w - 1, x + 1);
-              tmp[Ix(x, z, w)] = 0.25f * inc[Ix(xl, z, w)] + 0.5f * inc[Ix(x, z, w)] + 0.25f * inc[Ix(xr, z, w)];
+        // valley width: the incision of a band is smoothed (widen + band) times, Horner style: one pass over the map per smoothing pass in total, the biggest rivers are smoothed the most
+        if (passesMax > 0) {
+          std::vector<float>& acc = accum;
+          acc.assign(n, 0.0f);
+          for (int j = passesMax; j >= 0; --j) {
+            if (j < passesMax) BlurPass(acc, tmp, w, h);
+            const int bandHere = j - widen;     // the cells whose total number of passes is j
+            const float scale = 1.0f / kCentre[j];
+            if (bandHere >= 0 && bandHere <= grow) {
+              for (std::size_t i = 0; i < n; ++i) if (static_cast<int>(band[i]) == bandHere) acc[i] += inc[i] * scale;
             }
           }
-          for (int z = 0; z < h; ++z) {
-            const int zu = std::max(0, z - 1), zd = std::min(h - 1, z + 1);
-            for (int x = 0; x < w; ++x) inc[Ix(x, z, w)] = 0.25f * tmp[Ix(x, zu, w)] + 0.5f * tmp[Ix(x, z, w)] + 0.25f * tmp[Ix(x, zd, w)];
-          }
+          inc = acc;
         }
         for (int z = 0; z < h; ++z) {
           for (int x = 0; x < w; ++x) {
@@ -1386,6 +1427,8 @@ namespace moho::editor::field::erosion
       p.max_cut = static_cast<float>(a.p.N("max_cut", p.max_cut));
       p.area_min = static_cast<float>(a.p.N("area_min", p.area_min));
       p.widen = std::max(0, std::min(8, static_cast<int>(a.p.N("widen", p.widen))));
+      p.width_vary = Clamp01(static_cast<float>(a.p.N("width_vary", p.width_vary)));
+      p.route_every = std::max(1, std::min(16, static_cast<int>(a.p.N("route_every", p.route_every))));
       p.spread = std::max(0.1f, static_cast<float>(a.p.N("spread", p.spread)));
       p.breach = a.p.N("breach", 1.0) != 0.0;
       p.jitter = std::max(0.0f, static_cast<float>(a.p.N("jitter", 0.0)));
