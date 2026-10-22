@@ -10,6 +10,15 @@
 //       (nil for the other modes) so the caller can keep it for the rest of the stroke. nil without a terrain.
 //       Noise mode: smooth value noise at the sample coordinates (so it is continuous across the dabs of a stroke, seed = the stroke id); noiseScale = the
 //       lattice cell size in samples (default 8), noiseOctaves 1..4 (default 2), noiseRoughness = amplitude share of each further octave (default 0.5).
+//       Shaped brush: arguments 13 and 14, shape (a handle of ed_brush_shape_set; nil / 0 = the round falloff profile) and angle (degrees the mask is turned: brushes.lua Angle
+//       plus the stroke's random turn). The mask then replaces the falloff profile (the brush is still cut at the radius), the maths of every mode is unchanged. An unknown handle returns nil
+//       and does nothing, so the Lua loop takes over. An exe without these ignores the two extra arguments and would draw a round brush: the Lua side only passes a shape after
+//       finding ed_brush_shape_set.
+//   ed_brush_shape_set(handle, n, values) -> true | false
+//       Stores the shape mask `handle` (an integer >= 1; set again to replace it): n x n weights 0..1 (2 <= n <= 512) in a Lua array, row after row (z outer, x fastest), over the unit
+//       square -1..1 with the samples on the corners (u = -1 + 2 i / (n - 1)). Done once per shape and resolution (brushes.lua NativeShape), not per dab.
+//   ed_brush_shape_info(handle) -> n | nil
+//       The size of a stored shape (nil: none), for tests and as the probe.
 #include <cstdint>
 #include <vector>
 
@@ -52,6 +61,15 @@ namespace
     dab.noiseScale = static_cast<float>(NumberOr(L, 10, 8.0));
     dab.noiseOctaves = static_cast<int>(NumberOr(L, 11, 2.0));
     dab.noiseRoughness = static_cast<float>(NumberOr(L, 12, 0.5));
+    const int shapeHandle = static_cast<int>(NumberOr(L, 13, 0.0));
+    if (shapeHandle > 0) {
+      dab.shape = br::FindShape(shapeHandle);
+      if (dab.shape == nullptr) {
+        lua_pushnil(L);       // unknown handle: the Lua loop does the dab
+        return 1;
+      }
+      dab.shapeAngle = static_cast<float>(NumberOr(L, 14, 0.0));
+    }
 
     if (!moho::editor::AttachDocument(false)) {
       lua_pushnil(L);
@@ -93,6 +111,41 @@ namespace
     return 6;
   }
 
+  int __cdecl cfunc_EdBrushShapeSet(lua_State* const L)
+  {
+    const int handle = static_cast<int>(luaL_checknumber(L, 1));
+    const int n = static_cast<int>(luaL_checknumber(L, 2));
+    if (handle <= 0 || n < 2 || n > br::kMaxShapeSize || lua_type(L, 3) != LUA_TTABLE) {
+      lua_pushboolean(L, 0);
+      return 1;
+    }
+    const std::size_t count = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
+    std::vector<float> values;
+    values.reserve(count);
+    for (std::size_t i = 1; i <= count; ++i) {
+      lua_rawgeti(L, 3, static_cast<int>(i));
+      float v = 0.0f;
+      if (lua_type(L, -1) == LUA_TNUMBER) {
+        v = static_cast<float>(lua_tonumber(L, -1));
+      }
+      lua_settop(L, -2);
+      values.push_back(v);
+    }
+    lua_pushboolean(L, br::SetShape(handle, n, std::move(values)) ? 1 : 0);
+    return 1;
+  }
+
+  int __cdecl cfunc_EdBrushShapeInfo(lua_State* const L)
+  {
+    const br::Shape* const shape = br::FindShape(static_cast<int>(luaL_checknumber(L, 1)));
+    if (shape == nullptr) {
+      lua_pushnil(L);
+    } else {
+      lua_pushnumber(L, static_cast<lua_Number>(shape->n));
+    }
+    return 1;
+  }
+
   [[nodiscard]] moho::CScrLuaInitFormSet& UserLuaInitSet()
   {
     if (moho::CScrLuaInitFormSet* const set = moho::SCR_FindLuaInitFormSet("User"); set != nullptr) {
@@ -108,7 +161,13 @@ namespace
     {
       (void)new moho::CScrLuaBinder(
         UserLuaInitSet(), "ed_terrain_brush", &cfunc_EdTerrainBrush, nullptr, "<global>",
-        "ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed [, noiseScale, noiseOctaves, noiseRoughness]) -> changed, x0, z0, x1, z1, level"
+        "ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed [, noiseScale, noiseOctaves, noiseRoughness, shape, angle]) -> changed, x0, z0, x1, z1, level"
+      );
+      (void)new moho::CScrLuaBinder(
+        UserLuaInitSet(), "ed_brush_shape_set", &cfunc_EdBrushShapeSet, nullptr, "<global>", "ed_brush_shape_set(handle, n, values) -> true | false"
+      );
+      (void)new moho::CScrLuaBinder(
+        UserLuaInitSet(), "ed_brush_shape_info", &cfunc_EdBrushShapeInfo, nullptr, "<global>", "ed_brush_shape_info(handle) -> n | nil"
       );
     }
   };

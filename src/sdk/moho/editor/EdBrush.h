@@ -19,10 +19,127 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <map>
+#include <utility>
 #include <vector>
 
 namespace moho::editor::brush
 {
+  /**
+   * A brush shape mask (editor/runtime/lua/editor/brushes.lua): an n x n grid of weights 0..1 over the unit square -1..1 (row major, z outer, x fastest: sample (i, j) lies at
+   * u = -1 + 2 i / (n - 1), v = -1 + 2 j / (n - 1)), uploaded once per shape by ed_brush_shape_set and referred to by a handle number. Lua rasterises procedural shapes and loads
+   * image masks into it; a dab turns it by an angle and reads it bilinearly (ShapeSampler), exactly as brushes.lua Weight does for the Lua loop.
+   */
+  struct Shape
+  {
+    int n = 0;
+    std::vector<float> values;
+  };
+
+  /** The shapes uploaded so far, by handle (one instance for the whole exe: an inline function's static is shared by every translation unit). */
+  [[nodiscard]] inline std::map<int, Shape>& ShapeRegistry()
+  {
+    static std::map<int, Shape> shapes;
+    return shapes;
+  }
+
+  constexpr int kMaxShapeSize = 512;
+  constexpr std::size_t kMaxShapes = 4096;
+
+  /** Stores (or replaces) the shape `handle`; false for a bad size or a full registry. */
+  [[nodiscard]] inline bool SetShape(const int handle, const int n, std::vector<float>&& values)
+  {
+    if (handle <= 0 || n < 2 || n > kMaxShapeSize || values.size() != static_cast<std::size_t>(n) * static_cast<std::size_t>(n)) {
+      return false;
+    }
+    std::map<int, Shape>& shapes = ShapeRegistry();
+    if (shapes.find(handle) == shapes.end() && shapes.size() >= kMaxShapes) {
+      return false;
+    }
+    Shape& s = shapes[handle];
+    s.n = n;
+    s.values = std::move(values);
+    return true;
+  }
+
+  /** The shape of a handle, or null. */
+  [[nodiscard]] inline const Shape* FindShape(const int handle)
+  {
+    const std::map<int, Shape>& shapes = ShapeRegistry();
+    const auto it = shapes.find(handle);
+    return it == shapes.end() ? nullptr : &it->second;
+  }
+
+  /**
+   * brushes.lua Weight() on a shape grid: the mask value at the offset (dx, dz) from the centre of a brush of radius r, the mask turned by `angle` degrees. One operation per statement
+   * (float roundings as in the Lua VM), the same order as the Lua source:
+   *   u = (dx c + dz s) / r,  v = (-dx s + dz c) / r,  0 beyond u^2 + v^2 > 1.6,  bilinear read of the grid, 0 outside it.
+   */
+  struct ShapeSampler
+  {
+    const Shape* shape = nullptr;
+    float c = 1.0f;
+    float s = 0.0f;
+
+    ShapeSampler() = default;
+    ShapeSampler(const Shape* const sh, const float angleDegrees) : shape(sh)
+    {
+      // math.rad(angle) = angle * (pi / 180) in double, stored as a float; cos / sin of that float, stored as floats
+      const float a = static_cast<float>(static_cast<double>(angleDegrees) * (3.14159265358979323846 / 180.0));
+      c = static_cast<float>(std::cos(static_cast<double>(a)));
+      s = static_cast<float>(std::sin(static_cast<double>(a)));
+    }
+
+    [[nodiscard]] float At(const float dx, const float dz, const float r) const
+    {
+      float p = dx * c;
+      float q = dz * s;
+      float u = p + q;
+      u = u / r;
+      const float ndx = -dx;
+      p = ndx * s;
+      q = dz * c;
+      float v = p + q;
+      v = v / r;
+      const float uu = u * u;
+      const float vv = v * v;
+      if (uu + vv > 1.6f) {
+        return 0.0f;
+      }
+      const int n = shape->n;
+      const float top = static_cast<float>(n - 1);
+      float fx = u + 1.0f;
+      fx = fx * 0.5f;
+      fx = fx * top;
+      float fz = v + 1.0f;
+      fz = fz * 0.5f;
+      fz = fz * top;
+      if (fx < 0.0f || fz < 0.0f || fx > top || fz > top) {
+        return 0.0f;
+      }
+      const int x0 = std::min(n - 2, static_cast<int>(std::floor(fx)));
+      const int z0 = std::min(n - 2, static_cast<int>(std::floor(fz)));
+      const float tx = fx - static_cast<float>(x0);
+      const float tz = fz - static_cast<float>(z0);
+      const float* const g = shape->values.data();
+      const float a00 = g[static_cast<std::size_t>(z0) * static_cast<std::size_t>(n) + static_cast<std::size_t>(x0)];
+      const float a10 = g[static_cast<std::size_t>(z0) * static_cast<std::size_t>(n) + static_cast<std::size_t>(x0 + 1)];
+      const float a01 = g[static_cast<std::size_t>(z0 + 1) * static_cast<std::size_t>(n) + static_cast<std::size_t>(x0)];
+      const float a11 = g[static_cast<std::size_t>(z0 + 1) * static_cast<std::size_t>(n) + static_cast<std::size_t>(x0 + 1)];
+      const float ix = 1.0f - tx;
+      const float iz = 1.0f - tz;
+      float t0 = a00 * ix;
+      float t1 = a10 * tx;
+      const float topRow = t0 + t1;
+      t0 = a01 * ix;
+      t1 = a11 * tx;
+      const float bottomRow = t0 + t1;
+      t0 = topRow * iz;
+      t1 = bottomRow * tz;
+      return t0 + t1;
+    }
+  };
+
   enum class Mode
   {
     Raise,
@@ -72,6 +189,8 @@ namespace moho::editor::brush
     float noiseScale = 8.0f;      // noise: lattice cell size in samples (>= 1)
     int noiseOctaves = 2;         // noise: 1..4 layers, each one with half the cell size
     float noiseRoughness = 0.5f;  // noise: the share of the amplitude the next octave keeps (0..1)
+    const Shape* shape = nullptr;  // optional brush shape mask: replaces the round falloff profile (falloff is then unused)
+    float shapeAngle = 0.0f;       // degrees the mask is turned (brushes.lua Angle + the stroke's random turn)
   };
 
   /** Inclusive sample window of a dab (what the Lua path read: one sample beyond the brush on every side), clamped to a width x height grid. */
@@ -355,6 +474,8 @@ namespace moho::editor::brush
     }
 
     const detail::Profile profile(r, dab.falloff);
+    const bool shaped = dab.shape != nullptr && dab.shape->n >= 2;
+    const ShapeSampler sampler(shaped ? dab.shape : nullptr, dab.shapeAngle);
     const float word = static_cast<float>(detail::kWord);
     // squared distance beyond which the weight is surely 0 (a loose bound: the exact test is the float distance in Profile::At)
     const float farD2 = r * r * 1.001f + 1.0f;
@@ -371,7 +492,8 @@ namespace moho::editor::brush
           continue;
         }
         const float distance = static_cast<float>(std::sqrt(static_cast<double>(d2)));
-        const float weight = profile.At(distance);
+        // a shape mask replaces the falloff profile; the brush is still cut at the radius (terrain.lua Weight)
+        const float weight = shaped ? (distance >= r ? 0.0f : sampler.At(dx, dz, r)) : profile.At(distance);
         if (!(weight > 0.0f)) {
           continue;
         }
@@ -441,6 +563,33 @@ namespace moho::editor::brush
     }
     result.changed = changed;
     return result;
+  }
+
+  /**
+   * The weights a shaped brush gives the samples x0..x1 / z0..z1 (row major, z outer) for a brush of radius r at (cx, cz): what terrain.lua Weight returns per sample (0 at and beyond the
+   * radius, else the mask). The erosion brush takes such a list for its window (ed_erode_dab, opts.weights).
+   */
+  inline void FillShapeWeights(
+    const Shape& shape, const float angleDegrees, const float cx, const float cz, const float r, const int x0, const int z0, const int x1, const int z1, std::vector<float>& out
+  )
+  {
+    out.clear();
+    if (x1 < x0 || z1 < z0 || !(r > 0.0f) || shape.n < 2) {
+      return;
+    }
+    out.reserve(static_cast<std::size_t>(x1 - x0 + 1) * static_cast<std::size_t>(z1 - z0 + 1));
+    const ShapeSampler sampler(&shape, angleDegrees);
+    for (int z = z0; z <= z1; ++z) {
+      const float dz = static_cast<float>(z) - cz;
+      const float dz2 = dz * dz;
+      for (int x = x0; x <= x1; ++x) {
+        const float dx = static_cast<float>(x) - cx;
+        const float dx2 = dx * dx;
+        const float d2 = dx2 + dz2;
+        const float distance = static_cast<float>(std::sqrt(static_cast<double>(d2)));
+        out.push_back(distance >= r ? 0.0f : sampler.At(dx, dz, r));
+      }
+    }
   }
 
   /** A whole dab on a grid of width x height words: the window, the new window content and the result. Used by the tests. */

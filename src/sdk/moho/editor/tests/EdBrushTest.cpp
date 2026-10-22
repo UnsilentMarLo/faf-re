@@ -66,6 +66,8 @@ struct LuaBrush
   int strokeId;
   double noiseScale = 8, noiseRough = 0.5;
   int noiseOctaves = 2;
+  const br::Shape* shape = nullptr;   // a shaped brush (brushes.lua Active ~= 'round'): the mask replaces the falloff profile
+  double angle = 0;                   // degrees: brushes.lua Angle + the stroke's random turn
 };
 
 static double LuaWeight(const double distance, const double radius, const double falloff)
@@ -82,6 +84,33 @@ static double LuaWeight(const double distance, const double radius, const double
   }
   const double PI = F(3.14159265);
   return Mul(0.5, Add(1, Cos(Div(Mul(PI, Sub(distance, inner)), width))));
+}
+
+// brushes.lua Weight() for a shape grid (the mask at the offset (dx, dz) of a brush of radius r, turned by `angle` degrees), operation by operation as the Lua source:
+//   local a = math.rad(angle); local c, s = math.cos(a), math.sin(a)
+//   local u = (dx * c + dz * s) / r;  local v = (-dx * s + dz * c) / r
+//   if u * u + v * v > 1.6 then return 0 end
+//   ImageSample(m, u, v): bilinear on the n x n grid over -1..1, 0 outside it
+static double LuaShapedWeight(const br::Shape& shape, const double dx, const double dz, const double r, const double angle)
+{
+  const double a = F(angle * (3.14159265358979323846 / 180.0));
+  const double c = Cos(a), s = F(std::sin(a));
+  const double u = Div(Add(Mul(dx, c), Mul(dz, s)), r);
+  const double v = Div(Add(Mul(-dx, s), Mul(dz, c)), r);
+  if (Add(Mul(u, u), Mul(v, v)) > F(1.6)) {
+    return 0;
+  }
+  const int n = shape.n;
+  const double fx = Mul(Mul(Add(u, 1), 0.5), n - 1), fz = Mul(Mul(Add(v, 1), 0.5), n - 1);
+  if (fx < 0 || fz < 0 || fx > n - 1 || fz > n - 1) {
+    return 0;
+  }
+  const int x0 = static_cast<int>(Min(n - 2, Floor(fx))), z0 = static_cast<int>(Min(n - 2, Floor(fz)));
+  const double tx = Sub(fx, x0), tz = Sub(fz, z0);
+  auto at = [&](const int x, const int z) { return static_cast<double>(shape.values[static_cast<std::size_t>(z) * n + x]); };   // m.values[z * n + x + 1]
+  const double top = Add(Mul(at(x0, z0), Sub(1, tx)), Mul(at(x0 + 1, z0), tx));
+  const double bottom = Add(Mul(at(x0, z0 + 1), Sub(1, tx)), Mul(at(x0 + 1, z0 + 1), tx));
+  return Add(Mul(top, Sub(1, tz)), Mul(bottom, tz));
 }
 
 static double LuaNoise(const double x, const double z, const double seed)
@@ -183,6 +212,7 @@ static RefOut LuaDab(const std::vector<std::uint16_t>& grid, const int gw, const
   b.level = b.level < 0 ? b.level : F(b.level);
   b.noiseScale = F(b.noiseScale);
   b.noiseRough = F(b.noiseRough);
+  b.angle = F(b.angle);
   const double K02 = F(0.2);
   const double r = b.radius;
   int x0 = static_cast<int>(Floor(Sub(cx, r))) - 1, z0 = static_cast<int>(Floor(Sub(cz, r))) - 1;
@@ -229,7 +259,9 @@ static RefOut LuaDab(const std::vector<std::uint16_t>& grid, const int gw, const
     for (int x = x0; x <= x1; ++x) {
       const double dx = Sub(x, cx);
       const double dz = Sub(z, cz);
-      const double weight = LuaWeight(Sqrt(Add(Mul(dx, dx), Mul(dz, dz))), r, b.falloff);
+      const double distance = Sqrt(Add(Mul(dx, dx), Mul(dz, dz)));
+      // terrain.lua Weight(): 0 at and beyond the radius, then the shape mask or the round profile
+      const double weight = b.shape ? (distance >= r ? 0.0 : LuaShapedWeight(*b.shape, dx, dz, r, b.angle)) : LuaWeight(distance, r, b.falloff);
       if (weight > 0) {
         const int i = (z - z0) * w + (x - x0) + 1;
         double value = before[i];
@@ -300,6 +332,22 @@ static double DoubleWeight(const double d, const double r, double falloff)
   return 0.5 * (1 + std::cos(3.14159265358979 * (d - inner) / width));
 }
 
+// the same shaped weight in plain double (a straightforward bilinear read of the grid, the rotation by cos / sin)
+static double DoubleShapedWeight(const br::Shape& shape, const double dx, const double dz, const double r, const double angle)
+{
+  const double a = angle * 3.14159265358979323846 / 180.0;
+  const double c = std::cos(a), s = std::sin(a);
+  const double u = (dx * c + dz * s) / r, v = (-dx * s + dz * c) / r;
+  if (u * u + v * v > 1.6) return 0;
+  const int n = shape.n;
+  const double fx = (u + 1) * 0.5 * (n - 1), fz = (v + 1) * 0.5 * (n - 1);
+  if (fx < 0 || fz < 0 || fx > n - 1 || fz > n - 1) return 0;
+  const int x0 = std::min(n - 2, static_cast<int>(std::floor(fx))), z0 = std::min(n - 2, static_cast<int>(std::floor(fz)));
+  const double tx = fx - x0, tz = fz - z0;
+  auto at = [&](const int x, const int z) { return static_cast<double>(shape.values[static_cast<std::size_t>(z) * n + x]); };
+  return (at(x0, z0) * (1 - tx) + at(x0 + 1, z0) * tx) * (1 - tz) + (at(x0, z0 + 1) * (1 - tx) + at(x0 + 1, z0 + 1) * tx) * tz;
+}
+
 // returns the window's new words (no noise: its hash is integer arithmetic and is checked on its own)
 static std::vector<double> DoubleDab(const std::vector<std::uint16_t>& grid, const int gw, const int gh, const double cx, const double cz, const LuaBrush& b, const RefOut& win)
 {
@@ -318,7 +366,8 @@ static std::vector<double> DoubleDab(const std::vector<std::uint16_t>& grid, con
   for (int z = 0; z < h; ++z) {
     for (int x = 0; x < w; ++x) {
       const double dx = win.x0 + x - cx, dz = win.z0 + z - cz;
-      const double wt = DoubleWeight(std::sqrt(dx * dx + dz * dz), b.radius, b.falloff);
+      const double dist = std::sqrt(dx * dx + dz * dz);
+      const double wt = b.shape ? (dist >= b.radius ? 0.0 : DoubleShapedWeight(*b.shape, dx, dz, b.radius, b.angle)) : DoubleWeight(dist, b.radius, b.falloff);
       if (wt <= 0) continue;
       double v = before[z * w + x];
       if (mode == "raise") v += b.dir * b.strength * wt * 128;
@@ -376,6 +425,8 @@ static void CompareDab(const std::vector<std::uint16_t>& grid, const int gw, con
   dab.noiseScale = static_cast<float>(lb.noiseScale);
   dab.noiseOctaves = lb.noiseOctaves;
   dab.noiseRoughness = static_cast<float>(lb.noiseRough);
+  dab.shape = lb.shape;
+  dab.shapeAngle = static_cast<float>(lb.angle);
   CHECK(br::ModeFromName(lb.mode, dab.mode), "mode %s", lb.mode);
 
   br::Window win;
@@ -417,7 +468,8 @@ static void CompareDab(const std::vector<std::uint16_t>& grid, const int gw, con
     const std::vector<double> d = DoubleDab(grid, gw, gh, cx, cz, lb, ref);
     double worst = 0;
     for (std::size_t i = 0; i < d.size(); ++i) worst = std::max(worst, std::fabs(d[i] - after[i]));
-    const double tol = std::string(lb.mode) == "smooth" ? 3.0 : 1.0;
+    // (a shaped brush rotates with float cos / sin, which moves a read of a noisy picture mask by a few 1e-6 of a cell: up to two words on a full-range pull)
+    const double tol = lb.shape ? (std::string(lb.mode) == "smooth" ? 4.0 : 3.0) : (std::string(lb.mode) == "smooth" ? 3.0 : 1.0);
     CHECK(worst <= tol, "%s: worst difference from the double reference %f words", what, worst);
   }
 }
@@ -697,6 +749,198 @@ static void TestProperties()
   CHECK(!br::ModeFromName("erode", m) && !br::ModeFromName("stamp", m) && !br::ModeFromName(nullptr, m) && br::ModeFromName("noise", m), "mode names");
 }
 
+
+// ---- shaped brushes (EdBrush.h Shape / ShapeSampler): the mask replaces the falloff profile ------------------------------------------------------
+
+static double SmoothStep(const double a, const double b, const double x)
+{
+  double t = (x - a) / (b - a);
+  t = std::min(1.0, std::max(0.0, t));
+  return t * t * (3 - 2 * t);
+}
+
+// A test shape: n x n values over -1..1 (corners on the samples), like brushes.lua Grid(): 0 ridge, 1 mountain-like (cone times bumps), 2 plateau, 3 a picture of random pixels,
+// 4 a gradient that is not symmetric (shows the turn direction), 5 all ones (every sample inside the disc gets 1)
+static br::Shape MakeShape(const int kind, const int n)
+{
+  br::Shape sh;
+  sh.n = n;
+  sh.values.resize(static_cast<std::size_t>(n) * n);
+  for (int j = 0; j < n; ++j) {
+    for (int i = 0; i < n; ++i) {
+      const double u = static_cast<double>(i) / (n - 1) * 2 - 1, v = static_cast<double>(j) / (n - 1) * 2 - 1;
+      const double d = std::sqrt(u * u + v * v);
+      double w = 0;
+      switch (kind) {
+      case 0: w = SmoothStep(1.0, 0.85, std::fabs(u)) * SmoothStep(0.35, 0.0, std::fabs(v)); break;
+      case 1: w = std::min(1.0, std::max(0.0, 1 - d) * (0.35 + 1.3 * (0.5 + 0.5 * std::sin(u * 9.1 + 1.3) * std::cos(v * 7.7 - 0.4)))); break;
+      case 2: w = SmoothStep(1.0, 0.7, d); break;
+      case 3: w = static_cast<double>(Rand() % 65536) / 65535.0; break;
+      case 4: w = (u + 1) * 0.5 * (1 - 0.5 * (v + 1) * 0.5); break;
+      default: w = 1; break;
+      }
+      sh.values[static_cast<std::size_t>(j) * n + i] = static_cast<float>(w);
+    }
+  }
+  return sh;
+}
+
+static void TestShapeRegistry()
+{
+  using namespace br;
+  CHECK(FindShape(1) == nullptr, "no shape yet");
+  CHECK(!SetShape(0, 4, std::vector<float>(16, 1.0f)), "handle 0 is refused");
+  CHECK(!SetShape(1, 1, std::vector<float>(1, 1.0f)), "a 1 x 1 shape is refused");
+  CHECK(!SetShape(1, 4, std::vector<float>(15, 1.0f)), "a wrong value count is refused");
+  CHECK(!SetShape(1, kMaxShapeSize + 1, std::vector<float>(static_cast<std::size_t>(kMaxShapeSize + 1) * (kMaxShapeSize + 1), 1.0f)), "a huge shape is refused");
+  CHECK(SetShape(1, 4, std::vector<float>(16, 0.5f)) && FindShape(1) && FindShape(1)->n == 4, "a shape is stored");
+  CHECK(SetShape(1, 8, std::vector<float>(64, 0.25f)) && FindShape(1)->n == 8 && FindShape(1)->values[63] == 0.25f, "set again replaces it");
+  CHECK(FindShape(2) == nullptr, "another handle is empty");
+}
+
+static void TestShaped()
+{
+  // native shaped dabs against the Lua transliteration (every Lua operation rounded to a float: the words must be equal) and against plain double (within a word or two)
+  const int gw = 71, gh = 63;
+  const char* const modes[] = {"raise", "lower", "plateau", "flatten", "smooth", "noise"};
+  const double angles[] = {0, 17.5, 90, 200, 359.9, -30, 45};
+  const int sizes[] = {64, 129};
+  const double centres[][2] = {{35, 31}, {0, 0}, {70, 62}, {20.37, 40.81}, {-3, 10}, {66.5, 5.25}};
+  const double radii[] = {1, 2.5, 7.3, 16, 30};
+  std::vector<std::uint16_t> grids[4];
+  for (int k = 0; k < 4; ++k) grids[k] = MakeGrid(gw, gh, k);
+  char what[200];
+  int count = 0;
+  for (int kind = 0; kind < 6; ++kind) {
+    for (const int n : sizes) {
+      const br::Shape shape = MakeShape(kind, n);
+      for (const char* const mode : modes) {
+        for (const double angle : angles) {
+          for (const auto& c : centres) {
+            for (const double r : radii) {
+              if ((++count % 4) != 0) continue;                         // thin out: 6 x 2 x 6 x 7 x 6 x 5 dabs are a lot
+              const std::vector<std::uint16_t>& grid = grids[count % 4 == 0 ? (count / 4) % 4 : 0];
+              LuaBrush lb{r, 0.5, (std::string(mode) == "smooth") ? 6 : 2.5, (count % 8 == 0) ? -1 : 1, mode, -1, 9};
+              lb.shape = &shape;
+              lb.angle = angle;
+              std::snprintf(what, sizeof(what), "shape %d n=%d %s angle %g c=(%g,%g) r=%g dir=%d", kind, n, mode, angle, c[0], c[1], r, lb.dir);
+              CompareDab(grid, gw, gh, c[0], c[1], lb, what);
+              if (std::string(mode) == "flatten" || std::string(mode) == "plateau") {
+                LuaBrush lv = lb;
+                lv.level = 41.7;
+                std::snprintf(what, sizeof(what), "shape %d n=%d %s level angle %g c=(%g,%g) r=%g", kind, n, mode, angle, c[0], c[1], r);
+                CompareDab(grid, gw, gh, c[0], c[1], lv, what);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  CHECK(count > 1000, "the shaped sweep ran %d dabs", count);
+}
+
+static void TestShapeProperties()
+{
+  const int gw = 60, gh = 60;
+  const std::vector<std::uint16_t> flat(static_cast<std::size_t>(gw) * gh, 20000);
+  br::Window win;
+  std::vector<std::uint16_t> a, b;
+  br::Dab dab;
+  dab.cx = 30; dab.cz = 30; dab.radius = 12; dab.strength = 2; dab.mode = br::Mode::Raise; dab.falloff = 1;
+
+  // a shape of ones: a flat disc, full strength to the rim (the falloff is not used), nothing at or beyond the radius
+  const br::Shape ones = MakeShape(5, 64);
+  dab.shape = &ones;
+  br::ComputeDab(flat.data(), gw, gh, dab, win, a);
+  int inside = 0, atFull = 0, bad = 0;
+  for (int z = win.z0; z <= win.z1; ++z) {
+    for (int x = win.x0; x <= win.x1; ++x) {
+      const double d = std::sqrt(static_cast<double>((x - 30) * (x - 30) + (z - 30) * (z - 30)));
+      const std::uint16_t v = a[static_cast<std::size_t>(z - win.z0) * win.Width() + (x - win.x0)];
+      if (d < 12 - 1e-3) {
+        ++inside;
+        if (v == 20000 + 2 * 128) ++atFull; else ++bad;
+      } else if (d >= 12 + 1e-3 && v != 20000) {
+        ++bad;
+      }
+    }
+  }
+  CHECK(inside > 400 && atFull == inside && bad == 0, "a shape of ones is a flat disc (%d of %d at full strength, %d wrong)", atFull, inside, bad);
+
+  // the shape is turned by the angle, anti-clockwise as brushes.lua turns it: the gradient shape (white at +u) is white towards +x at angle 0, towards +z at 90 degrees... (u = dx c + dz s)
+  const br::Shape grad = MakeShape(4, 64);
+  dab.shape = &grad;
+  dab.radius = 20;
+  dab.shapeAngle = 0;
+  br::ComputeDab(flat.data(), gw, gh, dab, win, a);
+  auto at = [&](const std::vector<std::uint16_t>& v, const int x, const int z) { return static_cast<int>(v[static_cast<std::size_t>(z - win.z0) * win.Width() + (x - win.x0)]) - 20000; };
+  // the gradient shape is (u + 1) / 2 * (1 - (v + 1) / 4); strength 2 = 256 words at weight 1; at 10 of 20 units: u or v = +-0.5
+  CHECK(std::abs(at(a, 40, 30) - 144) <= 2 && std::abs(at(a, 20, 30) - 48) <= 2, "angle 0: +x is the white side (%d vs %d, expected 144 and 48)", at(a, 40, 30), at(a, 20, 30));
+  dab.shapeAngle = 90;
+  br::ComputeDab(flat.data(), gw, gh, dab, win, b);
+  // a mask turned by 90 degrees: u = dz / r, v = -dx / r
+  CHECK(std::abs(at(b, 30, 40) - 144) <= 2 && std::abs(at(b, 30, 20) - 48) <= 2, "angle 90: +z is the white side (%d vs %d)", at(b, 30, 40), at(b, 30, 20));
+  CHECK(std::abs(at(b, 40, 30) - 112) <= 2 && std::abs(at(b, 20, 30) - 80) <= 2, "angle 90: along x v = -dx / r (%d vs %d, expected 112 and 80)", at(b, 40, 30), at(b, 20, 30));
+  dab.shapeAngle = 360;
+  br::ComputeDab(flat.data(), gw, gh, dab, win, b);
+  int differ = 0;
+  for (std::size_t i = 0; i < a.size(); ++i) differ += (std::abs(static_cast<int>(a[i]) - static_cast<int>(b[i])) > 1) ? 1 : 0;
+  CHECK(differ == 0, "angle 360 = angle 0 (%d samples differ)", differ);
+
+  // a null or too small shape is the round brush
+  dab.shape = nullptr;
+  dab.shapeAngle = 0;
+  dab.radius = 9;
+  br::Dab round = dab;
+  br::Shape tiny;
+  round.shape = &tiny;           // n = 0: not usable, the round profile is used
+  std::vector<std::uint16_t> r1, r2;
+  br::ComputeDab(flat.data(), gw, gh, dab, win, r1);
+  br::ComputeDab(flat.data(), gw, gh, round, win, r2);
+  CHECK(r1 == r2, "an empty shape is the round brush");
+
+  // the mask replaces the profile for every mode: a smooth dab on flat ground changes nothing, flatten at the ground's own level changes nothing
+  dab.shape = &grad;
+  dab.mode = br::Mode::Smooth;
+  CHECK(br::ComputeDab(flat.data(), gw, gh, dab, win, a).changed == 0, "smooth with a shape on flat ground changes nothing");
+  dab.mode = br::Mode::Flatten;
+  dab.level = 20000.0f / 128.0f;
+  CHECK(br::ComputeDab(flat.data(), gw, gh, dab, win, a).changed == 0, "flatten with a shape at the ground's level changes nothing");
+}
+
+static void TestShapeWeights()
+{
+  // FillShapeWeights (the erosion brush's window) = the transliteration per sample, 0 at and beyond the radius, row major
+  const double angles[] = {0, 33, 90, 271.5};
+  const double radii[] = {1.5, 6, 25.25};
+  for (int kind = 0; kind < 5; ++kind) {
+    const br::Shape shape = MakeShape(kind, kind % 2 ? 64 : 128);
+    for (const double angle : angles) {
+      for (const double r : radii) {
+        const double cx = 40.3, cz = 22.8;
+        const int x0 = static_cast<int>(std::floor(cx - r)) - 4, z0 = static_cast<int>(std::floor(cz - r)) - 3, x1 = static_cast<int>(std::ceil(cx + r)) + 5, z1 = static_cast<int>(std::ceil(cz + r)) + 2;
+        std::vector<float> w;
+        br::FillShapeWeights(shape, static_cast<float>(angle), static_cast<float>(cx), static_cast<float>(cz), static_cast<float>(r), x0, z0, x1, z1, w);
+        CHECK(w.size() == static_cast<std::size_t>(x1 - x0 + 1) * (z1 - z0 + 1), "weights count");
+        int wrong = 0, nonzero = 0;
+        std::size_t i = 0;
+        for (int z = z0; z <= z1; ++z) {
+          for (int x = x0; x <= x1; ++x, ++i) {
+            const double dx = Sub(x, F(cx)), dz = Sub(z, F(cz));
+            const double dist = Sqrt(Add(Mul(dx, dx), Mul(dz, dz)));
+            const double ref = dist >= F(r) ? 0.0 : LuaShapedWeight(shape, dx, dz, F(r), F(angle));
+            if (static_cast<double>(w[i]) != ref) ++wrong;
+            if (w[i] > 0) ++nonzero;
+          }
+        }
+        CHECK(wrong == 0, "shape %d angle %g r=%g: %d weights differ from the Lua transliteration", kind, angle, r, wrong);
+        CHECK(nonzero > 0 || r < 2, "shape %d r=%g has weights", kind, r);
+      }
+    }
+  }
+}
+
 // ---- the document: the write path of ed_terrain_brush ---------------------------------------------------------------------------------------
 
 static void TestDocument()
@@ -784,6 +1028,37 @@ static void Bench()
   }
 }
 
+static void BenchShaped()
+{
+  // a 64-radius dab on a 4096 map, round against shaped (the Lua loop it replaces costs ~25 Lua operations per sample plus a procedural shape function or a bilinear mask read)
+  const int w = 4096, h = 4096;
+  std::vector<std::uint16_t> grid(static_cast<std::size_t>(w) * h);
+  for (std::size_t i = 0; i < grid.size(); ++i) grid[i] = static_cast<std::uint16_t>(2000 + (i * 2654435761u >> 22));
+  const br::Shape mountain = MakeShape(1, 129), image = MakeShape(3, 64);
+  const struct { const char* name; const br::Shape* shape; } cases[] = {{"round", nullptr}, {"mountain 129", &mountain}, {"image 64", &image}};
+  for (const auto& cs : cases) {
+    for (const char* const mode : {"raise", "smooth", "noise"}) {
+      br::Dab dab;
+      if (!br::ModeFromName(mode, dab.mode)) continue;
+      dab.radius = 64; dab.strength = 3; dab.falloff = 1; dab.seed = 3;
+      dab.shape = cs.shape;
+      dab.shapeAngle = 33.0f;
+      const auto t0 = std::chrono::steady_clock::now();
+      const int reps = 200;
+      long total = 0;
+      for (int i = 0; i < reps; ++i) {
+        dab.cx = 1000.0f + i * 7.3f;
+        dab.cz = 2000.0f + i * 3.1f;
+        br::Window win;
+        std::vector<std::uint16_t> after;
+        total += br::ComputeDab(grid.data(), w, h, dab, win, after).changed;
+      }
+      const auto t1 = std::chrono::steady_clock::now();
+      std::printf("bench r=64 %-13s %-6s %.3f ms per dab (%ld samples changed per dab)\n", cs.name, mode, std::chrono::duration<double, std::milli>(t1 - t0).count() / reps, total / reps);
+    }
+  }
+}
+
 int main(int argc, char** /*argv*/)
 {
   TestSweep();
@@ -791,9 +1066,14 @@ int main(int argc, char** /*argv*/)
   TestNoiseDabs();
   TestSmoothNoise();
   TestProperties();
+  TestShapeRegistry();
+  TestShapeProperties();
+  TestShapeWeights();
+  TestShaped();
   TestDocument();
   if (argc > 1) {
     Bench();
+    BenchShaped();
   }
   std::printf("%s: %d checks, %d failures\n", gFailures == 0 ? "PASS" : "FAIL", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
