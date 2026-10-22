@@ -457,11 +457,42 @@ static void PropThreads()
   SetThreads(orig);
 }
 
+/** The erosion variants leave no step at the map border: the mean |h(edge) - h(edge + 1)| over the four sides stays near the input's (a missing neighbour never gives or takes, nothing is pinned). */
+static void PropBorder()
+{
+  const int n = 129;
+  const GridPtr r = Run("ridged", "width=129,height=129,seed=3,scale=51,octaves=3,persistence=0.4");
+  const GridPtr p = Run("perlin", "width=129,height=129,seed=103,scale=25,octaves=3");
+  const GridPtr base = Run("add", "", {{"a", Run("affine", "mul=55,add=0", {{"a", r}})}, {"b", Run("affine", "mul=8,add=0", {{"a", p}})}});
+  auto tilted = std::make_shared<Grid>(*base);
+  for (int z = 0; z < n; ++z)
+    for (int x = 0; x < n; ++x) tilted->At(x, z) += 0.25f * static_cast<float>(std::fabs(x - 0.5 * n) + 0.7 * std::fabs(z - 0.5 * n));
+  const auto edgeStep = [n](const Grid& g) {
+    double s = 0.0;
+    int c = 0;
+    for (int i = 2; i < n - 2; ++i) {
+      s += std::fabs(g.At(i, 0) - g.At(i, 1)) + std::fabs(g.At(i, n - 1) - g.At(i, n - 2)) + std::fabs(g.At(0, i) - g.At(1, i)) + std::fabs(g.At(n - 1, i) - g.At(n - 2, i));
+      c += 4;
+    }
+    return s / c;
+  };
+  struct C { const char* op; const char* params; };
+  static const C cases[] = {{"thermal_map", "iterations=60,rate=0.5,talus=0.5"}, {"erode_rocksoil", "iterations=60"}, {"erode_snow", "iterations=40,amount=3"},
+                            {"erode_wind", "iterations=40"}, {"erode_glacier", "iterations=60"}, {"settle", "iterations=20"}};
+  const double before = edgeStep(*tilted);
+  for (const C& c : cases) {
+    const GridPtr out = Run(c.op, c.params, {{"a", GridPtr(tilted)}});
+    const double after = edgeStep(*out);
+    CHECK(after <= before * 1.2 + 0.05, "%s: a step at the map border (%.3f -> %.3f)", c.op, before, after);
+  }
+}
+
 static void RunProperties()
 {
   PropGenerators();
   PropFilters();
   PropAnalysis();
   PropErosion();
+  PropBorder();
   PropThreads();
 }

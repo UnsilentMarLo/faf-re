@@ -6,6 +6,13 @@
 //                       erosion, deposition, evaporation; thermal slides coupled in every few iterations
 //     erode_droplet     particle erosion (Beyer / Lague): droplets with inertia run downhill, pick up and drop sediment; tiled, bit identical for any thread count
 //     erode_stream      stream power incision on a drainage network (pit filled flow routing, implicit solver): river valleys with branching channels
+//   edge (erode_hydraulic): open (default) = the edge cells are ordinary cells, water and sediment run out over the map edge, and the outermost cells take the change of their inner neighbour
+//     (no step is left at the border); closed = reflecting walls; pinned = the outer ring keeps its height (the old behaviour, which left a wall of untouched ground at the border).
+//     The droplets reflect their digging brush at the map edge; the stream solver raises the edge cells with the uplift. The brush session solves the map-edge sides of its window as open.
+//   settings every erosion op takes (all off by default except where noted): vary / vary_scale (hard and soft ground: noise on the erodibility), rain_vary (wetter and drier patches: hydraulic
+//     rain, droplet release probability, stream catchment), protect (ridges and summits are harder, and slide less), seed (of these patterns), conserve (0..1: puts the lost volume back where
+//     sediment settles), keep_range (1: stretch the result back to the input's height range), max_change (units: no sample moves further than this); droplets: drop_vary (every droplet its own
+//     size / life / inertia / load), accel (1 = speeds up downhill, the default; 0 = the old rule that slowed droplets down on slopes); stream: jitter (flow routed over ground + noise).
 //   every op returns the new height (`output=height`, the default) or, with `output=` wear | deposit | flow | water | sediment, one of the other results (the editor asks for all at
 //   once through OpArgs::extra). Inputs: a (the height field), mask (erodibility 0..1, optional), like.
 //
@@ -36,9 +43,13 @@ namespace moho::editor::field::erosion
     float talus = 0.8f;           // thermal slide limit (rise per run)
     float thermal = 0.0f;         // thermal rate 0..1 per slide step (0 = no thermal coupling)
     int thermal_every = 2;        // a thermal step after this many hydraulic iterations
-    bool pin_border = true;       // the outermost ring keeps its height and drains water (false: closed edges)
+    bool pin_border = true;       // the sides in pin_sides keep their height and drain water (the other sides: open_edge or closed walls)
+    int pin_sides = 15;           // bit 0 / 1 = the -x / +x column, bit 2 / 3 = the -z / +z row of the rectangle (a brush window pins only the sides inside the map)
+    bool open_edge = false;       // a side that is not pinned lets water and sediment run out over the edge (the edge cells are ordinary cells); false: a closed wall
     bool settle = true;           // at the end the remaining sediment settles where it is (conserves mass)
     bool track = true;            // keep the wear, deposit and flow masks (off: the brush and previews do not need them)
+    float vary = 0.0f;            // brush only: 0..1, hard and soft ground under the brush (noise on the erodibility and the rain), the same pattern for every dab of a map
+    float vary_scale = 40.0f;     // feature size of that pattern (samples)
   };
 
   /** The state of the grid solver on a rectangle. Arrays are row major w * h; empty optional arrays mean 1. */
@@ -54,6 +65,7 @@ namespace moho::editor::field::erosion
     std::vector<float> rain_rate; // per cell factor of the rain (brush weight); empty = 1
     std::vector<float> erode_rate;// per cell factor of erosion and thermal slides (brush weight); empty = 1
     std::vector<float> rock;      // per cell erodibility; empty = 1
+    std::vector<float> thermal_rate;   // per cell factor of the thermal slides only; empty = erode_rate (the brush weights)
     std::vector<float> wear;      // accumulated erosion (>= 0), optional
     std::vector<float> dep;       // accumulated deposition (>= 0), optional
     std::vector<float> flow;      // accumulated discharge (speed * depth), optional

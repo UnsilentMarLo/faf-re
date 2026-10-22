@@ -399,7 +399,7 @@ static void TestProperties()
     for (std::size_t i = 0; i < H->v.size(); ++i) net += static_cast<double>(extra["wear"].v[i]) - extra["deposit"].v[i] - (H->v[i] - r->v[i]);
     CHECK(std::fabs(net) / before < 2e-3, "wear - deposit does not match the height change (%g)", net);
     // the border is left alone with pinned edges
-    const GridPtr p = Make("erode_hydraulic", "iterations=40", {{"a", H}});
+    const GridPtr p = Make("erode_hydraulic", "iterations=40,edge=pinned", {{"a", H}});
     bool same = true;
     for (int x = 0; x < H->w; ++x) {
       same = same && p->At(x, 0) == H->At(x, 0) && p->At(x, H->h - 1) == H->At(x, H->h - 1);
@@ -466,7 +466,302 @@ static void TestProperties()
     CHECK(changed > 0, "the brush changed nothing");
     CHECK(outside == 0, "the brush changed %d samples far outside its window", outside);
   }
+
   std::printf("properties done\n");
+}
+
+
+// ---- the map boundary ---------------------------------------------------------------------------------------------------------------------------
+
+/** Mean |h(edge) - h(edge + 1)| over the four sides (corners left out): a vertical wall or lip at the border shows up as a jump of this step. */
+static double EdgeStep(const Grid& g)
+{
+  double s = 0.0;
+  int n = 0;
+  for (int i = 2; i < g.w - 2; ++i) {
+    s += std::fabs(g.At(i, 0) - g.At(i, 1)) + std::fabs(g.At(i, g.h - 1) - g.At(i, g.h - 2));
+    n += 2;
+  }
+  for (int j = 2; j < g.h - 2; ++j) {
+    s += std::fabs(g.At(0, j) - g.At(1, j)) + std::fabs(g.At(g.w - 1, j) - g.At(g.w - 2, j));
+    n += 2;
+  }
+  return s / n;
+}
+
+/** Mean change |after - before| of the outermost cells over the mean change of the cells 8 .. 12 in from the border: a ring that is left out (or hit twice as hard) breaks this. */
+static double EdgeChangeRatio(const Grid& before, const Grid& after)
+{
+  double edge = 0.0, inner = 0.0;
+  int ne = 0, ni = 0;
+  for (int z = 0; z < before.h; ++z) {
+    for (int x = 0; x < before.w; ++x) {
+      const int d = std::min(std::min(x, before.w - 1 - x), std::min(z, before.h - 1 - z));
+      const double c = std::fabs(static_cast<double>(after.At(x, z)) - before.At(x, z));
+      if (d == 0) { edge += c; ++ne; }
+      else if (d >= 8 && d <= 12) { inner += c; ++ni; }
+    }
+  }
+  return (edge / ne) / std::max(1e-9, inner / ni);
+}
+
+/** A hilly field with a tilt, so water and droplets run towards and over the borders. */
+static GridPtr Tilted(const int n, const int seed, const double tilt)
+{
+  const GridPtr M = Mountains(n, seed);
+  auto g = std::make_shared<Grid>(*M);
+  for (int z = 0; z < n; ++z)
+    for (int x = 0; x < n; ++x) g->At(x, z) += static_cast<float>(tilt * (std::fabs(x - 0.5 * n) + 0.7 * std::fabs(z - 0.5 * n)));
+  return g;
+}
+
+static void TestBoundary()
+{
+  SetThreads(4);
+  struct Case { const char* name; const char* op; const char* params; };
+  static const Case cases[] = {
+    {"hydraulic", "erode_hydraulic", "iterations=200,rain=0.006,erosion=0.12"},
+    {"hydraulic thermal", "erode_hydraulic", "iterations=120,thermal=0.5,talus=0.6"},
+    {"droplet", "erode_droplet", "density=3,lifetime=60,seed=4"},
+    {"droplet thermal", "erode_droplet", "density=3,lifetime=40,seed=5,thermal=0.5,thermal_steps=10"},
+    {"stream", "erode_stream", "iterations=12,uplift=0.2"},
+  };
+  for (const double tilt : {0.0, 0.25, -0.25}) {
+    const GridPtr H = Tilted(129, 12, tilt);
+    const double before = EdgeStep(*H);
+    for (const Case& c : cases) {
+      const GridPtr r = Make(c.op, c.params, {{"a", H}});
+      const double after = EdgeStep(*r);
+      const double ratio = EdgeChangeRatio(*H, *r);
+      std::printf("boundary tilt %+.2f %-18s edge step %.3f -> %.3f, edge change / inner change %.2f\n", tilt, c.name, before, after, ratio);
+      CHECK(after <= before * 1.2 + 0.05, "%s (tilt %g): a step at the border: %.3f -> %.3f", c.name, tilt, before, after);
+      CHECK(ratio > 0.25 && ratio < 2.5, "%s (tilt %g): the border cells change %.2f times as much as the inside (a pinned ring changes 0, a clipped brush 2 and more)", c.name, tilt, ratio);
+    }
+  }
+}
+
+/** The local brushes (erode, rain, deposit) at the map border: the stroke runs along the left and top edge of a tilted field. */
+static void TestBrushBoundary()
+{
+  SetThreads(2);
+  const int n = 97;
+  const GridPtr H = Tilted(n, 13, 0.3);
+  std::vector<std::uint16_t> words(H->Count());
+  for (std::size_t i = 0; i < words.size(); ++i) words[i] = static_cast<std::uint16_t>(std::floor(H->v[i] * 128.0f + 0.5f));
+  for (int mode = 0; mode < 3; ++mode) {
+    er::ErodeSession s;
+    er::HydroParams hp;   // the strokes of the editor use rates like these (erosionbrush.lua)
+    hp.rain = 0.012f;
+    hp.erosion = 0.3f;
+    hp.deposition = 0.1f;
+    hp.thermal = 0.3f;
+    s.Begin(n, n, words.data(), hp);
+    Grid cur = *H;
+    auto put = [&](const int x0, const int z0, const int x1, const int z1, const std::vector<std::uint16_t>& w) {
+      for (int z = z0; z <= z1; ++z)
+        for (int x = x0; x <= x1; ++x) cur.At(x, z) = static_cast<float>(w[static_cast<std::size_t>(z - z0) * (x1 - x0 + 1) + (x - x0)]) / 128.0f;
+    };
+    for (int k = 0; k < 10; ++k) {
+      for (int side = 0; side < 2; ++side) {
+        er::BrushDab d;
+        d.mode = mode;
+        d.radius = 12;
+        d.cx = side == 0 ? 2.0 : 10.0 + k * 7.0;
+        d.cz = side == 0 ? 10.0 + k * 7.0 : 2.0;
+        d.iterations = 24;
+        d.amount = 1.5;
+        int x0, z0, x1, z1;
+        std::vector<std::uint16_t> w;
+        if (s.Dab(d, x0, z0, x1, z1, w)) put(x0, z0, x1, z1, w);
+      }
+    }
+    int x0, z0, x1, z1;
+    std::vector<std::uint16_t> w;
+    if (s.Finish(x0, z0, x1, z1, w)) put(x0, z0, x1, z1, w);
+    // the left column x = 0 and the top row z = 0, compared with the step the field had
+    double b = 0.0, a = 0.0;
+    int cnt = 0;
+    for (int i = 2; i < n - 2; ++i) {
+      b += std::fabs(H->At(0, i) - H->At(1, i)) + std::fabs(H->At(i, 0) - H->At(i, 1));
+      a += std::fabs(cur.At(0, i) - cur.At(1, i)) + std::fabs(cur.At(i, 0) - cur.At(i, 1));
+      cnt += 2;
+    }
+    b /= cnt;
+    a /= cnt;
+    std::printf("brush mode %d: edge step %.3f -> %.3f, edge change / inner change %.2f\n", mode, b, a, EdgeChangeRatio(*H, cur));
+    CHECK(a <= b * 1.2 + 0.05, "brush mode %d: a step at the map border: %.3f -> %.3f", mode, b, a);
+  }
+}
+
+
+// ---- variation, height preservation, conservation ---------------------------------------------------------------------------------------------
+
+/** How unevenly the erosion is spread over the map: the coefficient of variation of the mean |change| of 8 x 8 blocks (0 = every block is changed alike, the evenly spaced look of uniform rain and identical droplets). */
+static double RegionalVariation(const Grid& before, const Grid& after, double* meanChange = nullptr)
+{
+  const int B = 8, margin = 16;      // the blocks cover the map without its border strip (edge effects are not what is measured here)
+  const int iw = before.w - 2 * margin, ih = before.h - 2 * margin;
+  double sum[B][B] = {}, cnt[B][B] = {};
+  double all = 0.0;
+  for (int z = margin; z < before.h - margin; ++z) {
+    for (int x = margin; x < before.w - margin; ++x) {
+      const double c = std::fabs(static_cast<double>(after.At(x, z)) - before.At(x, z));
+      sum[(z - margin) * B / ih][(x - margin) * B / iw] += c;
+      cnt[(z - margin) * B / ih][(x - margin) * B / iw] += 1.0;
+      all += c;
+    }
+  }
+  double m = 0.0, m2 = 0.0;
+  for (int j = 0; j < B; ++j)
+    for (int i = 0; i < B; ++i) {
+      const double v = sum[j][i] / cnt[j][i];
+      m += v;
+      m2 += v * v;
+    }
+  m /= B * B;
+  m2 /= B * B;
+  if (meanChange != nullptr) *meanChange = all / static_cast<double>(iw * ih);
+  return std::sqrt(std::max(0.0, m2 - m * m)) / std::max(1e-9, m);
+}
+
+static double Total(const Grid& g) { return Sum(g.v); }
+
+/** A noisy hillside: a tilted plane with gentle noise on it (what uniform rain and identical droplets turn into evenly spaced parallel rills). */
+static GridPtr Hillside(const int n, const int seed)
+{
+  char buf[160];
+  std::snprintf(buf, sizeof(buf), "width=%d,height=%d,seed=%d,scale=%d,octaves=4,persistence=0.5", n, n, seed, std::max(16, n / 3));
+  const GridPtr p = Make("perlin", buf, {});
+  auto g = std::make_shared<Grid>(*p);
+  for (int z = 0; z < n; ++z)
+    for (int x = 0; x < n; ++x) g->At(x, z) = 1.5f * p->At(x, z) + 0.35f * static_cast<float>(x) + 0.2f * static_cast<float>(z) + 20.0f;
+  return g;
+}
+
+static void TestVariation()
+{
+  SetThreads(4);
+  const GridPtr M = Mountains(129, 21);
+  const GridPtr H = Hillside(129, 21);
+  struct Case { const char* name; const char* op; const char* base; const char* vary; };
+  static const Case cases[] = {
+    {"hydraulic", "erode_hydraulic", "iterations=200", "vary=0.9,vary_scale=40,rain_vary=0.8"},
+    {"droplet", "erode_droplet", "density=2,seed=3", "vary=0.9,vary_scale=40,rain_vary=0.8,drop_vary=0.8"},
+    {"stream", "erode_stream", "iterations=8,k=0.5", "vary=0.9,vary_scale=40,rain_vary=0.8,jitter=0.5"},
+  };
+  for (const Case& c : cases) {
+    const GridPtr plain = Make(c.op, c.base, {{"a", H}});
+    const GridPtr varied = Make(c.op, (std::string(c.base) + "," + c.vary).c_str(), {{"a", H}});
+    double m0 = 0.0, m1 = 0.0;
+    const double v0 = RegionalVariation(*H, *plain, &m0), v1 = RegionalVariation(*H, *varied, &m1);
+    std::printf("variation %-10s regional variation %.3f -> %.3f (mean change %.3f -> %.3f)\n", c.name, v0, v1, m0, m1);
+    CHECK(v1 > v0 * 1.08, "%s: the variation options do not make the erosion more uneven (%.3f -> %.3f)", c.name, v0, v1);
+    CHECK(varied->v != plain->v, "%s: the variation options changed nothing", c.name);
+    // thread independence of the new paths
+    SetThreads(1);
+    const GridPtr again = Make(c.op, (std::string(c.base) + "," + c.vary).c_str(), {{"a", H}});
+    SetThreads(4);
+    CHECK(again->v == varied->v, "%s: the variation depends on the thread count", c.name);
+    // a different seed gives a different pattern
+    const GridPtr other = Make(c.op, (std::string(c.base) + "," + c.vary + ",seed=77").c_str(), {{"a", H}});
+    CHECK(other->v != varied->v, "%s: the seed does not change the variation", c.name);
+  }
+  // keep range, max change (on the mountain field)
+  const Stats hs = Measure(*M);
+  for (const Case& c : cases) {
+    const GridPtr kept = Make(c.op, (std::string(c.base) + ",keep_range=1").c_str(), {{"a", M}});
+    const Stats ks = Measure(*kept);
+    const auto pct = [](std::vector<float> v, const double q) {
+      std::sort(v.begin(), v.end());
+      return v[static_cast<std::size_t>(q * static_cast<double>(v.size() - 1))];
+    };
+    const float span = hs.max - hs.min;
+    CHECK(ks.min >= hs.min - 1e-3f && ks.max <= hs.max + 1e-3f, "%s: keep_range left the input range: %f .. %f (input %f .. %f)", c.name, ks.min, ks.max, hs.min, hs.max);
+    CHECK(std::fabs(pct(kept->v, 0.01) - pct(M->v, 0.01)) < 0.04f * span && std::fabs(pct(kept->v, 0.99) - pct(M->v, 0.99)) < 0.04f * span,
+          "%s: keep_range: the 1%% / 99%% heights are %f / %f, the input's %f / %f", c.name, pct(kept->v, 0.01), pct(kept->v, 0.99), pct(M->v, 0.01), pct(M->v, 0.99));
+    const GridPtr capped = Make(c.op, (std::string(c.base) + ",max_change=1.5").c_str(), {{"a", M}});
+    double worst = 0.0;
+    for (std::size_t i = 0; i < M->v.size(); ++i) worst = std::max(worst, std::fabs(static_cast<double>(capped->v[i]) - M->v[i]));
+    CHECK(worst <= 1.5 + 1e-3, "%s: max_change 1.5 left a change of %f", c.name, worst);
+    const GridPtr plain = Make(c.op, c.base, {{"a", M}});
+    double worstPlain = 0.0;
+    for (std::size_t i = 0; i < M->v.size(); ++i) worstPlain = std::max(worstPlain, std::fabs(static_cast<double>(plain->v[i]) - M->v[i]));
+    std::printf("range %-10s plain %.2f .. %.2f (max change %.2f), kept %.2f .. %.2f, input %.2f .. %.2f\n", c.name, Measure(*plain).min, Measure(*plain).max, worstPlain, ks.min, ks.max, hs.min, hs.max);
+  }
+  // conserve: the volume the run lost comes back
+  for (const Case& c : cases) {
+    const GridPtr plain = Make(c.op, c.base, {{"a", M}});
+    const GridPtr kept = Make(c.op, (std::string(c.base) + ",conserve=1").c_str(), {{"a", M}});
+    const double t0 = Total(*M), t1 = Total(*plain), t2 = Total(*kept);
+    std::printf("volume %-10s lost %.4f%% -> %.6f%%\n", c.name, 100.0 * (t0 - t1) / t0, 100.0 * (t0 - t2) / t0);
+    CHECK(std::fabs(t0 - t2) / t0 < 1e-3, "%s: conserve=1 left a volume change of %g", c.name, (t0 - t2) / t0);
+  }
+  // protect: the summits keep more of their height
+  for (const Case& c : cases) {
+    const GridPtr plain = Make(c.op, c.base, {{"a", M}});
+    const GridPtr prot = Make(c.op, (std::string(c.base) + ",protect=1").c_str(), {{"a", M}});
+    std::vector<float> sorted = M->v;
+    std::sort(sorted.begin(), sorted.end());
+    const float top = sorted[sorted.size() * 95 / 100];
+    double d0 = 0.0, d1 = 0.0;
+    int cnt = 0;
+    for (std::size_t i = 0; i < M->v.size(); ++i) {
+      if (M->v[i] < top) continue;
+      d0 += M->v[i] - plain->v[i];
+      d1 += M->v[i] - prot->v[i];
+      ++cnt;
+    }
+    std::printf("protect %-10s the top 5%% lose %.3f -> %.3f on average\n", c.name, d0 / cnt, d1 / cnt);
+    CHECK(d1 <= d0 * 0.8 + 1e-3, "%s: protect=1 does not spare the summits (%.3f -> %.3f)", c.name, d0 / cnt, d1 / cnt);
+  }
+}
+
+static void TestSolverExtras()
+{
+  SetThreads(4);
+  // droplets on a real slope: with the old speed rule (accel 0) the speed fell to 0 on the first steps and (almost) nothing was dug
+  {
+    const GridPtr slope = Hillside(129, 5);
+    const GridPtr fixedRule = Make("erode_droplet", "density=2,seed=3", {{"a", slope}});
+    const GridPtr oldRule = Make("erode_droplet", "density=2,seed=3,accel=0", {{"a", slope}});
+    double mf = 0.0, mo = 0.0;
+    RegionalVariation(*slope, *fixedRule, &mf);
+    RegionalVariation(*slope, *oldRule, &mo);
+    std::printf("droplet speed rule: mean change accel=1 %.4f, accel=0 %.4f\n", mf, mo);
+    CHECK(mf > 20.0 * mo && mf > 0.05, "droplets still dig (almost) nothing on a slope: %.4f vs the old rule %.4f", mf, mo);
+  }
+  // the local brush with hard / soft ground: same pattern for every dab, differs from the plain brush
+  {
+    const int n = 97;
+    const GridPtr B = Mountains(n, 30);
+    std::vector<std::uint16_t> words(B->Count());
+    for (std::size_t i = 0; i < words.size(); ++i) words[i] = static_cast<std::uint16_t>(std::floor(B->v[i] * 128.0f + 0.5f));
+    auto stroke = [&](const float vary) {
+      er::HydroParams hp;
+      hp.rain = 0.012f;
+      hp.erosion = 0.3f;
+      hp.vary = vary;
+      er::ErodeSession s;
+      s.Begin(n, n, words.data(), hp);
+      std::vector<std::uint16_t> cur = words;
+      for (int k = 0; k < 8; ++k) {
+        er::BrushDab d;
+        d.cx = 30.0 + k * 5.0;
+        d.cz = 48.0;
+        d.radius = 12;
+        d.iterations = 16;
+        int x0, z0, x1, z1;
+        std::vector<std::uint16_t> w;
+        if (s.Dab(d, x0, z0, x1, z1, w))
+          for (int z = z0; z <= z1; ++z)
+            for (int x = x0; x <= x1; ++x) cur[static_cast<std::size_t>(z) * n + x] = w[static_cast<std::size_t>(z - z0) * (x1 - x0 + 1) + (x - x0)];
+      }
+      return cur;
+    };
+    const std::vector<std::uint16_t> plain = stroke(0.0f), varied = stroke(0.9f), again = stroke(0.9f);
+    CHECK(varied == again, "the brush with variation is not repeatable");
+    CHECK(varied != plain, "the brush variation changed nothing");
+  }
 }
 
 static void Lab(const std::string& dir, const int n, const std::string& only, const std::string& extraParams)
@@ -581,6 +876,10 @@ int main(const int argc, char** argv)
   }
   TestGoldens(update);
   TestProperties();
+  TestBoundary();
+  TestBrushBoundary();
+  TestVariation();
+  TestSolverExtras();
   if (update && gFailures == 0) {
     std::ofstream out(argv[1], std::ios::binary);
     for (const std::string& l : gLines) out << l << "\n";

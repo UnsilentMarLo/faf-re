@@ -1,7 +1,7 @@
 // EDITOR: Lua natives of the local erosion brush (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T3; the solver is EdErosion.cpp).
 //
 //   ed_erode_begin([params])                      -> ok | nil, message   starts a stroke session: copies the map heights as floats, water / sediment start empty.
-//                                                 params (all optional numbers): rain evaporation gain capacity erosion deposition depth_max min_slope cut_limit talus thermal thermal_every
+//                                                 params (all optional numbers): rain evaporation gain capacity erosion deposition depth_max min_slope cut_limit talus thermal thermal_every max_speed vary vary_scale
 //   ed_erode_window(cx, cz, radius[, {mode, margin}])  -> x0, z0, x1, z1    the inclusive sample window a dab would use (for building shaped brush weights)
 //   ed_erode_dab(cx, cz, radius[, opts])          -> changed, x0, z0, x1, z1   one dab inside the open stroke of the document (ed_cmd_begin): runs the kernels on the window and writes
 //                                                 the new heights. opts: iterations strength falloff margin amount weights (list for the window, row major), mode = 'erode' | 'rain' | 'deposit'
@@ -76,6 +76,8 @@ namespace
     p.thermal = static_cast<float>(OptNum(L, index, "thermal", p.thermal));
     p.thermal_every = static_cast<int>(OptNum(L, index, "thermal_every", p.thermal_every));
     p.max_speed = static_cast<float>(OptNum(L, index, "max_speed", p.max_speed));
+    p.vary = std::max(0.0f, std::min(1.0f, static_cast<float>(OptNum(L, index, "vary", p.vary))));
+    p.vary_scale = std::max(2.0f, static_cast<float>(OptNum(L, index, "vary_scale", p.vary_scale)));
     return p;
   }
 

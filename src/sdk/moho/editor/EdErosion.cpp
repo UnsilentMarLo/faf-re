@@ -67,6 +67,98 @@ namespace moho::editor::field::erosion
       return z ^ (z >> 31);
     }
 
+    // ---- spatial variation ----------------------------------------------------------------------------------------------------------------------
+
+    /** Smooth value noise of the world position (feature size `scale` world units, `octaves` octaves of half the size), spread to 0..1 (mean 0.5, +- 2.5 standard deviations = the range). A coarse
+     *  grid (cell = step) samples the same field. Sequential and deterministic. */
+    void NoiseField(std::vector<float>& out, const int w, const int h, const float cell, const float scale, const std::uint32_t seed, const int octaves, const bool fixedSpread = false, const int ox = 0, const int oz = 0)
+    {
+      const std::size_t n = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
+      out.assign(n, 0.0f);
+      const auto lattice = [&](const std::uint64_t o, const int ix, const int iz) {
+        return static_cast<float>(Mix(static_cast<std::uint64_t>(seed) * 131u + o, static_cast<std::uint64_t>(static_cast<std::uint32_t>(ix)), static_cast<std::uint64_t>(static_cast<std::uint32_t>(iz))) >> 40) *
+               (1.0f / 16777216.0f);
+      };
+      float amp = 1.0f;
+      for (int o = 0; o < octaves; ++o, amp *= 0.5f) {
+        const float inv = cell / std::max(1e-3f, scale / static_cast<float>(1 << o));
+        for (int z = 0; z < h; ++z) {
+          const float v = static_cast<float>(z + oz) * inv;
+          const int iz = static_cast<int>(std::floor(v));
+          const float fz = v - static_cast<float>(iz);
+          const float sz = fz * fz * (3.0f - 2.0f * fz);
+          for (int x = 0; x < w; ++x) {
+            const float u = static_cast<float>(x + ox) * inv;
+            const int ix = static_cast<int>(std::floor(u));
+            const float fx = u - static_cast<float>(ix);
+            const float sx = fx * fx * (3.0f - 2.0f * fx);
+            const float a = lattice(static_cast<std::uint64_t>(o), ix, iz) * (1.0f - sx) + lattice(static_cast<std::uint64_t>(o), ix + 1, iz) * sx;
+            const float b = lattice(static_cast<std::uint64_t>(o), ix, iz + 1) * (1.0f - sx) + lattice(static_cast<std::uint64_t>(o), ix + 1, iz + 1) * sx;
+            out[Ix(x, z, w)] += amp * (a * (1.0f - sz) + b * sz);
+          }
+        }
+      }
+      double sum = 0.0, sum2 = 0.0;
+      for (const float v : out) {
+        sum += v;
+        sum2 += static_cast<double>(v) * v;
+      }
+      double mean = sum / static_cast<double>(n);
+      double sd = std::sqrt(std::max(0.0, sum2 / static_cast<double>(n) - mean * mean));
+      if (fixedSpread) {
+        // a window of a larger map (the brush): the same mapping for every window, from the statistics of this noise (mean 0.5 and about 0.2 per octave amplitude)
+        double a2 = 0.0, a1 = 0.0, am = 1.0;
+        for (int o = 0; o < octaves; ++o, am *= 0.5) {
+          a1 += am;
+          a2 += am * am;
+        }
+        mean = 0.5 * a1;
+        sd = 0.2 * std::sqrt(a2);
+      }
+      const float k = sd > 1e-9 ? static_cast<float>(1.0 / (5.0 * sd)) : 0.0f;
+      for (float& v : out) v = Clamp01(0.5f + (v - static_cast<float>(mean)) * k);
+    }
+
+    /** 0..1 where the ground is a ridge or a high summit: convexity (the height over the mean of its surroundings, radius ~6 world units) in units of its standard deviation, or the relative height cubed. */
+    void RidgeMap(const std::vector<float>& t, const int w, const int h, const float cell, std::vector<float>& out)
+    {
+      const std::size_t n = t.size();
+      const int r = std::max(1, std::min(10, static_cast<int>(6.0f / std::max(cell, 1e-3f) + 0.5f)));
+      std::vector<float> tmp(n), mean(n);
+      for (int z = 0; z < h; ++z) {
+        for (int x = 0; x < w; ++x) {
+          float s = 0.0f;
+          int c = 0;
+          for (int k = std::max(0, x - r); k <= std::min(w - 1, x + r); ++k, ++c) s += t[Ix(k, z, w)];
+          tmp[Ix(x, z, w)] = s / static_cast<float>(c);
+        }
+      }
+      for (int z = 0; z < h; ++z) {
+        for (int x = 0; x < w; ++x) {
+          float s = 0.0f;
+          int c = 0;
+          for (int k = std::max(0, z - r); k <= std::min(h - 1, z + r); ++k, ++c) s += tmp[Ix(x, k, w)];
+          mean[Ix(x, z, w)] = s / static_cast<float>(c);
+        }
+      }
+      double sum2 = 0.0;
+      float lo = t[0], hi = t[0];
+      for (std::size_t i = 0; i < n; ++i) {
+        const double c = static_cast<double>(t[i]) - mean[i];
+        sum2 += c * c;
+        lo = std::min(lo, t[i]);
+        hi = std::max(hi, t[i]);
+      }
+      const float sd = static_cast<float>(std::sqrt(sum2 / static_cast<double>(n)));
+      const float inv = sd > 1e-6f ? 1.0f / (1.5f * sd) : 0.0f;
+      const float span = std::max(1e-6f, hi - lo);
+      out.resize(n);
+      for (std::size_t i = 0; i < n; ++i) {
+        const float rel = (t[i] - lo) / span;
+        out[i] = std::max(Clamp01((t[i] - mean[i]) * inv), rel * rel * rel);
+      }
+    }
+
     // ---- thermal slides ---------------------------------------------------------------------------------------------------------------------
 
     struct ThermalScratch
@@ -75,7 +167,7 @@ namespace moho::editor::field::erosion
     };
 
     void ThermalImpl(std::vector<float>& t, const int w, const int h, const float cell, const float talus, const float rate, const std::vector<float>& rateMask,
-                     const bool pinBorder, ThermalScratch& sc)
+                     const int pinSides, ThermalScratch& sc)
     {
       static const int dxs[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
       static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
@@ -85,9 +177,10 @@ namespace moho::editor::field::erosion
       sc.next.resize(n);
       const float tAxis = talus * cell;
       const float tDiag = talus * cell * 1.41421356f;
-      const int lo = pinBorder ? 1 : 0;
+      // pinSides: bit 0 / 1 = the -x / +x column, bit 2 / 3 = the -z / +z row is left alone (a side without its bit takes part: a missing neighbour never gives or takes)
+      const int loX = pinSides & 1, hiX = (pinSides >> 1) & 1, loZ = (pinSides >> 2) & 1, hiZ = (pinSides >> 3) & 1;
       const bool useMask = !rateMask.empty();
-      const auto valid = [&](const int x, const int z) { return x >= lo && z >= lo && x < w - lo && z < h - lo; };
+      const auto valid = [&](const int x, const int z) { return x >= loX && z >= loZ && x < w - hiX && z < h - hiZ; };
       Rows(w, h, [&](const int z0, const int z1) {
         for (int z = z0; z < z1; ++z) {
           for (int x = 0; x < w; ++x) {
@@ -145,7 +238,7 @@ namespace moho::editor::field::erosion
                    const bool pinBorder)
   {
     ThermalScratch sc;
-    ThermalImpl(t, w, h, cell, talus, rate, rateMask, pinBorder, sc);
+    ThermalImpl(t, w, h, cell, talus, rate, rateMask, pinBorder ? 15 : 0, sc);
   }
 
   // ---- grid hydraulic erosion -------------------------------------------------------------------------------------------------------------------
@@ -165,6 +258,45 @@ namespace moho::editor::field::erosion
     flow.assign(n, 0.0f);
   }
 
+  namespace
+  {
+    /** The water surface of the (dry) cell outside an open edge: the edge cell's ground, carried on in the direction it already descends in (`inner` = the neighbour on the other side),
+     *  so water leaves a map edge like it leaves any other cell and the edge cell is no special case (no pinned ring, no wall of material left standing at the border). */
+    inline float GhostSurface(const float edge, const float inner) { return edge + std::min(0.0f, edge - inner); }
+
+    /**
+     * Edge consistency: the outermost cells of the open sides take the change of their inner neighbour (`after` = `before` + the neighbour's change), so the step between the edge and
+     * the cell beside it stays what the terrain had: a border that is dug / filled differently from its neighbour (the drain at the edge digs it, sediment piles there) is what stood as
+     * a vertical wall at the map border. `pinnedSides` (the bits of ThermalImpl / HydroParams::pin_sides) are left alone; the corner follows the diagonal neighbour.
+     */
+    void MirrorEdgeChange(const std::vector<float>& before, std::vector<float>& after, const int w, const int h, const int pinnedSides)
+    {
+      if (w < 4 || h < 4) return;
+      const bool openL = (pinnedSides & 1) == 0, openR = (pinnedSides & 2) == 0, openT = (pinnedSides & 4) == 0, openB = (pinnedSides & 8) == 0;
+      const auto chg = [&](const int x, const int z) {
+        const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
+        return after[i] - before[i];
+      };
+      const auto put = [&](const int x, const int z, const float c) {
+        const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
+        after[i] = before[i] + c;
+      };
+      // the inner cells are never written here, so the order does not matter
+      for (int z = 1; z < h - 1; ++z) {
+        if (openL) put(0, z, chg(1, z));
+        if (openR) put(w - 1, z, chg(w - 2, z));
+      }
+      for (int x = 1; x < w - 1; ++x) {
+        if (openT) put(x, 0, chg(x, 1));
+        if (openB) put(x, h - 1, chg(x, h - 2));
+      }
+      if (openL && openT) put(0, 0, chg(1, 1));
+      if (openR && openT) put(w - 1, 0, chg(w - 2, 1));
+      if (openL && openB) put(0, h - 1, chg(1, h - 2));
+      if (openR && openB) put(w - 1, h - 1, chg(w - 2, h - 2));
+    }
+  } // namespace
+
   void RunHydro(HydroState& st, const HydroParams& p, const int iterations)
   {
     const int w = st.w;
@@ -180,7 +312,8 @@ namespace moho::editor::field::erosion
     std::vector<float> tn(n), sn(n), dold(n);
     ThermalScratch tsc;
     const float cell = st.cell;
-    const bool pin = p.pin_border;
+    const int sides = p.pin_border ? (p.pin_sides & 15) : 0;      // the pinned sides of the rectangle
+    const bool openEdge = p.open_edge;                              // the other sides let water and sediment leave
     const float gain = std::max(0.0f, std::min(0.5f, p.gain));
     const float evap = Clamp01(p.evaporation);
     const float depthMax = std::max(1e-4f, p.depth_max);
@@ -188,7 +321,9 @@ namespace moho::editor::field::erosion
     const bool hasErode = !st.erode_rate.empty();
     const bool hasRock = !st.rock.empty();
     const float invDepthMax = 1.0f / depthMax;
-    const auto pinned = [&](const int x, const int z) { return pin && (x == 0 || z == 0 || x == w - 1 || z == h - 1); };
+    const auto pinned = [&](const int x, const int z) {
+      return ((sides & 1) != 0 && x == 0) || ((sides & 2) != 0 && x == w - 1) || ((sides & 4) != 0 && z == 0) || ((sides & 8) != 0 && z == h - 1);
+    };
     float* const D = st.d.data();
     float* const S = st.s.data();
     float* const F0 = st.f[0].data();
@@ -221,9 +356,13 @@ namespace moho::editor::field::erosion
             const float H = T[i] + D[i];
             float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
             if (x > 0) a0 = std::max(0.0f, F0[i] + gain * (H - (T[i - 1] + D[i - 1])));
+            else if (openEdge) a0 = std::max(0.0f, F0[i] + gain * (H - GhostSurface(T[i], T[i + 1])));
             if (x < w - 1) a1 = std::max(0.0f, F1[i] + gain * (H - (T[i + 1] + D[i + 1])));
+            else if (openEdge) a1 = std::max(0.0f, F1[i] + gain * (H - GhostSurface(T[i], T[i - 1])));
             if (z > 0) a2 = std::max(0.0f, F2[i] + gain * (H - (T[i - w] + D[i - w])));
+            else if (openEdge) a2 = std::max(0.0f, F2[i] + gain * (H - GhostSurface(T[i], T[i + w])));
             if (z < h - 1) a3 = std::max(0.0f, F3[i] + gain * (H - (T[i + w] + D[i + w])));
+            else if (openEdge) a3 = std::max(0.0f, F3[i] + gain * (H - GhostSurface(T[i], T[i - w])));
             const float sum = a0 + a1 + a2 + a3;
             if (sum > D[i]) {
               const float k = sum > 0.0f ? D[i] / sum : 0.0f;
@@ -336,7 +475,7 @@ namespace moho::editor::field::erosion
         });
       }
       if (p.thermal > 0.0f && p.thermal_every > 0 && ((it + 1) % p.thermal_every) == 0) {
-        ThermalImpl(st.t, w, h, cell, p.talus, p.thermal, st.erode_rate, pin, tsc);
+        ThermalImpl(st.t, w, h, cell, p.talus, p.thermal, st.thermal_rate.empty() ? st.erode_rate : st.thermal_rate, sides, tsc);
       }
     }
     if (p.settle) {
@@ -521,6 +660,10 @@ namespace moho::editor::field::erosion
       float drain_pits = 1.0f;   // 1: droplets steer on the pit filled terrain (they leave closed basins and carve their rims instead of filling them), 0: on the raw terrain
       int rounds = 4;
       std::uint32_t seed = 1;
+      float accel = 1.0f;        // 1: speeds up downhill (physical), 0: the old rule (slows down downhill), in between: blend (0.5 = constant speed)
+      float drop_vary = 0.0f;    // 0..1: every droplet draws its own radius, lifetime, inertia, capacity, dissolving rate and water (breaks the evenly spaced parallel rills of identical droplets)
+      const std::vector<float>* demand = nullptr;   // optional per cell factor 0..1 on what a droplet dissolves (hard ground takes up less, instead of the droplet just digging on further downstream)
+      const std::vector<float>* accept = nullptr;   // optional per cell probability 0..1 that a droplet starting there is released (spatially varying rain)
     };
 
     struct DropGrids
@@ -549,10 +692,33 @@ namespace moho::editor::field::erosion
       return done;
     }
 
+    constexpr int kMaxRadius = 12;
+    inline int MaxLife(const DropParams& p) { return static_cast<int>(std::ceil(static_cast<float>(p.lifetime) * (1.0f + 0.4f * p.drop_vary))) + 1; }
+
+    /** Mirror boundary: an index outside 0..n-1 is reflected back into it (-1 -> 1, n -> n - 2); -1 when even that falls outside (a tiny map). */
+    inline int Reflect(const int i, const int n)
+    {
+      int r = i;
+      if (r < 0) r = -r;
+      if (r > n - 1) r = 2 * (n - 1) - r;
+      return (r < 0 || r > n - 1) ? -1 : r;
+    }
+
     /** One droplet; all reads and writes stay within `reach` cells of the start position (lifetime + radius + 2). */
-    void RunDroplet(std::vector<float>& t, const std::vector<float>& hs, const int w, const int h, const float cell, const DropParams& p, const std::vector<float>* rock, DropGrids& g,
+    void RunDroplet(std::vector<float>& t, const std::vector<float>& hs, const int w, const int h, const float cell, const DropParams& base, const std::vector<float>* rock, DropGrids& g,
                     Rng& rng, const double x0, const double z0)
     {
+      DropParams p = base;
+      if (base.drop_vary > 0.0f) {
+        const float u = base.drop_vary;
+        const auto sgn = [&rng]() { return rng.Unit() * 2.0f - 1.0f; };
+        p.radius = std::max(1, std::min(kMaxRadius, static_cast<int>(std::floor(static_cast<float>(base.radius) * (1.0f + u * sgn()) + 0.5f))));
+        p.lifetime = std::max(1, std::min(MaxLife(base), static_cast<int>(std::floor(static_cast<float>(base.lifetime) * (1.0f + 0.4f * u * sgn()) + 0.5f))));
+        p.inertia = Clamp01(std::min(0.95f, base.inertia * (1.0f + u * sgn())));
+        p.capacity = base.capacity * (1.0f + 0.6f * u * sgn());
+        p.erode = base.erode * (1.0f + 0.4f * u * sgn());
+        p.water = base.water * (1.0f + 0.5f * u * sgn());
+      }
       float px = static_cast<float>(x0);
       float pz = static_cast<float>(z0);
       float dx = 0.0f, dz = 0.0f;
@@ -608,12 +774,13 @@ namespace moho::editor::field::erosion
           // inside a filled basin the droplet runs on the spill surface above the real ground: nothing to dissolve there (the rim at the outlet is eroded, so the basin drains)
           const float ground = t[i00] * (1.0f - fx) * (1.0f - fz) + t[i00 + 1] * fx * (1.0f - fz) + t[i00 + w] * (1.0f - fx) * fz + t[i00 + w + 1] * fx * fz;
           if (height - ground > 0.03f * cell || life < 2) amount = 0.0f;      // (a droplet picks up nothing in its first steps: no craters where it lands)
+          if (amount > 0.0f && p.demand != nullptr) amount *= (*p.demand)[i00];
           if (amount > 0.0f) {
+            // The brush is a full disc whose weights add up to one; the part that lies outside the map is reflected at the edge (cell -1 is cell 1, cell w is cell w - 2, ...), so a cell on the
+            // border is dug as deep as one inside. Without it the border would take half the digging (a lip stands there) and, once the disc were clipped and renormalised, twice as much.
             float wsum = 0.0f;
             for (int oz = -R; oz <= R; ++oz) {
               for (int ox = -R; ox <= R; ++ox) {
-                const int cx = ix + ox, cz = iz + oz;
-                if (cx < 0 || cz < 0 || cx >= w || cz >= h) continue;
                 const float d = std::sqrt(static_cast<float>(ox * ox + oz * oz));
                 if (d < static_cast<float>(R) + 0.5f) wsum += static_cast<float>(R) + 0.5f - d;
               }
@@ -622,10 +789,10 @@ namespace moho::editor::field::erosion
               float taken = 0.0f;
               for (int oz = -R; oz <= R; ++oz) {
                 for (int ox = -R; ox <= R; ++ox) {
-                  const int cx = ix + ox, cz = iz + oz;
-                  if (cx < 0 || cz < 0 || cx >= w || cz >= h) continue;
                   const float d = std::sqrt(static_cast<float>(ox * ox + oz * oz));
                   if (d >= static_cast<float>(R) + 0.5f) continue;
+                  const int cx = Reflect(ix + ox, w), cz = Reflect(iz + oz, h);
+                  if (cx < 0 || cz < 0) continue;
                   const std::size_t j = Ix(cx, cz, w);
                   const float k = (rock != nullptr ? Clamp01((*rock)[j]) : 1.0f);
                   // no cell goes deeper than `round_cut` below the surface the round started with: runaway holes where many droplets meet cannot form
@@ -639,7 +806,9 @@ namespace moho::editor::field::erosion
             }
           }
         }
-        speed = std::sqrt(std::max(0.0f, speed * speed + dh * p.gravity / cell));
+        // accel 1: the droplet speeds up going down (v^2 grows by the drop times gravity); accel 0 is the old rule, which slowed it down on the way down (v^2 + dh * gravity with dh < 0), so on
+        // any real slope the speed fell to 0 within a step or two, the capacity with it, and nothing was dug (the droplets only scratched the first cells of their run)
+        speed = std::sqrt(std::max(0.0f, speed * speed + dh * p.gravity / cell * (1.0f - 2.0f * p.accel)));
         water *= (1.0f - p.evaporate);
       }
       // the rest settles where the droplet stopped (within the room the spill surface leaves)
@@ -653,7 +822,7 @@ namespace moho::editor::field::erosion
     void RunDroplets(std::vector<float>& t, const int w, const int h, const float cell, const DropParams& p, const std::vector<float>* rock, DropGrids& g)
     {
       if (w < 4 || h < 4) return;
-      const int reach = p.lifetime + p.radius + 3;
+      const int reach = (p.drop_vary > 0.0f ? MaxLife(p) : p.lifetime) + (p.drop_vary > 0.0f ? std::min(kMaxRadius, static_cast<int>(std::ceil(static_cast<float>(p.radius) * (1.0f + p.drop_vary)))) : p.radius) + 3;
       const int tile = std::max(48, 2 * reach + 2);
       const int tx = (w + tile - 1) / tile;
       const int tz = (h + tile - 1) / tile;
@@ -681,6 +850,10 @@ namespace moho::editor::field::erosion
             for (int c = 0; c < count; ++c) {
               const double x0 = bx0 + static_cast<double>(rng.Unit()) * (bw - 1);
               const double z0 = bz0 + static_cast<double>(rng.Unit()) * (bh - 1);
+              if (p.accept != nullptr) {
+                const float u = rng.Unit();
+                if (u > (*p.accept)[Ix(static_cast<int>(x0 + 0.5), static_cast<int>(z0 + 0.5), w)]) continue;
+              }
               RunDroplet(t, hs, w, h, cell, p, rock, g, rng, x0, z0);
             }
           });
@@ -703,6 +876,9 @@ namespace moho::editor::field::erosion
       float area_min = 24.0f;   // drainage area (cells) below which nothing is incised: only real channels, the slopes keep their shape
       int widen = 1;            // the incision is smoothed this many times (3 x 3 binomial) before it is applied: wider channels
       bool breach = true;       // closed depressions are drained by cutting their lowest rim (false: they stay, and no river crosses them)
+      float jitter = 0.0f;      // the flow is routed over the terrain plus smooth noise of this height (in cells of rise per cell): rivers pick their own paths, branch and meander instead of running
+                                // straight down smooth slopes side by side; the ground itself gets no noise
+      std::uint32_t seed = 1;
     };
 
     /** Cell indices by descending value, equal values by ascending index (LSD radix sort on the float bit patterns: stable, O(n)). */
@@ -737,14 +913,16 @@ namespace moho::editor::field::erosion
      * (1 + everything above) to their lower neighbours (multiple flow direction: shares proportional to slope^spread); `slope` receives the steepest drop per unit distance of every
      * cell. Edge cells are outlets. Sequential and ordered: deterministic.
      */
-    void Drainage(const std::vector<float>& fill, const int w, const int h, const float cell, const float spread, std::vector<float>& area, std::vector<float>& slope)
+    void Drainage(const std::vector<float>& fill, const int w, const int h, const float cell, const float spread, std::vector<float>& area, std::vector<float>& slope,
+                  const std::vector<float>* rain = nullptr)
     {
       static const int dxs[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
       static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
       const std::size_t n = fill.size();
       std::vector<std::uint32_t> order;
       SortDescending(fill, order);
-      area.assign(n, 1.0f);
+      if (rain != nullptr && rain->size() == n) area = *rain;      // the water every cell makes (default 1)
+      else area.assign(n, 1.0f);
       slope.assign(n, 0.0f);
       for (std::size_t k = 0; k < n; ++k) {
         const std::uint32_t c = order[k];
@@ -776,13 +954,16 @@ namespace moho::editor::field::erosion
     }
 
     void RunStream(std::vector<float>& t, const int w, const int h, const float cell, const StreamParams& p, const std::vector<float>* rock, std::vector<float>& wear,
-                   std::vector<float>& area)
+                   std::vector<float>& area, const std::vector<float>* rain = nullptr, const std::vector<float>* slideRate = nullptr)
     {
       if (w < 3 || h < 3) return;
       const std::size_t n = t.size();
-      std::vector<float> fill, slope, inc(n), tmp(n);
+      std::vector<float> fill, slope, inc(n), tmp(n), jit, noisy;
+      if (p.jitter > 0.0f) NoiseField(jit, w, h, cell, 4.0f * cell, p.seed * 7u + 3u, 2);
+      const std::vector<float>* ref = &t;      // the surface the flow is routed on and the filled surface is compared with
       ThermalScratch tsc;
       const std::vector<float> none;
+      const std::vector<float>& slide = slideRate != nullptr ? *slideRate : none;
       for (int it = 0; it <= p.iterations; ++it) {
         if (p.breach) {
           tmp = t;
@@ -791,7 +972,13 @@ namespace moho::editor::field::erosion
         } else {
           FillSurface(t, w, h, 0.004f * cell, fill);
         }
-        Drainage(fill, w, h, cell, p.spread, area, slope);
+        if (p.jitter > 0.0f) {
+          noisy.resize(n);
+          for (std::size_t i = 0; i < n; ++i) noisy[i] = t[i] + (jit[i] - 0.5f) * p.jitter * cell;
+          FillSurface(noisy, w, h, 0.004f * cell, fill);
+          ref = &noisy;
+        }
+        Drainage(fill, w, h, cell, p.spread, area, slope, rain);
         if (it == p.iterations) break;
         // incision: where the ground lies on the (filled) surface and drains: k * area^m * slope, never more than a share of the drop to the lowest neighbour
         Rows(w, h, [&](const int z0, const int z1) {
@@ -799,7 +986,7 @@ namespace moho::editor::field::erosion
             for (int x = 0; x < w; ++x) {
               const std::size_t i = Ix(x, z, w);
               float v = 0.0f;
-              if (x > 0 && z > 0 && x < w - 1 && z < h - 1 && area[i] > p.area_min && fill[i] - t[i] < 0.03f * cell) {
+              if (x > 0 && z > 0 && x < w - 1 && z < h - 1 && area[i] > p.area_min && fill[i] - (*ref)[i] < 0.03f * cell) {
                 float low = t[i];
                 low = std::min(low, std::min(std::min(t[i - 1], t[i + 1]), std::min(t[i - w], t[i + w])));
                 const float ad = area[i] - p.area_min;
@@ -823,9 +1010,13 @@ namespace moho::editor::field::erosion
             for (int x = 0; x < w; ++x) inc[Ix(x, z, w)] = 0.25f * tmp[Ix(x, zu, w)] + 0.5f * tmp[Ix(x, z, w)] + 0.25f * tmp[Ix(x, zd, w)];
           }
         }
-        for (int z = 1; z < h - 1; ++z) {
-          for (int x = 1; x < w - 1; ++x) {
+        for (int z = 0; z < h; ++z) {
+          for (int x = 0; x < w; ++x) {
             const std::size_t i = Ix(x, z, w);
+            if (x == 0 || z == 0 || x == w - 1 || z == h - 1) {
+              t[i] += p.uplift;      // the edge cells are outlets and are not cut, but they rise with the rest (else the uplift stands as a wall at the border)
+              continue;
+            }
             // a cell never drops below its lowest neighbour: incision cannot go below base level and does not dig pits
             const float low = std::min(std::min(std::min(t[i - 1], t[i + 1]), std::min(t[i - w], t[i + w])), t[i]);
             const float cut = std::min(inc[i], t[i] - low);
@@ -833,12 +1024,12 @@ namespace moho::editor::field::erosion
             wear[i] += cut;
           }
         }
-        if (p.diffusion > 0.0f) ThermalImpl(t, w, h, cell, p.talus, p.diffusion, none, true, tsc);
+        if (p.diffusion > 0.0f) ThermalImpl(t, w, h, cell, p.talus, p.diffusion, slide, 0, tsc);
       }
     }
 
     /** Smooths the change `after - before` with a 3 x 3 binomial kernel, `amount` 0..1 blends the smoothed change in (1 = fully smoothed): takes the cell scale noise out of an erosion result and keeps its structure. */
-    void SmoothDelta(const std::vector<float>& before, std::vector<float>& after, const int w, const int h, const float amount, const int passes)
+    void SmoothDelta(const std::vector<float>& before, std::vector<float>& after, const int w, const int h, const float amount, const int passes, const bool pinnedEdge = false)
     {
       if (amount <= 0.0f || passes <= 0) return;
       const std::size_t n = before.size();
@@ -864,7 +1055,8 @@ namespace moho::editor::field::erosion
       for (int z = 0; z < h; ++z) {
         for (int x = 0; x < w; ++x) {
           const std::size_t i = Ix(x, z, w);
-          const bool edge = x == 0 || z == 0 || x == w - 1 || z == h - 1;      // the outer ring keeps its own change (a pinned edge stays untouched)
+          // only a pinned edge keeps its own change (it stays untouched); an edge that takes part is smoothed like the rest, else its change would differ from its neighbours' by the noise
+          const bool edge = pinnedEdge && (x == 0 || z == 0 || x == w - 1 || z == h - 1);
           after[i] = before[i] + (edge ? d[i] : d[i] + amount * (sm[i] - d[i]));
         }
       }
@@ -933,6 +1125,138 @@ namespace moho::editor::field::erosion
       return m != a.in.end() ? &m->second->v : nullptr;
     }
 
+    /**
+     * What makes one run different from place to place (all optional, all off by default = the uniform behaviour the solvers always had):
+     *   vary / vary_scale   erodibility is multiplied by 1 - vary * noise (noise 0..1 of feature size vary_scale world units): hard and soft ground side by side
+     *   rain_vary           the water every place gets varies by +- rain_vary (hydraulic rain, droplet release probability, stream catchment)
+     *   protect             erodibility is multiplied by 1 - protect * (ridge / summit map): ridges and high ground keep their shape
+     * The input mask (erodibility 0..1) multiplies with all of it.
+     */
+    struct Factors
+    {
+      std::vector<float> rock, rain, accept, thermal, soft;
+      const std::vector<float>* rockPtr = nullptr;
+      const std::vector<float>* softPtr = nullptr;        // the hardness from vary / protect alone (no input mask): scales what a droplet takes up, not only where it takes it from
+      const std::vector<float>* thermalPtr = nullptr;     // thermal slide rate factor: ridges and summits (protect) slide less; empty = no mask
+      Factors() = default;
+      Factors(const Factors&) = delete;
+      Factors& operator=(const Factors&) = delete;
+    };
+
+    void BuildFactors(const OpArgs& a, const Grid& src, Factors& f)
+    {
+      const float vary = Clamp01(static_cast<float>(a.p.N("vary", 0.0)));
+      const float protect = Clamp01(static_cast<float>(a.p.N("protect", 0.0)));
+      const float rainVary = Clamp01(static_cast<float>(a.p.N("rain_vary", 0.0)));
+      const std::uint32_t seed = static_cast<std::uint32_t>(a.p.N("seed", 1.0));
+      const std::size_t n = src.v.size();
+      f.rockPtr = RockOf(a);
+      if (vary > 0.0f || protect > 0.0f) {
+        f.rock.assign(n, 1.0f);
+        f.soft.assign(n, 1.0f);
+        if (f.rockPtr != nullptr) f.rock = *f.rockPtr;
+        std::vector<float> m;
+        if (vary > 0.0f) {
+          NoiseField(m, src.w, src.h, src.cell, std::max(2.0f, static_cast<float>(a.p.N("vary_scale", 60.0))), seed, 3);
+          for (std::size_t i = 0; i < n; ++i) {
+            // a contrast curve: more clearly hard and clearly soft ground than the plain noise has (which is mostly in between)
+            const float c = Clamp01((m[i] - 0.2f) * (1.0f / 0.6f));
+            const float hard = c * c * (3.0f - 2.0f * c);
+            f.rock[i] *= 1.0f - vary * hard;
+            f.soft[i] *= 1.0f - vary * hard;
+          }
+        }
+        if (protect > 0.0f) {
+          RidgeMap(src.v, src.w, src.h, src.cell, m);
+          f.thermal.resize(n);
+          for (std::size_t i = 0; i < n; ++i) {
+            f.rock[i] *= 1.0f - protect * m[i];
+            f.soft[i] *= 1.0f - protect * m[i];
+            f.thermal[i] = 1.0f - protect * m[i];
+          }
+          f.thermalPtr = &f.thermal;
+        }
+        f.rockPtr = &f.rock;
+        f.softPtr = &f.soft;
+      }
+      if (rainVary > 0.0f) {
+        std::vector<float> m;
+        NoiseField(m, src.w, src.h, src.cell, std::max(2.0f, 0.5f * static_cast<float>(a.p.N("vary_scale", 60.0))), seed * 5u + 11u, 3);
+        f.rain.resize(n);
+        f.accept.resize(n);
+        for (std::size_t i = 0; i < n; ++i) {
+          f.rain[i] = 1.0f + rainVary * (2.0f * m[i] - 1.0f);
+          f.accept[i] = 1.0f - rainVary * m[i];
+        }
+      }
+    }
+
+    /**
+     * After the run: `conserve` (0..1) puts the share of the volume the run lost (sediment that left over the edge, was not placed, or a river carried off) back where material settles (the
+     * deposit map, else the low ground), or takes a gain off where it was dug; `keep_range` (1) stretches the result so its lowest and highest point are those of the input again;
+     * `max_change` (units, 0 = off) limits how far any sample may move from the input. In this order.
+     */
+    void PostProcess(const OpArgs& a, const std::vector<float>& before, std::vector<float>& after, const std::vector<float>* deposit, const std::vector<float>* wear)
+    {
+      const std::size_t n = before.size();
+      if (n == 0 || after.size() != n) return;
+      const float conserve = Clamp01(static_cast<float>(a.p.N("conserve", 0.0)));
+      if (conserve > 0.0f) {
+        double v = 0.0;
+        for (std::size_t i = 0; i < n; ++i) v += static_cast<double>(before[i]) - after[i];
+        v *= conserve;
+        const bool lost = v > 0.0;
+        const std::vector<float>* pick = lost ? deposit : wear;
+        std::vector<float> w(n);
+        float lo = before[0], hi = before[0];
+        for (const float x : before) {
+          lo = std::min(lo, x);
+          hi = std::max(hi, x);
+        }
+        double sum = 0.0;
+        const bool useMap = pick != nullptr && pick->size() == n;
+        double mapSum = 0.0;
+        if (useMap) for (const float x : *pick) mapSum += x;
+        for (std::size_t i = 0; i < n; ++i) {
+          const float rel = (before[i] - lo) / std::max(1e-6f, hi - lo);
+          const float low = lost ? (1.0f - rel) * (1.0f - rel) : rel * rel;
+          w[i] = (useMap && mapSum > 1e-9) ? (*pick)[i] : low;
+          sum += w[i];
+        }
+        if (sum > 1e-12) {
+          const double k = v / sum;
+          for (std::size_t i = 0; i < n; ++i) after[i] += static_cast<float>(k * w[i]);
+        }
+      }
+      if (a.p.N("keep_range", 0.0) != 0.0) {
+        // the robust range: the lowest / highest 0.25% of the samples are ignored, so one filled pit or one lone peak does not decide the stretch; afterwards nothing leaves the input's range
+        const auto robust = [n](const std::vector<float>& v, float& lo, float& hi) {
+          std::vector<float> c = v;
+          const std::size_t k = std::min(n / 2, static_cast<std::size_t>(static_cast<double>(n) * 0.0025));
+          std::nth_element(c.begin(), c.begin() + static_cast<std::ptrdiff_t>(k), c.end());
+          lo = c[k];
+          std::nth_element(c.begin(), c.begin() + static_cast<std::ptrdiff_t>(n - 1 - k), c.end());
+          hi = c[n - 1 - k];
+        };
+        float lo0, hi0, lo1, hi1;
+        robust(before, lo0, hi0);
+        robust(after, lo1, hi1);
+        float minB = before[0], maxB = before[0];
+        for (const float x : before) {
+          minB = std::min(minB, x);
+          maxB = std::max(maxB, x);
+        }
+        if (hi1 - lo1 > 1e-6f) {
+          const float k = (hi0 - lo0) / (hi1 - lo1);
+          for (std::size_t i = 0; i < n; ++i) after[i] = std::max(minB, std::min(maxB, lo0 + (after[i] - lo1) * k));
+        }
+      }
+      const float cap = static_cast<float>(a.p.N("max_change", 0.0));
+      if (cap > 0.0f) {
+        for (std::size_t i = 0; i < n; ++i) after[i] = before[i] + std::max(-cap, std::min(cap, after[i] - before[i]));
+      }
+    }
+
     HydroParams HydroOf(const OpArgs& a)
     {
       HydroParams p;
@@ -950,7 +1274,10 @@ namespace moho::editor::field::erosion
       p.talus = static_cast<float>(a.p.N("talus", p.talus));
       p.thermal = static_cast<float>(a.p.N("thermal", p.thermal));
       p.thermal_every = static_cast<int>(a.p.N("thermal_every", p.thermal_every));
-      p.pin_border = a.p.S("edge", "open") != "closed";
+      // edge: open (default: the edge cells take part and water runs out over the map edge), closed (walls), pinned (the outer ring keeps its height: the old behaviour, leaves a step at the border)
+      const std::string edge = a.p.S("edge", "open");
+      p.pin_border = edge == "pinned";
+      p.open_edge = edge != "closed";
       p.settle = a.p.N("settle", 1.0) != 0.0;
       p.track = a.p.N("masks", 1.0) != 0.0;
       return p;
@@ -964,9 +1291,15 @@ namespace moho::editor::field::erosion
       HydroState st;
       st.Allocate(src->w, src->h, src->cell);
       st.t = src->v;
-      if (const std::vector<float>* rock = RockOf(a)) st.rock = *rock;
+      Factors fac;
+      BuildFactors(a, *src, fac);
+      if (fac.rockPtr != nullptr) st.rock = *fac.rockPtr;
+      if (!fac.rain.empty()) st.rain_rate = fac.rain;
+      if (fac.thermalPtr != nullptr) st.thermal_rate = *fac.thermalPtr;
       RunHydro(st, p, p.iterations);
-      SmoothDelta(src->v, st.t, src->w, src->h, static_cast<float>(a.p.N("smooth", 1.0)), static_cast<int>(a.p.N("smooth_passes", 1)));
+      SmoothDelta(src->v, st.t, src->w, src->h, static_cast<float>(a.p.N("smooth", 1.0)), static_cast<int>(a.p.N("smooth_passes", 1)), p.pin_border);
+      if (p.open_edge && !p.pin_border) MirrorEdgeChange(src->v, st.t, src->w, src->h, 0);
+      PostProcess(a, src->v, st.t, &st.dep, &st.wear);
       Results r;
       r.height = Shaped(*src);
       r.height.v = st.t;
@@ -1004,6 +1337,19 @@ namespace moho::editor::field::erosion
       p.round_cut = std::max(0.01f, static_cast<float>(a.p.N("round_cut", p.round_cut)));
       p.rounds = std::max(1, std::min(64, static_cast<int>(a.p.N("rounds", p.rounds))));
       p.seed = static_cast<std::uint32_t>(a.p.N("seed", 1.0));
+      p.drop_vary = Clamp01(static_cast<float>(a.p.N("drop_vary", 0.0)));
+      p.accel = Clamp01(static_cast<float>(a.p.N("accel", p.accel)));
+      Factors fac;
+      BuildFactors(a, *src, fac);
+      p.demand = fac.softPtr;
+      if (!fac.accept.empty()) {
+        // the thinned release keeps the mean density: more candidates where it is accepted less
+        double mean = 0.0;
+        for (const float x : fac.accept) mean += x;
+        mean /= static_cast<double>(fac.accept.size());
+        p.density = static_cast<float>(p.density / std::max(0.05, mean));
+        p.accept = &fac.accept;
+      }
       Results r;
       r.height = *src;
       r.wear = Shaped(*src);
@@ -1012,15 +1358,17 @@ namespace moho::editor::field::erosion
       r.water = Shaped(*src);
       r.sediment = Shaped(*src);
       DropGrids g{&r.wear.v, &r.deposit.v, &r.flow.v};
-      RunDroplets(r.height.v, src->w, src->h, src->cell, p, RockOf(a), g);
+      RunDroplets(r.height.v, src->w, src->h, src->cell, p, fac.rockPtr, g);
       SmoothDelta(src->v, r.height.v, src->w, src->h, static_cast<float>(a.p.N("smooth", 1.0)), static_cast<int>(a.p.N("smooth_passes", 2)));
       const float thermal = static_cast<float>(a.p.N("thermal", 0.0));
       const int steps = std::max(0, std::min(1000, static_cast<int>(a.p.N("thermal_steps", 0.0))));
       if (thermal > 0.0f && steps > 0) {
         ThermalScratch sc;
         const std::vector<float> none;
-        for (int i = 0; i < steps; ++i) ThermalImpl(r.height.v, src->w, src->h, src->cell, static_cast<float>(a.p.N("talus", 0.8)), thermal, none, false, sc);
+        const std::vector<float>& rate = fac.thermalPtr != nullptr ? *fac.thermalPtr : none;
+        for (int i = 0; i < steps; ++i) ThermalImpl(r.height.v, src->w, src->h, src->cell, static_cast<float>(a.p.N("talus", 0.8)), thermal, rate, 0, sc);
       }
+      PostProcess(a, src->v, r.height.v, &r.deposit.v, &r.wear.v);
       return Emit(a, r, out, err);
     }
 
@@ -1040,6 +1388,10 @@ namespace moho::editor::field::erosion
       p.widen = std::max(0, std::min(8, static_cast<int>(a.p.N("widen", p.widen))));
       p.spread = std::max(0.1f, static_cast<float>(a.p.N("spread", p.spread)));
       p.breach = a.p.N("breach", 1.0) != 0.0;
+      p.jitter = std::max(0.0f, static_cast<float>(a.p.N("jitter", 0.0)));
+      p.seed = static_cast<std::uint32_t>(a.p.N("seed", 1.0));
+      Factors fac;
+      BuildFactors(a, *src, fac);
       Results r;
       r.height = *src;
       r.wear = Shaped(*src);
@@ -1048,8 +1400,9 @@ namespace moho::editor::field::erosion
       r.water = Shaped(*src);
       r.sediment = Shaped(*src);
       std::vector<float> area;
-      RunStream(r.height.v, src->w, src->h, src->cell, p, RockOf(a), r.wear.v, area);
+      RunStream(r.height.v, src->w, src->h, src->cell, p, fac.rockPtr, r.wear.v, area, fac.rain.empty() ? nullptr : &fac.rain, fac.thermalPtr);
       if (area.size() == r.flow.v.size()) r.flow.v = area;
+      PostProcess(a, src->v, r.height.v, &r.deposit.v, &r.wear.v);
       return Emit(a, r, out, err);
     }
 
@@ -1200,6 +1553,15 @@ namespace moho::editor::field::erosion
     st.rain_rate.resize(n);
     st.erode_rate.resize(n);
     const bool custom = dab.weights.size() == n;
+    std::vector<float> vary;
+    if (params_.vary > 0.0f) NoiseField(vary, ww, wh, 1.0f, std::max(2.0f, params_.vary_scale), 17u, 3, true, x0, z0);
+    // the window sides that lie inside the map stay fixed (the brush weights are zero there); the sides on the map edge are open: the edge cells are solved like all the others, so no
+    // fixed column is left standing next to cells that were eroded (that was the wall at the map border)
+    int sides = 0;
+    if (x0 > 0) sides |= 1;
+    if (x1 < w_ - 1) sides |= 2;
+    if (z0 > 0) sides |= 4;
+    if (z1 < h_ - 1) sides |= 8;
     for (int z = 0; z < wh; ++z) {
       for (int x = 0; x < ww; ++x) {
         const std::size_t i = Ix(x, z, ww);
@@ -1214,7 +1576,13 @@ namespace moho::editor::field::erosion
         const float wgt = custom ? dab.weights[i] : RoundWeight(dist, radius, dab.falloff);
         st.rain_rate[i] = wgt;
         st.erode_rate[i] = dab.mode == 1 ? RoundWeight(dist, radius + 0.9 * margin, 1.0) : wgt;
-        if (dab.mode == 2 && !(x == 0 || z == 0 || x == ww - 1 || z == wh - 1)) {
+        if (!vary.empty()) {
+          const float c = Clamp01((vary[i] - 0.2f) * (1.0f / 0.6f));
+          const float hard = c * c * (3.0f - 2.0f * c);
+          st.erode_rate[i] *= 1.0f - params_.vary * hard;
+          st.rain_rate[i] *= 1.0f + params_.vary * (1.0f - 2.0f * hard) * 0.7f;
+        }
+        if (dab.mode == 2 && !(((sides & 1) != 0 && x == 0) || ((sides & 4) != 0 && z == 0) || ((sides & 2) != 0 && x == ww - 1) || ((sides & 8) != 0 && z == wh - 1))) {
           st.s[i] += static_cast<float>(dab.amount * dab.strength) * wgt;
         }
       }
@@ -1224,11 +1592,15 @@ namespace moho::editor::field::erosion
     p.rain *= k;
     p.erosion = std::min(1.0f, p.erosion * k);
     p.thermal = std::min(1.0f, p.thermal * k);
-    p.pin_border = true;
+    p.pin_border = sides != 0;
+    p.pin_sides = sides;
+    p.open_edge = true;
     p.settle = false;
     p.track = false;
     if (dab.mode == 2) p.rain *= 0.5f;
+    const std::vector<float> before = st.t;
     RunHydro(st, p, std::max(0, dab.iterations));
+    MirrorEdgeChange(before, st.t, ww, wh, sides);
     words.resize(n);
     for (int z = 0; z < wh; ++z) {
       for (int x = 0; x < ww; ++x) {
