@@ -7,10 +7,15 @@
 //                `grid` (default 1) is the build grid in world units, `snap` (default 1) 0 keeps the exact rectangle, `word` (default 128) quantises targets to 1 / word units (0 = off),
 //                `strength` 0..1, `output` height | weight (the largest pad weight, 0..1) | core (1 inside any core).
 //   symmetrize   a = any field. The master wedge of the map is copied onto the rest by the symmetry group: mode mirror_x | mirror_z | mirror_xz | diag | adiag | diag_both | rot2 | rot4 |
-//                rotn (n = `n`, any N-fold turn). Centre cx, cz (world; default the middle of the field), `side` / `sector` picks the master wedge (0 .. group size - 1; for the mirror modes
-//                side 0 is the left / upper half or quadrant like the `mirror` op), `angle` (degrees) turns the wedge start of rotn. `combine` copy (the master wedge, default) | avg |
-//                max | min over all images; `nearest` 1 reads the closest sample instead of interpolating (codes such as terrain types); `seam` (world units) blends copy towards avg near the wedge borders (soft borders for turns). Every output is a function of the input and the
-//                group alone, so the result is invariant under the group exactly when the centre lies on a lattice point (or half lattice) and the group is made of quarter turns / mirrors.
+//                rotn (n = `n`, any N-fold turn). Centre cx, cz (world; default the middle of the field), `side` / `sector` picks the master wedge (0 .. wedges - 1, larger / negative
+//                values wrap; mirrors across one line 2 wedges, rot2 2, rot4 / mirror_xz / diag_both 4, rotn n; side 0 is the left / upper half or quadrant like the `mirror` op),
+//                `angle` (degrees) turns the layout of the wedges: the start of wedge 0 of rotn, or added to the default start (180 degrees) of rot2 / rot4. `combine` copy (the master wedge,
+//                default) | avg | max | min over all images; `nearest` 1 reads the closest sample instead of interpolating (codes such as terrain types, no seam); `seam` (world units, copy only)
+//                cross-fades every wedge border: near a border the value blends towards the neighbouring image (the master turned / mirrored over that border), weight 0.5 on the border
+//                falling to 0 over `seam` (smoothstep), so the result is continuous across the borders (a turn joins the two borders of the master, which hold unrelated contents).
+//                Every output is a function of the input and the group alone, so the result is invariant under the group exactly when the centre lies on a lattice point (or half lattice) and
+//                the group is made of quarter turns / mirrors. Only images that lie inside the field count (a turn or diagonal mirror of a map that is not square maps part of it outside
+//                itself: such a sample takes the image closest to the master wedge that does exist, instead of an edge clamped value).
 //   slope_limit  a = heights. Makes every neighbouring pair of samples differ by at most (limit - margin) * cell: the engine's pathing rule (the steepest neighbouring difference over a
 //                footprint window, 0.75 blocks land units) then holds for every unit class. Exact in two sweeps: `lower` = the highest Lipschitz surface below the input (cuts peaks),
 //                `raise` = the lowest above it (fills valleys), `both` blends the two with `balance` (0 raise .. 1 lower). `mask` (0..1) blends the result into the input, `strength` too.
@@ -235,29 +240,34 @@ namespace moho::editor::field
 
     struct Group
     {
-      std::vector<Mat> m;
-      double a0 = 0.0;      // start angle of wedge 0
-      double width = 0.0;   // wedge width
+      std::vector<Mat> m;       // the group elements about the centre, m[0] is the identity
+      double a0 = 0.0;          // start angle of wedge 0 (radians, atan2(z, x) of the field)
+      double width = 0.0;       // width of every wedge
+      bool mirrored = false;    // dihedral group: the wedge borders are mirror lines
     };
 
+    /** Mode / n / angle -> the group. `angle` (degrees) turns the start of wedge 0: for rotn it IS the start angle, for rot2 / rot4 it is added to their default start (180 degrees:
+     *  wedge 0 is the upper half / upper left quarter), for the mirror modes it is ignored. Wedge k runs from a0 + k * width to a0 + (k + 1) * width (increasing angle = clockwise on a map
+     *  that has z pointing down), the same numbering the Symmetry panel's "Symmetrise from" parts use. */
     bool BuildGroup(const std::string& mode, const OpArgs& a, Group& g, std::string& err)
     {
       int n = 1;
       bool mirrored = false;
       double axis = 0.0;   // for dihedral groups: the angle of a mirror line = start of wedge 0
       double a0 = 0.0;
+      const double turn = a.p.N("angle", 0.0) * kPi / 180.0;
       if (mode == "mirror_x") { n = 1; mirrored = true; axis = kPi / 2.0; }
       else if (mode == "mirror_z") { n = 1; mirrored = true; axis = kPi; }
       else if (mode == "mirror_xz") { n = 2; mirrored = true; axis = kPi; }
       else if (mode == "diag") { n = 1; mirrored = true; axis = kPi / 4.0; }
       else if (mode == "adiag") { n = 1; mirrored = true; axis = 3.0 * kPi / 4.0; }
       else if (mode == "diag_both") { n = 2; mirrored = true; axis = kPi / 4.0; }
-      else if (mode == "rot2") { n = 2; a0 = kPi; }
-      else if (mode == "rot4") { n = 4; a0 = kPi; }
+      else if (mode == "rot2") { n = 2; a0 = kPi + turn; }
+      else if (mode == "rot4") { n = 4; a0 = kPi + turn; }
       else if (mode == "rotn") {
         n = static_cast<int>(std::lround(a.p.N("n", 3.0)));
         if (n < 2 || n > 16) { err = "symmetrize: rotn needs 2 <= n <= 16"; return false; }
-        a0 = a.p.N("angle", 0.0) * kPi / 180.0;
+        a0 = turn;
       } else {
         err = "symmetrize: unknown mode '" + mode + "'";
         return false;
@@ -265,6 +275,7 @@ namespace moho::editor::field
       for (int k = 0; k < n; ++k) {
         g.m.push_back(Rot(2.0 * kPi * k / n));
       }
+      g.mirrored = mirrored;
       if (mirrored) {
         // mirror lines at axis + k * pi / n
         for (int k = 0; k < n; ++k) {
@@ -299,6 +310,47 @@ namespace moho::editor::field
       return static_cast<float>(top * (1.0 - fz) + bot * fz);
     }
 
+    /** Reads the source at a world position. False when the position lies outside the field (nothing is read: a turn of a map that is not square, or a diagonal mirror of one, maps part of
+     *  the map outside itself, and clamping to the edge would paint a smear of edge values). A position within 1e-7 of a sample snaps onto it (exact copies for 90 degree turns / mirrors). */
+    struct Reader
+    {
+      const Grid& g;
+      double inv;
+      bool nearest;
+      bool Read(const double wx, const double wz, float& out) const
+      {
+        double sx = (wx - static_cast<double>(g.ox)) * inv;
+        double sz = (wz - static_cast<double>(g.oz)) * inv;
+        constexpr double kOut = 1e-6;
+        if (sx < -kOut || sz < -kOut || sx > static_cast<double>(g.w - 1) + kOut || sz > static_cast<double>(g.h - 1) + kOut) return false;
+        const double rx = std::round(sx), rz = std::round(sz);
+        if (std::fabs(sx - rx) < 1e-7) sx = rx;
+        if (std::fabs(sz - rz) < 1e-7) sz = rz;
+        out = Bilinear(g, sx, sz, nearest);
+        return true;
+      }
+    };
+
+    inline bool SameMat(const Mat& p, const Mat& q)
+    {
+      return std::fabs(p.a - q.a) < 1e-9 && std::fabs(p.b - q.b) < 1e-9 && std::fabs(p.c - q.c) < 1e-9 && std::fabs(p.d - q.d) < 1e-9;
+    }
+
+    /** Distance from a point at radius r and angle `ang` from a border ray (which starts at the centre) to that ray. */
+    inline double RayDistance(const double r, const double ang)
+    {
+      return ang >= kPi / 2.0 ? r : r * std::sin(ang);
+    }
+
+    // The result at every sample is a function of the source and the group alone:
+    //   copy      the value of the point's image inside the master wedge, i.e. the orbit point of the group with the SMALLEST angle from the start of the master wedge (the master wedge is
+    //             the half open angle range [start, start + width), so a point on its closing border takes the image on the opening border; a mirror line is its own image). Only images
+    //             inside the field count: on a map that is not square a 90 degree turn can map a point out of the field, then the nearest-to-master image inside it is used, so the result
+    //             is still exactly symmetric wherever the map is.
+    //   seam > 0  soft wedge borders. Near a border the image blends towards the NEIGHBOUR image across that border (the master content mirrored / turned over the border; what the
+    //             next wedge would show), with weight 0.5 on the border falling to 0 over `seam` units (smoothstep): on the border both sides compute the same blend, so the result is
+    //             continuous across it (a turn has no other way to join two arbitrary wedge contents).
+    //   avg, max, min   over all images inside the field (exactly symmetric, no master wedge).
     bool OpSymmetrize(const OpArgs& a, Grid& out, std::string& err)
     {
       const Grid* src = Need(a, "a", err);
@@ -311,96 +363,77 @@ namespace moho::editor::field
         err = "symmetrize: combine must be copy, avg, max or min";
         return false;
       }
+      const int combineMode = combine == "copy" ? 0 : (combine == "avg" ? 1 : (combine == "max" ? 2 : 3));
       const int count = static_cast<int>(grp.m.size());
       int wedge = static_cast<int>(std::lround(a.p.Has("sector") ? a.p.N("sector", 0.0) : a.p.N("side", 0.0)));
       wedge = ((wedge % count) + count) % count;
       const double cx = a.p.Has("cx") ? F32(a.p.N("cx", 0.0)) : static_cast<double>(src->ox) + 0.5 * (src->w - 1) * static_cast<double>(src->cell);
       const double cz = a.p.Has("cz") ? F32(a.p.N("cz", 0.0)) : static_cast<double>(src->oz) + 0.5 * (src->h - 1) * static_cast<double>(src->cell);
-      const double seam = std::max(0.0, a.p.N("seam", 0.0));
       const bool nearest = a.p.N("nearest", 0.0) != 0.0;
+      const double seam = nearest ? 0.0 : std::max(0.0, a.p.N("seam", 0.0));   // blending codes (terrain types) makes no sense
       const double start = grp.a0 + wedge * grp.width;
+      const double width = grp.width;
+      // the image that a point near the opening / closing border of the master wedge blends towards. Mirrors: its reflection over that border line (the content on the other side of the line).
+      // Turns: the wedge next to the master is the master turned by +width (over the closing border) / -width (over the opening border), so what continues the master across its closing
+      // border is the master's own opening border turned back (rotation by -width), and the other way round
+      const Mat tOpen = grp.mirrored ? Refl(start) : Rot(width);
+      const Mat tClose = grp.mirrored ? Refl(start + width) : Rot(-width);
+      const bool oneLine = SameMat(tOpen, tClose);   // mirror_x / z, diag, adiag, rot2: both borders lie on one line
+      const double kTol = 1e-9;
       out = *src;
-      const double inv = 1.0 / static_cast<double>(src->cell);
+      const Reader rd{*src, 1.0 / static_cast<double>(src->cell), nearest};
       Rows(src->h, [&](const int z0, const int z1) {
         for (int z = z0; z < z1; ++z) {
           for (int x = 0; x < src->w; ++x) {
             const double u = WX(*src, x) - cx;
             const double v = WZ(*src, z) - cz;
             const double r = std::sqrt(u * u + v * v);
-            // angle inside the wedge system: phi in [0, 2 pi) from the start of wedge 0
-            double phi = std::atan2(v, u) - grp.a0;
-            phi = std::fmod(phi, 2.0 * kPi);
-            if (phi < 0.0) phi += 2.0 * kPi;
-            if (r == 0.0) phi = 0.0;
-            // the exact axes: phi = k * width up to rounding belongs to the wedge that starts there
-            const double kw = phi / grp.width;
-            int k = static_cast<int>(std::floor(kw + 1e-9));
-            const double within = (kw - k) * grp.width;   // angle from the start of wedge k
-            const bool master = (k == wedge) || (count > 1 && std::fabs(kw - std::round(kw)) < 1e-9 && static_cast<int>(std::lround(kw)) == wedge);
-            float result;
-            const auto Image = [&](const Mat& m) {
+            int cnt = 0;
+            double sum = 0.0, mx = 0.0, mn = 0.0;
+            double bestPh = 1e30, bu = u, bv = v;
+            float bestVal = src->At(x, z);
+            for (int i = 0; i < count; ++i) {
+              const Mat& m = grp.m[static_cast<std::size_t>(i)];
               const double qu = m.a * u + m.b * v;
               const double qv = m.c * u + m.d * v;
-              return Bilinear(*src, (cx + qu - src->ox) * inv, (cz + qv - src->oz) * inv, nearest);
-            };
-            if (combine == "copy") {
-              if (master) {
-                result = src->At(x, z);
-              } else {
-                // the image of p inside the master wedge. A point on the closing border of the wedge has an image on the opening border (turns); where it has none (mirrors) the
-                // candidates on the closing border are all that exist and the one with the smallest (z, x) is taken, so every point of an orbit picks the same one
-                float best = src->At(x, z);
-                bool found = false;
-                bool haveEnd = false;
-                double endV = 0.0, endU = 0.0;
-                for (const Mat& m : grp.m) {
-                  const double qu = m.a * u + m.b * v;
-                  const double qv = m.c * u + m.d * v;
-                  const double qr = std::sqrt(qu * qu + qv * qv);
-                  double ph = std::atan2(qv, qu) - grp.a0;
-                  ph = std::fmod(ph, 2.0 * kPi);
-                  if (ph < 0.0) ph += 2.0 * kPi;
-                  if (qr == 0.0) ph = 0.0;
-                  const double kq = ph / grp.width;
-                  const int kk = static_cast<int>(std::floor(kq + 1e-9));
-                  if (kk == wedge || (std::fabs(kq - std::round(kq)) < 1e-9 && static_cast<int>(std::lround(kq)) == wedge)) {
-                    best = Image(m);
-                    found = true;
-                    break;
-                  }
-                  if (std::fabs(kq - std::round(kq)) < 1e-9 && (static_cast<int>(std::lround(kq)) - 1 - wedge) % count == 0) {
-                    const double ru = std::round(qu * 1e6) / 1e6, rv = std::round(qv * 1e6) / 1e6;
-                    if (!haveEnd || rv < endV || (rv == endV && ru < endU)) {
-                      haveEnd = true;
-                      endV = rv;
-                      endU = ru;
-                      best = Image(m);
-                    }
-                  }
-                }
-                result = (found || haveEnd) ? best : src->At(x, z);
-              }
-              if (seam > 0.0 && r > 0.0) {
-                // distance to the nearest wedge border, blended towards the average of all images
-                const double dphi = std::min(within, grp.width - within);
-                const double dist = dphi >= kPi / 2.0 ? r : r * std::sin(dphi);
-                if (dist < seam) {
-                  double sum = 0.0;
-                  for (const Mat& m : grp.m) sum += Image(m);
-                  const double avg = sum / count;
-                  const double t = SmoothStep(dist / seam);
-                  result = static_cast<float>(avg + (static_cast<double>(result) - avg) * t);
+              float val;
+              if (!rd.Read(cx + qu, cz + qv, val)) continue;
+              if (cnt == 0) { mx = val; mn = val; } else { mx = std::max(mx, static_cast<double>(val)); mn = std::min(mn, static_cast<double>(val)); }
+              sum += val;
+              ++cnt;
+              if (combineMode == 0) {
+                // angle of the image from the start of the master wedge, in [0, 2 pi); just below 2 pi is the opening border seen from the other side
+                double ph = (qu == 0.0 && qv == 0.0) ? 0.0 : std::fmod(std::atan2(qv, qu) - start, 2.0 * kPi);
+                if (ph < 0.0) ph += 2.0 * kPi;
+                if (ph > 2.0 * kPi - kTol) ph = 0.0;
+                if (ph < bestPh - kTol) {
+                  bestPh = ph;
+                  bestVal = val;
+                  bu = qu;
+                  bv = qv;
                 }
               }
+            }
+            float result;
+            if (combineMode == 0) {
+              double value = bestVal;
+              if (seam > 0.0 && bestPh <= width + kTol && r > 0.0) {
+                // the image is in the master wedge: blend towards the neighbour images over the borders
+                const double psi = std::min(bestPh, width);
+                const double dOpen = RayDistance(r, psi);
+                const double dClose = RayDistance(r, width - psi);
+                double wOpen = 0.0, wClose = 0.0;
+                if (oneLine) wOpen = 0.5 * (1.0 - SmoothStep(std::min(dOpen, dClose) / seam));
+                else { wOpen = 0.5 * (1.0 - SmoothStep(dOpen / seam)); wClose = 0.5 * (1.0 - SmoothStep(dClose / seam)); }
+                float nb;
+                if (wOpen > 0.0 && rd.Read(cx + tOpen.a * bu + tOpen.b * bv, cz + tOpen.c * bu + tOpen.d * bv, nb)) value += wOpen * (static_cast<double>(nb) - static_cast<double>(bestVal));
+                if (wClose > 0.0 && rd.Read(cx + tClose.a * bu + tClose.b * bv, cz + tClose.c * bu + tClose.d * bv, nb)) value += wClose * (static_cast<double>(nb) - static_cast<double>(bestVal));
+              }
+              result = static_cast<float>(value);
+            } else if (combineMode == 1) {
+              result = static_cast<float>(sum / cnt);
             } else {
-              double acc = combine == "avg" ? 0.0 : static_cast<double>(Image(grp.m[0]));
-              for (int i = 0; i < count; ++i) {
-                const double val = Image(grp.m[static_cast<std::size_t>(i)]);
-                if (combine == "avg") acc += val;
-                else if (combine == "max") acc = std::max(acc, val);
-                else acc = std::min(acc, val);
-              }
-              result = static_cast<float>(combine == "avg" ? acc / count : acc);
+              result = static_cast<float>(combineMode == 2 ? mx : mn);
             }
             out.At(x, z) = result;
           }
