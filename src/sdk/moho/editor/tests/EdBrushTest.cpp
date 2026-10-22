@@ -64,6 +64,8 @@ struct LuaBrush
   const char* mode;
   double level;   // < 0: nil
   int strokeId;
+  double noiseScale = 8, noiseRough = 0.5;
+  int noiseOctaves = 2;
 };
 
 static double LuaWeight(const double distance, const double radius, const double falloff)
@@ -93,6 +95,41 @@ static double LuaNoise(const double x, const double z, const double seed)
   n = Mod(Add(Mul(n, n), ax), 4093);
   n = Mod(Add(Mul(n, n), bz), 4093);
   return Sub(Mul(Div(n, 4093), 2), 1);
+}
+
+// terrain.lua ValueNoise / SmoothNoise: smooth value noise on the hash above
+static double LuaValueNoise(const double x, const double z, const double cell, const double seed)
+{
+  const double fx = Div(x, cell);
+  const double fz = Div(z, cell);
+  const double ix = Floor(fx);
+  const double iz = Floor(fz);
+  double tx = Sub(fx, ix);
+  double tz = Sub(fz, iz);
+  tx = Mul(Mul(tx, tx), Sub(3, Mul(2, tx)));
+  tz = Mul(Mul(tz, tz), Sub(3, Mul(2, tz)));
+  const double v00 = LuaNoise(ix, iz, seed), v10 = LuaNoise(Add(ix, 1), iz, seed);
+  const double v01 = LuaNoise(ix, Add(iz, 1), seed), v11 = LuaNoise(Add(ix, 1), Add(iz, 1), seed);
+  const double top = Add(v00, Mul(Sub(v10, v00), tx));
+  const double bottom = Add(v01, Mul(Sub(v11, v01), tx));
+  return Add(top, Mul(Sub(bottom, top), tz));
+}
+
+static double LuaSmoothNoise(const double x, const double z, const double seed, double scale, double octaves, double rough)
+{
+  if (scale < 1) scale = 1;
+  octaves = Floor(octaves);
+  if (octaves < 1) octaves = 1; else if (octaves > 4) octaves = 4;
+  if (rough < 0) rough = 0; else if (rough > 1) rough = 1;
+  double total = 0, amp = 1, norm = 0, cell = scale;
+  for (int o = 0; o < octaves; ++o) {
+    if (o > 0 && cell < 1) break;
+    total = Add(total, Mul(amp, LuaValueNoise(x, z, cell, Add(seed, Mul(o, 1013)))));
+    norm = Add(norm, amp);
+    amp = Mul(amp, rough);
+    cell = Div(cell, 2);
+  }
+  return Div(total, norm);
 }
 
 // terrain.lua BoxBlur on 1-based arrays (index 0 unused)
@@ -144,6 +181,8 @@ static RefOut LuaDab(const std::vector<std::uint16_t>& grid, const int gw, const
   b.falloff = F(b.falloff);
   b.strength = F(b.strength);
   b.level = b.level < 0 ? b.level : F(b.level);
+  b.noiseScale = F(b.noiseScale);
+  b.noiseRough = F(b.noiseRough);
   const double K02 = F(0.2);
   const double r = b.radius;
   int x0 = static_cast<int>(Floor(Sub(cx, r))) - 1, z0 = static_cast<int>(Floor(Sub(cz, r))) - 1;
@@ -208,7 +247,7 @@ static RefOut LuaDab(const std::vector<std::uint16_t>& grid, const int gw, const
           const double k = Mul(Min(1, Mul(Mul(strength, K02), weight)), dir);
           value = Add(value, Mul(Sub(blurred[i], value), k));
         } else if (mode == "noise") {
-          value = Add(value, Mul(Mul(Mul(Mul(dir, LuaNoise(x, z, b.strokeId)), strength), weight), 128));
+          value = Add(value, Mul(Mul(Mul(Mul(dir, LuaSmoothNoise(x, z, b.strokeId, b.noiseScale, b.noiseOctaves, b.noiseRough)), strength), weight), 128));
         }
         value = Floor(Add(value, 0.5));
         if (value < 0) value = 0;
@@ -334,6 +373,9 @@ static void CompareDab(const std::vector<std::uint16_t>& grid, const int gw, con
   dab.falloff = static_cast<float>(lb.falloff);
   dab.level = static_cast<float>(lb.level);
   dab.seed = lb.strokeId;
+  dab.noiseScale = static_cast<float>(lb.noiseScale);
+  dab.noiseOctaves = lb.noiseOctaves;
+  dab.noiseRoughness = static_cast<float>(lb.noiseRough);
   CHECK(br::ModeFromName(lb.mode, dab.mode), "mode %s", lb.mode);
 
   br::Window win;
@@ -418,6 +460,29 @@ static void TestSweep()
   }
 }
 
+static void TestNoiseDabs()
+{
+  // whole noise dabs with every setting against the Lua transliteration
+  const int gw = 61, gh = 47;
+  const std::vector<std::uint16_t> grid = MakeGrid(gw, gh, 0);
+  const double scales[] = {1, 3, 8, 12.5, 30};
+  const int octs[] = {1, 2, 3, 4};
+  const double roughs[] = {0.3, 0.5, 0.7};
+  char what[160];
+  for (const double sc : scales) {
+    for (const int oc : octs) {
+      for (const double ro : roughs) {
+        LuaBrush lb{9, 0.6, 4, 1, "noise", -1, 21};
+        lb.noiseScale = sc; lb.noiseOctaves = oc; lb.noiseRough = ro;
+        std::snprintf(what, sizeof(what), "noise scale %g oct %d rough %g", sc, oc, ro);
+        CompareDab(grid, gw, gh, 31.4, 22.7, lb, what);
+        lb.dir = -1;
+        CompareDab(grid, gw, gh, 3.2, 40.1, lb, what);
+      }
+    }
+  }
+}
+
 static void TestNoise()
 {
   // the integer hash in long arithmetic, and the float transliteration of the Lua source
@@ -447,6 +512,100 @@ static void TestNoise()
   CHECK(std::fabs(sum / count) < 0.03, "noise mean %f", sum / count);
   CHECK(std::fabs(sum2 / count - 1.0 / 3.0) < 0.02, "noise variance %f", sum2 / count);
   CHECK(std::fabs(cross / (static_cast<double>(n) * (n - 1))) < 0.03, "noise neighbour correlation %f", cross / (static_cast<double>(n) * (n - 1)));
+}
+
+static void TestSmoothNoise()
+{
+  // the native smooth noise equals the float transliteration of terrain.lua for random points and settings
+  const double scales[] = {1, 2, 3.5, 8, 8.25, 16, 40, 0.4};
+  const double roughs[] = {0.3, 0.5, 0.7, 1.0, 0.0};
+  for (int i = 0; i < 20000; ++i) {
+    const int x = static_cast<int>(Rand() % 2100), z = static_cast<int>(Rand() % 2100), seed = static_cast<int>(Rand() % 100000);
+    const double scale = F(scales[Rand() % 8]), rough = F(roughs[Rand() % 5]);
+    const int oct = 1 + static_cast<int>(Rand() % 4);
+    const float n = br::detail::SmoothNoise(x, z, seed, static_cast<float>(scale), oct, static_cast<float>(rough));
+    const double ref = LuaSmoothNoise(x, z, seed, scale, oct, rough);
+    CHECK(n == static_cast<float>(ref), "smooth noise (%d,%d) seed %d scale %g oct %d rough %g: %.9g vs lua %.9g", x, z, seed, scale, oct, rough, static_cast<double>(n), ref);
+    CHECK(n >= -1.0001f && n <= 1.0001f, "smooth noise range %f", static_cast<double>(n));
+  }
+  // one octave on the lattice points is the hash itself
+  for (int i = 0; i < 400; ++i) {
+    const int ix = static_cast<int>(Rand() % 200), iz = static_cast<int>(Rand() % 200);
+    const float n = br::detail::SmoothNoise(ix * 8, iz * 8, 5, 8.0f, 1, 0.5f);
+    CHECK(n == br::detail::Noise(ix, iz, 5), "lattice point (%d,%d): %f vs %f", ix, iz, static_cast<double>(n), static_cast<double>(br::detail::Noise(ix, iz, 5)));
+  }
+  // smooth: neighbouring samples differ by at most the steepest smoothstep slope (3 / 2 of the range over one cell) while the white hash jumps
+  {
+    double worst = 0, sum = 0, whiteSum = 0;
+    int count = 0;
+    for (int z = 0; z < 120; ++z) {
+      for (int x = 0; x < 119; ++x) {
+        const double a = br::detail::SmoothNoise(x, z, 9, 8.0f, 1, 0.5f), b = br::detail::SmoothNoise(x + 1, z, 9, 8.0f, 1, 0.5f);
+        worst = std::max(worst, std::fabs(a - b));
+        sum += std::fabs(a - b);
+        whiteSum += std::fabs(static_cast<double>(br::detail::Noise(x, z, 9)) - br::detail::Noise(x + 1, z, 9));
+        ++count;
+      }
+    }
+    CHECK(worst <= 2.0 * 1.5 / 8.0 + 1e-4, "one octave of scale 8: neighbour step %f", worst);
+    CHECK(sum / count < 0.25 * whiteSum / count, "smooth noise steps %f vs white %f", sum / count, whiteSum / count);
+  }
+  // it still has spread (not flat): the standard deviation over a big window
+  {
+    double sum = 0, sum2 = 0;
+    const int n = 200;
+    for (int z = 0; z < n; ++z) for (int x = 0; x < n; ++x) {
+      const double v = br::detail::SmoothNoise(x + 300, z + 700, 4, 8.0f, 2, 0.5f);
+      sum += v;
+      sum2 += v * v;
+    }
+    const double mean = sum / (n * n), sd = std::sqrt(sum2 / (n * n) - mean * mean);
+    CHECK(std::fabs(mean) < 0.1 && sd > 0.2 && sd < 0.7, "smooth noise mean %f sd %f", mean, sd);
+  }
+  // the scale sets the size of the bumps: the number of sign changes along a line falls when the cell grows
+  {
+    auto crossings = [](const float scale) {
+      int c = 0;
+      float last = br::detail::SmoothNoise(0, 50, 3, scale, 1, 0.5f);
+      for (int x = 1; x < 400; ++x) {
+        const float v = br::detail::SmoothNoise(x, 50, 3, scale, 1, 0.5f);
+        if ((v < 0) != (last < 0)) ++c;
+        last = v;
+      }
+      return c;
+    };
+    CHECK(crossings(4.0f) > crossings(16.0f) && crossings(16.0f) > crossings(64.0f), "bigger scale, fewer zero crossings (%d %d %d)", crossings(4.0f), crossings(16.0f), crossings(64.0f));
+  }
+  // coherent across dabs: two overlapping flat dabs of one stroke (same seed) add the same amount to a sample, whatever their centres
+  {
+    const int gw = 80, gh = 80;
+    const std::vector<std::uint16_t> grid(static_cast<std::size_t>(gw) * gh, 30000);
+    br::Dab a;
+    a.mode = br::Mode::Noise; a.radius = 16; a.falloff = 0; a.strength = 6; a.seed = 11; a.noiseScale = 6; a.noiseOctaves = 3; a.noiseRoughness = 0.5f;
+    br::Dab b = a;
+    a.cx = 30; a.cz = 38;
+    b.cx = 44; b.cz = 40;
+    br::Window wa, wb;
+    std::vector<std::uint16_t> ra, rb;
+    br::ComputeDab(grid.data(), gw, gh, a, wa, ra);
+    br::ComputeDab(grid.data(), gw, gh, b, wb, rb);
+    int overlap = 0, bad = 0;
+    for (int z = 30; z <= 48; ++z) {
+      for (int x = 36; x <= 38; ++x) {
+        const int ia = (z - wa.z0) * wa.Width() + (x - wa.x0), ib = (z - wb.z0) * wb.Width() + (x - wb.x0);
+        ++overlap;
+        if (ra[static_cast<std::size_t>(ia)] != rb[static_cast<std::size_t>(ib)]) ++bad;
+      }
+    }
+    CHECK(overlap > 40 && bad == 0, "the two dabs give the same noise at shared samples (%d of %d differ)", bad, overlap);
+    // another stroke (seed) gives another pattern
+    br::Dab c = a;
+    c.seed = 12;
+    br::Window wc;
+    std::vector<std::uint16_t> rc;
+    br::ComputeDab(grid.data(), gw, gh, c, wc, rc);
+    CHECK(rc != ra, "another stroke id gives another pattern");
+  }
 }
 
 static void TestProperties()
@@ -629,6 +788,8 @@ int main(int argc, char** /*argv*/)
 {
   TestSweep();
   TestNoise();
+  TestNoiseDabs();
+  TestSmoothNoise();
   TestProperties();
   TestDocument();
   if (argc > 1) {

@@ -1,6 +1,6 @@
 // EDITOR: the native terrain brush dab (docs/projects/MAP_EDITOR.md, "Native brush dab"; math in EdBrush.h, caller editor/runtime/lua/editor/terrain.lua DabOne).
 //
-//   ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed) -> changed, x0, z0, x1, z1, level
+//   ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed [, noiseScale, noiseOctaves, noiseRoughness]) -> changed, x0, z0, x1, z1, level
 //       One dab of the round brush at sample position (cx, cz) inside the open stroke of the document (ed_cmd_begin). mode = 'raise' | 'lower' |
 //       'plateau' | 'flatten' | 'smooth' | 'noise' (anything else: returns nil and does nothing, the caller keeps its Lua path). strength, falloff and the
 //       weight profile are the ones of terrain.lua; dir = -1 inverts; level (world units, flatten / plateau) nil or negative = the ground under the
@@ -8,6 +8,8 @@
 //       MapDocument::EditHeights, the path ed_doc_height_write takes (undo stroke, view field, sim queue). Returns the number of changed samples,
 //       the inclusive window it worked on (the rectangle to re-snap units in; clamped to the map) and, for plateau / flatten, the level it used
 //       (nil for the other modes) so the caller can keep it for the rest of the stroke. nil without a terrain.
+//       Noise mode: smooth value noise at the sample coordinates (so it is continuous across the dabs of a stroke, seed = the stroke id); noiseScale = the
+//       lattice cell size in samples (default 8), noiseOctaves 1..4 (default 2), noiseRoughness = amplitude share of each further octave (default 0.5).
 #include <cstdint>
 #include <vector>
 
@@ -46,6 +48,10 @@ namespace
     dab.falloff = static_cast<float>(NumberOr(L, 7, 1.0));
     dab.level = static_cast<float>(NumberOr(L, 8, -1.0));
     dab.seed = static_cast<int>(NumberOr(L, 9, 0.0));
+    // optional trailing arguments (the noise mode); an exe without them ignores the extras
+    dab.noiseScale = static_cast<float>(NumberOr(L, 10, 8.0));
+    dab.noiseOctaves = static_cast<int>(NumberOr(L, 11, 2.0));
+    dab.noiseRoughness = static_cast<float>(NumberOr(L, 12, 0.5));
 
     if (!moho::editor::AttachDocument(false)) {
       lua_pushnil(L);
@@ -102,7 +108,7 @@ namespace
     {
       (void)new moho::CScrLuaBinder(
         UserLuaInitSet(), "ed_terrain_brush", &cfunc_EdTerrainBrush, nullptr, "<global>",
-        "ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed) -> changed, x0, z0, x1, z1, level"
+        "ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed [, noiseScale, noiseOctaves, noiseRoughness]) -> changed, x0, z0, x1, z1, level"
       );
     }
   };

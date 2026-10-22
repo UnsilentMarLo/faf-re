@@ -8,6 +8,9 @@
 // operation, `float` locals, so a dab gives the same words as the Lua loop (the self test compares the two when the native exists). Do not
 // "simplify" an expression into a different operation order, and build with /fp:precise (the default), not /fp:fast.
 //
+// The noise mode is smooth value noise on a lattice (terrain.lua ValueNoise / SmoothNoise): the lattice values come from a seeded integer hash whose
+// intermediates stay below 2^24, so the Lua VM's floats and these integers agree exactly.
+//
 // Units: heights are words, 128 per world unit; a dab at (cx, cz) in sample coordinates with a radius in samples; words are clamped to 0..65535.
 #pragma once
 
@@ -66,6 +69,9 @@ namespace moho::editor::brush
     float falloff = 1.0f;    // 0..1, the share of the radius the edge falls off over
     float level = -1.0f;     // flatten / plateau target in world units; < 0 = the ground under the centre of the dab
     int seed = 0;            // noise: the stroke id
+    float noiseScale = 8.0f;      // noise: lattice cell size in samples (>= 1)
+    int noiseOctaves = 2;         // noise: 1..4 layers, each one with half the cell size
+    float noiseRoughness = 0.5f;  // noise: the share of the amplitude the next octave keeps (0..1)
   };
 
   /** Inclusive sample window of a dab (what the Lua path read: one sample beyond the brush on every side), clamped to a width x height grid. */
@@ -97,7 +103,7 @@ namespace moho::editor::brush
     constexpr float kPi = 3.14159265f;
 
     /**
-     * terrain.lua Noise(): a hash of (x, z, stroke) in -1..1. Every intermediate stays below 2^24, so it is exact in the game's 32-bit float Lua numbers
+     * terrain.lua Hash(): a hash of (x, z, stroke) in -1..1 (the value of one lattice point of the smooth noise below). Every intermediate stays below 2^24, so it is exact in the game's 32-bit float Lua numbers
      * and in these integers alike (the first version multiplied by 374761393 and took math.mod: in 32-bit floats that product lost its low bits and
      * the hash was -1 nearly everywhere). Keep it the same as the Lua function.
      */
@@ -114,6 +120,82 @@ namespace moho::editor::brush
       v = v * 2.0f;
       v = v - 1.0f;
       return v;
+    }
+
+    /**
+     * terrain.lua ValueNoise(): smooth noise in -1..1 at the sample (x, z). The lattice has one random value (the hash above, per lattice point) every
+     * `cell` samples; the value at a point is the bilinear blend of the four corners with a smoothstep weight, so it is continuous and has no
+     * per-sample speckle. It depends on the world position only, so the dabs of one stroke join into continuous bumps. One operation per statement
+     * (float roundings as in the Lua VM).
+     */
+    [[nodiscard]] inline float ValueNoise(const int x, const int z, const float cell, const int seed)
+    {
+      const float fx = static_cast<float>(x) / cell;
+      const float fz = static_cast<float>(z) / cell;
+      const float flx = std::floor(fx);
+      const float flz = std::floor(fz);
+      float tx = fx - flx;
+      float tz = fz - flz;
+      float bx = 2.0f * tx;
+      bx = 3.0f - bx;
+      tx = (tx * tx) * bx;
+      float bz = 2.0f * tz;
+      bz = 3.0f - bz;
+      tz = (tz * tz) * bz;
+      const int ix = static_cast<int>(flx);
+      const int iz = static_cast<int>(flz);
+      const float v00 = Noise(ix, iz, seed);
+      const float v10 = Noise(ix + 1, iz, seed);
+      const float v01 = Noise(ix, iz + 1, seed);
+      const float v11 = Noise(ix + 1, iz + 1, seed);
+      float top = v10 - v00;
+      top = top * tx;
+      top = v00 + top;
+      float bottom = v11 - v01;
+      bottom = bottom * tx;
+      bottom = v01 + bottom;
+      float r = bottom - top;
+      r = r * tz;
+      return top + r;
+    }
+
+    /**
+     * terrain.lua SmoothNoise(): up to four octaves of ValueNoise, each with half the cell size of the one before and `roughness` times its amplitude,
+     * divided by the sum of the amplitudes so the result stays in -1..1. Octaves whose cell would be under one sample are left out.
+     */
+    [[nodiscard]] inline float SmoothNoise(const int x, const int z, const int seed, const float scale, const int octaves, const float roughness)
+    {
+      float cell = scale;
+      if (cell < 1.0f) {
+        cell = 1.0f;
+      }
+      int count = octaves;
+      if (count < 1) {
+        count = 1;
+      } else if (count > 4) {
+        count = 4;
+      }
+      float rough = roughness;
+      if (rough < 0.0f) {
+        rough = 0.0f;
+      } else if (rough > 1.0f) {
+        rough = 1.0f;
+      }
+      float total = 0.0f;
+      float amp = 1.0f;
+      float norm = 0.0f;
+      for (int o = 0; o < count; ++o) {
+        if (o > 0 && cell < 1.0f) {
+          break;
+        }
+        float v = ValueNoise(x, z, cell, seed + o * 1013);
+        v = v * amp;
+        total = total + v;
+        norm = norm + amp;
+        amp = amp * rough;
+        cell = cell / 2.0f;
+      }
+      return total / norm;
     }
 
     /** terrain.lua Weight() for the round brush: 0 outside the radius, 1 inside the flat part, a cosine edge between. */
@@ -342,7 +424,7 @@ namespace moho::editor::brush
           break;
         }
         case Mode::Noise: {
-          float t = dir * detail::Noise(x, z, dab.seed);
+          float t = dir * detail::SmoothNoise(x, z, dab.seed, dab.noiseScale, dab.noiseOctaves, dab.noiseRoughness);
           t = t * strength;
           t = t * weight;
           t = t * word;
