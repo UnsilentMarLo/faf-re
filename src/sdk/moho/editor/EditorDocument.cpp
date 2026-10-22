@@ -1,5 +1,6 @@
 // Engine side of the editor's MapDocument, see EditorDocument.h.
 #include "moho/editor/EditorDocument.h"
+#include "moho/editor/EdDirtyRect.h"
 #include "moho/editor/EdOverlay.h"
 
 #include <algorithm>
@@ -67,14 +68,26 @@ namespace moho::editor
         if (CHeightField* const view = res->GetHeightField(); view != nullptr) {
           const gpg::Rect2i r = ToRect2i(rect);
           view->SetElevationRectRaw(r, words, rect.Width());
-          view->UpdateError(r);
-          gpg::Rect2i dirty = r;
-          dirty.x0 = std::max(0, r.x0 - 1);
-          dirty.z0 = std::max(0, r.z0 - 1);
-          // clamped to the field: SyncTerrain copies this rect (inclusive) out of the sim field later
-          dirty.x1 = std::min(r.x1 + 1, view->Width() - 1);
-          dirty.z1 = std::min(r.z1 + 1, view->Height() - 1);
-          res->NotifyMapChange(dirty);
+          // Everything derived from the heights is recomputed over the changed rectangle GROWN by kDerivedDataPad samples (EdDirtyRect.h): a normal map texel reads the
+          // samples i .. i + 1 (a changed sample also changes the texel to its left / top) and the engine reads the end of its rectangle as exclusive; the tier error
+          // cells share their corner samples with the cell beside them. A tight rectangle left a one texel line of old normals / old error on its border: a straight
+          // crease around every brushed rectangle. Clamped to the field: the field copies below are inclusive.
+          const DirtyRect grown = PadDirtyRect(DirtyRect{rect.x0, rect.z0, rect.x1, rect.z1}, kDerivedDataPad, view->Width(), view->Height(), 1);
+          gpg::Rect2i dirty{};
+          dirty.x0 = grown.x0;
+          dirty.z0 = grown.z0;
+          dirty.x1 = grown.x1;
+          dirty.z1 = grown.z1;
+          view->UpdateError(dirty);
+          // NotifyMapChange = (finalize once) + UpdateNormalMap + a queue entry that CWldTerrainRes::SyncTerrain later copies out of the SIM field over the view field. In
+          // the editor the sim field only receives the edit at its next beat (ApplyPendingHeightEdits), so a sync between the edit and that beat copied the OLD heights over the
+          // view (normals already new, mesh old, and a later dab's normals computed from the old heights: borders at the rectangles). The view is the editor's own projection
+          // and already holds the heights, so once the terrain is finalized only the normal map is refreshed and no copy is queued.
+          if (res->GetBool()) {
+            res->UpdateNormalMap(dirty);
+          } else {
+            res->NotifyMapChange(dirty);
+          }
           // The renderer re-tessellates only when the camera moved, the terrain is in edit mode or the decal
           // manager has pending changes (HighFidelityTerrain::UpdateRenderContext): ask for one rebuild.
           if (IDecalManager* const decals = res->GetDecalManager(); decals != nullptr) {
@@ -151,7 +164,13 @@ namespace moho::editor
       // outside a live sim the sim and the view may share one field: it was written by the sink already
       if (field != gViewField) {
         field->SetElevationRectRaw(r, edit.words.data(), edit.rect.Width());
-        field->UpdateError(r);
+        const DirtyRect grown = PadDirtyRect(DirtyRect{edit.rect.x0, edit.rect.z0, edit.rect.x1, edit.rect.z1}, kDerivedDataPad, field->Width(), field->Height(), 1);
+        gpg::Rect2i errorRect{};
+        errorRect.x0 = grown.x0;
+        errorRect.z0 = grown.z0;
+        errorRect.x1 = grown.x1;
+        errorRect.z1 = grown.z1;
+        field->UpdateError(errorRect);
       }
       if (sim->mPathTables != nullptr) {
         gpg::Rect2i dirty{};
