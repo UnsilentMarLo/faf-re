@@ -346,6 +346,33 @@ namespace moho::editor::overlayslope
     return level;
   }
 
+  /** Blocks per side a view `cells` wide has at `level`. */
+  [[nodiscard]] inline int BlocksAt(const int cells, const int level)
+  {
+    return (cells + (1 << level) - 1) >> level;
+  }
+
+  /**
+   * The block size with hysteresis: the level of the last frame (`prev`, -1 for none) is kept until the view needs more than 1.25 x `maxBlocks` blocks per side
+   * (go coarser) or the next finer level would fit in 0.8 x `maxBlocks` (go finer). While the view is being zoomed, or its estimated size jitters by a few cells with
+   * the camera height, the level no longer flips back and forth at the threshold (each flip re-projects the whole view and changes how the blocks are cut).
+   * Colours are the same at every level (the steepest cell of a block wins, BuildLevels).
+   */
+  [[nodiscard]] inline int LevelWithHysteresis(const int cells, const int maxBlocks, const int prev)
+  {
+    if (prev < 0 || prev >= kLevels) {
+      return LevelForView(cells, maxBlocks);
+    }
+    int level = prev;
+    while (level < kLevels - 1 && BlocksAt(cells, level) * 4 > maxBlocks * 5) {
+      ++level;
+    }
+    while (level > 0 && BlocksAt(cells, level - 1) * 5 <= maxBlocks * 4) {
+      --level;
+    }
+    return level;
+  }
+
   /**
    * Colour step of a rating `value` against `limit` (both in the same unit): 0 = flat (not drawn), 1 .. kSteps = green to red up to the limit, kSteps + 1 = beyond
    * the limit. Neighbouring blocks with the same step get the same colour, so a run of them is drawn as one quad.

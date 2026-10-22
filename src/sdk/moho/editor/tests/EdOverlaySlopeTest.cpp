@@ -202,6 +202,39 @@ int main()
     CHECK(os::LevelForView(4096, 160) == 5, "an 80 km view uses blocks of 32 (%d)", os::LevelForView(4096, 160));
     CHECK((4096 + 31) / 32 <= 160, "and fits");
     CHECK(os::LevelForView(320, 160) == 1, "320 cells -> blocks of 2");
+    // hysteresis: 160 blocks per side; level 0 holds up to 200 cells, level 1 from 128 cells (0.8 x 160) down
+    CHECK(os::LevelWithHysteresis(100, 160, -1) == 0 && os::LevelWithHysteresis(4096, 160, -1) == 5, "no previous level: the plain choice");
+    CHECK(os::LevelWithHysteresis(170, 160, 0) == 0, "170 cells at level 0 (160 is the plain limit): kept up to 1.25 x");
+    CHECK(os::LevelWithHysteresis(201, 160, 0) == 1, "201 cells: coarser");
+    CHECK(os::LevelWithHysteresis(300, 160, 1) == 1, "at level 1 up to 400 cells");
+    CHECK(os::LevelWithHysteresis(180, 160, 1) == 1, "180 cells at level 1: the plain choice is 1 as well");
+    CHECK(os::LevelWithHysteresis(150, 160, 1) == 1, "150 cells at level 1 would fit at level 0 but not within 0.8 x: stays");
+    CHECK(os::LevelWithHysteresis(128, 160, 1) == 0, "128 cells: finer");
+    {
+      // zooming in and out across the threshold flips at most once each way
+      int level = -1, flips = 0, last = -1;
+      for (int cells = 100; cells <= 400; cells += 3) {
+        level = os::LevelWithHysteresis(cells, 160, level);
+        if (last >= 0 && level != last) ++flips;
+        last = level;
+      }
+      for (int cells = 400; cells >= 100; cells -= 3) {
+        level = os::LevelWithHysteresis(cells, 160, level);
+        if (level != last) ++flips;
+        last = level;
+      }
+      CHECK(flips == 2, "a zoom from 100 to 400 cells and back flips the level once each way (0>1, 1>0; the plain choice flips at 160 and 320: 4 times): %d", flips);
+      // jitter around the plain threshold (160) never flips
+      level = os::LevelForView(160, 160);
+      int jitterFlips = 0;
+      for (int k = 0; k < 200; ++k) {
+        const int cells = 160 + ((k * 7) % 21) - 10;
+        const int now = os::LevelWithHysteresis(cells, 160, level);
+        if (now != level) ++jitterFlips;
+        level = now;
+      }
+      CHECK(jitterFlips == 0, "a view that jitters by +-10 cells around the threshold never flips (%d)", jitterFlips);
+    }
     CHECK(os::ColorStep(0.0f, 0.75f) == 0 && os::ColorStep(0.02f, 0.75f) == 0, "flat is not drawn");
     CHECK(os::ColorStep(0.75f, 0.75f) == os::kSteps, "at the limit is the last step");
     CHECK(os::ColorStep(0.76f, 0.75f) == os::kSteps + 1, "beyond the limit");
