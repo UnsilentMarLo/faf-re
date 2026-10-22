@@ -25,6 +25,7 @@
 #include "moho/math/Vector4f.h"
 #include "moho/math/VMatrix4.h"
 #include "moho/mesh/MeshBatch.h"
+#include "moho/mesh/MeshLodDepth.h"
 #include "moho/mesh/ShaderDictionary.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/Shadow.h"
@@ -4880,24 +4881,17 @@ namespace moho
 
       instance->UpdateInterpolatedFields();
 
-      // View-depth distance: the binary treats the first sixteen bytes of the
-      // camera transform as a plane (a,b,c,d) and dots the interpolated world
-      // position against it -- 0x007DFB7F..0x007DFBB9 reads [cam+8]*pos.z +
-      // [cam+4]*pos.y + [cam+0]*pos.x + [cam+0Ch], with `orient_` at +0x00.
-      // Those are MEMORY LANES 0..3 of the quaternion, which in Wm3's storage
-      // are (w,x,y,z). The previous body spelled them as the named fields
-      // (.x,.y,.z,.w) -- correct only while lane 0 was called .x; the
-      // scalar-first conversion moved lane 0 to .w, and this site was not
-      // converted with it, so every mesh got a garbage depth and was culled by
-      // ComputeLOD. Index the storage directly so the lane order can no
-      // longer drift with the naming.
+      // View-depth distance: the world position dotted against the fade plane
+      // (a,b,c,d) argument, i.e. the camera's `viewport.r[1]` (0x007DFB7F..
+      // 0x007DFBB9 reads [plane+8]*pos.z + [plane+4]*pos.y + [plane+0]*pos.x +
+      // [plane+0Ch]). The first reconstruction read those four floats from the
+      // camera's orientation quaternion (`camera.tranform.orient_`) instead, which
+      // made the LOD depth depend on the heading (and on the quaternion's sign,
+      // so on which way round the camera had been turned): units switched LOD and
+      // disappeared when the camera only turned. See MeshLodDepth.h.
       const Wm3::Vec3f& worldPos = instance->interpolatedPosition;
-      const Wm3::Quatf& plane = camera.tranform.orient_;
       const float distance =
-        worldPos.z * plane.m_afTuple[2]
-        + worldPos.y * plane.m_afTuple[1]
-        + plane.m_afTuple[0] * worldPos.x
-        + plane.m_afTuple[3];
+        MeshLodDepth(fadePlane.x, fadePlane.y, fadePlane.z, fadePlane.w, worldPos.x, worldPos.y, worldPos.z);
 
       const boost::shared_ptr<Mesh> mesh = instance->GetMesh();
       const MeshLOD* const lod = mesh->ComputeLOD(distance);
