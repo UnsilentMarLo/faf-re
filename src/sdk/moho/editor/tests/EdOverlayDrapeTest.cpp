@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <utility>
 #include <vector>
 
 #include "moho/editor/EdOverlayDrape.h"
@@ -228,6 +229,52 @@ int main()
     const std::uint32_t col[4] = {1, 1, 1, 1};
     od::DrapePatch(node, visible, emit, budget, 0, 0, 16, 16, c, col, 0);
     CHECK(emitted == 0, "an off screen patch emits nothing (%d)", emitted);
+  }
+
+  // ---- DrapeEdge: a grid line follows the ground ----------------------------------------------------------------------------------------------
+  {
+    const Cam cam(100.0f, 40.0f, 0.0f, 100.0f, 0.0f, 100.0f);
+    const auto edgeRun = [&](const std::function<float(int, int)>& height, const int ax, const int az, const int bx, const int bz, std::vector<std::pair<od::Node, od::Node>>& segs, const int cap) {
+      auto node = [&](const int x, const int z, od::Node& n) { n = cam.Project(static_cast<float>(x), height(x, z), static_cast<float>(z)); return true; };
+      auto visible = [](float, float, float, float) { return true; };
+      auto emit = [&](const od::Node& a, const od::Node& b) { segs.emplace_back(a, b); };
+      od::QuadBudget budget;
+      budget.cap = cap;
+      budget.committed = 1;
+      od::Node a, b;
+      node(ax, az, a);
+      node(bx, bz, b);
+      od::DrapeEdge(node, visible, emit, budget, ax, az, bx, bz, a, b, 0);
+    };
+    std::vector<std::pair<od::Node, od::Node>> flat, bumpy, tight;
+    edgeRun([](int, int) { return 0.0f; }, 64, 80, 128, 80, flat, 1000);
+    CHECK(flat.size() == 1u, "an edge over flat ground is one segment (%zu)", flat.size());
+    edgeRun([](int x, int) { return (x > 90 && x < 100) ? 12.0f : 0.0f; }, 64, 80, 128, 80, bumpy, 1000);
+    CHECK(bumpy.size() > 2u, "a ridge cuts the edge up (%zu)", bumpy.size());
+    bool chained = true;
+    for (std::size_t i = 1; i < bumpy.size(); ++i) {
+      chained = chained && bumpy[i].first.x == bumpy[i - 1].second.x && bumpy[i].first.y == bumpy[i - 1].second.y;
+    }
+    CHECK(chained, "the segments form one chain");
+    edgeRun([](int x, int) { return (x > 90 && x < 100) ? 12.0f : 0.0f; }, 64, 80, 128, 80, tight, 3);
+    CHECK(tight.size() <= 3u, "the budget limits the cutting (%zu)", tight.size());
+    // single cell edges are never cut; z follows the ends (vertical edge)
+    std::vector<std::pair<od::Node, od::Node>> one;
+    edgeRun([](int, int z) { return z == 81 ? 5.0f : 0.0f; }, 70, 80, 70, 81, one, 1000);
+    CHECK(one.size() == 1u, "one cell is one segment");
+    // the vertex z of the ends is carried
+    std::vector<std::pair<od::Node, od::Node>> zs;
+    {
+      auto node = [&](const int x, const int z, od::Node& n) { n = cam.Project(static_cast<float>(x), 0.0f, static_cast<float>(z)); n.z = 0.1f * x; return true; };
+      auto visible = [](float, float, float, float) { return true; };
+      auto emit = [&](const od::Node& a, const od::Node& b) { zs.emplace_back(a, b); };
+      od::QuadBudget budget;
+      od::Node a, b;
+      node(0, 80, a);
+      node(10, 80, b);
+      od::DrapeEdge(node, visible, emit, budget, 0, 80, 10, 80, a, b, 0);
+    }
+    CHECK(zs.size() == 1u && zs[0].first.z == 0.0f && std::fabs(zs[0].second.z - 1.0f) < 1e-6f, "the ends keep their depth");
   }
 
   // ---- colours --------------------------------------------------------------------------------------------------------------------------------

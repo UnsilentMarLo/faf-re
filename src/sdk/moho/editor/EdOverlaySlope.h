@@ -203,6 +203,7 @@ namespace moho::editor::overlayslope
       tiles_.resize(static_cast<std::size_t>(std::max(0, tilesX_)) * static_cast<std::size_t>(std::max(0, tilesZ_)));
       built_ = 0;
       kind_ = -1;
+      ++version_;
     }
 
     [[nodiscard]] int Width() const noexcept { return width_; }
@@ -212,6 +213,8 @@ namespace moho::editor::overlayslope
     [[nodiscard]] int Kind() const noexcept { return kind_; }
     [[nodiscard]] int Window() const noexcept { return window_; }
     [[nodiscard]] std::size_t Built() const noexcept { return built_; }
+    /** Moves whenever a rating that Block() can answer with changes (a tile rated, dropped, another rule): a drawing built from the ratings is stale when it moved. */
+    [[nodiscard]] unsigned Version() const noexcept { return version_; }
 
     /** Another rule or window: every rating is wrong, drop them. Returns true when something was dropped. */
     bool SetKey(const int kind, const int window)
@@ -225,6 +228,7 @@ namespace moho::editor::overlayslope
       built_ = 0;
       kind_ = kind;
       window_ = window;
+      ++version_;
       return true;
     }
 
@@ -292,6 +296,7 @@ namespace moho::editor::overlayslope
       BuildLevels(t.data.data());
       t.dirty = false;
       t.usedAt = frame;
+      ++version_;
     }
 
     /** The rating (height words) of block (bx, bz) of `level` (the block covers cells bx << level ...); 0 where no tile is rated yet. */
@@ -315,6 +320,7 @@ namespace moho::editor::overlayslope
       for (auto& t : tiles_) {
         if (t && frame - t->usedAt > age) {
           t.reset();
+          ++version_;
           if (built_ > 0) {
             --built_;
           }
@@ -333,6 +339,7 @@ namespace moho::editor::overlayslope
     int width_ = 0, height_ = 0, tilesX_ = 0, tilesZ_ = 0;
     int kind_ = -1, window_ = 0;
     std::size_t built_ = 0;
+    unsigned version_ = 0;
     std::vector<std::unique_ptr<Tile>> tiles_;
   };
 

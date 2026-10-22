@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 
 namespace moho::editor::overlaydrape
 {
@@ -37,10 +38,10 @@ namespace moho::editor::overlaydrape
     return clipW > kNearW;
   }
 
-  /** A projected ground node: screen position and the clip space w it was divided by. */
+  /** A projected ground node: screen position, the clip space w it was divided by, and the vertex z the overlay is drawn with (the depth, EdOverlayLod.h VertexZ). */
   struct Node
   {
-    float x = 0.0f, y = 0.0f, w = 1.0f;
+    float x = 0.0f, y = 0.0f, w = 1.0f, z = 0.0f;
   };
 
   /** Corner order everywhere: c[0] = (u 0, v 0), c[1] = (1, 0), c[2] = (1, 1), c[3] = (0, 1). */
@@ -198,5 +199,46 @@ namespace moho::editor::overlaydrape
       }
     }
     emit(c, col);
+  }
+
+  /**
+   * Draws the straight edge from (ax, az) to (bx, bz) (integer ground positions, one of the two coordinates equal) as a chain of screen segments that follow the real ground:
+   * the middle node is projected, and when it is more than `tolPx` away from the perspective correct middle of the chord the edge is cut in two there and both halves are tried
+   * the same way (down to single cells, `maxDepth`, the budget). `a` and `b` are the projected ends.
+   *   node(x, z, Node&) -> bool   projects the ground point (false: behind the camera)
+   *   visible(minX, minY, maxX, maxY) -> bool   false when the screen box of the edge is off screen
+   *   emit(const Node& from, const Node& to)   one finished segment
+   */
+  constexpr int kMaxEdgeDepth = 6;
+  constexpr float kEdgeTolerancePx = 0.5f;
+
+  template <class NodeFn, class VisibleFn, class EmitFn>
+  void DrapeEdge(NodeFn& node, VisibleFn& visible, EmitFn& emit, QuadBudget& budget, const int ax, const int az, const int bx, const int bz, const Node& a, const Node& b,
+                 const int depth, const int maxDepth = kMaxEdgeDepth, const float tolPx = kEdgeTolerancePx)
+  {
+    const int len = std::max(std::abs(bx - ax), std::abs(bz - az));
+    if (len >= 2 && depth < maxDepth) {
+      const int mx = ax + (bx - ax) / 2, mz = az + (bz - az) / 2;
+      Node m;
+      if (node(mx, mz, m) && InFront(m.w)) {
+        // where the chord puts the middle (perspective correct: the ends weigh by their clip w), against where the ground does
+        const float t = static_cast<float>(std::max(std::abs(mx - ax), std::abs(mz - az))) / static_cast<float>(len);
+        const float ka = (1.0f - t) * a.w, kb = t * b.w;
+        const float cx = (ka + kb) > 1.0e-12f ? (ka * a.x + kb * b.x) / (ka + kb) : a.x;
+        const float cy = (ka + kb) > 1.0e-12f ? (ka * a.y + kb * b.y) / (ka + kb) : a.y;
+        const float minX = std::min(std::min(a.x, b.x), m.x), maxX = std::max(std::max(a.x, b.x), m.x);
+        const float minY = std::min(std::min(a.y, b.y), m.y), maxY = std::max(std::max(a.y, b.y), m.y);
+        if (!visible(minX, minY, maxX, maxY)) {
+          return;
+        }
+        const float dev = std::sqrt((cx - m.x) * (cx - m.x) + (cy - m.y) * (cy - m.y));
+        if (dev > tolPx && budget.TrySplit(depth, maxDepth, 1)) {
+          DrapeEdge(node, visible, emit, budget, ax, az, mx, mz, a, m, depth + 1, maxDepth, tolPx);
+          DrapeEdge(node, visible, emit, budget, mx, mz, bx, bz, m, b, depth + 1, maxDepth, tolPx);
+          return;
+        }
+      }
+    }
+    emit(a, b);
   }
 } // namespace moho::editor::overlaydrape

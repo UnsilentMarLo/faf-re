@@ -147,11 +147,13 @@ int main()
     CHECK(s.TilesX() == 4 && s.TilesZ() == 3, "tiles %d x %d", s.TilesX(), s.TilesZ());
     CHECK(s.SetKey(0, 2), "first key");
     CHECK(!s.SetKey(0, 2), "same key keeps the tiles");
+    const unsigned versionBefore = s.Version();
     CHECK(s.NeedsRating(1, 1), "unrated tile needs rating");
     CHECK(s.Block(0, 70, 70) == 0, "unrated tile reads 0");
     s.Rate(1, 1, h, 1);
     CHECK(!s.NeedsRating(1, 1), "rated tile is up to date");
     CHECK(s.Built() == 1, "one tile built");
+    CHECK(s.Version() != versionBefore, "rating a tile moves the version (drawings built from the ratings are stale)");
     CHECK(s.Block(0, 70, 70) == std::min(65535, os::CellRating(0, 2, 70, 70, h)), "block level 0 equals the rule");
     int mx = 0;
     for (int z = 64; z < 64 + 8; ++z)
