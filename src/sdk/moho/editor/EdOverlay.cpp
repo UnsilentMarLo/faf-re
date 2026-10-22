@@ -240,6 +240,42 @@ namespace
   ProjGrid gSlopeProj;
   std::map<std::array<int, 5>, ProjGrid> gGridProj;   // by window (x0, z0, nw, nh, step): shared by every grid that has it
 
+  // A run of cells drawn as ONE straight screen quad only looks right while the nodes it skips lie on the straight line between its end nodes: over bumpy ground the chord
+  // cuts under the terrain (which pokes through the draped colour as dark slivers) or floats above it. The longest length <= `len` whose skipped top and bottom edge nodes are
+  // within half a pixel of the chord; 1 (a single cell, always exact) when none is.
+  template <class Proj>
+  int FitRun(Proj& pg, moho::CHeightField& field, moho::GeomCamera3& camera, const float vw, const float vh, const int i, const int j, int len, int& projected)
+  {
+    for (; len > 1; --len) {
+      bool ok = true;
+      for (int row = 0; row < 2 && ok; ++row) {
+        float x0, y0, x1, y1;
+        if (!pg.Get(field, camera, vw, vh, i, j + row, x0, y0, projected) || !pg.Get(field, camera, vw, vh, i + len, j + row, x1, y1, projected)) {
+          ok = false;
+          break;
+        }
+        const float dx = x1 - x0, dy = y1 - y0;
+        const float chord = std::sqrt(dx * dx + dy * dy);
+        for (int k = 1; k < len; ++k) {
+          float x, y;
+          if (!pg.Get(field, camera, vw, vh, i + k, j + row, x, y, projected)) {
+            ok = false;
+            break;
+          }
+          const float off = chord > 1.0e-3f ? std::fabs((x - x0) * dy - (y - y0) * dx) / chord : std::sqrt((x - x0) * (x - x0) + (y - y0) * (y - y0));
+          if (off > 0.5f) {
+            ok = false;
+            break;
+          }
+        }
+      }
+      if (ok) {
+        return len;
+      }
+    }
+    return 1;
+  }
+
   // green (gentle) -> yellow -> red (at the limit), purple beyond it; flat ground stays clear so the terrain shows through. `step` is a ColorStep
   // (EdOverlaySlope.h): 0 flat, 1 .. kSteps up to the limit, kSteps + 1 beyond.
   std::uint32_t SlopeColor(const int step)
@@ -940,6 +976,11 @@ namespace moho
                   bxs = nbx; bys = nby; cx = ncx; cy = ncy;
                   ++len;
                 }
+                if (ok && len > 1) {
+                  len = FitRun(gSlopeProj, *field, *camera, vw, vh, i, j, len, gPerf.slopeNodesProjected);
+                  ok = gSlopeProj.Get(*field, *camera, vw, vh, i + len, j, bxs, bys, gPerf.slopeNodesProjected) &&
+                       gSlopeProj.Get(*field, *camera, vw, vh, i + len, j + 1, cx, cy, gPerf.slopeNodesProjected);
+                }
                 if (ok) {
                   const float minX = std::min(std::min(ax, bxs), std::min(cx, dx));
                   const float maxX = std::max(std::max(ax, bxs), std::max(cx, dx));
@@ -987,24 +1028,30 @@ namespace moho
             return (moho::editor::overlaynodes::NodeAlpha(g.v[static_cast<std::size_t>(j) * g.nw + i], g.maxAlpha) << 24) | g.rgb;
           };
           for (const moho::editor::overlaynodes::Run& run : g.runs) {
-            const int i = run.i, j = run.j, len = run.len;
-            float ax, ay, bx, by, cx, cy, dx, dy;
-            if (!pg.Get(*field, *camera, vw, vh, i, j, ax, ay, gPerf.gridNodesProjected) ||
-                !pg.Get(*field, *camera, vw, vh, i + len, j, bx, by, gPerf.gridNodesProjected) ||
-                !pg.Get(*field, *camera, vw, vh, i + len, j + 1, cx, cy, gPerf.gridNodesProjected) ||
-                !pg.Get(*field, *camera, vw, vh, i, j + 1, dx, dy, gPerf.gridNodesProjected)) {
-              continue;
+            // a long run is split where the ground is not straight (FitRun)
+            int pos = 0;
+            while (pos < run.len) {
+              const int i = run.i + pos, j = run.j;
+              const int len = run.len > 1 ? FitRun(pg, *field, *camera, vw, vh, i, j, run.len - pos, gPerf.gridNodesProjected) : 1;
+              pos += len;
+              float ax, ay, bx, by, cx, cy, dx, dy;
+              if (!pg.Get(*field, *camera, vw, vh, i, j, ax, ay, gPerf.gridNodesProjected) ||
+                  !pg.Get(*field, *camera, vw, vh, i + len, j, bx, by, gPerf.gridNodesProjected) ||
+                  !pg.Get(*field, *camera, vw, vh, i + len, j + 1, cx, cy, gPerf.gridNodesProjected) ||
+                  !pg.Get(*field, *camera, vw, vh, i, j + 1, dx, dy, gPerf.gridNodesProjected)) {
+                continue;
+              }
+              const float minX = std::min(std::min(ax, bx), std::min(cx, dx));
+              const float maxX = std::max(std::max(ax, bx), std::max(cx, dx));
+              const float minY = std::min(std::min(ay, by), std::min(cy, dy));
+              const float maxY = std::max(std::max(ay, by), std::max(cy, dy));
+              if (maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh) {
+                continue;
+              }
+              const std::uint32_t ca = colorAt(i, j), cb = colorAt(i + len, j), cc = colorAt(i + len, j + 1), cd = colorAt(i, j + 1);
+              batcher->DrawQuad(V{ax, ay, 0.0f, ca, 0.0f, 0.0f}, V{bx, by, 0.0f, cb, 1.0f, 0.0f}, V{cx, cy, 0.0f, cc, 1.0f, 1.0f}, V{dx, dy, 0.0f, cd, 0.0f, 1.0f});
+              ++gPerf.gridQuads;
             }
-            const float minX = std::min(std::min(ax, bx), std::min(cx, dx));
-            const float maxX = std::max(std::max(ax, bx), std::max(cx, dx));
-            const float minY = std::min(std::min(ay, by), std::min(cy, dy));
-            const float maxY = std::max(std::max(ay, by), std::max(cy, dy));
-            if (maxX < 0.0f || maxY < 0.0f || minX > vw || minY > vh) {
-              continue;
-            }
-            const std::uint32_t ca = colorAt(i, j), cb = colorAt(i + len, j), cc = colorAt(i + len, j + 1), cd = colorAt(i, j + 1);
-            batcher->DrawQuad(V{ax, ay, 0.0f, ca, 0.0f, 0.0f}, V{bx, by, 0.0f, cb, 1.0f, 0.0f}, V{cx, cy, 0.0f, cc, 1.0f, 1.0f}, V{dx, dy, 0.0f, cd, 0.0f, 1.0f});
-            ++gPerf.gridQuads;
           }
         }
         batcher->Flush();
