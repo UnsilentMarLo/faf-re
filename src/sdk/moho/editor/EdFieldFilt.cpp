@@ -19,6 +19,9 @@
 //                and hi) | twi (raw) | area (log scale of the catchment), smooth (sigma, units).
 //   rockiness    a, optional b (soil thickness, units). Where bare rock shows: slope (slope_lo .. slope_hi degrees), convexity (radius, gain) and thin soil (soil_full units); weights w_slope,
 //                w_convex, w_soil; breakup (noise amplitude), seed.
+//   normal_map   a (heights). The map normal of the engine (CHeightField::GetNormal: (left - right, 1, top - bottom) normalized, the samples half a unit either side) as three fields in the range
+//                0..1 (n * 0.5 + 0.5, what the terrain's own normal map stores): x is the result, y and z come back as the extra outputs. span (units between the two samples of a difference),
+//                strength (scales the slope), shift (units added to the sample positions; the result's origin moves with it: 0.5 puts the samples at the centres of the map squares like the engine's normal map), signed (-1..1 instead).
 //   color_ramp   a (a mask). A gradient map: `stops` = 5 numbers per stop (position, r, g, b, a, all 0..1), positions sorted by the op; lo / hi map the input onto 0..1; interp linear | smooth |
 //                step. The result is the red channel; green, blue and alpha come back as the extra outputs g, b, a.
 //
@@ -560,6 +563,44 @@ namespace moho::editor::field
       return true;
     }
 
+    // ---- normal_map ------------------------------------------------------------------------------------------------------------------------------
+
+    bool OpNormalMap(const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = Need(a, "a", err);
+      if (src == nullptr || !MakeOut(a, out, err)) return false;
+      const float span = std::max(0.05f, static_cast<float>(a.p.N("span", 1.0)));
+      const float strength = static_cast<float>(a.p.N("strength", 1.0));
+      const float shiftUnits = static_cast<float>(a.p.N("shift", 0.0));
+      const float shift = shiftUnits / src->cell;
+      out.ox = src->ox + shiftUnits;                   // the result lies where it was computed
+      out.oz = src->oz + shiftUnits;
+      const bool raw = a.p.N("signed", 0.0) != 0.0;
+      const float half = 0.5f * span / src->cell;      // samples either side of the point
+      const float scale = strength / span;             // slope (rise per run) from a difference over `span`
+      Grid Y(out.w, out.h, out.cell, out.ox, out.oz), Z = Y;
+      Rows(out.h, [&](const int z0, const int z1) {
+        for (int z = z0; z < z1; ++z) {
+          for (int x = 0; x < out.w; ++x) {
+            const float fx = static_cast<float>(x) + shift, fz = static_cast<float>(z) + shift;
+            const float left = BilinearC(*src, fx - half, fz), right = BilinearC(*src, fx + half, fz);
+            const float top = BilinearC(*src, fx, fz - half), bottom = BilinearC(*src, fx, fz + half);
+            const float nx = (left - right) * scale, nz = (top - bottom) * scale;
+            const float inv = 1.0f / std::sqrt(nx * nx + 1.0f + nz * nz);
+            const float ex = nx * inv, ey = inv, ez = nz * inv;
+            out.At(x, z) = raw ? ex : ex * 0.5f + 0.5f;
+            Y.At(x, z) = raw ? ey : ey * 0.5f + 0.5f;
+            Z.At(x, z) = raw ? ez : ez * 0.5f + 0.5f;
+          }
+        }
+      });
+      if (a.extra != nullptr) {
+        (*a.extra)["y"] = std::move(Y);
+        (*a.extra)["z"] = std::move(Z);
+      }
+      return true;
+    }
+
     // ---- wetness ---------------------------------------------------------------------------------------------------------------------------------
 
     bool OpWetness(const OpArgs& a, Grid& out, std::string& err)
@@ -728,6 +769,7 @@ namespace moho::editor::field
         RegisterOp("stratify", &OpStratify);
         RegisterOp("occlusion", &OpOcclusion);
         RegisterOp("hillshade", &OpHillshade);
+        RegisterOp("normal_map", &OpNormalMap);
         RegisterOp("wetness", &OpWetness);
         RegisterOp("rockiness", &OpRockiness);
         RegisterOp("color_ramp", &OpColorRamp);

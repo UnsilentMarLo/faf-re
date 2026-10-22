@@ -267,6 +267,45 @@ static void PropAnalysis()
     CHECK(InRange(*full, 0.0f, 1.0f), "hillshade range");
   }
   {
+    // normal_map: the engine's GetNormal (left - right, 1, top - bottom) encoded as n * 0.5 + 0.5; flat ground is (0.5, 1, 0.5)
+    std::map<std::string, Grid> ex;
+    const GridPtr flatN = Run("normal_map", "", {{"a", L}}, &ex);
+    CHECK(std::fabs(flatN->At(10, 10) - 0.5f) < 1e-6f && std::fabs(ex["z"].At(10, 10) - 0.5f) < 1e-6f && std::fabs(ex["y"].At(10, 10) - 1.0f) < 1e-6f, "flat normal (%g %g %g)", flatN->At(10, 10), ex["y"].At(10, 10), ex["z"].At(10, 10));
+    // a plane rising 0.5 per unit towards +x: the normal leans towards -x, nx = -0.5 / sqrt(1.25)
+    Grid ramp = *Run("const", "width=65,height=65,value=0");
+    for (int z = 0; z < 65; ++z) for (int x = 0; x < 65; ++x) ramp.At(x, z) = 0.5f * static_cast<float>(x) + 0.25f * static_cast<float>(z);
+    const GridPtr rp = std::make_shared<Grid>(ramp);
+    std::map<std::string, Grid> ex2;
+    const GridPtr nx = Run("normal_map", "", {{"a", rp}}, &ex2);
+    const float len = std::sqrt(0.25f + 1.0f + 0.0625f);
+    CHECK(std::fabs(nx->At(30, 30) - (-0.5f / len * 0.5f + 0.5f)) < 1e-4f, "plane nx %g", nx->At(30, 30));
+    CHECK(std::fabs(ex2["z"].At(30, 30) - (-0.25f / len * 0.5f + 0.5f)) < 1e-4f, "plane nz %g", ex2["z"].At(30, 30));
+    CHECK(std::fabs(ex2["y"].At(30, 30) - (1.0f / len * 0.5f + 0.5f)) < 1e-4f, "plane ny %g", ex2["y"].At(30, 30));
+    // strength scales the slope, signed gives -1..1, the encoded vector is a unit vector
+    std::map<std::string, Grid> ex3;
+    const GridPtr sg = Run("normal_map", "signed=1,strength=2", {{"a", rp}}, &ex3);
+    const float len2 = std::sqrt(1.0f + 1.0f + 0.25f);
+    CHECK(std::fabs(sg->At(30, 30) - (-1.0f / len2)) < 1e-4f, "strength 2 signed nx %g", sg->At(30, 30));
+    const float ux = nx->At(20, 40) * 2.0f - 1.0f, uy = ex2["y"].At(20, 40) * 2.0f - 1.0f, uz = ex2["z"].At(20, 40) * 2.0f - 1.0f;
+    CHECK(std::fabs(ux * ux + uy * uy + uz * uz - 1.0f) < 1e-4f, "unit length (%g)", ux * ux + uy * uy + uz * uz);
+    // span 4 on a plane gives the same slope per unit; the range is 0..1 on rough ground
+    const GridPtr wide = Run("normal_map", "span=4", {{"a", rp}});
+    CHECK(std::fabs(wide->At(30, 30) - nx->At(30, 30)) < 1e-4f, "span does not change a plane (%g vs %g)", wide->At(30, 30), nx->At(30, 30));
+    CHECK(InRange(*Run("normal_map", "shift=0.5", {{"a", T}}), 0.0f, 1.0f), "normal_map range");
+    // shift 0.5 on a plane: the same normal (the plane is linear), on a bump it moves the samples by half a unit
+    const GridPtr sh5 = Run("normal_map", "shift=0.5", {{"a", rp}});
+    CHECK(std::fabs(sh5->At(30, 30) - nx->At(30, 30)) < 1e-4f, "shift on a plane");
+    CHECK(sh5->ox == 0.5f && sh5->oz == 0.5f && nx->ox == 0.0f, "shift moves the origin (%g, %g)", sh5->ox, sh5->oz);
+    // on a bump the shifted result is the unshifted normal sampled half a unit further: nx(x) with shift 0.5 equals the engine's quad normal (h(x) - h(x + 1)) at the square (x, z)
+    Grid bump = *Run("const", "width=33,height=33,value=0");
+    for (int z = 0; z < 33; ++z) for (int x = 0; x < 33; ++x) bump.At(x, z) = 0.1f * static_cast<float>((x - 16) * (x - 16));
+    const GridPtr bp = std::make_shared<Grid>(bump);
+    const GridPtr sq = Run("normal_map", "shift=0.5,signed=1", {{"a", bp}});
+    const float slope = (bump.At(10, 8) + bump.At(10, 9)) * 0.5f - (bump.At(11, 8) + bump.At(11, 9)) * 0.5f;     // left - right over the square (10, 8): both rows are equal here, so the mean of the two rows
+    const float eq = slope / std::sqrt(slope * slope + 1.0f);
+    CHECK(std::fabs(sq->At(10, 8) - eq) < 1e-4f, "square normal %g expected %g", sq->At(10, 8), eq);
+  }
+  {
     // wetness: a V valley is wetter along the floor than on its sides, and the catchment grows downhill
     GridPtr v = Run("gradient", "width=65,height=65,angle=0,lo=-1,hi=1");
     v = Run("abs", "", {{"a", v}});
