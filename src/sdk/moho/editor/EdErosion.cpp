@@ -1509,7 +1509,7 @@ namespace moho::editor::field::erosion
     constexpr float kBrushVary = 0.5f;           // every droplet its own lifetime, inertia, load and dissolving rate (breaks the evenly spaced parallel rills of identical droplets)
     constexpr float kBrushKernel = 2.0f;         // radius of the cone the droplet digs with, in samples (the digging is centred on the exact position, not on a cell)
     constexpr float kBrushRollCut = 0.4f;        // no sample is dug deeper than this below its height at the start of the dab
-    constexpr int kBrushMaxDrops = 3000;         // (a bigger brush gets the same water in fewer, bigger droplets: the cost stays bounded)
+    constexpr int kBrushMaxDrops = 2000;         // (a bigger brush gets the same water in fewer, bigger droplets: the cost stays bounded)
 
     /** The window a dab works on and its per sample brush weights. */
     struct BrushCtx
@@ -1616,10 +1616,10 @@ namespace moho::editor::field::erosion
         const std::size_t j = Ix(k.cx[q], k.cz[q], c.w);
         float a = amount * k.kw[q] / k.wsum * wt;
         if (c.rock != nullptr) a *= WinAt(c.rock, c, k.cx[q], k.cz[q]);
-        const float low = LowestAround(t, c.w, c.h, k.cx[q], k.cz[q]);
-        if (p.cut_limit > 0.0f) a = std::min(a, p.cut_limit * std::max(0.0f, t[j] - low));
         const int bx = k.cx[q] - c.x0, bz = k.cz[q] - c.z0;
         if (bx >= 0 && bz >= 0 && bx < c.ww && bz < c.wh) a = std::min(a, std::max(0.0f, t[j] - ((*c.base)[Ix(bx, bz, c.ww)] - kBrushRollCut)));
+        if (a <= 1e-7f) continue;
+        if (p.cut_limit > 0.0f) a = std::min(a, p.cut_limit * std::max(0.0f, t[j] - LowestAround(t, c.w, c.h, k.cx[q], k.cz[q])));
         if (a <= 0.0f) continue;
         t[j] -= a;
         taken += a;
