@@ -215,9 +215,10 @@ namespace moho::editor::field::t7
   inline float FadeD(const float t) { return 30.0f * t * t * (t - 1.0f) * (t - 1.0f); }
 
   /** Gradient noise about -1..1 with its analytic derivative (per lattice unit): the value is the core's Perlin (same hash, same gradients, same scale). */
-  inline float PerlinD(const double x, const double z, const std::uint32_t seed, float& dnx, float& dnz)
+  inline float PerlinD(const double x, const double z, const std::uint32_t seed, float& dnx, float& dnz, const bool fine = false)
   {
-    const float (*G)[2] = GradTable();
+    const float (*G)[2] = fine ? Gradients64() : GradTable();
+    const std::uint32_t gm = fine ? 63u : 7u;
     const double fx0 = std::floor(x);
     const double fz0 = std::floor(z);
     const int ix = static_cast<int>(fx0);
@@ -225,10 +226,10 @@ namespace moho::editor::field::t7
     const float fx = static_cast<float>(x - fx0);
     const float fz = static_cast<float>(z - fz0);
     const float u = Fade(fx), v = Fade(fz), du = FadeD(fx), dv = FadeD(fz);
-    const float* ga = G[Hash2(ix, iz, seed) & 7u];
-    const float* gb = G[Hash2(ix + 1, iz, seed) & 7u];
-    const float* gc = G[Hash2(ix, iz + 1, seed) & 7u];
-    const float* gd = G[Hash2(ix + 1, iz + 1, seed) & 7u];
+    const float* ga = G[Hash2(ix, iz, seed) & gm];
+    const float* gb = G[Hash2(ix + 1, iz, seed) & gm];
+    const float* gc = G[Hash2(ix, iz + 1, seed) & gm];
+    const float* gd = G[Hash2(ix + 1, iz + 1, seed) & gm];
     const float va = ga[0] * fx + ga[1] * fz;
     const float vb = gb[0] * (fx - 1.0f) + gb[1] * fz;
     const float vc = gc[0] * fx + gc[1] * (fz - 1.0f);
@@ -241,10 +242,18 @@ namespace moho::editor::field::t7
     return n * s;
   }
 
-  inline float Perlin(const double x, const double z, const std::uint32_t seed)
+  inline float Perlin(const double x, const double z, const std::uint32_t seed, const bool fine = false)
   {
     float dx, dz;
-    return PerlinD(x, z, seed, dx, dz);
+    return PerlinD(x, z, seed, dx, dz, fine);
+  }
+
+  /** Octave o of `rotate` noise at world position (wx, wz): the point in the octave's own frame (lattice units), see OctaveFrame in EdFieldCore.h. */
+  inline void RotatedPoint(const int o, const double px, const double pz, double& qx, double& qz)
+  {
+    const OctaveFrame& fr = OctaveFrameOf(o);
+    qx = px * fr.c - pz * fr.s + fr.ox;
+    qz = px * fr.s + pz * fr.c + fr.oz;
   }
 
   /** Fractal sum of Perlin, about 0..1 (0.5 + 0.5 * normalised sum), world position in, fixed constants. */

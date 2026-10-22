@@ -16,6 +16,8 @@
 //   dwarp        Domain warp of `a` (optional mask): kind fbm | curl | swirl | ripple | pinch. strength (units; swirl: degrees), size (units; swirl / pinch: radius), octaves, iterations (fbm: 2 =
 //                warp of a warp), angle / wavelength / phase (ripple), cx, cz (swirl / pinch centre, world), seed, edge clamp | wrap | mirror.
 //
+//   musgrave / fbm_damped also take rotate (0 default, 1: every octave in its own frame and 64 gradient directions, no lattice seams: see OctaveFrame in EdFieldCore.h).
+//
 // Every output sample is computed from the inputs and the world position alone, so the results are bit identical for any thread count.
 #pragma fp_contract(off)
 
@@ -41,6 +43,7 @@ namespace moho::editor::field
       const float hExp = static_cast<float>(a.p.N("h", 1.0));
       const float offset = static_cast<float>(a.p.N("offset", 1.0));
       const float gain = static_cast<float>(a.p.N("gain", 2.0));
+      const bool rotate = a.p.N("rotate", 0.0) >= 0.5;
       const std::string mode = a.p.S("mode", "ridged");
       if (mode != "ridged" && mode != "hybrid" && mode != "hetero") {
         err = "musgrave: mode must be ridged, hybrid or hetero";
@@ -61,7 +64,9 @@ namespace moho::editor::field
         float weight = 1.0f;
         for (int o = 0; o < octaves; ++o) {
           const std::uint32_t s = Hash32(seed * 131U + static_cast<std::uint32_t>(o) * 7919U + 17U);
-          float n = Perlin(wx * freq, wz * freq, s);
+          double qx = wx * freq, qz = wz * freq;
+          if (rotate) RotatedPoint(o, wx * freq, wz * freq, qx, qz);
+          float n = Perlin(qx, qz, s, rotate);
           n = std::max(-1.0f, std::min(1.0f, n));
           const float amp = amps[static_cast<std::size_t>(o)];
           if (kind == 0) {
@@ -106,6 +111,7 @@ namespace moho::editor::field
       const float pers = static_cast<float>(a.p.N("persistence", 0.5));
       const float lac = std::max(1.1f, static_cast<float>(a.p.N("lacunarity", 2.0)));
       const float damp = std::max(0.0f, static_cast<float>(a.p.N("damp", 1.0)));
+      const bool rotate = a.p.N("rotate", 0.0) >= 0.5;
       const Grid& g = out;
       Cells(out, [&](const int x, const int z) {
         const double wx = WorldX(g, x), wz = WorldZ(g, z);
@@ -114,7 +120,16 @@ namespace moho::editor::field
         for (int o = 0; o < octaves; ++o) {
           const std::uint32_t s = Hash32(seed * 131U + static_cast<std::uint32_t>(o) * 7919U + 17U);
           float dnx, dnz;
-          const float n = PerlinD(wx * freq, wz * freq, s, dnx, dnz);
+          double qx = wx * freq, qz = wz * freq;
+          if (rotate) RotatedPoint(o, wx * freq, wz * freq, qx, qz);
+          const float n = PerlinD(qx, qz, s, dnx, dnz, rotate);
+          if (rotate) {
+            const OctaveFrame& fr = OctaveFrameOf(o);       // the gradient back into the world frame
+            const float gx = static_cast<float>(fr.c) * dnx + static_cast<float>(fr.s) * dnz;
+            const float gz = static_cast<float>(-fr.s) * dnx + static_cast<float>(fr.c) * dnz;
+            dnx = gx;
+            dnz = gz;
+          }
           dsx += dnx;
           dsz += dnz;
           sum += amp * n / (1.0f + damp * (dsx * dsx + dsz * dsz) * 0.25f);

@@ -351,11 +351,20 @@ namespace moho::editor::field
       return g[0] * x + g[1] * z;
     }
 
+    /** The same with a chosen gradient set: the classic eight (mask 7) or the 64 evenly spread directions of `rotate` noise (mask 63). */
+    inline float GradDotT(const float (*G)[2], const std::uint32_t mask, const std::uint32_t h, const float x, const float z)
+    {
+      const float* g = G[h & mask];
+      return g[0] * x + g[1] * z;
+    }
+
     inline float Fade(const float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
 
-    /** Gradient noise, about -1..1. */
-    float Perlin(const double x, const double z, const std::uint32_t seed)
+    /** Gradient noise, about -1..1. `fine`: 64 gradient directions instead of eight (no preferred axis). */
+    float Perlin(const double x, const double z, const std::uint32_t seed, const bool fine = false)
     {
+      const float (*G)[2] = fine ? Gradients64() : kGrad;
+      const std::uint32_t gm = fine ? 63u : 7u;
       const double fx0 = std::floor(x);
       const double fz0 = std::floor(z);
       const int ix = static_cast<int>(fx0);
@@ -364,10 +373,10 @@ namespace moho::editor::field
       const float fz = static_cast<float>(z - fz0);
       const float u = Fade(fx);
       const float v = Fade(fz);
-      const float g00 = GradDot(Hash2(ix, iz, seed), fx, fz);
-      const float g10 = GradDot(Hash2(ix + 1, iz, seed), fx - 1.0f, fz);
-      const float g01 = GradDot(Hash2(ix, iz + 1, seed), fx, fz - 1.0f);
-      const float g11 = GradDot(Hash2(ix + 1, iz + 1, seed), fx - 1.0f, fz - 1.0f);
+      const float g00 = GradDotT(G, gm, Hash2(ix, iz, seed), fx, fz);
+      const float g10 = GradDotT(G, gm, Hash2(ix + 1, iz, seed), fx - 1.0f, fz);
+      const float g01 = GradDotT(G, gm, Hash2(ix, iz + 1, seed), fx, fz - 1.0f);
+      const float g11 = GradDotT(G, gm, Hash2(ix + 1, iz + 1, seed), fx - 1.0f, fz - 1.0f);
       const float a = g00 + (g10 - g00) * u;
       const float b = g01 + (g11 - g01) * u;
       return (a + (b - a) * v) * 1.41421356f;
@@ -375,9 +384,11 @@ namespace moho::editor::field
 
     constexpr float kSimplexScale = 99.2f;   // calibrated so the extremes of the 8 direction gradient set reach about +-1
 
-    /** 2D simplex noise, about -1..1. */
-    float Simplex(const double x, const double z, const std::uint32_t seed)
+    /** 2D simplex noise, about -1..1. `fine`: 64 gradient directions instead of eight. */
+    float Simplex(const double x, const double z, const std::uint32_t seed, const bool fine = false)
     {
+      const float (*G)[2] = fine ? Gradients64() : kGrad;
+      const std::uint32_t gm = fine ? 63u : 7u;
       const double F2 = 0.36602540378443865;
       const double G2 = 0.21132486540518713;
       const double s = (x + z) * F2;
@@ -399,17 +410,17 @@ namespace moho::editor::field
       float t0 = 0.5f - x0 * x0 - y0 * y0;
       if (t0 > 0.0f) {
         t0 *= t0;
-        n += t0 * t0 * GradDot(Hash2(i, j, seed), x0, y0);
+        n += t0 * t0 * GradDotT(G, gm, Hash2(i, j, seed), x0, y0);
       }
       float t1 = 0.5f - x1 * x1 - y1 * y1;
       if (t1 > 0.0f) {
         t1 *= t1;
-        n += t1 * t1 * GradDot(Hash2(i + i1, j + j1, seed), x1, y1);
+        n += t1 * t1 * GradDotT(G, gm, Hash2(i + i1, j + j1, seed), x1, y1);
       }
       float t2 = 0.5f - x2 * x2 - y2 * y2;
       if (t2 > 0.0f) {
         t2 *= t2;
-        n += t2 * t2 * GradDot(Hash2(i + 1, j + 1, seed), x2, y2);
+        n += t2 * t2 * GradDotT(G, gm, Hash2(i + 1, j + 1, seed), x2, y2);
       }
       return n * kSimplexScale;
     }
@@ -423,6 +434,7 @@ namespace moho::editor::field
       float lacunarity = 2.0f;
       int basis = 0;                 // 0 perlin, 1 simplex
       double shiftX = 0.0, shiftZ = 0.0;
+      bool rotate = false;           // every octave in its own frame (a turn and a shift) and 64 gradient directions: no lattice seams, no preferred axis
     };
 
     NoiseParams ReadNoise(const OpArgs& a, const char* const defaultBasis)
@@ -436,6 +448,7 @@ namespace moho::editor::field
       n.basis = (a.p.S("basis", defaultBasis) == "simplex") ? 1 : 0;
       n.shiftX = a.p.N("shiftx", 0.0);
       n.shiftZ = a.p.N("shiftz", 0.0);
+      n.rotate = a.p.N("rotate", 0.0) >= 0.5;
       return n;
     }
 
@@ -448,9 +461,15 @@ namespace moho::editor::field
       double freq = 1.0 / n.scale;
       for (int o = 0; o < n.octaves; ++o) {
         const std::uint32_t seed = Hash32(n.seed * 131U + static_cast<std::uint32_t>(o) * 7919U + 17U);
-        const double px = (wx + n.shiftX) * freq;
-        const double pz = (wz + n.shiftZ) * freq;
-        float s = n.basis == 1 ? Simplex(px, pz, seed) : Perlin(px, pz, seed);
+        double px = (wx + n.shiftX) * freq;
+        double pz = (wz + n.shiftZ) * freq;
+        if (n.rotate) {
+          const OctaveFrame& fr = OctaveFrameOf(o);
+          const double qx = px * fr.c - pz * fr.s + fr.ox;
+          pz = px * fr.s + pz * fr.c + fr.oz;
+          px = qx;
+        }
+        float s = n.basis == 1 ? Simplex(px, pz, seed, n.rotate) : Perlin(px, pz, seed, n.rotate);
         s = std::max(-1.0f, std::min(1.0f, s));
         float u;
         if (kind == 1) {
