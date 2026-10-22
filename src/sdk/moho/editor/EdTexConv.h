@@ -204,8 +204,13 @@ namespace moho::editor::texconv
     out.px.resize(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
     static const From own[4] = {From::R, From::G, From::B, From::A};
     for (int c = 0; c < 4; ++c) {
+      // a Keep channel with arithmetic (invert, scale, bias, centre, clamp) works on its own channel
+      Chan chan = chans[c];
+      if (chan.from == From::Keep && (chan.invert || chan.center || chan.scale != 1.0f || chan.bias != 0.0f || chan.lo != 0.0f || chan.hi != 1.0f)) {
+        chan.from = own[c];
+      }
       Plane p;
-      if (!MakePlane(chans[c], src.px, src.w, src.h, w, h, p)) {
+      if (!MakePlane(chan, src.px, src.w, src.h, w, h, p)) {
         p = Resample(PlaneOf(src.px, src.w, src.h, own[c]), w, h);
       }
       for (std::size_t i = 0; i < out.px.size(); ++i) {

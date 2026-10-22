@@ -144,6 +144,13 @@ int main()
       rok = rok && std::abs(static_cast<int>(rough.px[i].a) - static_cast<int>(want * 255.0f + 0.5f)) <= 1 && rough.px[i].r == src.px[i].r;
     }
     CHECK(rok, "roughness from spec alpha: scale -0.45, bias 0.92, clamp 0.45..0.92");
+    // a channel that keeps its source but has arithmetic (the converter's "invert the alpha") still works on that channel when the whole picture is converted
+    tc::Chan invA[4];
+    invA[3].invert = true;
+    const dds::Image ia = tc::Convert(src, 16, 8, invA);
+    bool iaok = true;
+    for (std::size_t i = 0; i < ia.px.size(); ++i) iaok = iaok && ia.px[i].a == 255 - src.px[i].a && ia.px[i].r == src.px[i].r && ia.px[i].b == src.px[i].b;
+    CHECK(iaok, "Keep + invert inverts the channel's own values");
     // luminance
     tc::Chan lum[4];
     lum[1].from = tc::From::Lum;
