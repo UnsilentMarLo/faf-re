@@ -623,6 +623,11 @@ namespace
         words[static_cast<std::size_t>(z - rect.z0) * static_cast<std::size_t>(rw) + static_cast<std::size_t>(x - rect.x0)] = ClampWord(v * 128.0f);
       }
     }
+    // a stroke that was left open (a brush stroke whose end never came) would swallow this commit into its undo step: BeginStroke does nothing while one is open and the
+    // commit would be undone together with the brush; close it first so a field commit is always a step of its own
+    while (doc.StrokeOpen()) {
+      doc.EndStroke();
+    }
     doc.BeginStroke(label);
     const std::size_t changed = doc.EditHeights(rect, words.data());
     doc.EndStroke();
