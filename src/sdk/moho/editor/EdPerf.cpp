@@ -53,6 +53,14 @@ namespace moho::editor::perf
     TConVar<bool> gConPresentWait("ed_present_wait", "Editor: 1 = Present waits for the GPU in short sleeps instead of a spin that keeps a core at 100 percent (default 1)", &gPresentWait);
     bool gParallelNormalMap = true;
     TConVar<bool> gConParNormalMap("ed_par_normalmap", "Editor: 1 = big normal map updates (map load, whole map edits) use the worker pool (default 1)", &gParallelNormalMap);
+    float gUiGcKb = 8192.0f;
+    float gSimGcKb = 8192.0f;
+    float gGcMaxSeconds = 60.0f;
+    TConVar<float> gConUiGc("ed_ui_gc_kb", "Editor: the UI Lua state's forced full collection (every 5 s) runs only after this many KiB of new heap, 0 = always (default 8192)", &gUiGcKb);
+    TConVar<float> gConSimGc("ed_sim_gc_kb", "Editor: the sim Lua state's forced full collection (every 7 s) runs only after this many KiB of new heap, 0 = always (default 8192)", &gSimGcKb);
+    TConVar<float> gConGcMax("ed_gc_max_seconds", "Editor: longest time between two forced Lua collections while the heap does not grow (default 60)", &gGcMaxSeconds);
+    GcGate gUiGate;
+    GcGate gSimGate;
     TConVar<float> gConIdleSeconds("ed_idle_seconds", "Editor: seconds without input before ed_fps_idle applies (default 10)", &gIdleSeconds);
 
     // ---- clock ----------------------------------------------------------------------------------------------------------------------------------
@@ -256,6 +264,26 @@ namespace moho::editor::perf
     };
     const PresentSleepInstaller gPresentSleepInstaller{};
   } // namespace
+
+  bool UiGcDue(const int heapKb, const float dtSeconds) noexcept
+  {
+    return gUiGate.Due(heapKb, dtSeconds, static_cast<long>(gUiGcKb), gGcMaxSeconds);
+  }
+
+  void UiGcDone(const int heapKb) noexcept
+  {
+    gUiGate.Done(heapKb);
+  }
+
+  bool SimGcDue(const int heapKb, const float dtSeconds) noexcept
+  {
+    return gSimGate.Due(heapKb, dtSeconds, static_cast<long>(gSimGcKb), gGcMaxSeconds);
+  }
+
+  void SimGcDone(const int heapKb) noexcept
+  {
+    gSimGate.Done(heapKb);
+  }
 
   bool ParallelNormalMapEnabled() noexcept
   {

@@ -129,4 +129,39 @@ namespace moho::editor::perf
     std::int64_t lastStart_ = 0;
     bool started_ = false;
   };
+
+  /**
+   * Decides whether the periodic forced full collection of a Lua state is worth its pause. The engine forces one every 5 s of frame time in the UI state
+   * (`CUIManager::Frame`) and every 70 ticks in the sim state (`Sim::AdvanceBeat`), whatever the state is doing. A full collection of the editor's UI state (65,000 lines of
+   * modules, catalogs) or of the sim state (every blueprint) stops the thread for as long as the live heap is big, est. tens to hundreds of milliseconds, and an idle editor does
+   * it for nothing. The gate lets it run when the heap grew by `minGrowthKb` since the last forced collection finished (there is garbage to find) or when `maxSeconds` have
+   * passed (native resources held by dead Lua objects, textures, are not in the Lua heap's size and must not wait forever). `minGrowthKb <= 0` = always: the original behaviour.
+   * Lua's own threshold (collect when the heap doubled) stays in force either way.
+   */
+  class GcGate
+  {
+  public:
+    /** `heapKb`: the state's heap now; `dtSeconds`: time since the previous call. true = collect now (and call Done with the heap after it). */
+    [[nodiscard]] bool Due(const long heapKb, const double dtSeconds, const long minGrowthKb, const double maxSeconds) noexcept
+    {
+      if (minGrowthKb <= 0) {
+        return true;
+      }
+      since_ += dtSeconds;
+      if (heapKb < afterKb_) {
+        afterKb_ = heapKb;   // the heap shrank by itself (Lua's own collection): measure growth from there
+      }
+      return heapKb - afterKb_ >= minGrowthKb || since_ >= maxSeconds;
+    }
+
+    void Done(const long heapKbAfter) noexcept
+    {
+      afterKb_ = heapKbAfter;
+      since_ = 0.0;
+    }
+
+  private:
+    long afterKb_ = 0;
+    double since_ = 0.0;
+  };
 } // namespace moho::editor::perf

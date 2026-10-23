@@ -11,6 +11,7 @@
 #include <cmath>
 
 #include "moho/editor/EditorDocument.h"
+#include "moho/editor/EdPerf.h"
 #include <cstdarg>
 #include <cstdio>
 #include <cstddef>
@@ -10675,7 +10676,12 @@ void Sim::AdvanceBeat(const int amt)
   }
 
   if (mLuaState && mLuaState->m_state && (mCurTick % 70u) == 0u) {
-    lua_setgcthreshold(mLuaState->m_state, 0);
+    // EDITOR: the forced full collection of the sim state (every blueprint lives in it: a pause of est. 100 ms on the Sim thread) runs when the heap grew, not every 7 s
+    // whatever happens (moho/editor/EdPerf.cpp, `ed_sim_gc_kb 0` = always, as before). Lua's own threshold (heap doubled) stays in force.
+    if (moho::editor::perf::SimGcDue(lua_getgccount(mLuaState->m_state), 7.0f)) {
+      lua_setgcthreshold(mLuaState->m_state, 0);
+      moho::editor::perf::SimGcDone(lua_getgccount(mLuaState->m_state));
+    }
   }
 
   // +0x08FC latch: set here in AdvanceBeat, cleared in Sim::Sync.

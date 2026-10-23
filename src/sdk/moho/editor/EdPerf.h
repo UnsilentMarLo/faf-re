@@ -11,6 +11,9 @@
 //   ed_idle_seconds   10
 //   ed_present_wait   1      DeviceD3D9::Present waits for the GPU in short sleeps instead of a spin that keeps a core at 100 percent (EdPerf.cpp, PresentSleep)
 //   ed_par_normalmap  1      big normal map updates (map load, whole map edits) use the worker pool of the field engine (CWldMap.cpp, UpdateNormalMap)
+//   ed_ui_gc_kb       8192   the UI state's forced full GC (every 5 s) runs only after this much new Lua heap, or after ed_gc_max_seconds; 0 = always (the original)
+//   ed_sim_gc_kb      8192   the same for the sim state (every 70 ticks)
+//   ed_gc_max_seconds 60
 // Lua natives:
 //   ed_perf_loop([reset])  -> { fps, frameMs, maxFrameMs, mainMs, dispatchMs, waitMs, idleMs, presentMs, renderMs, cap, state, vsync, frames }
 //   ed_perf_threads()      -> { { id, name, cpu, totalMs, main }, ... }  cpu = percent of one core since the last call
@@ -35,6 +38,16 @@ namespace moho::editor::perf
 
   /** `ed_par_normalmap` (default 1): CWldTerrainRes::UpdateNormalMap splits big updates over the field engine's worker pool. */
   [[nodiscard]] bool ParallelNormalMapEnabled() noexcept;
+
+  /**
+   * The forced full Lua collections (`CUIManager::Frame` every 5 s of frame time on the main thread, `Sim::AdvanceBeat` every 70 ticks on the Sim thread): `Due` says whether
+   * this one is worth its pause (heap grew by `ed_ui_gc_kb` / `ed_sim_gc_kb` KiB since the last one, or `ed_gc_max_seconds` passed), `Done` is called after the collection with the
+   * heap size. See GcGate in EdPerfPolicy.h. `heapKb` = `lua_getgccount(state)`.
+   */
+  [[nodiscard]] bool UiGcDue(int heapKb, float dtSeconds) noexcept;
+  void UiGcDone(int heapKb) noexcept;
+  [[nodiscard]] bool SimGcDue(int heapKb, float dtSeconds) noexcept;
+  void SimGcDone(int heapKb) noexcept;
 
   /** Time the loop spent blocked in the OS wait after the frame (nothing to do). */
   void NoteIdleWait(std::int64_t startNs) noexcept;

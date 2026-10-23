@@ -173,11 +173,69 @@ static void TestPacer()
   CHECK(Pacer::Period(1.0f) == Pacer::Period(kMinCap), "period is clamped to the minimum cap");
 }
 
+static void TestGcGate()
+{
+  // off (0): every call collects, the original behaviour
+  {
+    GcGate g;
+    CHECK(g.Due(1000, 5.0, 0, 60.0), "gate off: always due");
+    g.Done(1000);
+    CHECK(g.Due(1000, 5.0, 0, 60.0), "gate off: still always due");
+  }
+  // an idle state: heap constant, nothing to find; due only at the time limit
+  {
+    GcGate g;
+    g.Done(100000);   // 100 MB after the last collection
+    int due = 0;
+    double t = 0;
+    for (int i = 0; i < 40; ++i) {   // 40 calls of 5 s = 200 s idle
+      t += 5.0;
+      if (g.Due(100000, 5.0, 8192, 60.0)) {
+        ++due;
+        g.Done(100000);
+      }
+    }
+    CHECK(due == 3, "200 s idle: one collection per 60 s limit (3), got %d", due);
+    (void)t;
+  }
+  // garbage appears: due on the first call after 8 MB of growth
+  {
+    GcGate g;
+    g.Done(100000);
+    CHECK(!g.Due(104000, 5.0, 8192, 60.0), "4 MB of growth: not yet");
+    CHECK(g.Due(108192, 5.0, 8192, 60.0), "8 MB of growth: due");
+    g.Done(101000);
+    CHECK(!g.Due(102000, 5.0, 8192, 60.0), "1 MB after the collection: not due");
+  }
+  // Lua collected on its own (heap shrank): growth is measured from the smaller heap
+  {
+    GcGate g;
+    g.Done(200000);
+    CHECK(!g.Due(120000, 5.0, 8192, 60.0), "shrunk heap: not due");
+    CHECK(!g.Due(125000, 5.0, 8192, 60.0), "5 MB above the new low: not due");
+    CHECK(g.Due(129000, 5.0, 8192, 60.0), "9 MB above the new low: due");
+  }
+  // the time limit counts across skipped calls and restarts after Done
+  {
+    GcGate g;
+    g.Done(1000);
+    bool due = false;
+    for (int i = 0; i < 11 && !due; ++i) {
+      due = g.Due(1000, 5.0, 8192, 60.0);
+    }
+    CHECK(!due, "55 s: not due");
+    CHECK(g.Due(1000, 5.0, 8192, 60.0), "60 s: due");
+    g.Done(1000);
+    CHECK(!g.Due(1000, 5.0, 8192, 60.0), "right after Done: not due");
+  }
+}
+
 int main()
 {
   TestCaps();
   TestStateName();
   TestPacer();
+  TestGcGate();
   std::printf("EdPerfPolicyTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
 }
