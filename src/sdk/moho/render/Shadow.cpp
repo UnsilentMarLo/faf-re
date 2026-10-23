@@ -523,14 +523,32 @@ namespace moho
     CD3DDevice* const device = D3D_GetDevice();
     (void)device->GetResources();
 
+    // EDITOR: what the render targets are (EdShadowCache.h)
+    moho::editor::shadowcache::State& cacheState = ShadowCacheStates()[this];
+    moho::editor::shadowcache::Key cacheKey;
+    cacheKey.size = mShadowSize;
+    cacheKey.fidelity = mShadowFidelity;
+    cacheKey.blur = mShadowBlurEnabled;
+    cacheKey.owner = this;
+    cacheKey.targets[0] = mShadowMap.get();
+    cacheKey.targets[1] = mBlurTargetA.get();
+    cacheKey.targets[2] = mBlurTargetB.get();
+
     if (!mShadowCameraValid) {
-      // EDITOR: the targets are cleared below, the map they held is gone
-      moho::editor::shadowcache::Invalidate(ShadowCacheStates()[this]);
+      // EDITOR: the targets already hold the cleared map of the frame before (zoomed out beyond ren_ShadowLOD, a long stay in an overview): three clears of the whole map less
+      if (moho::editor::shadowcache::StillCleared(cacheState, cacheKey, ren_ShadowCache)) {
+        return;
+      }
+      // the targets are cleared below, the map they held is gone
+      moho::editor::shadowcache::Invalidate(cacheState);
       // Nothing to draw - just leave the targets bound and cleared.
       device->SetRenderTarget1(mShadowMap.get(), mDepthStencil.get(), true, -1, 1.0f, 0);
       if (mShadowBlurEnabled) {
         device->SetRenderTarget1(mBlurTargetA.get(), mDepthStencil.get(), true, -1, 1.0f, 0);
         device->SetRenderTarget1(mBlurTargetB.get(), mDepthStencil.get(), true, -1, 1.0f, 0);
+      }
+      if (ren_ShadowCache) {
+        moho::editor::shadowcache::MarkCleared(cacheState, cacheKey);
       }
       return;
     }
@@ -577,21 +595,12 @@ namespace moho
     meshRenderer->Batch(REN_GetGameTick(), REN_GetSimDeltaSeconds(), mCamera, viewCamera.viewport.r[1]);
     sc::gAccumulateBones = false;
 
-    sc::State& cacheState = ShadowCacheStates()[this];
-    sc::Key cacheKey;
     bool cacheUsable = false;
     if (ren_ShadowCache) {
       moho::editor::renderstats::ScopedMs sceneTimer(moho::editor::renderstats::gCur.shadowSceneMs);
       cacheUsable = ShadowSceneSignature(*meshRenderer, cacheKey.scene);
       if (cacheUsable) {
         std::memcpy(cacheKey.lightViewProjection, &mCamera.viewProjection, sizeof(cacheKey.lightViewProjection));
-        cacheKey.size = mShadowSize;
-        cacheKey.fidelity = mShadowFidelity;
-        cacheKey.blur = mShadowBlurEnabled;
-        cacheKey.owner = this;
-        cacheKey.targets[0] = mShadowMap.get();
-        cacheKey.targets[1] = mBlurTargetA.get();
-        cacheKey.targets[2] = mBlurTargetB.get();
         if (sc::Decide(cacheState, cacheKey, ren_ShadowCache, ren_ShadowCacheTrees, ren_ShadowCacheMaxAge) == sc::Decision::Reuse) {
           ++moho::editor::renderstats::gShadowHits;
           moho::editor::renderstats::gCur.shadowReused = 1;
@@ -600,9 +609,8 @@ namespace moho
         ++moho::editor::renderstats::gShadowMisses;
       }
     }
-    if (!cacheUsable) {
-      sc::Invalidate(cacheState);
-    }
+    // the held map is replaced from here on; only a pass that ran to its end stores the new one (an error inside the pass must not leave a half drawn map marked as good)
+    sc::Invalidate(cacheState);
     moho::editor::renderstats::gCur.shadowRendered = 1;
 
     // Depth pass into the shadow map.

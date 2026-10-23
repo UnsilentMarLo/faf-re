@@ -92,6 +92,8 @@ namespace moho::editor::shadowcache
     Key key;
     std::uint8_t timeMask = 0;     // the map that is held was drawn with depth techniques that depend on the clock (kTimeWind, kTimeOther)
     int age = 0;                   // frames the held map has been reused
+    bool cleared = false;          // the targets hold the cleared map of a frame without a valid light camera (zoomed out beyond ren_ShadowLOD)
+    Key clearedKey;                // which targets were cleared (only owner, size, fidelity, blur and targets count)
     // counters for ed_render_stats (since the start)
     std::uint32_t hits = 0;
     std::uint32_t misses = 0;
@@ -132,6 +134,29 @@ namespace moho::editor::shadowcache
     return Decision::Render;
   }
 
+  [[nodiscard]] inline bool SameTargets(const Key& a, const Key& b) noexcept
+  {
+    return a.size == b.size && a.fidelity == b.fidelity && a.blur == b.blur && a.owner == b.owner && a.targets[0] == b.targets[0] && a.targets[1] == b.targets[1] &&
+           a.targets[2] == b.targets[2];
+  }
+
+  /**
+   * A frame with no valid light camera clears the targets so the shaders see "no shadow". The clear is not repeated while the targets are the same objects and nothing was drawn
+   * into them since (a drawn map goes through Store, which forgets the clear).
+   */
+  [[nodiscard]] inline bool StillCleared(const State& state, const Key& now, const bool enabled) noexcept
+  {
+    return enabled && state.cleared && SameTargets(state.clearedKey, now);
+  }
+
+  inline void MarkCleared(State& state, const Key& now) noexcept
+  {
+    state.valid = false;
+    state.age = 0;
+    state.cleared = true;
+    state.clearedKey = now;
+  }
+
   /** The pass has just drawn the map for `key`; `timeMask`: the kTime... bits of the depth techniques it used. */
   inline void Store(State& state, const Key& key, const std::uint8_t timeMask) noexcept
   {
@@ -139,6 +164,7 @@ namespace moho::editor::shadowcache
     state.key = key;
     state.timeMask = timeMask;
     state.age = 0;
+    state.cleared = false;
   }
 
   /** The held map is gone or can no longer be trusted (targets released, settings changed). */
@@ -146,6 +172,7 @@ namespace moho::editor::shadowcache
   {
     state.valid = false;
     state.age = 0;
+    state.cleared = false;
   }
 
   /**

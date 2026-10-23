@@ -205,6 +205,35 @@ static void TestDecide()
   sc::Store(other, k, static_cast<std::uint8_t>(sc::kTimeWind | sc::kTimeOther));
   CHECK(sc::Decide(other, k, true, true, 300) == sc::Decision::Render, "wind and unknown: never held");
 
+  // the cleared map of a frame without a light camera
+  {
+    sc::State cl;
+    const sc::Key t = MakeKey(0);
+    CHECK(!sc::StillCleared(cl, t, true), "nothing cleared yet");
+    sc::MarkCleared(cl, t);
+    CHECK(sc::StillCleared(cl, t, true), "cleared and the targets are the same: the clear is not repeated");
+    CHECK(!sc::StillCleared(cl, t, false), "cvar off: cleared again");
+    sc::Key o = t;
+    o.scene = 99;
+    o.lightViewProjection[0] = 5.0f;
+    CHECK(sc::StillCleared(cl, o, true), "the scene and the light matrix do not matter for a cleared target");
+    static int fresh;
+    o = t;
+    o.targets[2] = &fresh;
+    CHECK(!sc::StillCleared(cl, o, true), "a rebuilt target is not cleared");
+    o = t;
+    o.size = 512;
+    CHECK(!sc::StillCleared(cl, o, true), "another size");
+    CHECK(sc::Decide(cl, t, true, false, 300) == sc::Decision::Render, "a cleared target is never a held map");
+    sc::Store(cl, t, 0);
+    CHECK(!sc::StillCleared(cl, t, true), "drawing a map forgets the clear");
+    sc::MarkCleared(cl, t);
+    CHECK(sc::Decide(cl, t, true, false, 300) == sc::Decision::Render, "after a clear the held map is gone");
+    sc::Store(cl, t, 0);
+    sc::Invalidate(cl);
+    CHECK(!sc::StillCleared(cl, t, true) && !cl.valid, "invalidated: neither");
+  }
+
   // classes of the techniques of mesh.fx
   CHECK(sc::ClassifyDepthTechnique("Depth") == 0, "Depth");
   CHECK(sc::ClassifyDepthTechnique("DepthClip") == 0, "DepthClip");
