@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
@@ -1701,7 +1702,61 @@ namespace moho::editor::field
 
   void RegisterOp(const char* const name, const ExternalOpFn fn) { ExternalOps()[name] = fn; }
 
+  namespace
+  {
+    std::atomic<OpInterceptor> gInterceptor{nullptr};
+    std::mutex gStatsMutex;
+    std::map<std::string, OpStat>& StatTable()
+    {
+      static std::map<std::string, OpStat> table;
+      return table;
+    }
+  } // namespace
+
+  void SetOpInterceptor(const OpInterceptor fn) { gInterceptor.store(fn); }
+
+  void NoteOpGpu(const std::string& name, const double ms)
+  {
+    const std::lock_guard<std::mutex> lock(gStatsMutex);
+    OpStat& s = StatTable()[name];
+    ++s.gpuCalls;
+    s.gpuMs += ms;
+  }
+
+  void NoteOpFallback(const std::string& name)
+  {
+    const std::lock_guard<std::mutex> lock(gStatsMutex);
+    ++StatTable()[name].fallbacks;
+  }
+
+  std::map<std::string, OpStat> OpStats(const bool reset)
+  {
+    const std::lock_guard<std::mutex> lock(gStatsMutex);
+    std::map<std::string, OpStat> copy = StatTable();
+    if (reset) {
+      StatTable().clear();
+    }
+    return copy;
+  }
+
   bool RunOp(const std::string& name, const OpArgs& args, Grid& out, std::string& err)
+  {
+    if (const OpInterceptor intercept = gInterceptor.load(); intercept != nullptr && (Registry().count(name) != 0 || ExternalOps().count(name) != 0) && intercept(name, args, out)) {
+      return true;
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool ok = RunOpCpu(name, args, out, err);
+    if (Registry().count(name) != 0 || ExternalOps().count(name) != 0) {
+      const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+      const std::lock_guard<std::mutex> lock(gStatsMutex);
+      OpStat& s = StatTable()[name];
+      ++s.cpuCalls;
+      s.cpuMs += ms;
+    }
+    return ok;
+  }
+
+  bool RunOpCpu(const std::string& name, const OpArgs& args, Grid& out, std::string& err)
   {
     const auto it = Registry().find(name);
     const auto ext = ExternalOps().find(name);

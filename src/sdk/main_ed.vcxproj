@@ -192,7 +192,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(FafFfmpegRoot)\lib;$(DirectXLibX86);$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;windowscodecs.lib;ole32.lib;comdlg32.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;d3d11.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;windowscodecs.lib;ole32.lib;comdlg32.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/IGNORE:4006 %(AdditionalOptions)</AdditionalOptions>
       <IgnoreSpecificDefaultLibraries>msvcrt.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ForceFileOutput>Enabled</ForceFileOutput>
@@ -240,7 +240,7 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q 
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(FafFfmpegRoot)\lib;$(DirectXLibX86);$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;windowscodecs.lib;ole32.lib;comdlg32.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;d3d11.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;windowscodecs.lib;ole32.lib;comdlg32.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/IGNORE:4006 %(AdditionalOptions)</AdditionalOptions>
       <!-- Mirror of the Debug link, which excludes the release CRT so nothing
            can drag it in beside the debug one. This configuration uses the
@@ -301,7 +301,7 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q 
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(FafFfmpegRoot)\lib;$(DirectXLibX64);$(FafRepoRoot)dependencies\zlib-1.2.3;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;windowscodecs.lib;ole32.lib;comdlg32.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;d3d11.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;windowscodecs.lib;ole32.lib;comdlg32.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/IGNORE:4006 $(FafX64AddressLinkOptions) %(AdditionalOptions)</AdditionalOptions>
       <IgnoreSpecificDefaultLibraries>msvcrt.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ForceFileOutput>Enabled</ForceFileOutput>
@@ -334,7 +334,7 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q 
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(FafFfmpegRoot)\lib;$(DirectXLibX64);$(FafRepoRoot)dependencies\zlib-1.2.3;$(FafRepoRoot)dependencies\wxWindows-2.4.2\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;windowscodecs.lib;ole32.lib;comdlg32.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>avformat.lib;avcodec.lib;avutil.lib;swscale.lib;swresample.lib;ws2_32.lib;d3d9.lib;d3dx9.lib;d3d10.lib;d3d11.lib;dxgi.lib;dxguid.lib;dsound.lib;x3daudio.lib;legacy_stdio_definitions.lib;legacy_stdio_wide_specifiers.lib;dbghelp.lib;winmm.lib;version.lib;comctl32.lib;shlwapi.lib;faultrep.lib;zlib.lib;wxmswu.lib;regex.lib;png.lib;jpeg.lib;tiff.lib;windowscodecs.lib;ole32.lib;comdlg32.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/IGNORE:4006 $(FafX64AddressLinkOptions) %(AdditionalOptions)</AdditionalOptions>
       <IgnoreSpecificDefaultLibraries>msvcrtd.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ForceFileOutput>Enabled</ForceFileOutput>
@@ -1272,6 +1272,9 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q 
     <ClCompile Include="moho\editor\EdPerf.cpp" />
     <ClCompile Include="moho\editor\EdActivity.cpp" />
     <ClCompile Include="moho\editor\EdRenderStats.cpp" />
+    <ClCompile Include="moho\editor\EdGpu.cpp" />
+    <ClCompile Include="moho\editor\EdGpuOps.cpp" />
+    <ClCompile Include="moho\editor\EdGpuLua.cpp" />
     <ClCompile Include="moho\editor\EdTexConv.cpp" />
     <ClCompile Include="moho\editor\EdUnitBones.cpp" />
     <ClCompile Include="moho\editor\EdWindow.cpp" />

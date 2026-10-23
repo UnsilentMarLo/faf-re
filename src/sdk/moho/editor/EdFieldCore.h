@@ -65,8 +65,33 @@ namespace moho::editor::field
   using ExternalOpFn = bool (*)(const OpArgs&, Grid&, std::string&);
   void RegisterOp(const char* name, ExternalOpFn fn);
 
-  /** Runs op `name`. false with `err` set on a bad op name, missing input or parameter. */
+  /**
+   * An optional front door for ops (the GPU compute backend, EdGpuOps.cpp). RunOp asks the interceptor first: true = it made `out` (RunOp returns true at once), false = run the CPU op.
+   * The interceptor must leave `out` untouched when it returns false, must never throw, and must be thread safe (ops can run on worker threads). Null (the default) = every op is a CPU op.
+   */
+  using OpInterceptor = bool (*)(const std::string& name, const OpArgs& args, Grid& out);
+  void SetOpInterceptor(OpInterceptor fn);
+
+  /** Runs op `name`. false with `err` set on a bad op name, missing input or parameter. Consults the interceptor first. */
   bool RunOp(const std::string& name, const OpArgs& args, Grid& out, std::string& err);
+
+  /** RunOp without the interceptor and without statistics: always the CPU op (the GPU self test and the tests compare against it). */
+  bool RunOpCpu(const std::string& name, const OpArgs& args, Grid& out, std::string& err);
+
+  // ---- per-op statistics (which backend ran how many ops, for the perf report) -------------------------------------------------------------------------
+  struct OpStat
+  {
+    std::uint64_t cpuCalls = 0;
+    double cpuMs = 0.0;
+    std::uint64_t gpuCalls = 0;
+    double gpuMs = 0.0;
+    std::uint64_t fallbacks = 0;   // the GPU was tried and failed, the CPU op ran instead
+  };
+  /** RunOp records the CPU runs itself (RunOpCpu does not); the interceptor records its GPU runs and fall-backs. Thread safe. */
+  void NoteOpGpu(const std::string& name, double ms);
+  void NoteOpFallback(const std::string& name);
+  /** A copy of the table (op name -> stat). `reset` clears it afterwards. */
+  [[nodiscard]] std::map<std::string, OpStat> OpStats(bool reset);
 
   /** Names of all ops (sorted). */
   [[nodiscard]] const std::vector<std::string>& OpNames();
