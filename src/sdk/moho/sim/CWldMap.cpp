@@ -27,6 +27,8 @@
 #include "legacy/containers/Map.h"
 #include "legacy/containers/Tree.h"
 #include "legacy/containers/Vector.h"
+#include "moho/editor/EdFieldCore.h"
+#include "moho/editor/EdPerf.h"
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/misc/StartupHelpers.h"
@@ -1023,6 +1025,9 @@ namespace
       loadControl.mHandle->UpdateLoadingProgress();
     }
   }
+
+  /// EDITOR: normal map updates smaller than this many 4x4 blocks (a brush dab is a few dozen) stay on the calling thread.
+  constexpr std::int64_t kParallelNormalMapMinBlocks = 4096;
 } // namespace
 
 namespace moho
@@ -2961,8 +2966,8 @@ namespace moho
           continue;
         }
 
-        auto* blockRowBytes = static_cast<std::uint8_t*>(mappedBits);
-        for (std::int32_t localZ = lockRect.z0; localZ < lockRect.z1; localZ += 4) {
+        // One row of 4x4 blocks: reads the height field, writes only its own row of the locked texture.
+        const auto encodeBlockRow = [&](const std::int32_t localZ, std::uint8_t* const blockRowBytes) {
           auto* blockOutput = reinterpret_cast<std::uint64_t*>(blockRowBytes);
           for (std::int32_t localX = lockRect.x0; localX < lockRect.x1; localX += 4) {
             TerrainNormalEncodeBlock block{};
@@ -2981,11 +2986,34 @@ namespace moho
 
             *blockOutput++ = moho::DXT_EncodeAlphaBlock(block.mNormalX, 1, 4);
             *blockOutput++ = moho::DXT_EncodeGreenBlock(block.mNormalZ);
-
-            TickLoadingProgress(loadControl);
           }
+        };
 
-          blockRowBytes += pitchBytes;
+        auto* const lockedBytes = static_cast<std::uint8_t*>(mappedBits);
+        const std::int32_t blockRowCount = (lockRect.z1 - lockRect.z0 + 3) / 4;
+        const std::int64_t blockCount = static_cast<std::int64_t>(blockRowCount) * ((lockRect.x1 - lockRect.x0 + 3) / 4);
+        if (blockCount >= kParallelNormalMapMinBlocks && moho::editor::perf::ParallelNormalMapEnabled()) {
+          // EDITOR: block rows are independent (pure reads of the height field, each writes its own row of the texture), so a big update (a map load, a whole map edit)
+          // is split over the field engine's worker pool in batches of rows; the loading progress (which is also the abort check and throws) stays on this thread, once
+          // per row after each batch. The bytes are identical to the serial loop below (docs/projects/editor/PERFORMANCE.md).
+          constexpr std::int32_t kBatchRows = 64;
+          for (std::int32_t batchStart = 0; batchStart < blockRowCount; batchStart += kBatchRows) {
+            const std::int32_t batchEnd = std::min(blockRowCount, batchStart + kBatchRows);
+            moho::editor::field::ParallelFor(batchEnd - batchStart, [&](const int index) {
+              const std::int32_t blockRow = batchStart + index;
+              encodeBlockRow(lockRect.z0 + blockRow * 4, lockedBytes + static_cast<std::size_t>(blockRow) * pitchBytes);
+            });
+            for (std::int32_t row = batchStart; row < batchEnd; ++row) {
+              TickLoadingProgress(loadControl);
+            }
+          }
+        } else {
+          auto* blockRowBytes = lockedBytes;
+          for (std::int32_t localZ = lockRect.z0; localZ < lockRect.z1; localZ += 4) {
+            encodeBlockRow(localZ, blockRowBytes);
+            TickLoadingProgress(loadControl);
+            blockRowBytes += pitchBytes;
+          }
         }
 
         (void)sheet->Unlock();

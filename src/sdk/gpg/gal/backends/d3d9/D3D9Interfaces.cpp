@@ -39,6 +39,7 @@
 #include <d3dx9.h>
 
 #include <bit>
+#include <chrono>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -3286,6 +3287,9 @@ namespace gpg::gal
         }
     }
 
+    /// EDITOR: set by moho/editor/EdPerf.cpp; sleeps a short while and returns true, or returns false when it cannot (see DeviceD3D9::Present).
+    bool (*gPresentWaitSleep)() = nullptr;
+
     /**
      * Address: 0x008ED640 (FUN_008ED640)
      *
@@ -3296,8 +3300,20 @@ namespace gpg::gal
     {
         Func1();
         IDirect3DQuery9* const frameEventQuery = mFrameEventQuery;
-        while (frameEventQuery->GetData(nullptr, 0U, D3DGETDATA_FLUSH) == 1)
+        // EDITOR: the original loop below polls with the flush flag as fast as it can, a core at 100 percent for as long as the GPU is behind (a frame, or the vsync wait of
+        // the one before). The flag is only needed once (it submits the pending commands); after 100 microseconds of spinning the editor's hook (moho/editor/EdPerf.cpp,
+        // `ed_present_wait`) sleeps about 0.3 ms between polls. No hook, or a hook that cannot sleep: the original loop, unchanged.
+        if (frameEventQuery->GetData(nullptr, 0U, D3DGETDATA_FLUSH) == 1)
         {
+            bool sleeping = gPresentWaitSleep != nullptr;
+            const std::chrono::steady_clock::time_point spinStart = std::chrono::steady_clock::now();
+            while (frameEventQuery->GetData(nullptr, 0U, sleeping ? 0U : D3DGETDATA_FLUSH) == 1)
+            {
+                if (sleeping && std::chrono::steady_clock::now() - spinStart > std::chrono::microseconds(100) && !gPresentWaitSleep())
+                {
+                    sleeping = false;   // cannot sleep here: spin as before
+                }
+            }
         }
 
         const HRESULT result = mDevice->Present(nullptr, nullptr, nullptr, nullptr);

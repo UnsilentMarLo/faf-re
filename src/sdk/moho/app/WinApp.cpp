@@ -44,6 +44,7 @@
 #include "moho/misc/TimeBar.h"
 #include "moho/resource/ResourceManager.h"
 #include "moho/core/Thread.h"
+#include "moho/editor/EdPerf.h"
 
 #include "gpg/core/reflection/StaticInitPhase.h"
 
@@ -1709,6 +1710,13 @@ namespace
     return static_cast<int>(rounded) + ((value < rounded) ? -1 : 0);
   }
 
+  /** EDITOR: the HWND of the main window for the frame rate limiter (null before it exists). */
+  void* editorMainWindowHandle()
+  {
+    wxWindow* const window = moho::WIN_GetMainWindow();
+    return window != nullptr ? reinterpret_cast<void*>(static_cast<std::uintptr_t>(window->GetHandle())) : nullptr;
+  }
+
   DWORD ComputeWaitTimeoutMs()
   {
     const float remainingMs = wakeupTimerDur - ProbeWakeTimerMs();
@@ -2455,7 +2463,12 @@ void moho::WIN_AppExecute(IWinApp* const app)
     return;
   }
 
-  THREAD_SetAffinity(true);
+  // EDITOR: the original pins the main thread to the lowest allowed CPU (a 2007 workaround for unsynchronised timers). The editor lets the scheduler place it: a pinned thread
+  // shares its core with whatever else the system or the driver puts there (the map loader, the sim, the graphics driver's own threads) and can never move away from it.
+  // `/edpin` brings the pin back (docs/projects/editor/PERFORMANCE.md).
+  if (!moho::CFG_GetArgOption("/editor", 0, nullptr) || moho::CFG_GetArgOption("/edpin", 0, nullptr)) {
+    THREAD_SetAffinity(true);
+  }
   ::InitCommonControls();
   ::CoInitialize(nullptr);
   PLAT_Init();
@@ -2497,7 +2510,15 @@ void moho::WIN_AppExecute(IWinApp* const app)
       break;
     }
 
+    // EDITOR: the frame rate cap (moho/editor/EdPerf.cpp, ed_fps_limit and friends). The original loop has no pacing at all besides the swap chain's vsync. The wait is cut short
+    // by any window message: then the message is dispatched first (this iteration ends here, `success` stays false) and the cap is asked again.
+    if (moho::editor::perf::ThrottleBeforeFrame(editorMainWindowHandle())) {
+      continue;
+    }
+
+    moho::editor::perf::FrameBegin();
     app->Main();
+    moho::editor::perf::FrameEnd();
     success = true;
     acceptNewEvent = true;
 
@@ -2505,7 +2526,9 @@ void moho::WIN_AppExecute(IWinApp* const app)
 
     const DWORD timeoutMs = ComputeWaitTimeoutMs();
     wakeupTimerDur = kInfiniteWakeupMs;
+    const std::int64_t idleWaitStartNs = moho::editor::perf::NowNs();
     WIN_GetWaitHandleSet()->MsgWaitEx(timeoutMs);
+    moho::editor::perf::NoteIdleWait(idleWaitStartNs);
   }
 
   app->Destroy();

@@ -37,6 +37,7 @@
 #include "moho/render/d3d/D3DSingletonCleanup.h"
 #include "moho/render/SParticleBuffer.h"
 #include "moho/render/WRenViewport.h"
+#include "moho/editor/EdPerf.h"
 #include "moho/render/ID3DIndexSheet.h"
 #include "moho/render/ID3DDepthStencil.h"
 #include "moho/render/ID3DRenderTarget.h"
@@ -1726,13 +1727,17 @@ namespace moho
         (void)InitContext(context);
       }
 
+      const std::int64_t presentStartNs = moho::editor::perf::NowNs();   // EDITOR: ed_perf_loop timing (moho/editor/EdPerf.cpp)
       device->Present();
+      moho::editor::perf::NotePresent(presentStartNs);
       (void)AddToStatCounter(EnsureEngineIntStat(sEngineStatRenderPresentCount, "Render_PresentCount"), 1);
 
       if (mClearEnabled != 0) {
         Clear();
       } else {
+        const std::int64_t renderStartNs = moho::editor::perf::NowNs();
         mViewport->D3DWindowOnDeviceRender();
+        moho::editor::perf::NoteRender(renderStartNs);
       }
     } catch (const gpg::gal::Error& error) {
       gpg::Warnf("%s(%d) %s", error.GetFile(), error.GetLine(), error.what());
