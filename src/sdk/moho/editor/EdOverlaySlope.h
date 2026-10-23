@@ -4,6 +4,15 @@
 //   kind 0 "path": the rule a mobile footprint of `n` x `n` cells is checked with (STIMap::OccupancyCapsOfFootprintAt / OCCUPY_MobileCheck): the largest
 //          height difference between neighbouring samples inside the window (x in [cx, cx + n], z in [cz, cz + n]), in height words (128 per world unit).
 //   kind 1 "build": the rule a structure is checked with (OCCUPY_CheckAreaFlatness): highest minus lowest sample over the same window.
+//   kind 2 "ring": the rule of a structure whose blueprint has Physics.FlattenSkirt = true, which is nearly every building (OCCUPY_CheckEdgeFlatness, 0x00564F80).
+//          Only the 1-cell perimeter ring around the skirt rect is looked at (the skirt itself is not: it is levelled when the structure is built).
+//          For a skirt of `n` x `n` cells at cell (cx, cz) the engine's rect is x0 = cx, x1 = cx + n, z0 = cz, z1 = cz + n (inclusive sample indices, the same rect as
+//          kind 1: RUnitBlueprint::GetSkirtRect gives x0 = SkirtOffsetX + floor(centre - footprint / 2), x1 = x0 + SkirtSizeX, OCCUPY_Check truncates both to int) and the ring is
+//          the samples x0-1 .. x1+1 on the rows z0-1 and z1+1, then x0-1 and x1+1 on the rows z0 .. z1. minH / maxH are taken over the ring, the pivot is
+//          ceil(h(x1+1, z1)) (the sample the engine reads LAST: the right column's final row), and the rating is max(maxH - pivot, pivot - minH).
+//          Quantisation: heights are words (1/128 world unit) and the engine's float arithmetic on them is exact (word * 2^-7 is exact in a float, so are
+//          the differences and the ceil), hence the rating is exactly that deviation in words, no rounding: pivot_words = ceil(h / 128) * 128,
+//          rating = max(maxW - pivot_words, pivot_words - minW). The structure fits when MaxGroundVariation * 128 >= rating (the same test as the engine's).
 //
 // The ratings live in a cache of 64 x 64 cell tiles kept until the heights under a tile change (Invalidate) or the rule changes (SetKey): nothing is
 // rated twice, a brush stroke re-rates only the tiles it touched, and a tile is rated in O(cells) with sliding window maxima (not O(cells * window^2)).
@@ -17,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -25,6 +35,39 @@ namespace moho::editor::overlayslope
   constexpr int kTile = 64;      // cells per tile side
   constexpr int kLevels = 7;     // block sizes 1, 2, 4 ... 64 cells
   constexpr int kMaxWindow = 16;
+  constexpr int kWordsPerUnit = 128;   // height words per world unit (CHeightField: elevation = word / 128)
+
+  constexpr int kKindPath = 0;
+  constexpr int kKindBuild = 1;   // OCCUPY_CheckAreaFlatness
+  constexpr int kKindRing = 2;    // OCCUPY_CheckEdgeFlatness
+
+  /** The kind a Lua name stands for ("build" area rule, "ring" edge rule); anything else (including "path") is the mobile rule, as before kind 2 existed. */
+  [[nodiscard]] inline int KindFromName(const char* const name)
+  {
+    if (name != nullptr) {
+      if (std::strcmp(name, "build") == 0) {
+        return kKindBuild;
+      }
+      if (std::strcmp(name, "ring") == 0) {
+        return kKindRing;
+      }
+    }
+    return kKindPath;
+  }
+
+  /** ceil(word / 128) * 128: the engine's ceil() of an elevation, in words (exact: a word is a multiple of 2^-7 world units). */
+  [[nodiscard]] constexpr int CeilToUnit(const int word)
+  {
+    const int q = word >= 0 ? (word + kWordsPerUnit - 1) / kWordsPerUnit : -((-word) / kWordsPerUnit);
+    return q * kWordsPerUnit;
+  }
+
+  /** The ring rule's deviation (words) from the extremes over the ring and the last sample the engine read. */
+  [[nodiscard]] constexpr int RingDeviation(const int lo, const int hi, const int last)
+  {
+    const int pivot = CeilToUnit(last);
+    return std::max(hi - pivot, pivot - lo);
+  }
 
   /** The rating of one cell computed straight from the rule (slow; the reference for the tests and the readout under the pointer). */
   template <class Sampler>
@@ -43,6 +86,25 @@ namespace moho::editor::overlayslope
         }
       }
       return maxDelta;
+    }
+    if (kind == kKindRing) {
+      // a transliteration of OCCUPY_CheckEdgeFlatness: the rows above and below (walking x), then the columns left and right (walking z)
+      int lo = 1 << 30;
+      int hi = -(1 << 30);
+      int last = 0;
+      for (int x = cx - 1; x <= cx + n + 1; ++x) {
+        const int top = h(x, cz - 1);
+        last = h(x, cz + n + 1);
+        lo = std::min(lo, std::min(top, last));
+        hi = std::max(hi, std::max(top, last));
+      }
+      for (int z = cz; z <= cz + n; ++z) {
+        const int left = h(cx - 1, z);
+        last = h(cx + n + 1, z);
+        lo = std::min(lo, std::min(left, last));
+        hi = std::max(hi, std::max(left, last));
+      }
+      return RingDeviation(lo, hi, last);
     }
     int lo = 1 << 30;
     int hi = -(1 << 30);
@@ -91,12 +153,58 @@ namespace moho::editor::overlayslope
   }
 
   /**
+   * Kind 2 (ring) for the kTile x kTile cells whose first cell is (cx0, cz0). Needs the samples [cx0 - 1, cx0 + kTile + n + 1] x [cz0 - 1, cz0 + kTile + n + 1].
+   * Tile-local sample (u, v) = (x - (cx0 - 1), z - (cz0 - 1)); the cell (i, j) looks at: the rows v = j and v = j + n + 2 over u in [i, i + n + 2], the columns
+   * u = i and u = i + n + 2 over v in [j + 1, j + n + 1], and the pivot sample (u, v) = (i + n + 2, j + n + 1). The four extremes come from sliding windows
+   * along the rows (n + 3 wide) and along the columns (n + 1 wide), so the cost per cell does not grow with the skirt.
+   */
+  template <class Sampler>
+  inline void RateRingTile(const int n, const int cx0, const int cz0, Sampler&& h, std::uint16_t* const out)
+  {
+    const int sw = kTile + n + 2;
+    const std::size_t ssw = static_cast<std::size_t>(sw);
+    std::vector<int> H(ssw * ssw);
+    for (int v = 0; v < sw; ++v) {
+      for (int u = 0; u < sw; ++u) {
+        H[static_cast<std::size_t>(v) * ssw + u] = h(cx0 - 1 + u, cz0 - 1 + v);
+      }
+    }
+    std::vector<int> scratch(ssw * 2);
+    std::vector<int> rowHi(ssw * ssw), rowLo(ssw * ssw), colHi(ssw * ssw), colLo(ssw * ssw);
+    for (int v = 0; v < sw; ++v) {
+      SlidingExtreme<true>(&H[static_cast<std::size_t>(v) * ssw], 1, sw, n + 3, &rowHi[static_cast<std::size_t>(v) * ssw], 1, scratch.data(), kTile);
+      SlidingExtreme<false>(&H[static_cast<std::size_t>(v) * ssw], 1, sw, n + 3, &rowLo[static_cast<std::size_t>(v) * ssw], 1, scratch.data(), kTile);
+    }
+    for (int u = 0; u < sw; ++u) {
+      SlidingExtreme<true>(&H[u], sw, sw, n + 1, &colHi[u], sw, scratch.data(), kTile + 1);
+      SlidingExtreme<false>(&H[u], sw, sw, n + 1, &colLo[u], sw, scratch.data(), kTile + 1);
+    }
+    for (int j = 0; j < kTile; ++j) {
+      for (int i = 0; i < kTile; ++i) {
+        const std::size_t top = static_cast<std::size_t>(j) * ssw + i;
+        const std::size_t bottom = static_cast<std::size_t>(j + n + 2) * ssw + i;
+        const std::size_t left = static_cast<std::size_t>(j + 1) * ssw + i;
+        const std::size_t right = left + static_cast<std::size_t>(n + 2);
+        const int hi = std::max(std::max(rowHi[top], rowHi[bottom]), std::max(colHi[left], colHi[right]));
+        const int lo = std::min(std::min(rowLo[top], rowLo[bottom]), std::min(colLo[left], colLo[right]));
+        const int last = H[static_cast<std::size_t>(j + n + 1) * ssw + i + n + 2];
+        const int dev = RingDeviation(lo, hi, last);
+        out[static_cast<std::size_t>(j) * kTile + i] = static_cast<std::uint16_t>(std::min(65535, std::max(0, dev)));
+      }
+    }
+  }
+
+  /**
    * The ratings of the kTile x kTile cells whose first cell is (cx0, cz0), written to `out` (row major, x fastest), with the separable sliding window passes:
-   * cost ~ cells * a few operations whatever the window. Needs the samples [cx0, cx0 + kTile + n] x [cz0, cz0 + kTile + n].
+   * cost ~ cells * a few operations whatever the window. Needs the samples [cx0, cx0 + kTile + n] x [cz0, cz0 + kTile + n] (kind 2: one more on every side).
    */
   template <class Sampler>
   inline void RateTile(const int kind, const int n, const int cx0, const int cz0, Sampler&& h, std::uint16_t* const out)
   {
+    if (kind == kKindRing) {
+      RateRingTile(n, cx0, cz0, h, out);
+      return;
+    }
     const int sw = kTile + n + 1;
     std::vector<int> H(static_cast<std::size_t>(sw) * sw);
     for (int j = 0; j < sw; ++j) {
@@ -232,16 +340,20 @@ namespace moho::editor::overlayslope
       return true;
     }
 
-    /** The samples [x0, x1] x [z0, z1] changed: the cells that look at them (up to kMaxWindow + 1 cells before them) must be rated again. */
+    /**
+     * The samples [x0, x1] x [z0, z1] changed: the cells that look at them (up to kMaxWindow + 1 cells before them) must be rated again. The ring rule also looks one
+     * sample behind its cell (cell c reads from c - 1), so the cell right after the changed samples is stale too.
+     */
     void Invalidate(const int x0, const int z0, const int x1, const int z1)
     {
       if (tiles_.empty()) {
         return;
       }
+      const int after = (kind_ == kKindRing) ? 1 : 0;
       const int tx0 = std::max(0, (x0 - kMaxWindow - 1) / kTile);   // (a negative quotient truncates towards zero: still tile 0 or less)
       const int tz0 = std::max(0, (z0 - kMaxWindow - 1) / kTile);
-      const int tx1 = std::min(tilesX_ - 1, std::max(0, x1) / kTile);
-      const int tz1 = std::min(tilesZ_ - 1, std::max(0, z1) / kTile);
+      const int tx1 = std::min(tilesX_ - 1, std::max(0, x1 + after) / kTile);
+      const int tz1 = std::min(tilesZ_ - 1, std::max(0, z1 + after) / kTile);
       for (int tz = tz0; tz <= tz1; ++tz) {
         for (int tx = tx0; tx <= tx1; ++tx) {
           if (std::unique_ptr<Tile>& t = tiles_[static_cast<std::size_t>(tz) * tilesX_ + tx]; t) {

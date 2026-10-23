@@ -2,6 +2,8 @@
 //   g++ -std=c++20 -O2 -I src/sdk src/sdk/moho/editor/tests/EdOverlaySlopeTest.cpp -o EdOverlaySlopeTest
 //   MSVC: cl /std:c++20 /EHsc /O2 /I src/sdk EdOverlaySlopeTest.cpp
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -29,12 +31,13 @@ namespace
   {
     int w, d;
     std::vector<int> v;
-    Field(const int width, const int depth, unsigned seed) : w(width), d(depth), v(static_cast<std::size_t>(width) * depth)
+    Field(const int width, const int depth, unsigned seed, const unsigned range = 3000u, const bool cliffs = true)
+        : w(width), d(depth), v(static_cast<std::size_t>(width) * depth)
     {
       for (auto& x : v) {
         seed = seed * 1664525u + 1013904223u;
-        x = static_cast<int>((seed >> 8) % 3000u) + 2000;
-        if ((seed >> 4) % 11u == 0u) x += 9000;   // some cliffs
+        x = static_cast<int>((seed >> 8) % range) + 2000;
+        if (cliffs && (seed >> 4) % 11u == 0u) x += 9000;   // some cliffs
       }
     }
     int At(int x, int z) const
@@ -95,9 +98,9 @@ int main()
   {
     const Field f(300, 220, 1);
     const auto h = [&f](const int x, const int z) { return f.At(x, z); };
-    for (int kind = 0; kind < 2; ++kind) {
-      for (int n : {1, 2, 3, 5, 8, 16}) {
-        for (const int origin : {0, 64, 192}) {
+    for (int kind = 0; kind < 3; ++kind) {
+      for (int n : {1, 2, 3, 5, 8, 12, 15, 16}) {
+        for (const int origin : {0, 64, 192, 256}) {
           std::vector<std::uint16_t> out(os::kTile * os::kTile);
           os::RateTile(kind, n, origin, 64, h, out.data());
           int bad = 0;
@@ -111,6 +114,93 @@ int main()
         }
       }
     }
+  }
+
+  // ---- the ring rule (kind 2) against a direct transliteration of the engine's OCCUPY_CheckEdgeFlatness, in float world units as the engine computes them ----
+  {
+    // STIMap.cpp: SampleClampedElevation (word * 1/128 as a float, indices clamped) and OCCUPY_CheckEdgeFlatness, rect = { x0, x1, z0, z1 } (inclusive sample indices)
+    struct EngineField
+    {
+      const Field& f;
+      float Sample(const int x, const int z) const { return static_cast<float>(f.At(x, z)) * (1.0f / 128.0f); }
+    };
+    const auto engineDeviation = [](const EngineField& field, const int x0, const int x1, const int z0, const int z1) {
+      float minHeight = std::numeric_limits<float>::max();
+      float maxHeight = -std::numeric_limits<float>::max();
+      float lastSample = 0.0f;
+      for (int cellX = x0 - 1; cellX <= x1 + 1; ++cellX) {
+        const float topSample = field.Sample(cellX, z0 - 1);
+        lastSample = field.Sample(cellX, z1 + 1);
+        minHeight = std::min({minHeight, topSample, lastSample});
+        maxHeight = std::max({maxHeight, topSample, lastSample});
+      }
+      for (int cellZ = z0; cellZ <= z1; ++cellZ) {
+        const float leftSample = field.Sample(x0 - 1, cellZ);
+        lastSample = field.Sample(x1 + 1, cellZ);
+        minHeight = std::min({minHeight, leftSample, lastSample});
+        maxHeight = std::max({maxHeight, leftSample, lastSample});
+      }
+      const float pivot = std::ceil(lastSample);
+      return std::max(maxHeight - pivot, pivot - minHeight);
+    };
+    unsigned seed = 99;
+    int cases = 0, passes = 0, fails = 0;
+    for (int variant = 0; variant < 3; ++variant) {
+      // rough terrain (cliffs), gentle terrain (a few world units of noise) and nearly flat terrain (about one unit): the verdicts must vary
+      const Field f(140, 110, 20u + static_cast<unsigned>(variant), variant == 0 ? 3000u : (variant == 1 ? 700u : 150u), variant == 0);
+      const EngineField ef{f};
+      const auto h = [&f](const int x, const int z) { return f.At(x, z); };
+      for (int n = 1; n <= os::kMaxWindow; ++n) {
+        for (int trial = 0; trial < 120; ++trial) {
+          seed = seed * 1664525u + 1013904223u;
+          const int cx = static_cast<int>((seed >> 8) % 150u) - 5;   // some cells hang over the edge of the field (clamped samples)
+          seed = seed * 1664525u + 1013904223u;
+          const int cz = static_cast<int>((seed >> 8) % 120u) - 5;
+          const float want = engineDeviation(ef, cx, cx + n, cz, cz + n);
+          const int got = os::CellRating(os::kKindRing, n, cx, cz, h);
+          CHECK(static_cast<float>(got) / 128.0f == want, "ring n %d at (%d, %d): %d words vs the engine's %.7f", n, cx, cz, got, want);
+          CHECK(got >= 0, "ring rating is never negative (%d)", got);
+          for (const float limit : {1.0f, 1.1f, 1.2f}) {
+            const bool engineFits = limit >= want;                                   // blueprint.Physics.MaxGroundVariation >= deviation
+            const bool viewFits = !(static_cast<float>(got) / 128.0f > limit);       // what the slope view draws as not blocked
+            CHECK(engineFits == viewFits, "ring verdict n %d at (%d, %d) limit %.1f", n, cx, cz, limit);
+            ++cases;
+            (engineFits ? passes : fails)++;
+          }
+        }
+      }
+    }
+    CHECK(passes > 200 && fails > 200, "the random terrains give both verdicts (%d fit, %d do not of %d)", passes, fails, cases);
+
+    // hand checks: a flat field at 3.3 units: the pivot is 4, the ring sits 0.7 below it
+    {
+      Field flat(40, 40, 1, 1u, false);
+      for (auto& x : flat.v) x = 422;                // 422 / 128 = 3.296875
+      const auto h = [&flat](const int x, const int z) { return flat.At(x, z); };
+      CHECK(os::CellRating(os::kKindRing, 4, 10, 10, h) == 512 - 422, "flat ground below an integer height: rating = ceil - h (%d)", os::CellRating(os::kKindRing, 4, 10, 10, h));
+      CHECK(os::CellRating(os::kKindBuild, 4, 10, 10, h) == 0, "the area rule calls the same ground flat");
+      flat.v.assign(flat.v.size(), 512);             // exactly 4.0: the ceil keeps it
+      CHECK(os::CellRating(os::kKindRing, 4, 10, 10, h) == 0, "flat ground at an integer height: 0");
+      // only the sample the engine reads last sets the pivot: (x1 + 1, z1) = (cx + n + 1, cz + n)
+      const int cx = 10, cz = 12, n = 5;
+      flat.v[static_cast<std::size_t>(cz + n) * flat.w + (cx + n + 1)] = 900;    // 7.03125: ceil 8
+      const int dev = os::CellRating(os::kKindRing, n, cx, cz, h);
+      // ring min 512, max 900, pivot 1024: max(900 - 1024, 1024 - 512) = 512
+      CHECK(dev == 512, "pivot from the last sample (x1 + 1, z1): %d", dev);
+      // the sample next to it (x1 + 1, z1 + 1) is the end of the bottom row, not the last read: it does not move the pivot
+      flat.v[static_cast<std::size_t>(cz + n) * flat.w + (cx + n + 1)] = 512;
+      flat.v[static_cast<std::size_t>(cz + n + 1) * flat.w + (cx + n + 1)] = 900;
+      CHECK(os::CellRating(os::kKindRing, n, cx, cz, h) == 900 - 512, "the corner sample is in the ring but is not the pivot (%d)", os::CellRating(os::kKindRing, n, cx, cz, h));
+      // a sample inside the skirt is not looked at at all
+      flat.v[static_cast<std::size_t>(cz + n) * flat.w + (cx + 2)] = 5000;
+      flat.v[static_cast<std::size_t>(cz + 2) * flat.w + (cx + 2)] = 5000;
+      CHECK(os::CellRating(os::kKindRing, n, cx, cz, h) == 900 - 512, "the skirt's own samples are not part of the ring rule");
+      CHECK(os::CellRating(os::kKindBuild, n, cx, cz, h) > 900 - 512, "but the area rule sees them");
+    }
+    CHECK(os::CeilToUnit(0) == 0 && os::CeilToUnit(1) == 128 && os::CeilToUnit(128) == 128 && os::CeilToUnit(129) == 256 && os::CeilToUnit(65535) == 65536, "ceil to a world unit");
+    CHECK(os::KindFromName("path") == os::kKindPath && os::KindFromName("build") == os::kKindBuild && os::KindFromName("ring") == os::kKindRing &&
+              os::KindFromName("bogus") == os::kKindPath && os::KindFromName(nullptr) == os::kKindPath,
+          "kind names");
   }
 
   // ---- levels: a block holds the maximum of its cells ----
@@ -183,6 +273,25 @@ int main()
     CHECK(s.NeedsRating(1, 1) && s.Built() == 0, "dropped");
     s.Reset(100, 100);
     CHECK(s.TilesX() == 2 && s.Built() == 0, "reset");
+  }
+
+  // ---- store with the ring rule: the cell after a changed sample is stale too (it reads from one sample before its own) ----
+  {
+    Field f(200, 150, 6, 800u, false);
+    const auto h = [&f](const int x, const int z) { return f.At(x, z); };
+    os::Store s;
+    s.Reset(f.w, f.d);
+    s.SetKey(os::kKindRing, 3);
+    s.Rate(1, 1, h, 1);
+    s.Rate(0, 0, h, 1);
+    CHECK(s.Block(0, 70, 70) == os::CellRating(os::kKindRing, 3, 70, 70, h), "ring tile cell equals the rule");
+    s.Invalidate(60, 100, 63, 100);   // sample 63 is read by cell 64 (its ring starts at 63): the tile 1 is stale
+    CHECK(s.NeedsRating(1, 1), "a ring cell reads one sample before it: an edit of sample 63 dirties tile 1");
+    s.Rate(1, 1, h, 2);
+    s.Invalidate(100, 60, 100, 62);   // row 62 is read by cells of row 63 at the earliest (z0 - 1 = 62 for cz = 63): tile row 0, not 1
+    CHECK(!s.NeedsRating(1, 1), "an edit two rows above the tile keeps it");
+    s.Invalidate(100, 63, 100, 63);
+    CHECK(s.NeedsRating(1, 1), "row 63 is looked at by cells of tile row 1 (their ring starts one row above)");
   }
 
   // ---- trim ----

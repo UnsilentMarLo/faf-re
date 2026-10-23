@@ -119,7 +119,10 @@ namespace
   //   OCCUPY_MobileCheck): the largest height difference between neighbouring samples inside the window, in world units per cell,
   //   against the footprint's MaxSlope (0.75 for every land, amphibious and hover footprint, lua/footprints.lua).
   // kind 1 "build": the rule a structure is checked with (OCCUPY_CheckAreaFlatness): highest minus lowest sample over the skirt
-  //   (window x window cells, window + 1 samples per side), against the blueprint's Physics.MaxGroundVariation (1.1 for most).
+  //   (window x window cells, window + 1 samples per side), against the blueprint's Physics.MaxGroundVariation (1.1 for most). Used by blueprints with
+  //   FlattenSkirt = false (mass extractors, hydrocarbon plants, walls, point defence, naval factories, ...).
+  // kind 2 "ring": the rule of blueprints with FlattenSkirt = true (nearly every building): OCCUPY_CheckEdgeFlatness, the 1-cell ring around the skirt against
+  //   a pivot of ceil(last sample), see EdOverlaySlope.h.
   //
   // The ratings are kept in a tile cache (EdOverlaySlope.h) until the heights under a tile change (NotifyHeights, called by the document's height sink) or
   // the rule / window changes; a frame only rates tiles that were never rated or went stale, within a time budget. What is drawn is a quadtree of blocks
@@ -847,7 +850,8 @@ namespace
   }
 
   // ed_overlay_slope(kind, x0, z0, x1, z1, window, limit): show the slope gradient over the cell rectangle [x0, x1) x [z0, z1);
-  // kind 'path' (mobile footprint rule) or 'build' (structure ground variation).
+  // kind 'path' (mobile footprint rule), 'build' (structure area rule, FlattenSkirt = false) or 'ring' (structure edge rule, FlattenSkirt = true);
+  // ed_overlay_slope_caps() lists the kinds this build knows.
   int __cdecl cfunc_EdOverlaySlope(lua_State* const L)
   {
     const char* const kind = lua_tostring(L, 1);
@@ -856,7 +860,7 @@ namespace
       lua_pushstring(L, "ed_overlay_slope(kind, x0, z0, x1, z1, window, limit)");
       return 2;
     }
-    gSlope.kind = (std::strcmp(kind, "build") == 0) ? 1 : 0;
+    gSlope.kind = moho::editor::overlayslope::KindFromName(kind);
     gSlope.x0 = static_cast<int>(lua_tonumber(L, 2));
     gSlope.z0 = static_cast<int>(lua_tonumber(L, 3));
     gSlope.x1 = static_cast<int>(lua_tonumber(L, 4));
@@ -865,6 +869,19 @@ namespace
     gSlope.limit = std::max(0.01f, static_cast<float>(lua_tonumber(L, 7)));
     gSlope.on = true;
     lua_pushboolean(L, 1);
+    return 1;
+  }
+
+  // ed_overlay_slope_caps() -> { 'path', 'build', 'ring' }: the rule names ed_overlay_slope / ed_slope_at understand (an older build has no such function and knows 'path' and 'build')
+  int __cdecl cfunc_EdOverlaySlopeCaps(lua_State* const L)
+  {
+    lua_newtable(L);
+    int i = 0;
+    for (const char* const name : {"path", "build", "ring"}) {
+      lua_pushnumber(L, static_cast<lua_Number>(++i));
+      lua_pushstring(L, name);
+      lua_settable(L, -3);
+    }
     return 1;
   }
 
@@ -886,7 +903,7 @@ namespace
     const int cx = static_cast<int>(std::floor(lua_tonumber(L, 2)));
     const int cz = static_cast<int>(std::floor(lua_tonumber(L, 3)));
     const int n = std::max(1, std::min(16, static_cast<int>(lua_tonumber(L, 4))));
-    const int v = moho::editor::overlayslope::CellRating((std::strcmp(kind, "build") == 0) ? 1 : 0, n, cx, cz,
+    const int v = moho::editor::overlayslope::CellRating(moho::editor::overlayslope::KindFromName(kind), n, cx, cz,
                                                          [field](int x, int z) { return static_cast<int>(field->GetHeightAt(x, z)); });
     lua_pushnumber(L, static_cast<lua_Number>(static_cast<float>(v) / 128.0f));
     return 1;
@@ -1196,6 +1213,8 @@ namespace
       (void)new moho::CScrLuaBinder(set, "ed_overlay_slope", &cfunc_EdOverlaySlope, nullptr, "<global>",
                                     "ed_overlay_slope(kind, x0, z0, x1, z1, window, limit) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_slope_off", &cfunc_EdOverlaySlopeOff, nullptr, "<global>", "ed_overlay_slope_off()");
+      (void)new moho::CScrLuaBinder(set, "ed_overlay_slope_caps", &cfunc_EdOverlaySlopeCaps, nullptr, "<global>",
+                                    "ed_overlay_slope_caps() -> { 'path', 'build', 'ring' }, the rule names of ed_overlay_slope / ed_slope_at");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_grid", &cfunc_EdOverlayGrid, nullptr, "<global>", "ed_overlay_grid(x0, z0, x1, z1 [, rgb, alpha]) -> true | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_grid_off", &cfunc_EdOverlayGridOff, nullptr, "<global>", "ed_overlay_grid_off()");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_depth", &cfunc_EdOverlayDepth, nullptr, "<global>", "ed_overlay_depth([on]) -> on: depth test of the ground overlays against the terrain");
