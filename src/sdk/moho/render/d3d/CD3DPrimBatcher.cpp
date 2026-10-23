@@ -11,6 +11,7 @@
 
 #include "gpg/core/utils/BoostWrappers.h"
 #include "gpg/gal/EffectVariable.hpp"
+#include "moho/editor/EdRenderStats.h"
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/ID3DIndexSheet.h"
 #include "moho/render/ID3DTextureSheet.h"
@@ -61,6 +62,10 @@ namespace
     sizeof(moho::VMatrix4) == sizeof(gpg::gal::Matrix),
     "CD3DPrimBatcher camera matrix lanes must match VMatrix4 storage"
   );
+
+  // EDITOR: the viewport of the UI pass in progress (see UI_GetRenderViewSize). 0 = unknown.
+  float gUiViewWidth = 0.0f;
+  float gUiViewHeight = 0.0f;
 
   [[nodiscard]] moho::Vector3f BuildGlyphCorner(
     const moho::Vector3f& origin,
@@ -1100,6 +1105,11 @@ namespace moho
     CD3DDevice* const device = D3D_GetDevice();
     (void)device->DrawTriangleList(&vertexSheetView, &indexSheetView, &primitiveType);
 
+    // EDITOR: ed_render_stats
+    ++moho::editor::renderstats::gCur.batcherFlushes;
+    moho::editor::renderstats::gCur.batcherVertices += vertexCount;
+    moho::editor::renderstats::gCur.batcherIndices += primitiveCount;
+
     runtime->mVertices.clear();
     runtime->mPrimitives.clear();
   }
@@ -1638,6 +1648,13 @@ namespace moho
     }
   }
 
+  bool UI_GetRenderViewSize(float& width, float& height) noexcept
+  {
+    width = gUiViewWidth;
+    height = gUiViewHeight;
+    return gUiViewWidth > 0.0f && gUiViewHeight > 0.0f;
+  }
+
   /**
    * Address: 0x0084D3E0 (FUN_0084D3E0)
    *
@@ -1647,6 +1664,9 @@ namespace moho
    */
   void CD3DPrimBatcher::SetToViewport(const int head, const CUIManager& manager)
   {
+    // EDITOR: forget the last head's size first, a head that returns early below must not be culled with it
+    gUiViewWidth = 0.0f;
+    gUiViewHeight = 0.0f;
     if (head < 0) {
       return;
     }
@@ -1670,6 +1690,8 @@ namespace moho
 
     const float widthF = static_cast<float>(width);
     const float heightF = static_cast<float>(height);
+    gUiViewWidth = widthF;
+    gUiViewHeight = heightF;
 
     VMatrix4 projection{};
     projection.r[0] = {2.0f / widthF, 0.0f, 0.0f, 0.0f};

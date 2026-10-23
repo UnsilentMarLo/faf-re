@@ -2,7 +2,9 @@
 
 #include <Windows.h>
 
+#include <cstdint>
 #include <cstring>
+#include <map>
 #include <new>
 
 #include "gpg/core/utils/Logging.h"
@@ -20,6 +22,9 @@
 #include "moho/terrain/TerrainCommon.h"
 #include "moho/terrain/TerrainShaderVars.h"
 #include "moho/mesh/Mesh.h"
+#include "moho/mesh/MeshBatch.h"
+#include "moho/editor/EdRenderStats.h"
+#include "moho/editor/EdShadowCache.h"
 #include "gpg/gal/RenderTargetContext.hpp"
 
 namespace gpg::gal
@@ -48,6 +53,66 @@ namespace
 {
   // Depth-stencil format the shadow map's companion buffer is created with.
   constexpr int kShadowDepthStencilFormat = 3;
+
+  // EDITOR: the shadow map cache (EdShadowCache.h). One state per Shadow object (the viewport owns one; a map keeps this independent of Shadow's layout).
+  std::map<const moho::Shadow*, moho::editor::shadowcache::State>& ShadowCacheStates()
+  {
+    static std::map<const moho::Shadow*, moho::editor::shadowcache::State> states;
+    return states;
+  }
+
+  /**
+   * EDITOR: the signature of the scene MeshRenderer::Batch has just collected for the light camera: one hash per instance over everything the depth pass reads (which mesh and LOD,
+   * transform, scale, colour, parameters, dissolve, scroll, the shader time), added up so the order does not matter, plus the bones of the skinned ones (summed by the bone palette
+   * code while `gAccumulateBones` was set). Returns false when the scene cannot be signed (skinned instances while the bones are not in the bone palette texture: the constant
+   * palettes are filled while drawing, after this point), then the map is drawn.
+   */
+  [[nodiscard]] bool ShadowSceneSignature(moho::MeshRenderer& renderer, std::uint64_t& signature)
+  {
+    namespace sc = moho::editor::shadowcache;
+    const bool boneTexture = moho::HardwareMeshBatch::UsesBoneTexture();
+    std::uint64_t sum = 0;
+    std::uint64_t count = 0;
+    for (const moho::MeshBatchBucket& bucket : renderer.meshes) {
+      if (bucket.second.empty()) {
+        continue;
+      }
+      const bool skinned = bucket.first.mIsStaticPose != 0;
+      if (skinned && !boneTexture) {
+        return false;
+      }
+      for (moho::MeshInstance* const instance : bucket.second) {
+        sc::Hasher hash;
+        hash.AddPointer(instance);
+        hash.AddPointer(bucket.first.mLod);
+        hash.Add(skinned ? 1u : 0u);
+        hash.AddBytes(&instance->interpolatedPosition, sizeof(instance->interpolatedPosition));
+        hash.AddBytes(&instance->curOrientation, sizeof(instance->curOrientation));
+        hash.AddBytes(&instance->scale, sizeof(instance->scale));
+        hash.AddFloat(instance->dissolve);
+        hash.Add(static_cast<std::uint32_t>(instance->color));
+        hash.AddFloat(instance->meshColor);
+        hash.AddFloat(instance->parameters);
+        hash.AddFloat(instance->fractionCompleteParameter);
+        hash.AddFloat(instance->fractionHealthParameter);
+        hash.AddFloat(instance->lifetimeParameter);
+        hash.AddFloat(instance->auxiliaryParameter);
+        hash.AddFloat(instance->scroll1.x + ((instance->scroll2.x - instance->scroll1.x) * moho::MeshInstance::sCurrentInterpolant));
+        hash.AddFloat(instance->scroll1.y + ((instance->scroll2.y - instance->scroll1.y) * moho::MeshInstance::sCurrentInterpolant));
+        hash.Add(static_cast<std::uint32_t>(instance->gameTick));
+        sum += hash.Value();
+        ++count;
+      }
+    }
+    sc::Hasher total;
+    total.Add(static_cast<std::uint32_t>(sum & 0xFFFFFFFFu));
+    total.Add(static_cast<std::uint32_t>(sum >> 32));
+    total.Add(static_cast<std::uint32_t>(count));
+    total.Add(static_cast<std::uint32_t>(sc::gBoneSum & 0xFFFFFFFFu));
+    total.Add(static_cast<std::uint32_t>(sc::gBoneSum >> 32));
+    signature = total.Value();
+    return true;
+  }
 
   struct BlinkyBoxListNode
   {
@@ -157,6 +222,14 @@ namespace moho
   {
     mShadowFidelity = 0;
     mShadowBlurEnabled = false;
+
+    {
+      // EDITOR: the map in the render target goes with it (find only: this is reached from the destructor)
+      auto& states = ShadowCacheStates();
+      if (const auto it = states.find(this); it != states.end()) {
+        moho::editor::shadowcache::Invalidate(it->second);
+      }
+    }
 
     mShadowMap.reset();
     mBlurTargetA.reset();
@@ -451,6 +524,8 @@ namespace moho
     (void)device->GetResources();
 
     if (!mShadowCameraValid) {
+      // EDITOR: the targets are cleared below, the map they held is gone
+      moho::editor::shadowcache::Invalidate(ShadowCacheStates()[this]);
       // Nothing to draw - just leave the targets bound and cleared.
       device->SetRenderTarget1(mShadowMap.get(), mDepthStencil.get(), true, -1, 1.0f, 0);
       if (mShadowBlurEnabled) {
@@ -493,14 +568,50 @@ namespace moho
       device->SetViewport(&savedPos, &savedSize, savedMinDepth, savedMaxDepth);
     };
 
+    // EDITOR: collect the scene for the light camera first (the same work the pass did after binding its target; it touches no device state), and look whether the map the render
+    // target holds is still the right one (EdShadowCache.h). The depth pass and the two blur passes, the expensive part, are left out when it is.
+    namespace sc = moho::editor::shadowcache;
+    MeshRenderer* const meshRenderer = MeshRenderer::GetInstance();
+    sc::gBoneSum = 0;
+    sc::gAccumulateBones = ren_ShadowCache;
+    meshRenderer->Batch(REN_GetGameTick(), REN_GetSimDeltaSeconds(), mCamera, viewCamera.viewport.r[1]);
+    sc::gAccumulateBones = false;
+
+    sc::State& cacheState = ShadowCacheStates()[this];
+    sc::Key cacheKey;
+    bool cacheUsable = false;
+    if (ren_ShadowCache) {
+      moho::editor::renderstats::ScopedMs sceneTimer(moho::editor::renderstats::gCur.shadowSceneMs);
+      cacheUsable = ShadowSceneSignature(*meshRenderer, cacheKey.scene);
+      if (cacheUsable) {
+        std::memcpy(cacheKey.lightViewProjection, &mCamera.viewProjection, sizeof(cacheKey.lightViewProjection));
+        cacheKey.size = mShadowSize;
+        cacheKey.fidelity = mShadowFidelity;
+        cacheKey.blur = mShadowBlurEnabled;
+        cacheKey.owner = this;
+        cacheKey.targets[0] = mShadowMap.get();
+        cacheKey.targets[1] = mBlurTargetA.get();
+        cacheKey.targets[2] = mBlurTargetB.get();
+        if (sc::Decide(cacheState, cacheKey, ren_ShadowCache, ren_ShadowCacheTrees, ren_ShadowCacheMaxAge) == sc::Decision::Reuse) {
+          ++moho::editor::renderstats::gShadowHits;
+          moho::editor::renderstats::gCur.shadowReused = 1;
+          return;
+        }
+        ++moho::editor::renderstats::gShadowMisses;
+      }
+    }
+    if (!cacheUsable) {
+      sc::Invalidate(cacheState);
+    }
+    moho::editor::renderstats::gCur.shadowRendered = 1;
+
     // Depth pass into the shadow map.
     device->SetRenderTarget1(mShadowMap.get(), mDepthStencil.get(), true, -1, 1.0f, 0);
     bindTargetWithBorder(mShadowMap);
 
-
-    MeshRenderer* const meshRenderer = MeshRenderer::GetInstance();
-    meshRenderer->Batch(REN_GetGameTick(), REN_GetSimDeltaSeconds(), mCamera, viewCamera.viewport.r[1]);
+    sc::gPassTimeMask = 0;
     meshRenderer->RenderDepth(mCamera, meshRenderer->meshes);
+    const std::uint8_t passTimeMask = sc::gPassTimeMask;
 
     restoreViewport();
 
@@ -545,6 +656,9 @@ namespace moho
 
     if (!mShadowBlurEnabled) {
       dumpShadowTargets(false);
+      if (cacheUsable) {
+        sc::Store(cacheState, cacheKey, passTimeMask);
+      }
       return;
     }
 
@@ -578,6 +692,9 @@ namespace moho
     blurPass(mBlurTargetA, mShadowMap, "THorizontalBlurDepthToVariance");
     blurPass(mBlurTargetB, mBlurTargetA, "TVerticalBlurDepthToVariance");
     dumpShadowTargets(true);
+    if (cacheUsable) {
+      sc::Store(cacheState, cacheKey, passTimeMask);
+    }
   }
 
   /**
@@ -599,6 +716,7 @@ namespace moho
     if (!ren_Shadows) {
       return;
     }
+    moho::editor::renderstats::ScopedMs shadowTimer(moho::editor::renderstats::gCur.shadowMs);   // EDITOR: ed_render_stats
 
     std::int32_t fidelity = std::min(shadow_Fidelity, shadow_FidelitySupported);
     if (fidelity < 0) {

@@ -3,9 +3,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -112,6 +114,16 @@ namespace moho
     {
       std::vector<EdGlyph> glyphs;
       float width = 0.0f;
+      // The glyph bitmap of every glyph at each of the four sub-pixel phases, resolved on first use: a drawn run then needs no hash lookup per glyph per frame. The pointers are
+      // into State::glyphCache (an unordered_map: its nodes never move, and nothing erases from it).
+      mutable std::vector<const CD3DFontCharInfo*> resolved[4];
+    };
+
+    // Looks a string up without making a std::string of it (the layout cache is asked once per drawn label per frame).
+    struct StringKeyHash
+    {
+      using is_transparent = void;
+      std::size_t operator()(const std::string_view key) const noexcept { return std::hash<std::string_view>{}(key); }
     };
 
     // Counters for `ed_text_stats()` (cost measurements of P2).
@@ -126,6 +138,8 @@ namespace moho
     };
 
     Stats gStats;
+    // The render timing costs two QueryPerformanceCounter reads per drawn string; it only runs once ed_text_stats has been asked for (perf report, tests).
+    bool gStatsTiming = false;
 
     Stats GetTextStatsAndReset()
     {
@@ -147,7 +161,7 @@ namespace moho
       float pixelSize = 0.0f;
       bool lcd = true;
       std::unordered_map<std::uint64_t, CD3DFontCharInfo> glyphCache;
-      std::unordered_map<std::string, Layout> layoutCache;
+      std::unordered_map<std::string, Layout, StringKeyHash, std::equal_to<>> layoutCache;
       std::map<wchar_t, CD3DFontCharInfo> charInfoCache;
       std::uint8_t grayLut[256];
     };
@@ -197,11 +211,12 @@ namespace moho
 
     const Layout& GetLayout(State& st, const char* text)
     {
-      const std::string key(text != nullptr ? text : "");
-      const auto it = st.layoutCache.find(key);
+      const std::string_view lookup(text != nullptr ? text : "");
+      const auto it = st.layoutCache.find(lookup);
       if (it != st.layoutCache.end()) {
         return it->second;
       }
+      const std::string key(lookup);
       if (st.layoutCache.size() > 4096u) {
         st.layoutCache.clear();
       }
@@ -367,7 +382,7 @@ namespace moho
     )
     {
       State& st = AsState(state);
-      const std::uint64_t renderStart = Ticks();
+      const std::uint64_t renderStart = gStatsTiming ? Ticks() : 0u;
       ++gStats.runs;
       const Layout& layout = GetLayout(st, text);
 
@@ -376,8 +391,10 @@ namespace moho
         std::fabs(yAxis.y) == 1.0f;
 
       float end = 0.0f;
-      for (const EdGlyph& g : layout.glyphs) {
-        if (std::isfinite(maxAdvance) && g.x + g.advance > maxAdvance) {
+      const bool limited = std::isfinite(maxAdvance);
+      for (std::size_t glyphIndex = 0; glyphIndex < layout.glyphs.size(); ++glyphIndex) {
+        const EdGlyph& g = layout.glyphs[glyphIndex];
+        if (limited && g.x + g.advance > maxAdvance) {
           break;
         }
         end = g.x + g.advance;
@@ -400,7 +417,15 @@ namespace moho
           cursor.z += xAxis.z * g.x;
         }
 
-        const CD3DFontCharInfo& info = GetGlyph(st, g, phase);
+        std::vector<const CD3DFontCharInfo*>& resolved = layout.resolved[phase & 3];
+        if (resolved.size() != layout.glyphs.size()) {
+          resolved.assign(layout.glyphs.size(), nullptr);
+        }
+        const CD3DFontCharInfo*& slot = resolved[glyphIndex];
+        if (slot == nullptr) {
+          slot = &GetGlyph(st, g, phase);
+        }
+        const CD3DFontCharInfo& info = *slot;
         if (info.mTex) {
           if (st.lcd) {
             if (!primBatcher->mLcdTextActive) {
@@ -420,7 +445,9 @@ namespace moho
           ++gStats.quads;
         }
       }
-      gStats.renderTicks += Ticks() - renderStart;
+      if (gStatsTiming) {
+        gStats.renderTicks += Ticks() - renderStart;
+      }
 
       return Vector3f{origin.x + xAxis.x * end, origin.y + xAxis.y * end, origin.z + xAxis.z * end};
     }
@@ -480,6 +507,7 @@ namespace
   // Returns the counters since the last call and resets them (cost measurements, docs/projects/editor_research/P2_LCD_TEXT.md).
   int __cdecl cfunc_EdTextStats(lua_State* const state)
   {
+    moho::gStatsTiming = true;
     const moho::Stats snapshot = moho::GetTextStatsAndReset();
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);

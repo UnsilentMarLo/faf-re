@@ -74,6 +74,8 @@
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/d3d/CD3DFont.h"
 #include "moho/render/d3d/CD3DPrimBatcher.h"
+#include "moho/editor/EdRenderStats.h"
+#include "moho/editor/EdUiCull.h"
 #include "moho/render/d3d/RD3DTextureResource.h"
 #include "moho/render/IRenderWorldView.h"
 #include "moho/render/RCamManager.h"
@@ -16411,6 +16413,22 @@ void moho::CMauiText::DoRender(
     baselineY = font->mAscent + top;
   }
 
+  // EDITOR: a run that starts to the right of the window, whose baseline is far above or below it, or that ends left of it, has no glyph on the screen (EdUiCull.h). The width
+  // of the string is asked only when the run starts left of the window (a parked control): the layout is cached by the text backend.
+  moho::editor::renderstats::Frame& uiStats = moho::editor::renderstats::gCur;
+  if (moho::ui_CullOffscreen) {
+    float viewW = 0.0f;
+    float viewH = 0.0f;
+    if (UI_GetRenderViewSize(viewW, viewH)) {
+      const float runWidth = originX < 0.0f ? font->GetAdvance(text, 0) : -1.0f;
+      if (moho::editor::uicull::TextOutside(originX, baselineY, runWidth, viewW, viewH, 256.0f)) {
+        ++uiStats.uiTextsCulled;
+        return;
+      }
+    }
+  }
+  ++uiStats.uiTextsDrawn;
+
   const Wm3::Vector3f xAxis{1.0f, 0.0f, 0.0f};
   const Wm3::Vector3f yAxis{0.0f, -1.0f, 0.0f};
 
@@ -22936,10 +22954,28 @@ void moho::CMauiBitmap::DoRender(
     return;
   }
 
+  // EDITOR: a bitmap with alpha 0, or one that lies completely outside the window (a control parked off screen: Maui does not clip), puts no pixel on the screen: it is not built,
+  // not queued and its texture is not put into the atlas (moho/editor/EdUiCull.h; ui_SkipTransparent / ui_CullOffscreen 0 draw every bitmap as before).
+  moho::editor::renderstats::Frame& uiStats = moho::editor::renderstats::gCur;
+  if (moho::ui_SkipTransparent && moho::editor::uicull::ColorTransparent(mVertexAlpha)) {
+    ++uiStats.uiBitmapsTransparent;
+    return;
+  }
+
   const float bottom = CScriptLazyVar_float::GetValue(&mBottomLV);
   const float right = CScriptLazyVar_float::GetValue(&mRightLV);
   const float top = CScriptLazyVar_float::GetValue(&mTopLV);
   const float left = CScriptLazyVar_float::GetValue(&mLeftLV);
+
+  if (moho::ui_CullOffscreen) {
+    float viewW = 0.0f;
+    float viewH = 0.0f;
+    if (UI_GetRenderViewSize(viewW, viewH) && moho::editor::uicull::QuadOutside(left, top, right, bottom, viewW, viewH)) {
+      ++uiStats.uiBitmapsCulled;
+      return;
+    }
+  }
+  ++uiStats.uiBitmapsDrawn;
 
   gpg::Rect2f destRect;
   destRect.x0 = left;
@@ -25295,6 +25331,25 @@ void moho::CMauiBorder::DoRender(
     static_cast<float>(FloorFrndintAdjustDown(CScriptLazyVar_float::GetValue(&mBorderWidthLV)));
   const float borderHeight =
     static_cast<float>(FloorFrndintAdjustDown(CScriptLazyVar_float::GetValue(&mBorderHeightLV)));
+
+  // EDITOR: alpha 0 or completely outside the window: nothing to draw (EdUiCull.h). The rectangle is grown by the border size: the strips lie inside it, this is only a margin.
+  {
+    moho::editor::renderstats::Frame& uiStats = moho::editor::renderstats::gCur;
+    if (moho::ui_SkipTransparent && moho::editor::uicull::ColorTransparent(mVertexAlpha)) {
+      ++uiStats.uiBordersCulled;
+      return;
+    }
+    float viewW = 0.0f;
+    float viewH = 0.0f;
+    if (moho::ui_CullOffscreen && UI_GetRenderViewSize(viewW, viewH)) {
+      const float margin = std::max(std::fabs(borderWidth), std::fabs(borderHeight));
+      if (moho::editor::uicull::QuadOutside(left - margin, top - margin, right + margin, bottom + margin, viewW, viewH)) {
+        ++uiStats.uiBordersCulled;
+        return;
+      }
+    }
+    ++uiStats.uiBordersDrawn;
+  }
 
   const float innerLeft = left + borderWidth;
   const float innerRight = right - borderWidth;

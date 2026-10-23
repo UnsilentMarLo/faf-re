@@ -1,4 +1,6 @@
 #include "moho/editor/EdOverlay.h"
+#include "moho/editor/EdRenderStats.h"
+#include "moho/editor/EdActivity.h"
 #include "moho/editor/EdFieldCore.h"
 #include "moho/editor/EdOverlayDrape.h"
 #include "moho/editor/EdOverlayField.h"
@@ -772,6 +774,7 @@ namespace
   //   points: flat array { x, y, z, x, y, z, ... } in world coordinates; color: 'RRGGBB' or 'AARRGGBB' hex string
   int __cdecl cfunc_EdOverlaySet(lua_State* const L)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 2) != LUA_TTABLE) {
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_set(id, points, color [, worldWidth, minPx, maxPx, closed, halo])");
@@ -805,6 +808,7 @@ namespace
   // ed_overlay_icon(id, x, y, z, texturePath, sizePx [, color])
   int __cdecl cfunc_EdOverlayIcon(lua_State* const L)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 5) != LUA_TSTRING) {
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_icon(id, x, y, z, texturePath, sizePx [, color])");
@@ -828,6 +832,7 @@ namespace
   // ed_overlay_decal(id, x, y, z, texturePath, size [, color, yawRadians])
   int __cdecl cfunc_EdOverlayDecal(lua_State* const L)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 5) != LUA_TSTRING) {
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw])");
@@ -854,6 +859,7 @@ namespace
   // ed_overlay_slope_caps() lists the kinds this build knows.
   int __cdecl cfunc_EdOverlaySlope(lua_State* const L)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     const char* const kind = lua_tostring(L, 1);
     if (kind == nullptr) {
       lua_pushnil(L);
@@ -875,6 +881,7 @@ namespace
   // ed_overlay_slope_caps() -> { 'path', 'build', 'ring' }: the rule names ed_overlay_slope / ed_slope_at understand (an older build has no such function and knows 'path' and 'build')
   int __cdecl cfunc_EdOverlaySlopeCaps(lua_State* const L)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     lua_newtable(L);
     int i = 0;
     for (const char* const name : {"path", "build", "ring"}) {
@@ -887,6 +894,7 @@ namespace
 
   int __cdecl cfunc_EdOverlaySlopeOff(lua_State* const)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     gSlope.on = false;
     return 0;
   }
@@ -912,6 +920,7 @@ namespace
   // ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha [, step]])  values: nw * nh numbers 0..255, row major; node (i, j) lies at world (x0 + i * step, z0 + j * step)
   int __cdecl cfunc_EdOverlayNodes(lua_State* const L)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 6) != LUA_TTABLE) {
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha])");
@@ -958,6 +967,7 @@ namespace
   // 0..255, row major): the cheap way to send a change of a few nodes instead of the whole grid. nil, message when there is no such grid or the rectangle is outside it.
   int __cdecl cfunc_EdOverlayNodesRect(lua_State* const L)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 6) != LUA_TTABLE) {
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_nodes_rect(id, i0, j0, w, h, values)");
@@ -1027,6 +1037,7 @@ namespace
   //   ed_overlay_remove(id) takes it off. -> true | nil, message
   int __cdecl cfunc_EdOverlayField(lua_State* const L)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     namespace of = moho::editor::overlayfield;
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 2) != LUA_TNUMBER) {
       lua_pushnil(L);
@@ -1123,6 +1134,7 @@ namespace
   //   lines every cell where a cell is big on screen, every 2, 4 ... 64 cells where it is small, fading with the distance. rgb = 0xRRGGBB (default white), alpha 0 .. 1 scales the lines.
   int __cdecl cfunc_EdOverlayGrid(lua_State* const L)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TNUMBER || lua_type(L, 4) != LUA_TNUMBER) {
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_grid(x0, z0, x1, z1 [, rgb, alpha])");
@@ -1141,6 +1153,7 @@ namespace
 
   int __cdecl cfunc_EdOverlayGridOff(lua_State* const)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     gGrid.on = false;
     return 0;
   }
@@ -1148,6 +1161,7 @@ namespace
   // ed_overlay_depth([on]) -> on: the slope view, the build grid and the value grids are hidden by the terrain (depth test, writes off); false draws them without occlusion again.
   int __cdecl cfunc_EdOverlayDepth(lua_State* const L)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TNONE && lua_type(L, 1) != LUA_TNIL) {
       gDepthTest = lua_toboolean(L, 1) != 0;
     }
@@ -1157,6 +1171,7 @@ namespace
 
   int __cdecl cfunc_EdOverlayRemove(lua_State* const L)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (const char* const id = lua_tostring(L, 1)) {
       Lines().erase(id);
       Icons().erase(id);
@@ -1169,6 +1184,7 @@ namespace
 
   int __cdecl cfunc_EdOverlayClear(lua_State* const)
   {
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     Lines().clear();
     Icons().clear();
     Decals().clear();
@@ -1248,12 +1264,14 @@ namespace moho
   {
     void NotifyHeights(const int x0, const int z0, const int x1, const int z1)
     {
+      moho::editor::activity::Touch(moho::editor::activity::kHeights);
       ++gHeightEpoch;
       gSlopeStore.Invalidate(x0, z0, x1, z1);
     }
 
     void NotifyHeightsAll()
     {
+      moho::editor::activity::Touch(moho::editor::activity::kHeights);
       ++gHeightEpoch;
       gSlopeStore.InvalidateAll();
     }
@@ -1274,6 +1292,21 @@ namespace moho
       if (vw < 1.0f || vh < 1.0f) {
         return;
       }
+
+      // ed_render_stats: the overlay's own time and its share of the batcher's flushes / vertices this frame
+      struct OverlayCounters
+      {
+        moho::editor::renderstats::Frame& frame = moho::editor::renderstats::gCur;
+        const std::uint32_t flushes0 = frame.batcherFlushes;
+        const std::uint32_t vertices0 = frame.batcherVertices;
+        const double t0 = moho::editor::renderstats::NowMs();
+        ~OverlayCounters()
+        {
+          frame.overlayMs += moho::editor::renderstats::NowMs() - t0;
+          frame.overlayFlushes += frame.batcherFlushes - flushes0;
+          frame.overlayVertices += frame.batcherVertices - vertices0;
+        }
+      } overlayCounters;
 
       batcher->SetProjectionMatrix(MakeViewportPixelProjection(*camera));
       batcher->SetViewMatrix(VMatrix4::Identity());

@@ -1,3 +1,4 @@
+#include "moho/editor/EdRenderStats.h"
 #include "moho/ui/CUIManager.h"
 
 #include <Windows.h>
@@ -584,6 +585,7 @@ void moho::CUIManager::ValidateFrame(const int frameIdx)
  */
 void moho::CUIManager::RenderFrames(const int head, CD3DPrimBatcher* const primBatcher)
 {
+  moho::editor::renderstats::ScopedMs uiTimer(moho::editor::renderstats::gCur.uiMs);   // EDITOR: ed_render_stats
   primBatcher->SetToViewport(head, *this);
 
   CD3DDevice* const device = D3D_GetDevice();
@@ -605,6 +607,7 @@ void moho::CUIManager::RenderFrames(const int head, CD3DPrimBatcher* const primB
  */
 void moho::CUIManager::DrawUI(const int head, CD3DPrimBatcher* const primBatcher)
 {
+  moho::editor::renderstats::ScopedMs uiTimer(moho::editor::renderstats::gCur.uiMs);   // EDITOR: ed_render_stats
   primBatcher->SetToViewport(head, *this);
 
   CD3DDevice* const device = D3D_GetDevice();

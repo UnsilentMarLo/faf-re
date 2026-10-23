@@ -1,8 +1,10 @@
 #include "moho/render/d3d/CD3DTextureBatcher.h"
 #include <algorithm>
 #include <cstring>
+#include <unordered_map>
 
 #include "gpg/core/utils/BoostWrappers.h"
+#include "moho/editor/EdRenderStats.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/ID3DTextureSheet.h"
 #include "moho/render/d3d/CD3DDevice.h"
@@ -15,6 +17,55 @@ namespace moho
   namespace
   {
     using BatchTextureHandle = boost::shared_ptr<CD3DBatchTexture>;
+
+    // EDITOR: a pointer keyed shortcut in front of the atlas' ordered set (ren_AtlasFastLookup). AddTexture runs once per drawn Maui bitmap / border / glyph; the set walk costs
+    // a shared_ptr copy (two atomic operations) and ~10 comparisons each. A texture held by the atlas stays at one address until the atlas is reset (the entry holds a
+    // reference to it), and a set node does not move, so the UV rectangle can be found by the texture's address. Dropped on Reset and on destruction.
+    struct AtlasFastCache
+    {
+      const CD3DTextureBatcher* owner = nullptr;
+      std::unordered_map<const CD3DBatchTexture*, const gpg::Rect2f*> uv;
+    };
+    constexpr int kAtlasFastSlots = 4;
+
+    // function local: built on first use, whatever the order of the static initialisers
+    AtlasFastCache* AtlasFastSlots()
+    {
+      static AtlasFastCache slots[kAtlasFastSlots];
+      return slots;
+    }
+
+    AtlasFastCache* AtlasFastFor(const CD3DTextureBatcher* const atlas, const bool create)
+    {
+      AtlasFastCache* const slots = AtlasFastSlots();
+      AtlasFastCache* freeSlot = nullptr;
+      for (AtlasFastCache* slotPtr = slots; slotPtr != slots + kAtlasFastSlots; ++slotPtr) {
+        AtlasFastCache& slot = *slotPtr;
+        if (slot.owner == atlas) {
+          return &slot;
+        }
+        if (slot.owner == nullptr && freeSlot == nullptr) {
+          freeSlot = &slot;
+        }
+      }
+      if (create && freeSlot != nullptr) {
+        freeSlot->owner = atlas;
+        return freeSlot;
+      }
+      return nullptr;
+    }
+
+    void AtlasFastDrop(const CD3DTextureBatcher* const atlas)
+    {
+      AtlasFastCache* const slots = AtlasFastSlots();
+      for (AtlasFastCache* slotPtr = slots; slotPtr != slots + kAtlasFastSlots; ++slotPtr) {
+        AtlasFastCache& slot = *slotPtr;
+        if (slot.owner == atlas) {
+          slot.uv.clear();
+          slot.owner = nullptr;
+        }
+      }
+    }
 
     constexpr std::int32_t kCompositeWidth = 1024;
     constexpr std::int32_t kCompositeHeight = 1024;
@@ -196,6 +247,7 @@ namespace moho
    */
   CD3DTextureBatcher::~CD3DTextureBatcher()
   {
+    AtlasFastDrop(this);   // EDITOR
     // FUN_00448B30: the explicit atlas-tree clear ahead of member teardown.
     mMap.clear();
   }
@@ -211,6 +263,21 @@ namespace moho
   {
     if (!texture) {
       return nullptr;
+    }
+
+    // EDITOR: shortcut by address (see AtlasFastCache)
+    AtlasFastCache* fast = nullptr;
+    moho::editor::renderstats::Frame& stats = moho::editor::renderstats::gCur;
+    ++stats.atlasLookups;
+    if (moho::ren_AtlasFastLookup) {
+      fast = AtlasFastFor(this, true);
+      if (fast != nullptr) {
+        const auto hit = fast->uv.find(texture.get());
+        if (hit != fast->uv.end()) {
+          ++stats.atlasFastHits;
+          return hit->second;
+        }
+      }
     }
 
     TextureAtlasEntry lookupEntry{};
@@ -240,6 +307,7 @@ namespace moho
 
       found = mMap.insert(insertedEntry).first;
       ReleaseBatchTextureHandle(&insertionScratch);
+      ++stats.atlasAdds;
 
       // DXT5 (retail): one byte per texel, so a 4-row block row is 4 * mWidth bytes and the offset is
       // mWidth * z0 + 4 * x0. A8R8G8B8 (editor): 4 bytes per texel, a row is 4 * mWidth bytes.
@@ -252,6 +320,9 @@ namespace moho
       mDirty = 1;
     }
 
+    if (fast != nullptr) {
+      fast->uv[texture.get()] = &found->mUvRect;
+    }
     return &found->mUvRect;
   }
 
@@ -264,6 +335,8 @@ namespace moho
    */
   void CD3DTextureBatcher::Reset()
   {
+    AtlasFastDrop(this);   // EDITOR: the rectangles it points to go with the set
+    ++moho::editor::renderstats::gCur.atlasResets;
     mMap.clear();
     mRects.clear();
 

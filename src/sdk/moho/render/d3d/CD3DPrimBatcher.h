@@ -605,6 +605,12 @@ namespace moho
   );
 
   /**
+   * EDITOR: the size in pixels of the Maui viewport the UI pass in progress draws into (the window's client size, set by `CD3DPrimBatcher::SetToViewport`); false while it is not
+   * known. Maui controls use it to leave out what lies outside the window (moho/editor/EdUiCull.h).
+   */
+  [[nodiscard]] bool UI_GetRenderViewSize(float& width, float& height) noexcept;
+
+  /**
    * Address: 0x00454E20 (?DRAW_ClippedQuad@Moho@@YAXPAVCD3DPrimBatcher@1@ABV?$Rect2@M@gpg@@11I@Z)
    *
    * What it does:

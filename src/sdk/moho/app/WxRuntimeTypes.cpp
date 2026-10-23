@@ -48,6 +48,8 @@
 #include "moho/render/SimpleRenderWorldView.h"
 #include "moho/render/SkyDome.h"
 #include "moho/render/VisionRenderer.h"
+#include "gpg/gal/DrawStatistics.h"
+#include "moho/editor/EdRenderStats.h"
 #include "moho/render/WRenViewport.h"
 #include "moho/render/camera/CameraImpl.h"
 #include "moho/render/camera/GeomCamera3.h"
@@ -3483,6 +3485,11 @@ void moho::WRenViewport::D3DWindowOnDeviceRender()
   (void)moho::D3D_GetDevice()->InitRenderEngineStats();
   // FAF instrumentation, not in the binary: refill the draw stats just zeroed
   // with the previous frame's submissions (CD3DDevice::PublishDrawStatistics).
+  {
+    // EDITOR: ed_render_stats - the backend's tally of the frame that has just ended, read before PublishDrawStatistics takes it
+    const gpg::gal::DrawStatistics& pending = gpg::gal::PendingDrawStatistics();
+    moho::editor::renderstats::NextFrame(pending.drawCalls, pending.primitives, pending.vertices);
+  }
   moho::D3D_GetDevice()->PublishDrawStatistics();
 
   for (SWorldViewInfo& worldView : mWorldViews) {
@@ -3814,6 +3821,20 @@ namespace
     return disabled || sToggled;
   }
 
+  // EDITOR: the water passes (reflection mesh pass, water mask, refraction copy, surface) have something to show only on a map whose water is switched on. A map without water
+  // has its surface at -10000, under the terrain (HighFidelityWater::RenderWaterSurface). ren_WaterSkipDisabled 0 brings every pass back.
+  [[nodiscard]] bool WaterPassesWanted()
+  {
+    if (!moho::ren_WaterSkipDisabled) {
+      return true;
+    }
+    moho::IWldTerrainRes* const terrainRes = moho::REN_GetTerrainRes();
+    if (terrainRes == nullptr || terrainRes->mMap == nullptr) {
+      return true;
+    }
+    return terrainRes->mMap->mWaterEnabled != 0;
+  }
+
   [[nodiscard]] bool RenderAdditionsDisabled() noexcept
   {
     static const bool disabled = [] {
@@ -3842,6 +3863,7 @@ namespace
  */
 void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& worldViews)
 {
+  moho::editor::renderstats::ScopedMs renderTimer(moho::editor::renderstats::gCur.renderMs);   // EDITOR: ed_render_stats
   moho::CD3DDevice* const device = moho::D3D_GetDevice();
   if (device == nullptr) {
     return;
@@ -4129,15 +4151,24 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
       mCam->viewport.r[1]
     );
 
-    RenderReflections();
+    const bool waterPasses = WaterPassesWanted();   // EDITOR: see WaterPassesWanted
+    if (!waterPasses) {
+      moho::editor::renderstats::gCur.waterSkipped = 1;
+      ++moho::editor::renderstats::gWaterSkippedFrames;
+    }
+    if (waterPasses) {
+      RenderReflections();
+    }
     RenderMeshes(0x14, false);
     RenderEffects(true);
     RenderMeshes(0x18, false);
     FogOff();
 
     if (terrain != nullptr) {
-      RenderWaterMask(terrain);
-      RenderCopyForRefraction(false);
+      if (waterPasses) {
+        RenderWaterMask(terrain);
+        RenderCopyForRefraction(false);
+      }
       // Fog density tracks the camera zoom - the binary dispatches
       // IRenderWorldView slot 8 (CameraGetZoom) straight into FogOn at
       // 0x007F94B8..0x007F94C8, it is not a constant.
