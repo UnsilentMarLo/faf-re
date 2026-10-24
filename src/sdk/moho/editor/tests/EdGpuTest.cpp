@@ -42,6 +42,8 @@ EMU_KERNEL_BEGIN(k_reduce_sum)
 #include "moho/editor/gpu/reduce_sum.hlsl"
 EMU_KERNEL_END(reduce_sum)
 
+#include "moho/editor/tests/EdGpuErosionKernels.inc"      // gpu/erosion_*.hlsl (GP2)
+
 EMU_KERNEL_BEGIN(k_scale_offset)
 #include "moho/editor/gpu/scale_offset.hlsl"
 EMU_KERNEL_END(scale_offset)
