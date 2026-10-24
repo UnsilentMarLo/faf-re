@@ -86,6 +86,56 @@ namespace moho::editor::field::erosion
   /** One thermal slide step on t (see the `thermal` op); `rate` per cell optional (empty = scalar), the border ring is left alone when pinBorder. */
   void ThermalStep(std::vector<float>& t, int w, int h, float cell, float talus, float rate, const std::vector<float>& rateMask, bool pinBorder);
 
+  // ---- the shared parts of the ops, for the GPU versions (EdGpuErosion.cpp) -------------------------------------------------------------------
+
+  /** The droplet parameters of op erode_droplet (the same defaults and clamps as the CPU op; `demand` / `accept` are left null: the caller points them at its own copies). */
+  struct DropletParams
+  {
+    float density = 0.5f;      // droplets per cell
+    int lifetime = 30;         // steps
+    float inertia = 0.05f;
+    float capacity = 4.0f;
+    float min_slope = 0.01f;
+    float erode = 0.3f;
+    float deposit = 0.3f;
+    float evaporate = 0.01f;
+    float gravity = 4.0f;
+    int radius = 3;            // erosion brush radius (cells)
+    float speed = 1.0f;
+    float water = 1.0f;
+    float round_cut = 0.5f;    // a cell is dug at most this deep (world units) below the surface a round started with (a round is 1 / rounds of the droplets)
+    float drain_pits = 1.0f;   // 1: droplets steer on the pit filled terrain (they leave closed basins and carve their rims instead of filling them), 0: on the raw terrain
+    int rounds = 32;           // the steering surface is refreshed this often: the more rounds, the more the droplets of one round see the valleys the earlier ones dug (feedback: gullies that capture their neighbours and branch)
+    std::uint32_t seed = 1;
+    float accel = 1.0f;        // 1: speeds up downhill (physical), 0: the old rule (slows down downhill), in between: blend (0.5 = constant speed)
+    float drop_vary = 0.0f;    // 0..1: every droplet draws its own radius, lifetime, inertia, capacity, dissolving rate and water (breaks the evenly spaced parallel rills of identical droplets)
+    const std::vector<float>* demand = nullptr;   // optional per cell factor 0..1 on what a droplet dissolves (hard ground takes up less, instead of the droplet just digging on further downstream)
+    const std::vector<float>* accept = nullptr;   // optional per cell probability 0..1 that a droplet starting there is released (spatially varying rain)
+    float creep = 2.0f;        // hillslope creep: after every round the change made so far is smoothed by this many 3 x 3 binomial passes (for density 2 and 32 rounds; scales with density / rounds, see Creep), 0 = off
+  };
+
+  [[nodiscard]] DropletParams DropletParamsOf(const OpArgs& a);
+  [[nodiscard]] HydroParams HydroParamsOf(const OpArgs& a);
+
+  /** The per cell factors of the settings every erosion op takes (vary, protect, rain_vary, the mask input); an empty array = no such factor (1 everywhere). */
+  struct OpFactors
+  {
+    std::vector<float> rock;      // erodibility (mask input x hardness variation x protect)
+    std::vector<float> soft;      // hardness alone (what a droplet takes up)
+    std::vector<float> thermal;   // thermal slide factor (protect)
+    std::vector<float> rain;      // rain factor (rain_vary)
+    std::vector<float> accept;    // droplet release probability (rain_vary)
+  };
+  void BuildOpFactors(const OpArgs& a, const Grid& src, OpFactors& out);
+
+  /** erode_hydraulic after the solve: cell noise filter, edge consistency, PostProcess (conserve / keep_range / max_change) and the outputs, exactly as the CPU op. `st` holds t (the new height) and, when
+   *  the caller has them, d s wear dep flow (empty arrays are emitted as zeros). */
+  bool FinishHydroOp(const OpArgs& a, const Grid& src, const HydroParams& p, HydroState& st, Grid& out, std::string& err);
+  /** erode_droplet after the solve and the filters: PostProcess and the outputs. `height` is the new height (src shape); the other arrays may be empty (zeros). */
+  bool FinishDropletOp(const OpArgs& a, const Grid& src, std::vector<float>& height, std::vector<float>& wear, std::vector<float>& deposit, std::vector<float>& flow, Grid& out, std::string& err);
+  /** The pit filled steering surface (priority flood, Barnes 2014) the droplets steer on. */
+  void FillSteeringSurface(const std::vector<float>& t, int w, int h, float eps, std::vector<float>& fill);
+
   // ---- the local erosion brush --------------------------------------------------------------------------------------------------------------
 
   struct BrushDab

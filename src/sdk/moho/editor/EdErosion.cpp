@@ -642,30 +642,7 @@ namespace moho::editor::field::erosion
 
   namespace
   {
-    struct DropParams
-    {
-      float density = 0.5f;      // droplets per cell
-      int lifetime = 30;         // steps
-      float inertia = 0.05f;
-      float capacity = 4.0f;
-      float min_slope = 0.01f;
-      float erode = 0.3f;
-      float deposit = 0.3f;
-      float evaporate = 0.01f;
-      float gravity = 4.0f;
-      int radius = 3;            // erosion brush radius (cells)
-      float speed = 1.0f;
-      float water = 1.0f;
-      float round_cut = 0.5f;    // a cell is dug at most this deep (world units) below the surface a round started with (a round is 1 / rounds of the droplets)
-      float drain_pits = 1.0f;   // 1: droplets steer on the pit filled terrain (they leave closed basins and carve their rims instead of filling them), 0: on the raw terrain
-      int rounds = 32;           // the steering surface is refreshed this often: the more rounds, the more the droplets of one round see the valleys the earlier ones dug (feedback: gullies that capture their neighbours and branch)
-      std::uint32_t seed = 1;
-      float accel = 1.0f;        // 1: speeds up downhill (physical), 0: the old rule (slows down downhill), in between: blend (0.5 = constant speed)
-      float drop_vary = 0.0f;    // 0..1: every droplet draws its own radius, lifetime, inertia, capacity, dissolving rate and water (breaks the evenly spaced parallel rills of identical droplets)
-      const std::vector<float>* demand = nullptr;   // optional per cell factor 0..1 on what a droplet dissolves (hard ground takes up less, instead of the droplet just digging on further downstream)
-      const std::vector<float>* accept = nullptr;   // optional per cell probability 0..1 that a droplet starting there is released (spatially varying rain)
-      float creep = 2.0f;        // hillslope creep: after every round the change made so far is smoothed by this many 3 x 3 binomial passes (for density 2 and 32 rounds; scales with density / rounds, see Creep), 0 = off
-    };
+    using DropParams = DropletParams;      // (defined in EdErosion.h: the GPU version reads the same parameters)
 
     struct DropGrids
     {
@@ -1395,26 +1372,7 @@ namespace moho::editor::field::erosion
     {
       const Grid* src = NeedA(a, err);
       if (src == nullptr) return false;
-      DropParams p;
-      p.density = static_cast<float>(a.p.N("density", p.density));
-      p.lifetime = std::max(1, std::min(200, static_cast<int>(a.p.N("lifetime", p.lifetime))));
-      p.inertia = Clamp01(static_cast<float>(a.p.N("inertia", p.inertia)));
-      p.capacity = static_cast<float>(a.p.N("capacity", p.capacity));
-      p.min_slope = static_cast<float>(a.p.N("min_slope", p.min_slope));
-      p.erode = static_cast<float>(a.p.N("erode", p.erode));
-      p.deposit = static_cast<float>(a.p.N("deposit", p.deposit));
-      p.evaporate = static_cast<float>(a.p.N("evaporate", p.evaporate));
-      p.gravity = static_cast<float>(a.p.N("gravity", p.gravity));
-      p.radius = std::max(1, std::min(8, static_cast<int>(a.p.N("radius", p.radius))));
-      p.speed = static_cast<float>(a.p.N("speed", p.speed));
-      p.water = static_cast<float>(a.p.N("water", p.water));
-      p.drain_pits = Clamp01(static_cast<float>(a.p.N("drain_pits", p.drain_pits)));
-      p.round_cut = std::max(0.01f, static_cast<float>(a.p.N("round_cut", p.round_cut)));
-      p.rounds = std::max(1, std::min(64, static_cast<int>(a.p.N("rounds", p.rounds))));
-      p.seed = static_cast<std::uint32_t>(a.p.N("seed", 1.0));
-      p.drop_vary = Clamp01(static_cast<float>(a.p.N("drop_vary", 0.0)));
-      p.accel = Clamp01(static_cast<float>(a.p.N("accel", p.accel)));
-      p.creep = std::max(0.0f, std::min(8.0f, static_cast<float>(a.p.N("creep", p.creep))));
+      DropParams p = DropletParamsOf(a);
       Factors fac;
       BuildFactors(a, *src, fac);
       p.demand = fac.softPtr;
@@ -1551,6 +1509,95 @@ namespace moho::editor::field::erosion
     };
     const Registrar gRegistrar{};
   } // namespace
+
+  // ---- the shared parts of the ops, for the GPU versions ----------------------------------------------------------------------------------------
+
+  DropletParams DropletParamsOf(const OpArgs& a)
+  {
+    DropletParams p;
+    p.density = static_cast<float>(a.p.N("density", p.density));
+    p.lifetime = std::max(1, std::min(200, static_cast<int>(a.p.N("lifetime", p.lifetime))));
+    p.inertia = Clamp01(static_cast<float>(a.p.N("inertia", p.inertia)));
+    p.capacity = static_cast<float>(a.p.N("capacity", p.capacity));
+    p.min_slope = static_cast<float>(a.p.N("min_slope", p.min_slope));
+    p.erode = static_cast<float>(a.p.N("erode", p.erode));
+    p.deposit = static_cast<float>(a.p.N("deposit", p.deposit));
+    p.evaporate = static_cast<float>(a.p.N("evaporate", p.evaporate));
+    p.gravity = static_cast<float>(a.p.N("gravity", p.gravity));
+    p.radius = std::max(1, std::min(8, static_cast<int>(a.p.N("radius", p.radius))));
+    p.speed = static_cast<float>(a.p.N("speed", p.speed));
+    p.water = static_cast<float>(a.p.N("water", p.water));
+    p.drain_pits = Clamp01(static_cast<float>(a.p.N("drain_pits", p.drain_pits)));
+    p.round_cut = std::max(0.01f, static_cast<float>(a.p.N("round_cut", p.round_cut)));
+    p.rounds = std::max(1, std::min(64, static_cast<int>(a.p.N("rounds", p.rounds))));
+    p.seed = static_cast<std::uint32_t>(a.p.N("seed", 1.0));
+    p.drop_vary = Clamp01(static_cast<float>(a.p.N("drop_vary", 0.0)));
+    p.accel = Clamp01(static_cast<float>(a.p.N("accel", p.accel)));
+    p.creep = std::max(0.0f, std::min(8.0f, static_cast<float>(a.p.N("creep", p.creep))));
+    return p;
+  }
+
+  HydroParams HydroParamsOf(const OpArgs& a) { return HydroOf(a); }
+
+  void BuildOpFactors(const OpArgs& a, const Grid& src, OpFactors& out)
+  {
+    Factors f;
+    BuildFactors(a, src, f);
+    out = OpFactors();
+    if (f.rockPtr != nullptr) out.rock = *f.rockPtr;
+    if (f.softPtr != nullptr) out.soft = *f.softPtr;
+    if (f.thermalPtr != nullptr) out.thermal = *f.thermalPtr;
+    out.rain = f.rain;
+    out.accept = f.accept;
+  }
+
+  bool FinishHydroOp(const OpArgs& a, const Grid& src, const HydroParams& p, HydroState& st, Grid& out, std::string& err)
+  {
+    const std::size_t n = src.v.size();
+    for (std::vector<float>* v : {&st.d, &st.s, &st.wear, &st.dep, &st.flow}) {
+      if (v->size() != n) v->assign(n, 0.0f);
+    }
+    SmoothDelta(src.v, st.t, src.w, src.h, static_cast<float>(a.p.N("smooth", 1.0)), static_cast<int>(a.p.N("smooth_passes", 1)), p.pin_border);
+    if (p.open_edge && !p.pin_border) MirrorEdgeChange(src.v, st.t, src.w, src.h, 0);
+    PostProcess(a, src.v, st.t, &st.dep, &st.wear);
+    Results r;
+    r.height = Shaped(src);
+    r.height.v = st.t;
+    r.wear = Shaped(src);
+    r.wear.v = st.wear;
+    r.deposit = Shaped(src);
+    r.deposit.v = st.dep;
+    r.flow = Shaped(src);
+    r.flow.v = st.flow;
+    r.water = Shaped(src);
+    r.water.v = st.d;
+    r.sediment = Shaped(src);
+    r.sediment.v = st.s;
+    return Emit(a, r, out, err);
+  }
+
+  bool FinishDropletOp(const OpArgs& a, const Grid& src, std::vector<float>& height, std::vector<float>& wear, std::vector<float>& deposit, std::vector<float>& flow, Grid& out, std::string& err)
+  {
+    const std::size_t n = src.v.size();
+    for (std::vector<float>* v : {&wear, &deposit, &flow}) {
+      if (v->size() != n) v->assign(n, 0.0f);
+    }
+    PostProcess(a, src.v, height, &deposit, &wear);
+    Results r;
+    r.height = Shaped(src);
+    r.height.v = height;
+    r.wear = Shaped(src);
+    r.wear.v = wear;
+    r.deposit = Shaped(src);
+    r.deposit.v = deposit;
+    r.flow = Shaped(src);
+    r.flow.v = flow;
+    r.water = Shaped(src);
+    r.sediment = Shaped(src);
+    return Emit(a, r, out, err);
+  }
+
+  void FillSteeringSurface(const std::vector<float>& t, const int w, const int h, const float eps, std::vector<float>& fill) { FillSurface(t, w, h, eps, fill); }
 
   // ---- the local erosion brush ------------------------------------------------------------------------------------------------------------------
   //
