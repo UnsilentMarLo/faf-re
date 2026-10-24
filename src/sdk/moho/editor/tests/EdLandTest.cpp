@@ -388,6 +388,66 @@ static void TestLegacyUnchanged()
   }
 }
 
+/** The options added with the GPU version: style erosive, warp_levels, antialias (all off by default: the old results are unchanged, see TestLegacyUnchanged and the golden cases). */
+static void TestFractalQualityOptions()
+{
+  const Num base = {{"width", 129}, {"height", 129}, {"seed", 2}, {"scale", 60}, {"octaves", 8}};
+  const GridPtr classic = Run("fractal", base);
+  const GridPtr explicitClassic = Run("fractal", base, {{"style", "classic"}});
+  CHECK(Same(*classic, *explicitClassic), "style classic differs from the default");
+  std::string err;
+  CHECK(Run("fractal", base, {{"style", "bogus"}}, {}, &err) == nullptr, "a bad style is accepted");
+  for (const std::string kind : {"fbm", "billow", "ridged"}) {
+    const GridPtr c = Run("fractal", base, {{"kind", kind}});
+    const GridPtr e = Run("fractal", base, {{"kind", kind}, {"style", "erosive"}});
+    CHECK(c != nullptr && e != nullptr && !Same(*c, *e), "erosive %s has no effect", kind.c_str());
+    const Stats s = Measure(*e);
+    CHECK(s.min >= 0.0f && s.max <= 1.0f && s.sd > 0.05, "erosive %s: range %.3f .. %.3f sd %.3f", kind.c_str(), s.min, s.max, s.sd);
+    // erosion 0 damps nothing: the same field as classic
+    const GridPtr z = Run("fractal", {{"width", 129}, {"height", 129}, {"seed", 2}, {"scale", 60}, {"octaves", 8}, {"erosion", 0}}, {{"kind", kind}, {"style", "erosive"}});
+    CHECK(Same(*c, *z), "erosive %s with erosion 0 differs from classic", kind.c_str());
+  }
+  // the erosive style removes detail on steep ground: the mean slope of the finest octaves is lower than the classic one
+  const GridPtr big1 = Run("fractal", {{"width", 257}, {"height", 257}, {"seed", 5}, {"scale", 120}, {"octaves", 9}});
+  const GridPtr big2 = Run("fractal", {{"width", 257}, {"height", 257}, {"seed", 5}, {"scale", 120}, {"octaves", 9}}, {{"style", "erosive"}});
+  const auto roughness = [](const Grid& g) {
+    double sum = 0.0;
+    for (int z = 1; z + 1 < g.h; ++z) {
+      for (int x = 1; x + 1 < g.w; ++x) sum += std::fabs(g.At(x + 1, z) + g.At(x - 1, z) + g.At(x, z + 1) + g.At(x, z - 1) - 4.0f * g.At(x, z));
+    }
+    return sum;
+  };
+  CHECK(roughness(*big2) < roughness(*big1), "the erosive style is not smoother than the classic one");
+  // world position: a coarse grid samples the same noise as the fine one, also with the new options
+  Num fine = {{"width", 129}, {"height", 129}, {"seed", 4}, {"scale", 90}, {"octaves", 6}, {"warp", 10}, {"warp_levels", 2}, {"slope_detail", 0.3}};
+  Num coarse = fine;
+  coarse["width"] = 33;
+  coarse["height"] = 33;
+  coarse["cell"] = 4;
+  const GridPtr f = Run("fractal", fine, {{"style", "erosive"}});
+  const GridPtr c = Run("fractal", coarse, {{"style", "erosive"}});
+  bool ok = f != nullptr && c != nullptr;
+  for (int z = 0; ok && z < 33; ++z) {
+    for (int x = 0; ok && x < 33; ++x) ok = f->At(x * 4, z * 4) == c->At(x, z);
+  }
+  CHECK(ok, "erosive + warp_levels 2: a coarse grid does not sample the same noise as the fine one");
+  // warp_levels 2 differs from 1 and keeps the statistics
+  const GridPtr w1 = Run("fractal", {{"width", 129}, {"height", 129}, {"seed", 2}, {"scale", 60}, {"warp", 20}});
+  const GridPtr w2 = Run("fractal", {{"width", 129}, {"height", 129}, {"seed", 2}, {"scale", 60}, {"warp", 20}, {"warp_levels", 2}});
+  CHECK(!Same(*w1, *w2) && std::fabs(Measure(*w1).sd - Measure(*w2).sd) < 0.05, "warp_levels 2");
+  // antialias: a coarse preview is a low pass of the fine result: the finest octaves (shorter than 2 samples) are gone, the others stay
+  Num aaBase = {{"width", 65}, {"height", 65}, {"seed", 3}, {"scale", 200}, {"octaves", 10}, {"cell", 8}};   // octave wavelengths 200 .. 0.4
+  const GridPtr aa = Run("fractal", aaBase, {}, {});
+  Num aaOn = aaBase;
+  aaOn["antialias"] = 1;
+  const GridPtr on = Run("fractal", aaOn);
+  CHECK(aa != nullptr && on != nullptr && !Same(*aa, *on), "antialias has no effect when octaves are finer than the samples");
+  Num fineAa = {{"width", 33}, {"height", 33}, {"seed", 3}, {"scale", 200}, {"octaves", 3}, {"antialias", 1}};   // cell 1: 200, 100, 50 are all well resolved
+  Num fineOff = fineAa;
+  fineOff["antialias"] = 0;
+  CHECK(Same(*Run("fractal", fineAa), *Run("fractal", fineOff)), "antialias changes a field whose octaves are all resolved");
+}
+
 int main()
 {
   TestDeterminism();
@@ -399,6 +459,7 @@ int main()
   TestIsotropy();
   TestFractalOptions();
   TestLegacyUnchanged();
+  TestFractalQualityOptions();
   if (gFailures == 0) std::printf("EdLandTest PASS\n");
   else std::printf("EdLandTest FAIL (%d)\n", gFailures);
   return gFailures == 0 ? 0 : 1;

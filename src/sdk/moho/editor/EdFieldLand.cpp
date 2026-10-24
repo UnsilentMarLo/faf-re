@@ -24,6 +24,7 @@
 // Every output sample is computed from the inputs and the world position alone, so the results are bit identical for any thread count.
 #pragma fp_contract(off)
 
+#include "moho/editor/EdFieldFractal.h"
 #include "moho/editor/EdFieldUtil.h"
 
 #include <cmath>
@@ -36,26 +37,13 @@ namespace moho::editor::field
   {
     // ---- fractal ---------------------------------------------------------------------------------------------------------------------------------
 
-    enum Kind { kFbm = 0, kBillow = 1, kRidged = 2 };
-
-    struct FractalSetup
-    {
-      std::uint32_t seed = 1;
-      double scale = 120.0;
-      int octaves = 6;
-      float gain = 0.5f;
-      float lac = 2.0f;
-      Kind kind = kFbm;
-      float sharp = 2.0f;
-      double warp = 0.0;
-      double warpScale = 96.0;
-      float slopeDetail = 0.0f;
-      bool rotate = true;
-      float norm = 0.0f;       // sum of the octave amplitudes
-      float fit = 1.0f;        // maps the normalised sum to about 0..1
-      float amps[16] = {};
-      std::uint32_t octSeed[16] = {};
-    };
+    using fractal::Kind;
+    using fractal::Setup;
+    using fractal::kBillow;
+    using fractal::kErosive;
+    using fractal::kFbm;
+    using fractal::kRidged;
+    using FractalSetup = Setup;
 
     /** Octave o of the gradient noise at the point (wx, wz) (world), with the gradient per lattice unit in the world frame. */
     inline float Octave(const FractalSetup& s, const int o, const double px, const double pz, float& gx, float& gz)
@@ -98,16 +86,22 @@ namespace moho::editor::field
       if (s.warp > 0.0) {
         warpX = static_cast<double>(WarpNoise(s, 1, wx0, wz0)) * s.warp;
         warpZ = static_cast<double>(WarpNoise(s, 2, wx0, wz0)) * s.warp;
+        if (s.warpLevels >= 2) {      // a warp of a warp: the second pair of noises is read at the place the first one moved to
+          const double px = wx0 + warpX * 0.8, pz = wz0 + warpZ * 0.8;
+          warpX = static_cast<double>(WarpNoise(s, 3, px, pz)) * s.warp;
+          warpZ = static_cast<double>(WarpNoise(s, 4, px, pz)) * s.warp;
+        }
       }
+      const bool erosive = s.style == kErosive;
       float sum = 0.0f;
       float weight = 1.0f;
       float accX = 0.0f, accZ = 0.0f, accAmp = 0.0f;   // gradient of the octaves so far, in units of (amplitude per feature size)
-      double freq = 1.0 / s.scale;
-      double wavelength = s.scale;
+      float eroX = 0.0f, eroZ = 0.0f, eroAmp = 0.0f;   // the same for the signal of the erosive style (the gradient of what is summed)
       for (int o = 0; o < s.octaves; ++o) {
+        const double freq = s.freq[o];
         // An octave is moved by the warp, but never by more than a quarter of its own wavelength: the broad shapes bend a lot, the fine ones only a little (a fine octave pushed by
         // many wavelengths turns into smeared, worm like ridges).
-        const double move = s.warp > 0.0 ? std::min(1.0, wavelength / (4.0 * s.warp)) : 0.0;
+        const double move = s.move[o];
         float gx, gz;
         const float n = Octave(s, o, (wx0 + warpX * move) * freq, (wz0 + warpZ * move) * freq, gx, gz);
         float amp = s.amps[o];
@@ -116,12 +110,30 @@ namespace moho::editor::field
           const float f = Clamp01(steep * 0.6f);
           amp *= std::max(0.0f, 1.0f + s.slopeDetail * (2.0f * f - 1.0f));
         }
+        if (erosive && o > 0 && eroAmp > 0.0f) {
+          const float steep2 = (eroX * eroX + eroZ * eroZ) / (eroAmp * eroAmp);     // the squared slope of the terrain so far (about 1 on the typical slope)
+          amp /= 1.0f + s.erosion * steep2;
+        }
+        amp *= s.fade[o];
         float signal;
+        float sgx = gx, sgz = gz;       // gradient of the signal (per lattice unit), erosive style only
         switch (s.kind) {
-          case kBillow: signal = 2.0f * (std::fabs(n) - 0.25f); break;
+          case kBillow:
+            signal = 2.0f * (std::fabs(n) - 0.25f);
+            if (erosive) {
+              const float sg = n < 0.0f ? -2.0f : 2.0f;
+              sgx *= sg;
+              sgz *= sg;
+            }
+            break;
           case kRidged: {
-            float r = 1.0f - std::fabs(n);
-            r = s.sharp == 2.0f ? r * r : std::pow(r, s.sharp);
+            const float r0 = 1.0f - std::fabs(n);
+            float r = s.sharp == 2.0f ? r0 * r0 : std::pow(r0, s.sharp);
+            if (erosive) {
+              const float dr = -s.sharp * (s.sharp == 2.0f ? r0 : std::pow(r0, s.sharp - 1.0f)) * (n < 0.0f ? -1.0f : 1.0f) * 2.0f * weight;
+              sgx *= dr;
+              sgz *= dr;
+            }
             r *= weight;
             weight = Clamp01(r * 2.0f);
             signal = 2.0f * r - 1.0f;
@@ -130,11 +142,15 @@ namespace moho::editor::field
           default: signal = n; break;
         }
         sum += signal * amp;
-        accX += s.amps[o] * gx * static_cast<float>(freq * s.scale);
-        accZ += s.amps[o] * gz * static_cast<float>(freq * s.scale);
+        const float k = static_cast<float>(freq * s.scale);
+        accX += s.amps[o] * gx * k;
+        accZ += s.amps[o] * gz * k;
         accAmp += s.amps[o];
-        freq *= static_cast<double>(s.lac);
-        wavelength /= static_cast<double>(s.lac);
+        if (erosive) {
+          eroX += s.amps[o] * sgx * k;
+          eroZ += s.amps[o] * sgz * k;
+          eroAmp += s.amps[o];
+        }
       }
       // soft limit instead of a clamp: a clamp would cut flat topped discs into the highest peaks
       const float x = sum / s.norm * s.fit;
@@ -145,46 +161,7 @@ namespace moho::editor::field
     {
       if (!MakeOut(a, out, err)) return false;
       FractalSetup s;
-      s.seed = SeedOf(a);
-      s.scale = std::max(1e-3, a.p.N("scale", 120.0));
-      const int wantOct = std::max(1, std::min(16, static_cast<int>(a.p.N("octaves", 6))));
-      s.gain = std::max(0.05f, std::min(0.95f, static_cast<float>(a.p.N("persistence", 0.5))));
-      s.lac = std::max(1.2f, std::min(4.0f, static_cast<float>(a.p.N("lacunarity", 2.0))));
-      const std::string kind = a.p.S("kind", "fbm");
-      if (kind == "fbm") s.kind = kFbm;
-      else if (kind == "billow") s.kind = kBillow;
-      else if (kind == "ridged") s.kind = kRidged;
-      else {
-        err = "fractal: kind must be fbm, billow or ridged";
-        return false;
-      }
-      s.sharp = std::max(0.5f, std::min(8.0f, static_cast<float>(a.p.N("sharpness", 2.0))));
-      s.warp = std::max(0.0, a.p.N("warp", 0.0));
-      s.warpScale = std::max(1e-3, a.p.N("warp_scale", 0.8 * s.scale));
-      s.slopeDetail = std::max(-1.0f, std::min(1.0f, static_cast<float>(a.p.N("slope_detail", 0.0))));
-      s.rotate = a.p.N("rotate", 1.0) >= 0.5;
-      const double finest = std::max(0.0, a.p.N("finest", 0.0));
-      int octaves = 1;
-      double wave = s.scale;
-      while (octaves < wantOct && wave / static_cast<double>(s.lac) >= finest) {
-        wave /= static_cast<double>(s.lac);
-        ++octaves;
-      }
-      s.octaves = octaves;
-      float amp = 1.0f;
-      for (int o = 0; o < octaves; ++o) {
-        s.amps[o] = amp;
-        s.norm += amp;
-        s.octSeed[o] = Hash32(s.seed * 131U + static_cast<std::uint32_t>(o) * 7919U + 17U);
-        amp *= s.gain;
-      }
-      // The sum of the octaves is rarely near its theoretical limit: stretch it so the typical extremes land near 0 and 1 (the exact size is the job of `amplitude`).
-      switch (s.kind) {
-        case kRidged: s.fit = 1.6f; break;
-        case kBillow: s.fit = 2.7f; break;
-        default: s.fit = 3.0f; break;
-      }
-      s.fit = static_cast<float>(a.p.N("fit", static_cast<double>(s.fit)));
+      if (!fractal::Read(a, out.cell, s, err)) return false;
       const Grid& g = out;
       Cells(out, [&](const int x, const int z) { return FractalAt(s, WorldX(g, x), WorldZ(g, z)); });
       return true;
