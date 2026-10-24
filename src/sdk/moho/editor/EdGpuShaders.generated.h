@@ -5266,6 +5266,593 @@ void CSMain(KERNEL_IDS)
 
 )HLSL";
 
+  // field_wetfinal: 16x16x1 threads
+  inline constexpr char kSource_field_wetfinal[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op wetness (EdFieldFilt.cpp OpWetness), the point passes. stage 0: topographic wetness index ln(specific catchment / tan slope) from the catchment `area` and the height (gradient
+// floored at 0.005). stage 1: the op's output from the (smoothed) index `t`: mode 1 the index itself, 2 the catchment on a log scale (log2 / 14), else smoothstep(lo, hi, index).
+// ---- begin filt_common.hlsli
+// Helpers of the filter kernels (filt_*.hlsl). Every filter kernel has a constant buffer P that starts with  uint w, h, z0, rows;  (field size, first row and number of rows of this dispatch) and
+// reads the source field from a structured buffer. Functions that read a buffer cannot take it as an argument in the kernel subset, so they are macros that define a function for the buffer
+// whose name is given (the function reads P.w / P.h, so define it after the CBUFFER).
+#ifndef GPU_FILT_COMMON_HLSLI
+#define GPU_FILT_COMMON_HLSLI
+
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+
+// EdFieldUtil.h SmoothStep (an empty edge range is a step).
+FN float SmoothStep(float e0, float e1, float v)
+{
+    if (e1 == e0) return v < e0 ? 0.0f : 1.0f;
+    float t = saturate((v - e0) / (e1 - e0));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// BilinearC(gx, gz): bilinear sample of buffer BUF at fractional sample coordinates, clamped edges (EdFieldUtil.h BilinearC).
+#define DEFINE_BILINEAR_C(BUF)                                                                  \
+    FN float BilinearC(float gx, float gz)                                                      \
+    {                                                                                           \
+        float mx = float(P.w - 1u);                                                             \
+        float mz = float(P.h - 1u);                                                             \
+        float cx = gx < 0.0f ? 0.0f : (gx > mx ? mx : gx);                                      \
+        float cz = gz < 0.0f ? 0.0f : (gz > mz ? mz : gz);                                      \
+        int ix = int(cx);                                                                       \
+        int iz = int(cz);                                                                       \
+        if (ix >= int(P.w) - 1) ix = max(0, int(P.w) - 2);                                      \
+        if (iz >= int(P.h) - 1) iz = max(0, int(P.h) - 2);                                      \
+        float tx = cx - float(ix);                                                              \
+        float tz = cz - float(iz);                                                              \
+        int ix1 = min(int(P.w) - 1, ix + 1);                                                    \
+        int iz1 = min(int(P.h) - 1, iz + 1);                                                    \
+        uint r0 = uint(iz) * P.w;                                                               \
+        uint r1 = uint(iz1) * P.w;                                                              \
+        float a0 = BUF[r0 + uint(ix)];                                                          \
+        float a1 = BUF[r0 + uint(ix1)];                                                         \
+        float b0 = BUF[r1 + uint(ix)];                                                          \
+        float b1 = BUF[r1 + uint(ix1)];                                                         \
+        float top = a0 + (a1 - a0) * tx;                                                        \
+        float bottom = b0 + (b1 - b0) * tx;                                                     \
+        return top + (bottom - top) * tz;                                                       \
+    }
+
+// GradientAt(x, z, gx, gz): central difference gradient (rise per run, P.cell world units per sample) with clamped edges (EdFieldUtil.h GradientAt).
+#define DEFINE_GRADIENT_AT(BUF)                                                                 \
+    FN void GradientAt(int x, int z, OUT(float) gx, OUT(float) gz)                              \
+    {                                                                                           \
+        int x0 = max(0, x - 1);                                                                 \
+        int x1 = min(int(P.w) - 1, x + 1);                                                      \
+        int z0 = max(0, z - 1);                                                                 \
+        int z1 = min(int(P.h) - 1, z + 1);                                                      \
+        gx = 0.0f;                                                                              \
+        gz = 0.0f;                                                                              \
+        if (x1 > x0) gx = (BUF[uint(z) * P.w + uint(x1)] - BUF[uint(z) * P.w + uint(x0)]) / (float(x1 - x0) * P.cell); \
+        if (z1 > z0) gz = (BUF[uint(z1) * P.w + uint(x)] - BUF[uint(z0) * P.w + uint(x)]) / (float(z1 - z0) * P.cell); \
+    }
+
+#endif
+// ---- end filt_common.hlsli
+// ---- begin field_wet_params.hlsli
+// Constant buffer of the wetness kernels (field_wetprep, field_wetrank, field_wetsweep, field_wetfinal; op wetness).
+#ifndef GPU_FIELD_WET_PARAMS_HLSLI
+#define GPU_FIELD_WET_PARAMS_HLSLI
+
+struct WetParams
+{
+    uint w;
+    uint h;
+)HLSL"
+    R"HLSL(    uint tilesX;     // tiles of 32 x 32 samples: columns and rows
+    uint tilesZ;
+    uint tile0;      // first tile of this dispatch (banded dispatch of the rank kernel)
+    uint stage;      // field_wetfinal: 0 = topographic index, 1 = the op's output
+    uint mode;       // field_wetfinal: 0 wet (smoothstep lo..hi), 1 twi (raw), 2 area (log scale)
+    uint pad0;
+    float cell;
+    float pf;        // flow exponent
+    float lo;
+    float hi;
+};
+
+#endif
+// ---- end field_wet_params.hlsli
+
+CBUFFER(WetParams, P, 0)
+SRV_BUFFER(float, hgt, 0)
+SRV_BUFFER(float, area, 1)
+SRV_BUFFER(float, tw, 2)
+UAV_BUFFER(float, dst, 0)
+
+DEFINE_GRADIENT_AT(hgt)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y);
+    uint i = dtid.y * P.w + dtid.x;
+    if (P.stage == 0u)
+    {
+        float gx;
+        float gz;
+        GradientAt(x, z, gx, gz);
+        float tb = max(0.005f, sqrt(gx * gx + gz * gz));
+        float sca = area[i] * P.cell;
+        dst[i] = log(sca / tb);
+    }
+    else if (P.mode == 1u)
+    {
+        dst[i] = tw[i];
+    }
+    else if (P.mode == 2u)
+    {
+        dst[i] = saturate(log2(area[i]) / 14.0f);
+    }
+    else
+    {
+        dst[i] = SmoothStep(P.lo, P.hi, tw[i]);
+    }
+}
+
+)HLSL";
+
+  // field_wetprep: 16x16x1 threads
+  inline constexpr char kSource_field_wetprep[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op wetness (EdFieldFilt.cpp OpWetness), step 1: for every cell the inverse of the sum of the flow weights to its lower neighbours (eight of them, weight (drop / distance)^pf; 0 for a cell
+// that has no lower neighbour). A cell with area A gives A * weight_k * inv to the neighbour k.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin field_wet_params.hlsli
+// Constant buffer of the wetness kernels (field_wetprep, field_wetrank, field_wetsweep, field_wetfinal; op wetness).
+#ifndef GPU_FIELD_WET_PARAMS_HLSLI
+#define GPU_FIELD_WET_PARAMS_HLSLI
+
+struct WetParams
+{
+    uint w;
+    uint h;
+    uint tilesX;     // tiles of 32 x 32 samples: columns and rows
+    uint tilesZ;
+    uint tile0;      // first tile of this dispatch (banded dispatch of the rank kernel)
+    uint stage;      // field_wetfinal: 0 = topographic index, 1 = the op's output
+    uint mode;       // field_wetfinal: 0 wet (smoothstep lo..hi), 1 twi (raw), 2 area (log scale)
+    uint pad0;
+    float cell;
+    float pf;        // flow exponent
+    float lo;
+    float hi;
+};
+
+#endif
+// ---- end field_wet_params.hlsli
+
+CBUFFER(WetParams, P, 0)
+SRV_BUFFER(float, hgt, 0)
+UAV_BUFFER(float, inv, 0)
+
+static const int kWetDx[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+static const int kWetDz[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y);
+    int w = int(P.w);
+    int h = int(P.h);
+    uint i = dtid.y * P.w + dtid.x;
+    float c = hgt[i];
+    float sum = 0.0f;
+    UNROLL for (int k = 0; k < 8; ++k)
+    {
+        int nx = x + kWetDx[k];
+        int nz = z + kWetDz[k];
+        if (nx >= 0 && nz >= 0 && nx < w && nz < h)
+        {
+            float drop = c - hgt[uint(nz) * P.w + uint(nx)];
+            if (drop > 0.0f)
+            {
+                float dist = 1.41421356f;
+                if (k < 4) dist = 1.0f;
+                float wk = drop / dist;
+                if (P.pf != 1.0f) wk = pow(wk, P.pf);
+                sum += wk;
+            }
+        }
+    }
+    inv[i] = sum > 0.0f ? 1.0f / sum : 0.0f;
+}
+
+)HLSL";
+
+  // field_wetrank: 1024x1x1 threads
+  inline constexpr char kSource_field_wetrank[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op wetness, step 2: the order in which a tile of 32 x 32 samples is worked through. One group per tile, one thread per sample; every thread counts the samples of its tile that stand
+// higher (equal heights: the lower index first) and so finds its rank. order[tile * 1024 + rank] = the sample's index inside the tile (y * 32 + x). Samples past the field's edge sort last.
+// (A rank sort of 1024 keys is 1M comparisons per tile; it is done once per op.)
+// ---- begin field_wet_params.hlsli
+// Constant buffer of the wetness kernels (field_wetprep, field_wetrank, field_wetsweep, field_wetfinal; op wetness).
+#ifndef GPU_FIELD_WET_PARAMS_HLSLI
+#define GPU_FIELD_WET_PARAMS_HLSLI
+
+struct WetParams
+{
+    uint w;
+    uint h;
+    uint tilesX;     // tiles of 32 x 32 samples: columns and rows
+    uint tilesZ;
+    uint tile0;      // first tile of this dispatch (banded dispatch of the rank kernel)
+    uint stage;      // field_wetfinal: 0 = topographic index, 1 = the op's output
+    uint mode;       // field_wetfinal: 0 wet (smoothstep lo..hi), 1 twi (raw), 2 area (log scale)
+    uint pad0;
+    float cell;
+    float pf;        // flow exponent
+    float lo;
+    float hi;
+};
+
+#endif
+// ---- end field_wet_params.hlsli
+
+CBUFFER(WetParams, P, 0)
+SRV_BUFFER(float, hgt, 0)
+UAV_BUFFER(uint, order, 0)
+GROUPSHARED(float, keys, 1024)
+
+NUMTHREADS(1024, 1, 1)
+void CSMain(KERNEL_IDS)
+{
+    PHASES_BEGIN
+    uint tile = gid.x + P.tile0;
+    uint tx = tile % P.tilesX;
+    uint tz = tile / P.tilesX;
+    uint x = tx * 32u + (gtid.x & 31u);
+    uint z = tz * 32u + (gtid.x >> 5u);
+    float key = -3.0e38f;
+    if (x < P.w && z < P.h) key = hgt[z * P.w + x];
+    keys[gtid.x] = key;
+    BARRIER();
+    uint tile2 = gid.x + P.tile0;
+    float mine = keys[gtid.x];
+    uint rank = 0u;
+    LOOP for (uint j = 0u; j < 1024u; ++j)
+    {
+        float kj = keys[j];
+        if (kj > mine || (kj == mine && j < gtid.x)) rank += 1u;
+    }
+    if (tile2 < P.tilesX * P.tilesZ) order[tile2 * 1024u + rank] = gtid.x;
+    PHASES_END
+}
+
+)HLSL";
+
+  // field_wetsweep: 64x1x1 threads
+  inline constexpr char kSource_field_wetsweep[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op wetness, step 3: one sweep of the flow accumulation (multiple flow direction: a cell gives its catchment, 1 + everything above it, to its lower neighbours in proportion to
+// (drop / distance)^pf). The CPU op visits the cells from the highest down in one sequential pass. Here the field is cut into tiles of 32 x 32 samples, one THREAD per tile works
+// through its cells in the order of field_wetrank (highest first), keeping what flows inside the tile in a private array; what flows in from the neighbouring tiles is read from the
+// result of the previous sweep (`prev`). Sweep n is exact for every cell whose upstream paths cross at most n - 1 tile borders, and the fixed point is the CPU op's result, so the
+// host sweeps until nothing changes (`changed`). The sums are added in another order than the CPU's: equal to about 1e-6 relative.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin field_wet_params.hlsli
+// Constant buffer of the wetness kernels (field_wetprep, field_wetrank, field_wetsweep, field_wetfinal; op wetness).
+#ifndef GPU_FIELD_WET_PARAMS_HLSLI
+#define GPU_FIELD_WET_PARAMS_HLSLI
+
+struct WetParams
+{
+    uint w;
+    uint h;
+    uint tilesX;     // tiles of 32 x 32 samples: columns and rows
+    uint tilesZ;
+    uint tile0;      // first tile of this dispatch (banded dispatch of the rank kernel)
+    uint stage;      // field_wetfinal: 0 = topographic index, 1 = the op's output
+    uint mode;       // field_wetfinal: 0 wet (smoothstep lo..hi), 1 twi (raw), 2 area (log scale)
+    uint pad0;
+    float cell;
+    float pf;        // flow exponent
+    float lo;
+    float hi;
+};
+
+#endif
+// ---- end field_wet_params.hlsli
+
+CBUFFER(WetParams, P, 0)
+SRV_BUFFER(float, hgt, 0)
+SRV_BUFFER(float, inv, 1)
+SRV_BUFFER(uint, order, 2)
+SRV_BUFFER(float, prev, 3)
+UAV_BUFFER(float, nxt, 0)
+UAV_BUFFER(uint, changed, 1)
+
+static const int kWetDx[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+static const int kWetDz[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+
+NUMTHREADS(64, 1, 1)
+void CSMain(KERNEL_IDS)
+{
+    uint tile = dtid.x;
+    if (tile >= P.tilesX * P.tilesZ) return;
+    int tx = int(tile % P.tilesX);
+    int tz = int(tile / P.tilesX);
+    int w = int(P.w);
+    int h = int(P.h);
+    float acc[1024];
+    LOOP for (int q = 0; q < 1024; ++q) acc[q] = 0.0f;
+    uint flag = 0u;
+    LOOP for (uint r = 0u; r < 1024u; ++r)
+    {
+        uint li = order[tile * 1024u + r];
+        int x = tx * 32 + int(li & 31u);
+        int z = tz * 32 + int(li >> 5u);
+        if (x >= w || z >= h) break;
+        uint i = uint(z) * P.w + uint(x);
+        float c = hgt[i];
+        float a = 1.0f + acc[li];
+        UNROLL for (int k = 0; k < 8; ++k)
+        {
+            int nx = x + kWetDx[k];
+            int nz = z + kWetDz[k];
+            if (nx >= 0 && nz >= 0 && nx < w && nz < h && ((nx >> 5) != tx || (nz >> 5) != tz))
+            {
+                uint j = uint(nz) * P.w + uint(nx);
+                float drop = hgt[j] - c;
+                if (drop > 0.0f)
+                {
+                    float dist = 1.41421356f;
+                    if (k < 4) dist = 1.0f;
+                    float wk = drop / dist;
+                    if (P.pf != 1.0f) wk = pow(wk, P.pf);
+                    a += prev[j] * inv[j] * wk;
+                }
+            }
+        }
+        nxt[i] = a;
+        if (a != prev[i]) flag = 1u;
+        float give = a * inv[i];
+        if (give > 0.0f)
+        {
+            UNROLL for (int k2 = 0; k2 < 8; ++k2)
+            {
+                int nx2 = x + kWetDx[k2];
+                int nz2 = z + kWetDz[k2];
+                if (nx2 >= 0 && nz2 >= 0 && nx2 < w && nz2 < h && (nx2 >> 5) == tx && (nz2 >> 5) == tz)
+                {
+                    float drop2 = c - hgt[uint(nz2) * P.w + uint(nx2)];
+                    if (drop2 > 0.0f)
+                    {
+                        float dist2 = 1.41421356f;
+                        if (k2 < 4) dist2 = 1.0f;
+                        float wk2 = drop2 / dist2;
+                        if (P.pf != 1.0f) wk2 = pow(wk2, P.pf);
+                        acc[(nz2 & 31) * 32 + (nx2 & 31)] += give * wk2;
+                    }
+                }
+            }
+        }
+    }
+    if (flag != 0u) InterlockedOr(changed[0], 1u);
+}
+
+)HLSL";
+
   // field_wind_a: 16x16x1 threads
   inline constexpr char kSource_field_wind_a[] =
     R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
@@ -10373,6 +10960,10 @@ void CSMain(KERNEL_IDS)
     {"field_sub", kSource_field_sub, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x101759797F1D7EACULL},
     {"field_unsharp", kSource_field_unsharp, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x51536C353B56C1BDULL},
     {"field_weather", kSource_field_weather, "CSMain", 16u, 16u, 1u, 0x0u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xD84A62CAB2D4E35CULL},
+    {"field_wetfinal", kSource_field_wetfinal, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xC494E805BCBC81C3ULL},
+    {"field_wetprep", kSource_field_wetprep, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xC6CE8380D785A363ULL},
+    {"field_wetrank", kSource_field_wetrank, "CSMain", 1024u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x85F14B8A1B71D74DULL},
+    {"field_wetsweep", kSource_field_wetsweep, "CSMain", 64u, 1u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xFE462ABB28D7AE53ULL},
     {"field_wind_a", kSource_field_wind_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x9C31D6B9A4CDF0B1ULL},
     {"field_wind_b", kSource_field_wind_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x4823B43803A2C019ULL},
     {"filt_bilateral", kSource_filt_bilateral, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x6B226CC7B6F8A9DFULL},
@@ -10395,5 +10986,5 @@ void CSMain(KERNEL_IDS)
     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
   };
-  inline constexpr int kKernelCount = 53;
+  inline constexpr int kKernelCount = 57;
 } // namespace moho::editor::gpu::shaders

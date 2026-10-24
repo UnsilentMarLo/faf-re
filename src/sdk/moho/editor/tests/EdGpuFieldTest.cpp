@@ -43,6 +43,7 @@
 #include "moho/editor/gpu/field_sub_params.hlsli"
 #include "moho/editor/gpu/field_unsharp_params.hlsli"
 #include "moho/editor/gpu/field_weather_params.hlsli"
+#include "moho/editor/gpu/field_wet_params.hlsli"
 #include "moho/editor/gpu/field_wind_params.hlsli"
 
 EMU_KERNEL_BEGIN(k_field_settle)
@@ -100,6 +101,22 @@ EMU_KERNEL_END(field_weather)
 EMU_KERNEL_BEGIN(k_field_snowinit)
 #include "moho/editor/gpu/field_snowinit.hlsl"
 EMU_KERNEL_END(field_snowinit)
+
+EMU_KERNEL_BEGIN(k_field_wetfinal)
+#include "moho/editor/gpu/field_wetfinal.hlsl"
+EMU_KERNEL_END(field_wetfinal)
+
+EMU_KERNEL_BEGIN(k_field_wetprep)
+#include "moho/editor/gpu/field_wetprep.hlsl"
+EMU_KERNEL_END(field_wetprep)
+
+EMU_KERNEL_BEGIN(k_field_wetrank)
+#include "moho/editor/gpu/field_wetrank.hlsl"
+EMU_KERNEL_END(field_wetrank)
+
+EMU_KERNEL_BEGIN(k_field_wetsweep)
+#include "moho/editor/gpu/field_wetsweep.hlsl"
+EMU_KERNEL_END(field_wetsweep)
 
 EMU_KERNEL_BEGIN(k_field_wind_a)
 #include "moho/editor/gpu/field_wind_a.hlsl"
@@ -771,6 +788,65 @@ static void TestStratify()
   CheckDeclines("stratify_no_input", "stratify", Args({}, {}, {}));
 }
 
+// ---- wetness ---------------------------------------------------------------------------------------------------------------------------------------
+
+/** A terrain whose water runs along a serpentine channel: the longest possible flow path, crossing many tile borders. */
+static GridPtr SnakeTerrain(const int w, const int h)
+{
+  auto g = std::make_shared<Grid>(w, h, 2.0f, 0.0f, 0.0f, 500.0f);
+  int step = 0;
+  for (int z = 1; z < h; z += 3) {
+    const int row = (z / 3) % 2;
+    for (int i = 0; i < w; ++i) {
+      const int x = row == 0 ? i : w - 1 - i;
+      g->At(x, z) = 400.0f - 0.01f * static_cast<float>(step++);
+    }
+    if (z + 3 < h) {
+      for (int dz = 1; dz <= 2; ++dz) g->At(row == 0 ? w - 1 : 0, z + dz) = 400.0f - 0.01f * static_cast<float>(step++);
+    }
+  }
+  return g;
+}
+
+static void TestWetness()
+{
+  const GridPtr t = TestTerrain(100, 87, 2.0f, 141, 80.0);
+  for (const char* mode : {"wet", "twi", "area"}) {
+    CheckSame((std::string("wetness_") + mode).c_str(), "wetness", Args({}, {{"mode", mode}}, {{"a", t}}), 1e-5);
+  }
+  {
+    Grid g;
+    RunGpu("wetness", Args({}, {{"mode", "area"}}, {{"a", t}}), g);
+    double mx = 0.0;
+    for (const float v : g.v) mx = std::max(mx, static_cast<double>(v));
+    CHECK(mx > 0.3, "wetness finds channels (largest catchment %.3f of the log scale)", mx);
+  }
+  CheckSame("wetness_smooth", "wetness", Args({{"smooth", 7.0}, {"lo", 2.0}, {"hi", 9.0}}, {}, {{"a", t}}), 1e-5);
+  CheckSame("wetness_p1", "wetness", Args({{"p", 1.0}}, {{"mode", "twi"}}, {{"a", t}}), 1e-5);
+  CheckSame("wetness_p3", "wetness", Args({{"p", 3.0}}, {{"mode", "twi"}}, {{"a", t}}), 1e-5);
+  CheckSame("wetness_p_clamp", "wetness", Args({{"p", 20.0}}, {{"mode", "area"}}, {{"a", t}}), 1e-5);
+  // the longest flow path: a serpentine channel (about 90 tile borders), and a tilted plane (every path crosses the whole field)
+  CheckSame("wetness_snake", "wetness", Args({}, {{"mode", "area"}}, {{"a", SnakeTerrain(70, 70)}}), 1e-5);
+  {
+    auto plane = std::make_shared<Grid>(150, 40, 2.0f, 0.0f, 0.0f);
+    for (int z = 0; z < plane->h; ++z) {
+      for (int x = 0; x < plane->w; ++x) plane->At(x, z) = 300.0f - 1.5f * static_cast<float>(x) - 0.3f * static_cast<float>(z) + 0.01f * static_cast<float>((x * 7 + z * 13) % 5);
+    }
+    CheckSame("wetness_plane", "wetness", Args({}, {{"mode", "area"}}, {{"a", plane}}), 1e-5);
+  }
+  // flats, equal heights and pits: no flow between equal samples
+  CheckSame("wetness_flat", "wetness", Args({}, {{"mode", "area"}}, {{"a", std::make_shared<Grid>(40, 40, 1.0f, 0.0f, 0.0f, 5.0f)}}), 0.0);
+  for (const std::pair<int, int>& sz : {std::pair<int, int>{32, 32}, {33, 33}, {64, 31}, {31, 65}, {1, 37}, {41, 1}, {1, 1}, {17, 33}, {2, 2}, {5, 5}}) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 80.0);
+    CheckSame(("wetness_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "wetness", Args({{"smooth", 3.0}}, {}, {{"a", s}}), 1e-5);
+  }
+  auto like = std::make_shared<Grid>(*t);
+  like->ox = 7.0f;
+  CheckSame("wetness_like", "wetness", Args({}, {{"mode", "twi"}}, {{"a", t}, {"like", like}}), 1e-5);
+  CheckDeclines("wetness_bad_mode", "wetness", Args({}, {{"mode", "bogus"}}, {{"a", t}}));
+  CheckDeclines("wetness_no_input", "wetness", Args({}, {}, {}));
+}
+
 // ---- the work gates on the default policy ---------------------------------------------------------------------------------------------------------------
 
 /** On the default ed_gpu_min_cells a job goes to the GPU when it is worth about 10 ms of CPU time (WorthIt): cells * taps per cell. A bare 3 x 3 stencil only from 16 x min cells. */
@@ -794,6 +870,8 @@ static void TestGates()
   gate("unsharp r6", "unsharp", Args({{"radius", 6.0}}, {}, {{"a", f}}), true);
   gate("blur_slope r8", "blur_slope", Args({{"radius", 8.0}}, {}, {{"a", f}}), true);
   gate("slope_limit", "slope_limit", Args({}, {}, {{"a", f}}), true);
+  gate("wetness", "wetness", Args({}, {}, {{"a", TestTerrain(160, 160, 1.0f, 3, 30.0)}}), true);
+  gate("wetness 100 x 100", "wetness", Args({}, {}, {{"a", TestTerrain(100, 100, 1.0f, 3, 30.0)}}), false);
   gate("rockiness without noise", "rockiness", Args({{"breakup", 0.0}}, {}, {{"a", f}}), false);
   gate("rockiness", "rockiness", Args({}, {}, {{"a", f}}), true);
   gate("stratify without warp", "stratify", Args({}, {}, {{"a", f}}), false);
@@ -823,6 +901,7 @@ int main(int argc, char** argv)
   TestSlopeLimit();
   TestRockiness();
   TestStratify();
+  TestWetness();
   TestGates();
   TestRockSoil();
   TestSnow();
