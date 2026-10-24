@@ -10,7 +10,9 @@
 #include <memory>
 #include <new>
 #include <stdexcept>
+#include <functional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -33,6 +35,7 @@
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/math/Vector4f.h"
+#include "moho/console/CConCommand.h"
 #include "moho/console/CVarAccess.h"
 #include "moho/render/Cartographic.h"
 #include "moho/render/RCamManager.h"
@@ -656,6 +659,198 @@ namespace
   }
 
 
+  // ---- EDITOR: the water map at a finer resolution --------------------------------------------------------------------------------------------------------
+  // The water map of a map has one texel per 2 x 2 cells (and the shore flag is "any of the four corners is land", the water alpha mask is a test against that flag with bilinear
+  // filtering): the edge of a lake is a staircase of 2 unit steps, a texel wider than the real shore. The editor keeps a second water map for RENDERING with `ed_water_hires` texels
+  // per cell (default 4, at most 4096 texels a side; 0 = the half resolution one): every texel centre reads the BILINEAR height, the flag is "the ground there is above the water",
+  // the depth byte is the exact depth there; foam and flatness come from the half resolution masks. The half resolution water map (what is saved, what the foam brush edits) is not
+  // touched: GetWaterMap() hands the finer one to the renderers, and every writer of the water map marks the cells it changed (MarkWaterHiResDirty) so only those are rebuilt.
+  struct WaterHiRes
+  {
+    boost::shared_ptr<moho::CD3DDynamicTextureSheet> sheet;
+    std::int32_t texelsPerCell = 0;
+    std::int32_t width = 0;
+    std::int32_t height = 0;
+    bool dirtyAll = true;
+    bool dirty = false;
+    std::int32_t x0 = 0, z0 = 0, x1 = 0, z1 = 0;   // dirty cells, inclusive
+  };
+
+  std::unordered_map<const moho::CWldTerrainRes*, WaterHiRes> gWaterHiRes;
+  float gWaterHiResTexels = 4.0f;
+  moho::TConVar<float> gConWaterHiRes(
+    "ed_water_hires",
+    "Editor: texels per cell of the water map used for rendering (the shore of a lake is a staircase of this size), 0 = the half resolution map of the map file (default 4, at most 4096 texels a side)",
+    &gWaterHiResTexels
+  );
+
+  void MarkWaterHiResDirty(const moho::CWldTerrainRes* const res, const std::int32_t x0, const std::int32_t z0, const std::int32_t x1, const std::int32_t z1)
+  {
+    if (gWaterHiResTexels < 0.5f) {
+      return;
+    }
+    WaterHiRes& st = gWaterHiRes[res];
+    if (st.dirtyAll) {
+      return;
+    }
+    if (!st.dirty) {
+      st.x0 = x0; st.z0 = z0; st.x1 = x1; st.z1 = z1;
+      st.dirty = true;
+    } else {
+      st.x0 = std::min(st.x0, x0); st.z0 = std::min(st.z0, z0);
+      st.x1 = std::max(st.x1, x1); st.z1 = std::max(st.z1, z1);
+    }
+  }
+
+  void ForgetWaterHiRes(const moho::CWldTerrainRes* const res)
+  {
+    gWaterHiRes.erase(res);
+  }
+
+  /// Fills the texels of the cells [cx0, cx1] x [cz0, cz1] (a cell more on every side: the bilinear taps and the filter of the alpha test reach over the border).
+  void FillWaterHiRes(const moho::CWldTerrainRes& res, WaterHiRes& st, std::int32_t cx0, std::int32_t cz0, std::int32_t cx1, std::int32_t cz1)
+  {
+    constexpr float kNoWaterElevation = -10000.0f;
+    const moho::STIMap* const map = res.mMap;
+    const moho::CHeightField* const field = map->mHeightField.get();
+    if (st.sheet.get() == nullptr || field == nullptr) {
+      return;
+    }
+    const std::int32_t cellsX = field->width - 1;
+    const std::int32_t cellsZ = field->height - 1;
+    const std::int32_t k = st.texelsPerCell;
+    cx0 = std::max(0, cx0 - 1);
+    cz0 = std::max(0, cz0 - 1);
+    cx1 = std::min(cellsX - 1, cx1 + 1);
+    cz1 = std::min(cellsZ - 1, cz1 + 1);
+    if (cx1 < cx0 || cz1 < cz0) {
+      return;
+    }
+    const float waterElevation = map->mWaterEnabled != 0u ? map->mWaterElevation : kNoWaterElevation;
+    const float waterAbyssElevation = map->mWaterEnabled != 0u ? map->mWaterElevationAbyss : kNoWaterElevation;
+    const float depthDenominator = waterElevation - waterAbyssElevation;
+    const std::int32_t halfWidth = std::max(1, cellsX >> 1);
+    const std::int32_t halfHeight = std::max(1, cellsZ >> 1);
+
+    std::uint32_t pitchBytes = 0;
+    void* mappedBits = nullptr;
+    if (!st.sheet->Lock(&pitchBytes, &mappedBits)) {
+      return;
+    }
+    auto* const bits = static_cast<std::uint8_t*>(mappedBits);
+    const std::int32_t tz0 = cz0 * k;
+    const std::int32_t tz1 = (cz1 + 1) * k - 1;
+    const std::int32_t tx0 = cx0 * k;
+    const std::int32_t tx1 = (cx1 + 1) * k - 1;
+    const float inv = 1.0f / static_cast<float>(k);
+
+    const auto row = [&](const int index) {
+      const std::int32_t tz = tz0 + index;
+      const float z = (static_cast<float>(tz) + 0.5f) * inv;
+      const std::int32_t iz = static_cast<std::int32_t>(std::floor(z));
+      const float fz = z - static_cast<float>(iz);
+      const std::int32_t halfZ = std::min(halfHeight - 1, iz >> 1);
+      auto* const out = reinterpret_cast<std::uint32_t*>(bits + static_cast<std::size_t>(tz) * pitchBytes);
+      for (std::int32_t tx = tx0; tx <= tx1; ++tx) {
+        const float x = (static_cast<float>(tx) + 0.5f) * inv;
+        const std::int32_t ix = static_cast<std::int32_t>(std::floor(x));
+        const float fx = x - static_cast<float>(ix);
+        const float h00 = SampleTerrainHeightWordScaled(*field, ix, iz);
+        const float h10 = SampleTerrainHeightWordScaled(*field, ix + 1, iz);
+        const float h01 = SampleTerrainHeightWordScaled(*field, ix, iz + 1);
+        const float h11 = SampleTerrainHeightWordScaled(*field, ix + 1, iz + 1);
+        const float h = (h00 * (1.0f - fx) + h10 * fx) * (1.0f - fz) + (h01 * (1.0f - fx) + h11 * fx) * fz;
+        float depthByte = ((waterElevation - h) / depthDenominator) * 255.0f;
+        if (depthByte >= 255.0f) {
+          depthByte = 255.0f;
+        }
+        if (depthByte < 0.0f) {
+          depthByte = 0.0f;
+        }
+        const std::int32_t halfX = std::min(halfWidth - 1, ix >> 1);
+        const std::size_t maskIndex = static_cast<std::size_t>(halfX) + static_cast<std::size_t>(halfZ) * static_cast<std::size_t>(halfWidth);
+        std::uint32_t packed = 0;
+        if (res.mWaterFoam != nullptr) {
+          packed |= static_cast<std::uint32_t>(res.mWaterFoam[maskIndex]) << 24u;
+        }
+        if (res.mWaterFlatness != nullptr) {
+          packed |= static_cast<std::uint32_t>(res.mWaterFlatness[maskIndex]) << 16u;
+        }
+        packed |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(depthByte)) << 8u;
+        if (h > waterElevation) {
+          packed |= 0xFFu;
+        }
+        out[tx] = packed;
+      }
+    };
+    const std::int32_t rows = tz1 - tz0 + 1;
+    if (static_cast<std::int64_t>(rows) * (tx1 - tx0 + 1) >= 65536) {
+      moho::editor::field::ParallelFor(rows, row);
+    } else {
+      for (std::int32_t i = 0; i < rows; ++i) {
+        row(i);
+      }
+    }
+    (void)st.sheet->Unlock();
+  }
+
+  /// The water map the renderers should use: the finer one (made and refreshed here, when something marked cells dirty), or null for the half resolution one.
+  [[nodiscard]] boost::shared_ptr<moho::CD3DDynamicTextureSheet> WaterHiResSheet(const moho::CWldTerrainRes& res)
+  {
+    const float want = gWaterHiResTexels;
+    if (want < 0.5f) {
+      if (!gWaterHiRes.empty()) {
+        gWaterHiRes.erase(&res);
+      }
+      return {};
+    }
+    const auto it = gWaterHiRes.find(&res);
+    if (it == gWaterHiRes.end()) {
+      return {};    // nothing has built the water map yet: the half resolution one is what there is
+    }
+    WaterHiRes& st = it->second;
+    const moho::CHeightField* const field = res.mMap != nullptr ? res.mMap->mHeightField.get() : nullptr;
+    if (field == nullptr) {
+      return {};
+    }
+    const std::int32_t cellsX = field->width - 1;
+    const std::int32_t cellsZ = field->height - 1;
+    std::int32_t k = std::max(1, std::min(4, static_cast<std::int32_t>(want + 0.5f)));
+    while (k > 1 && (cellsX * k > 4096 || cellsZ * k > 4096)) {
+      --k;
+    }
+    if (cellsX * k > 4096 || cellsZ * k > 4096 || cellsX < 2 || cellsZ < 2) {
+      return {};    // a map this big keeps its half resolution water map
+    }
+    if (st.sheet.get() == nullptr || st.texelsPerCell != k) {
+      moho::CD3DDevice* const device = moho::D3D_GetDevice();
+      moho::ID3DDeviceResources* const resources = device != nullptr ? device->GetResources() : nullptr;
+      if (resources == nullptr) {
+        return {};
+      }
+      boost::shared_ptr<moho::CD3DDynamicTextureSheet> sheet;
+      resources->NewDynamicTextureSheet(sheet, cellsX * k, cellsZ * k, 2);
+      if (sheet.get() == nullptr) {
+        return {};
+      }
+      st.sheet = sheet;
+      st.texelsPerCell = k;
+      st.width = cellsX * k;
+      st.height = cellsZ * k;
+      st.dirtyAll = true;
+    }
+    if (st.dirtyAll) {
+      FillWaterHiRes(res, st, 0, 0, cellsX - 1, cellsZ - 1);
+      st.dirtyAll = false;
+      st.dirty = false;
+    } else if (st.dirty) {
+      FillWaterHiRes(res, st, st.x0, st.z0, st.x1, st.z1);
+      st.dirty = false;
+    }
+    return st.sheet;
+  }
+
+
   void RebuildWaterMapRect(moho::CWldTerrainRes& terrainRes, const gpg::Rect2i& updateRect)
   {
     constexpr float kNoWaterElevation = -10000.0f;
@@ -685,6 +880,9 @@ namespace
 
     const float waterElevation = map->mWaterEnabled != 0u ? map->mWaterElevation : kNoWaterElevation;
     const float waterAbyssElevation = map->mWaterEnabled != 0u ? map->mWaterElevationAbyss : kNoWaterElevation;
+
+    // EDITOR: the finer water map follows (rebuilt when a renderer asks for it)
+    MarkWaterHiResDirty(&terrainRes, x0, z0, x1, z1);
 
     const std::int32_t halfX0 = x0 >> 1;
     const std::int32_t halfX1 = x1 >> 1;
@@ -1178,6 +1376,7 @@ namespace moho
     ::operator delete[](mWaterDepthBias);
     ::operator delete[](mWaterFlatness);
     ::operator delete[](mWaterFoam);
+    ForgetWaterHiRes(this);
 
     if (mEditWordBuffer.begin != nullptr) {
       ::operator delete(mEditWordBuffer.begin);
@@ -1978,6 +2177,11 @@ namespace moho
    */
   boost::shared_ptr<ID3DTextureSheet> CWldTerrainRes::GetWaterMap() const
   {
+    // EDITOR: the finer water map for rendering (ed_water_hires), the half resolution one when that is off or the map is too big
+    const boost::shared_ptr<CD3DDynamicTextureSheet> fine = WaterHiResSheet(*this);
+    if (fine.get() != nullptr) {
+      return boost::static_pointer_cast<ID3DTextureSheet>(fine);
+    }
     return boost::static_pointer_cast<ID3DTextureSheet>(mWaterMapTexture);
   }
 
@@ -3165,6 +3369,11 @@ namespace moho
     Wm3::Vector3f dimensions{};
     (void)sheet->GetDimensions(&dimensions);
     const std::int32_t textureWidth = static_cast<std::int32_t>(dimensions.x);
+
+    // EDITOR: a channel of the water map was painted (foam, flatness): the finer water map copies those masks
+    if (sheet == mWaterMapTexture.get()) {
+      MarkWaterHiResDirty(this, columnStart * 2, rowStart * 2, columnEnd * 2 + 1, rowEnd * 2 + 1);
+    }
 
     std::uint32_t pitchBytes = 0;
     void* mappedBits = nullptr;
