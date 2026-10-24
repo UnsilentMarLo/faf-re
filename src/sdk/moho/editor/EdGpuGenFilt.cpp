@@ -98,25 +98,6 @@ namespace moho::editor::gpu
       return Finish(ex, j, out, err);
     }
 
-    /** The optional `mask` input as a field (or a one element dummy: every slot a kernel declares must be bound). */
-    struct MaskBind
-    {
-      Field field;
-      std::unique_ptr<Resource> dummy;
-      bool has = false;
-      [[nodiscard]] const Resource& R() const { return has ? field.R() : *dummy; }
-    };
-
-    bool BindMask(Executor& ex, const OpArgs& a, MaskBind& m, std::string& err)
-    {
-      if (const Grid* g = In(a, "mask"); g != nullptr) {
-        m.has = true;
-        return UploadGrid(ex, *g, m.field, err);
-      }
-      const float zero = 0.0f;
-      return MakeBuffer(ex, 1, m.dummy, err) && UploadBuffer(ex, *m.dummy, &zero, 4, err);
-    }
-
     // ---- bilateral ----------------------------------------------------------------------------------------------------------------------------------
 
     OpResult OpBilateralGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)

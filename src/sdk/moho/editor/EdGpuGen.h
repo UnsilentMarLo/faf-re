@@ -74,6 +74,25 @@ namespace moho::editor::gpu::gen
     return MakeBuffer(ex, static_cast<u32>(src->size()), out, err) && UploadBuffer(ex, *out, src->data(), src->size() * sizeof(T), err);
   }
 
+  /** The optional `mask` input as a field (or a one element dummy: every slot a kernel declares must be bound). */
+  struct MaskBind
+  {
+    Field field;
+    std::unique_ptr<Resource> dummy;
+    bool has = false;
+    [[nodiscard]] const Resource& R() const { return has ? field.R() : *dummy; }
+  };
+
+  [[nodiscard]] inline bool BindMask(Executor& ex, const OpArgs& a, MaskBind& m, std::string& err)
+  {
+    if (const Grid* g = In(a, "mask"); g != nullptr) {
+      m.has = true;
+      return UploadGrid(ex, *g, m.field, err);
+    }
+    const float zero = 0.0f;
+    return MakeBuffer(ex, 1, m.dummy, err) && UploadBuffer(ex, *m.dummy, &zero, 4, err);
+  }
+
   /** One dispatch of `unitsPerCell` * cells "octave evaluations" at most this big (a few ms on a discrete card, well below the 2 second driver reset on a weak one). */
   inline constexpr double kBandUnits = 2.5e7;
 
