@@ -29,6 +29,7 @@
 #include "moho/editor/gpu/filt_common.hlsli"
 #include "moho/editor/gpu/field_settle_params.hlsli"
 #include "moho/editor/gpu/field_slide_params.hlsli"
+#include "moho/editor/gpu/field_convolve_params.hlsli"
 #include "moho/editor/gpu/field_morph_params.hlsli"
 #include "moho/editor/gpu/field_sub_params.hlsli"
 
@@ -43,6 +44,10 @@ EMU_KERNEL_END(field_slide_a)
 EMU_KERNEL_BEGIN(k_field_slide_b)
 #include "moho/editor/gpu/field_slide_b.hlsl"
 EMU_KERNEL_END(field_slide_b)
+
+EMU_KERNEL_BEGIN(k_field_convolve)
+#include "moho/editor/gpu/field_convolve.hlsl"
+EMU_KERNEL_END(field_convolve)
 
 EMU_KERNEL_BEGIN(k_field_morph)
 #include "moho/editor/gpu/field_morph.hlsl"
@@ -319,6 +324,70 @@ static void TestMorph()
   }
 }
 
+// ---- convolve --------------------------------------------------------------------------------------------------------------------------------------
+
+static OpArgs ConvArgs(const std::vector<double>& k, const GridPtr& a, Num n = {}, Str s = {})
+{
+  OpArgs args = Args(n, s, {{"a", a}});
+  args.p.arr["kernel"] = k;
+  return args;
+}
+
+static void TestConvolve()
+{
+  const GridPtr t = TestTerrain(53, 41, 2.0f, 41, 50.0);
+  const std::vector<double> sharp = {0, -1, 0, -1, 5, -1, 0, -1, 0};
+  const std::vector<double> edge = {-1, -1, -1, -1, 8, -1, -1, -1, -1};
+  const std::vector<double> asym = {1, 2, 3, 0, 1, 0, -2, 0, 4};
+  std::vector<double> big(225), mid(25);
+  for (std::size_t i = 0; i < big.size(); ++i) big[i] = 1.0 + static_cast<double>((i * 7) % 5) - 0.5 * static_cast<double>(i % 3);
+  for (std::size_t i = 0; i < mid.size(); ++i) mid[i] = std::exp(-0.1 * static_cast<double>((i / 5 - 2) * (i / 5 - 2) + (i % 5 - 2) * (i % 5 - 2)));
+  for (const char* e : {"clamp", "wrap", "mirror", ""}) {
+    const Str es = {{"edge", e}};
+    CheckSame((std::string("convolve_sharp_") + e).c_str(), "convolve", ConvArgs(sharp, t, {}, es), 0.0);
+    CheckSame((std::string("convolve_asym_") + e).c_str(), "convolve", ConvArgs(asym, t, {{"scale", 1.5}, {"bias", -2.0}}, es), 0.0);
+    CheckSame((std::string("convolve_edge_") + e).c_str(), "convolve", ConvArgs(edge, t, {{"normalize", 0}}, es), 0.0);
+    CheckSame((std::string("convolve_5_") + e).c_str(), "convolve", ConvArgs(mid, t, {}, es), 0.0);
+    CheckSame((std::string("convolve_15_") + e).c_str(), "convolve", ConvArgs(big, t, {{"scale", 0.5}}, es), 0.0);
+  }
+  {
+    Grid g;
+    RunGpu("convolve", ConvArgs(edge, t, {{"normalize", 0}}), g);
+    CHECK(Compare(g, *t).maxAbs > 1.0, "convolve changes the terrain (the comparison is not vacuous)");
+  }
+  CheckSame("convolve_1x1_kernel", "convolve", ConvArgs({2.0}, t, {{"bias", 1.0}}), 0.0);   // a 1 x 1 kernel is below the work limit on the default policy only
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 80.0);
+    for (const char* e : {"clamp", "wrap", "mirror"}) {
+      CheckSame(("convolve_" + std::to_string(sz.first) + "x" + std::to_string(sz.second) + "_" + e).c_str(), "convolve", ConvArgs(mid, s, {}, {{"edge", e}}), 0.0);
+    }
+  }
+  {
+    auto like = std::make_shared<Grid>(*t);   // the result is placed like `like`
+    like->ox = 100.0f;
+    like->cell = 3.0f;
+    OpArgs args = ConvArgs(sharp, t);
+    args.in["like"] = like;
+    CheckSame("convolve_like", "convolve", args, 0.0);
+  }
+  CheckDeclines("convolve_even_kernel", "convolve", ConvArgs({1, 2, 3, 4}, t));
+  CheckDeclines("convolve_not_square", "convolve", ConvArgs({1, 2, 3, 4, 5, 6, 7, 8}, t));
+  CheckDeclines("convolve_too_big", "convolve", ConvArgs(std::vector<double>(289, 1.0), t));
+  CheckDeclines("convolve_no_kernel", "convolve", Args({}, {}, {{"a", t}}));
+  CheckDeclines("convolve_no_input", "convolve", Args({}, {}, {}));
+  {
+    gpu::GetPolicy().minCells = 65536.0f;
+    const GridPtr bigf = TestTerrain(300, 300, 1.0f, 3, 30.0);
+    Grid g;
+    bool onGpu = true;
+    RunGpu("convolve", ConvArgs({0, 1, 0, 1, 1, 1, 0, 1, 0}, bigf), g, &onGpu);
+    CHECK(onGpu, "a 3 x 3 convolution goes to the GPU on the default policy");
+    RunGpu("convolve", ConvArgs({1.0}, bigf), g, &onGpu);
+    CHECK(!onGpu, "a 1 x 1 kernel stays on the CPU on the default policy");
+    gpu::GetPolicy().minCells = 0.0f;
+  }
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -332,6 +401,7 @@ int main(int argc, char** argv)
   TestSettle();
   TestThermalMap();
   TestMorph();
+  TestConvolve();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
