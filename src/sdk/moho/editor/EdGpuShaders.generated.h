@@ -3757,6 +3757,181 @@ void CSMain(KERNEL_IDS)
 
 )HLSL";
 
+  // field_snowinit: 16x16x1 threads
+  inline constexpr char kSource_field_snowinit[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op erode_snow (EdFieldEro2.cpp OpSnow), the snow that falls before it slumps: amount * smoothstep(snowline - band, snowline + band, ground) * (1 - smoothstep(steepLo, steepHi, slope)) * mask.
+// ---- begin filt_common.hlsli
+// Helpers of the filter kernels (filt_*.hlsl). Every filter kernel has a constant buffer P that starts with  uint w, h, z0, rows;  (field size, first row and number of rows of this dispatch) and
+// reads the source field from a structured buffer. Functions that read a buffer cannot take it as an argument in the kernel subset, so they are macros that define a function for the buffer
+// whose name is given (the function reads P.w / P.h, so define it after the CBUFFER).
+#ifndef GPU_FILT_COMMON_HLSLI
+#define GPU_FILT_COMMON_HLSLI
+
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+
+// EdFieldUtil.h SmoothStep (an empty edge range is a step).
+FN float SmoothStep(float e0, float e1, float v)
+{
+    if (e1 == e0) return v < e0 ? 0.0f : 1.0f;
+    float t = saturate((v - e0) / (e1 - e0));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// BilinearC(gx, gz): bilinear sample of buffer BUF at fractional sample coordinates, clamped edges (EdFieldUtil.h BilinearC).
+#define DEFINE_BILINEAR_C(BUF)                                                                  \
+    FN float BilinearC(float gx, float gz)                                                      \
+    {                                                                                           \
+        float mx = float(P.w - 1u);                                                             \
+        float mz = float(P.h - 1u);                                                             \
+        float cx = gx < 0.0f ? 0.0f : (gx > mx ? mx : gx);                                      \
+        float cz = gz < 0.0f ? 0.0f : (gz > mz ? mz : gz);                                      \
+        int ix = int(cx);                                                                       \
+        int iz = int(cz);                                                                       \
+        if (ix >= int(P.w) - 1) ix = max(0, int(P.w) - 2);                                      \
+        if (iz >= int(P.h) - 1) iz = max(0, int(P.h) - 2);                                      \
+        float tx = cx - float(ix);                                                              \
+        float tz = cz - float(iz);                                                              \
+        int ix1 = min(int(P.w) - 1, ix + 1);                                                    \
+        int iz1 = min(int(P.h) - 1, iz + 1);                                                    \
+        uint r0 = uint(iz) * P.w;                                                               \
+        uint r1 = uint(iz1) * P.w;                                                              \
+        float a0 = BUF[r0 + uint(ix)];                                                          \
+        float a1 = BUF[r0 + uint(ix1)];                                                         \
+        float b0 = BUF[r1 + uint(ix)];                                                          \
+        float b1 = BUF[r1 + uint(ix1)];                                                         \
+        float top = a0 + (a1 - a0) * tx;                                                        \
+        float bottom = b0 + (b1 - b0) * tx;                                                     \
+        return top + (bottom - top) * tz;                                                       \
+    }
+
+// GradientAt(x, z, gx, gz): central difference gradient (rise per run, P.cell world units per sample) with clamped edges (EdFieldUtil.h GradientAt).
+#define DEFINE_GRADIENT_AT(BUF)                                                                 \
+    FN void GradientAt(int x, int z, OUT(float) gx, OUT(float) gz)                              \
+    {                                                                                           \
+        int x0 = max(0, x - 1);                                                                 \
+        int x1 = min(int(P.w) - 1, x + 1);                                                      \
+        int z0 = max(0, z - 1);                                                                 \
+        int z1 = min(int(P.h) - 1, z + 1);                                                      \
+        gx = 0.0f;                                                                              \
+        gz = 0.0f;                                                                              \
+        if (x1 > x0) gx = (BUF[uint(z) * P.w + uint(x1)] - BUF[uint(z) * P.w + uint(x0)]) / (float(x1 - x0) * P.cell); \
+        if (z1 > z0) gz = (BUF[uint(z1) * P.w + uint(x)] - BUF[uint(z0) * P.w + uint(x)]) / (float(z1 - z0) * P.cell); \
+    }
+
+#endif
+// ---- end filt_common.hlsli
+// ---- begin field_snowinit_params.hlsli
+// Constant buffer of field_snowinit.hlsl (op erode_snow).
+#ifndef GPU_FIELD_SNOWINIT_PARAMS_HLSLI
+#define GPU_FIELD_SNOWINIT_PARAMS_HLSLI
+
+struct SnowInitParams
+{
+    uint w;
+    uint h;
+    uint hasMask;
+    uint pad0;
+    float cell;
+    float amount;     // snow depth where it lies
+    float lineLo;     // snowline - band
+    float lineHi;     // snowline + band
+)HLSL"
+    R"HLSL(    float steepLo;    // no snow on ground steeper than steepLo .. steepHi (rise per run)
+    float steepHi;
+    float pad1;
+    float pad2;
+};
+
+#endif
+// ---- end field_snowinit_params.hlsli
+
+CBUFFER(SnowInitParams, P, 0)
+SRV_BUFFER(float, ground, 0)
+SRV_BUFFER(float, mask, 1)
+UAV_BUFFER(float, snow, 0)
+
+DEFINE_GRADIENT_AT(ground)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y);
+    uint i = dtid.y * P.w + dtid.x;
+    float gx;
+    float gz;
+    GradientAt(x, z, gx, gz);
+    float s = P.amount * SmoothStep(P.lineLo, P.lineHi, ground[i]) * (1.0f - SmoothStep(P.steepLo, P.steepHi, sqrt(gx * gx + gz * gz)));
+    if (P.hasMask != 0u) s *= saturate(mask[i]);
+    snow[i] = s;
+}
+
+)HLSL";
+
   // field_sub: 16x16x1 threads
   inline constexpr char kSource_field_sub[] =
     R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
@@ -8829,6 +9004,7 @@ void CSMain(KERNEL_IDS)
     {"field_slide_b", kSource_field_slide_b, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x8F04CA29A7C94D7AULL},
     {"field_slopelimit", kSource_field_slopelimit, "CSMain", 16u, 16u, 1u, 0xFu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2B02344E17C970CDULL},
     {"field_slopescan", kSource_field_slopescan, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x4DB2A8E0930B861FULL},
+    {"field_snowinit", kSource_field_snowinit, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA15762ADF2F092ACULL},
     {"field_sub", kSource_field_sub, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x101759797F1D7EACULL},
     {"field_unsharp", kSource_field_unsharp, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x51536C353B56C1BDULL},
     {"field_weather", kSource_field_weather, "CSMain", 16u, 16u, 1u, 0x0u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xD84A62CAB2D4E35CULL},
@@ -8852,5 +9028,5 @@ void CSMain(KERNEL_IDS)
     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
   };
-  inline constexpr int kKernelCount = 46;
+  inline constexpr int kKernelCount = 47;
 } // namespace moho::editor::gpu::shaders

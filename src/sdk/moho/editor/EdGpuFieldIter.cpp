@@ -11,6 +11,7 @@ namespace moho::editor::gpu::hk
   using uint = std::uint32_t;
 #include "moho/editor/gpu/field_settle_params.hlsli"
 #include "moho/editor/gpu/field_slide_params.hlsli"
+#include "moho/editor/gpu/field_snowinit_params.hlsli"
 #include "moho/editor/gpu/field_weather_params.hlsli"
 } // namespace moho::editor::gpu::hk
 
@@ -272,10 +273,84 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
+    // ---- erode_snow ---------------------------------------------------------------------------------------------------------------------------------
+
+    OpResult OpSnowGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = Source(a);
+      const Grid* acc = In(a, "mask");
+      if (src == nullptr || (acc != nullptr && !acc->SameShape(*src))) return OpResult::Unsupported;
+      const std::string want = a.p.S("output", "height");
+      if (want != "height" && want != "snow" && want != "cover" && want != "moved") return OpResult::Unsupported;
+      const int iterations = ItersOf(a, 40);
+      if (iterations == 0) return OpResult::Unsupported;   // only the snow that falls: a point pass
+      const int w = src->w, h = src->h;
+      const std::size_t n = src->Count();
+      if (!Fits(ex, n, 10)) return OpResult::Unsupported;
+      const KernelInfo* ki = FindKernel("field_snowinit");
+      if (ki == nullptr) { err = "kernel field_snowinit is missing"; return OpResult::Failed; }
+      const float line = static_cast<float>(a.p.N("snowline", 40.0));
+      const float band = std::max(1e-3f, static_cast<float>(a.p.N("band", 10.0)));
+      const float coverDepth = std::max(1e-3f, static_cast<float>(a.p.N("cover_depth", 0.5)));
+      hk::SnowInitParams ip{};
+      ip.w = static_cast<std::uint32_t>(w);
+      ip.h = static_cast<std::uint32_t>(h);
+      ip.cell = src->cell;
+      ip.amount = std::max(0.0f, static_cast<float>(a.p.N("amount", 3.0)));
+      ip.lineLo = line - band;
+      ip.lineHi = line + band;
+      ip.steepLo = static_cast<float>(a.p.N("steep_lo", 0.8));
+      ip.steepHi = static_cast<float>(a.p.N("steep_hi", 1.4));
+      Field ground, lost;
+      PingPong snow;
+      MaskBind mb;
+      if (!UploadGrid(ex, *src, ground, err) || !MakeField(ex, w, h, snow.f[0], err) || !MakeField(ex, w, h, snow.f[1], err) || !MakeField(ex, w, h, lost, err) ||
+          !FillBuffer(ex, lost.R(), 0u, err) || !BindMask(ex, a, mb, err)) {
+        return OpResult::Failed;
+      }
+      ip.hasMask = mb.has ? 1u : 0u;
+      Bindings bi;
+      bi.Srv(0, ground.R()).Srv(1, mb.R()).Uav(0, snow.f[0].R());
+      if (!DispatchGrid(ex, *ki, ip.w, ip.h, ip, bi, err)) return OpResult::Failed;
+      Slider sl;
+      if (!sl.Init(ex, w, h, err)) return OpResult::Failed;
+      sl.p.cell = src->cell;
+      sl.p.rate = std::max(0.0f, std::min(1.0f, static_cast<float>(a.p.N("rate", 0.5))));
+      sl.p.talus = std::max(0.0f, static_cast<float>(a.p.N("snow_talus", 0.9)));
+      sl.p.hasRock = 1;
+      sl.p.hasLost = 1;
+      sl.rock = &ground.R();
+      sl.lost = &lost.R();
+      const bool ok = RunIterations(ex, static_cast<u32>(iterations), 60.0, [&](const u32, std::string& e) {
+        if (!sl.Step(ex, snow.Src().R(), snow.Dst().R(), e)) return false;
+        snow.Flip();
+        return true;
+      }, err);
+      if (!ok) return OpResult::Failed;
+      Grid gSnow = LikeOf(*src), gLost = LikeOf(*src);
+      if (!DownloadGrid(ex, snow.Src(), gSnow, err) || !DownloadGrid(ex, lost, gLost, err)) return OpResult::Failed;
+      std::map<std::string, Grid> all;
+      all["height"] = LikeOf(*src);
+      all["snow"] = LikeOf(*src);
+      all["cover"] = LikeOf(*src);
+      all["moved"] = LikeOf(*src);
+      for (std::size_t i = 0; i < n; ++i) {
+        all["height"].v[i] = src->v[i] + gSnow.v[i];
+        all["snow"].v[i] = gSnow.v[i];
+        all["cover"].v[i] = field::t7::SmoothStep(0.0f, coverDepth, gSnow.v[i]);
+        all["moved"].v[i] = Clamp01(gLost.v[i]);
+      }
+      Grid result;
+      if (!Emit(a, result, all, "height")) return OpResult::Unsupported;
+      out = std::move(result);
+      return OpResult::Done;
+    }
+
     struct Registrar
     {
       Registrar()
       {
+        RegisterGpuOp("erode_snow", &OpSnowGpu, 16384.0f);
         RegisterGpuOp("erode_rocksoil", &OpRockSoilGpu, 16384.0f);
         RegisterGpuOp("settle", &OpSettleGpu, 16384.0f);
         RegisterGpuOp("thermal_map", &OpThermalMapGpu, 16384.0f);

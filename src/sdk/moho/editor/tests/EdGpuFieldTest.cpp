@@ -34,6 +34,7 @@
 #include "moho/editor/gpu/field_edge_params.hlsli"
 #include "moho/editor/gpu/field_morph_params.hlsli"
 #include "moho/editor/gpu/field_slopelimit_params.hlsli"
+#include "moho/editor/gpu/field_snowinit_params.hlsli"
 #include "moho/editor/gpu/field_slopescan_params.hlsli"
 #include "moho/editor/gpu/field_sub_params.hlsli"
 #include "moho/editor/gpu/field_unsharp_params.hlsli"
@@ -82,6 +83,10 @@ EMU_KERNEL_END(field_slopescan)
 EMU_KERNEL_BEGIN(k_field_weather)
 #include "moho/editor/gpu/field_weather.hlsl"
 EMU_KERNEL_END(field_weather)
+
+EMU_KERNEL_BEGIN(k_field_snowinit)
+#include "moho/editor/gpu/field_snowinit.hlsl"
+EMU_KERNEL_END(field_snowinit)
 
 EMU_KERNEL_BEGIN(k_field_sub)
 #include "moho/editor/gpu/field_sub.hlsl"
@@ -574,6 +579,32 @@ static void TestRockSoil()
   CheckDeclines("rocksoil_no_input", "erode_rocksoil", Args({}, {}, {}));
 }
 
+// ---- erode_snow ------------------------------------------------------------------------------------------------------------------------------------
+
+static void TestSnow()
+{
+  const GridPtr t = TestTerrain(69, 57, 2.0f, 81, 90.0);
+  const GridPtr acc = TestMask(69, 57, 6);
+  CheckSame("snow_default", "erode_snow", Args({{"iterations", 15}}, {}, {{"a", t}}), 1e-5, nullptr, true);
+  {
+    Grid g;
+    RunGpu("erode_snow", Args({{"iterations", 15}}, {}, {{"a", t}}), g);
+    CHECK(Compare(g, *t).maxAbs > 0.5, "erode_snow puts snow on the terrain (the comparison is not vacuous)");
+  }
+  CheckSame("snow_mask", "erode_snow", Args({{"iterations", 10}, {"amount", 6.0}, {"snowline", 30.0}, {"band", 25.0}}, {}, {{"a", t}, {"mask", acc}}), 1e-5, nullptr, true);
+  for (const char* o : {"snow", "cover", "moved"}) {
+    CheckSame((std::string("snow_") + o).c_str(), "erode_snow", Args({{"iterations", 12}, {"snow_talus", 0.3}, {"steep_lo", 0.2}, {"steep_hi", 0.9}, {"cover_depth", 1.5}, {"rate", 0.8}}, {{"output", o}}, {{"a", t}}), 1e-5, nullptr, true);
+  }
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 70.0);
+    CheckSame(("snow_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "erode_snow", Args({{"iterations", 7}, {"snowline", 25.0}}, {}, {{"a", s}}), 1e-5, nullptr, true);
+  }
+  CheckDeclines("snow_zero_iterations", "erode_snow", Args({{"iterations", 0}}, {}, {{"a", t}}));
+  CheckDeclines("snow_bad_output", "erode_snow", Args({}, {{"output", "bogus"}}, {{"a", t}}));
+  CheckDeclines("snow_bad_mask", "erode_snow", Args({}, {}, {{"a", t}, {"mask", TestMask(9, 9, 1)}}));
+  CheckDeclines("snow_no_input", "erode_snow", Args({}, {}, {}));
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -591,6 +622,7 @@ int main(int argc, char** argv)
   TestBlurBased();
   TestSlopeLimit();
   TestRockSoil();
+  TestSnow();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
