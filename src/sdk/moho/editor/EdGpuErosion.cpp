@@ -319,13 +319,13 @@ namespace moho::editor::gpu
                MakeBuffer(dev.ex, 2, weights, dev.err) && UploadBuffer(dev.ex, *weights, kern, sizeof(kern), dev.err);
       }
 
-      /** One smoothing pass of `from` into a scratch field that is neither `from` nor `d`; returns it (null on error). */
-      Field* Pass(Executor& ex, Field* from, Field* avoid, std::string& err)
+      /** One smoothing pass of `from` into a scratch field other than `from` (never `d`, which the blend needs); returns it (null on error). */
+      Field* Pass(Executor& ex, Field* from, std::string& err)
       {
         Field* out = nullptr;
         Field* tmp = nullptr;
         for (Field& c : f) {
-          if (&c == from || &c == avoid) continue;
+          if (&c == from) continue;
           if (out == nullptr) out = &c;
           else if (tmp == nullptr) tmp = &c;
         }
@@ -365,16 +365,14 @@ namespace moho::editor::gpu
         const int whole = static_cast<int>(passes);
         const float frac = passes - static_cast<float>(whole);
         Field* sm = &d;
-        Field* prev = nullptr;
         for (int k = 0; k < whole; ++k) {
-          Field* next = Pass(ex, sm, prev, err);
+          Field* next = Pass(ex, sm, err);
           if (next == nullptr) return false;
-          prev = sm == &d ? nullptr : sm;
           sm = next;
         }
         Field* sm2 = sm;
         if (frac > 0.0f) {
-          sm2 = Pass(ex, sm, nullptr, err);
+          sm2 = Pass(ex, sm, err);
           if (sm2 == nullptr) return false;
         }
         tp.amount = amount;

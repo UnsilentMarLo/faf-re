@@ -28,15 +28,20 @@ void CSMain(KERNEL_IDS)
     float avg = c;
     if (P.spread > 0.0f)
     {
+        // symmetric weights (the binomial 3 x 3), a neighbour that is off the map or pinned gives its weight to the centre: what a cell dissolves is all taken from the cells that can lose it
         float sum = 0.0f;
         for (int dz = -1; dz <= 1; ++dz)
         {
             for (int dx = -1; dx <= 1; ++dx)
             {
-                int xx = ClampIndex(x + dx, w);
-                int zz = ClampIndex(z + dz, h);
+                int xx = x + dx;
+                int zz = z + dz;
                 float wt = (dx == 0 ? 0.5f : 0.25f) * (dz == 0 ? 0.5f : 0.25f);
-                sum += wt * dT[uint(zz) * P.w + uint(xx)];
+                bool usable = xx >= 0 && zz >= 0 && xx < w && zz < h;
+                if (usable && (P.flags & 8u) != 0u && (xx == 0 || zz == 0 || xx == w - 1 || zz == h - 1)) usable = false;
+                if (dx == 0 && dz == 0) usable = true;
+                if (usable) sum += wt * dT[uint(zz) * P.w + uint(xx)];
+                else sum += wt * c;
             }
         }
         avg = sum;
