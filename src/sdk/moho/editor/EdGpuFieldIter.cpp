@@ -3,7 +3,7 @@
 // RunIterations: time limited submissions), so only one upload and one download cross the bus. The arithmetic is the CPU op's, in the same order. docs/projects/editor/GPU_COMPUTE.md, "More field ops (GP4)".
 #pragma fp_contract(off)
 
-#include "moho/editor/EdGpuGen.h"
+#include "moho/editor/EdGpuFieldCommon.h"
 
 namespace moho::editor::gpu::hk
 {
@@ -14,37 +14,10 @@ namespace moho::editor::gpu::hk
 
 namespace moho::editor::gpu
 {
-  using namespace gen;
+  using namespace fops;
 
   namespace
   {
-    inline float Clamp01(const float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
-
-    /** The `iterations` option the CPU ops read (EdFieldEro2.cpp ItersOf). */
-    inline int ItersOf(const OpArgs& a, const int fallback, const int cap = 20000) { return std::max(0, std::min(cap, static_cast<int>(a.p.N("iterations", fallback)))); }
-
-    /** `a` and the optional same-shaped inputs: false = the CPU op reports the error (or has nothing to do). */
-    const Grid* Source(const OpArgs& a)
-    {
-      const Grid* src = In(a, "a");
-      if (src == nullptr || src->w < 1 || src->h < 1) return nullptr;
-      if (const Grid* like = In(a, "like"); like != nullptr && !like->SameShape(*src)) return nullptr;
-      return src;
-    }
-
-    /** Puts the chosen result into `out` and the others into the extra outputs (EdFieldEro2.cpp Emit). false = unknown output name (the CPU op reports it). */
-    bool Emit(const OpArgs& a, Grid& out, std::map<std::string, Grid>& all, const char* const fallback)
-    {
-      const auto it = all.find(a.p.S("output", fallback));
-      if (it == all.end()) return false;
-      const std::string want = it->first;
-      for (auto& kv : all) {
-        if (kv.first != want && a.extra != nullptr) (*a.extra)[kv.first] = std::move(kv.second);
-      }
-      out = std::move(it->second);
-      return true;
-    }
-
     // ---- settle -------------------------------------------------------------------------------------------------------------------------------------
 
     OpResult OpSettleGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)

@@ -2453,6 +2453,152 @@ void CSMain(KERNEL_IDS)
 
 )HLSL";
 
+  // field_morph: 16x16x1 threads
+  inline constexpr char kSource_field_morph[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op morph (EdFieldFilt.cpp MorphPass): one grey scale dilation (isMax) or erosion over the window of the structuring element. The square element is two separable passes (shape 0 = along x,
+// then shape 1 = along z); disc, diamond and cross read the window directly. A window that leaves the field only reads the samples inside it. Window maximum and minimum are exact, so
+// the result is bit equal to the CPU op's.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin field_morph_params.hlsli
+// Constant buffer of field_morph.hlsl (op morph).
+#ifndef GPU_FIELD_MORPH_PARAMS_HLSLI
+#define GPU_FIELD_MORPH_PARAMS_HLSLI
+
+struct MorphParams
+{
+    uint w;
+    uint h;
+    uint z0;        // first row of this dispatch (banded dispatch)
+    uint rows;      // rows of this dispatch
+    uint shape;     // 0 = the row window (x), 1 = the column window (z), 2 = disc, 3 = diamond, 4 = cross
+    uint rad;       // radius in samples
+    uint isMax;     // 1 = dilation (window maximum), 0 = erosion (window minimum)
+    uint pad0;
+};
+
+#endif
+// ---- end field_morph_params.hlsli
+
+CBUFFER(MorphParams, P, 0)
+SRV_BUFFER(float, src, 0)
+UAV_BUFFER(float, dst, 0)
+
+FN float Better(float v, float best)
+{
+    if (P.isMax != 0u) return v > best ? v : best;
+    return v < best ? v : best;
+}
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.rows) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y + P.z0);
+    int w = int(P.w);
+    int h = int(P.h);
+    int r = int(P.rad);
+    float best = src[uint(z) * P.w + uint(x)];
+    if (P.shape == 0u || P.shape == 4u)
+    {
+        int x0 = max(0, x - r);
+        int x1 = min(w - 1, x + r);
+        LOOP for (int xx = x0; xx <= x1; ++xx) best = Better(src[uint(z) * P.w + uint(xx)], best);
+    }
+    if (P.shape == 1u || P.shape == 4u)
+    {
+        int z0 = max(0, z - r);
+        int z1 = min(h - 1, z + r);
+        LOOP for (int zz = z0; zz <= z1; ++zz) best = Better(src[uint(zz) * P.w + uint(x)], best);
+    }
+    if (P.shape == 2u || P.shape == 3u)
+    {
+        int z0 = max(0, z - r);
+        int z1 = min(h - 1, z + r);
+        LOOP for (int zz = z0; zz <= z1; ++zz)
+        {
+            int dz = zz - z;
+            // diamond: |dx| <= r - |dz|; disc: dx^2 + dz^2 <= r^2 (the window of the row is symmetric, so the extent is found by the condition)
+            int ext = r;
+            if (P.shape == 3u) ext = r - abs(dz);
+            int x0 = max(0, x - ext);
+            int x1 = min(w - 1, x + ext);
+            LOOP for (int xx = x0; xx <= x1; ++xx)
+            {
+                int dx = xx - x;
+                if (P.shape == 2u && dx * dx + dz * dz > r * r) continue;
+                best = Better(src[uint(zz) * P.w + uint(xx)], best);
+            }
+        }
+    }
+    dst[uint(z) * P.w + uint(x)] = best;
+}
+
+)HLSL";
+
   // field_settle: 16x16x1 threads
   inline constexpr char kSource_field_settle[] =
     R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
@@ -2955,6 +3101,68 @@ void CSMain(KERNEL_IDS)
     nxt[i] = loose[i] - moved[i] + got;
     if (P.hasGain != 0u) gain[i] = gain[i] + got;
     if (P.hasLost != 0u) lost[i] = lost[i] + moved[i];
+}
+
+)HLSL";
+
+  // field_sub: 16x16x1 threads
+  inline constexpr char kSource_field_sub[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// dst = x - y, sample by sample (the gradient, top hat and bottom hat of op morph).
+// ---- begin field_sub_params.hlsli
+// Constant buffer of field_sub.hlsl.
+#ifndef GPU_FIELD_SUB_PARAMS_HLSLI
+#define GPU_FIELD_SUB_PARAMS_HLSLI
+
+struct SubParams
+{
+    uint w;
+    uint h;
+    uint pad0;
+    uint pad1;
+};
+
+#endif
+// ---- end field_sub_params.hlsli
+
+CBUFFER(SubParams, P, 0)
+SRV_BUFFER(float, xs, 0)
+SRV_BUFFER(float, ys, 1)
+UAV_BUFFER(float, dst, 0)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    uint i = dtid.y * P.w + dtid.x;
+    dst[i] = xs[i] - ys[i];
 }
 
 )HLSL";
@@ -7725,9 +7933,11 @@ void CSMain(KERNEL_IDS)
     {"erosion_steer", kSource_erosion_steer, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9EB04DF47EC712E6ULL},
     {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x36C964038468BD87ULL},
     {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xD889E54F1E4B6956ULL},
+    {"field_morph", kSource_field_morph, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x52463243DBBAAFBBULL},
     {"field_settle", kSource_field_settle, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x600636D24769A34FULL},
     {"field_slide_a", kSource_field_slide_a, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0F632EA329C10980ULL},
     {"field_slide_b", kSource_field_slide_b, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x8F04CA29A7C94D7AULL},
+    {"field_sub", kSource_field_sub, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x101759797F1D7EACULL},
     {"filt_bilateral", kSource_filt_bilateral, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x6B226CC7B6F8A9DFULL},
     {"filt_blurdir", kSource_filt_blurdir, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x7E0FBD4C9A05041EULL},
     {"filt_diffuse", kSource_filt_diffuse, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x40DC1A1D6642A2D3ULL},
@@ -7748,5 +7958,5 @@ void CSMain(KERNEL_IDS)
     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
   };
-  inline constexpr int kKernelCount = 37;
+  inline constexpr int kKernelCount = 39;
 } // namespace moho::editor::gpu::shaders

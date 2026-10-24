@@ -29,6 +29,8 @@
 #include "moho/editor/gpu/filt_common.hlsli"
 #include "moho/editor/gpu/field_settle_params.hlsli"
 #include "moho/editor/gpu/field_slide_params.hlsli"
+#include "moho/editor/gpu/field_morph_params.hlsli"
+#include "moho/editor/gpu/field_sub_params.hlsli"
 
 EMU_KERNEL_BEGIN(k_field_settle)
 #include "moho/editor/gpu/field_settle.hlsl"
@@ -41,6 +43,14 @@ EMU_KERNEL_END(field_slide_a)
 EMU_KERNEL_BEGIN(k_field_slide_b)
 #include "moho/editor/gpu/field_slide_b.hlsl"
 EMU_KERNEL_END(field_slide_b)
+
+EMU_KERNEL_BEGIN(k_field_morph)
+#include "moho/editor/gpu/field_morph.hlsl"
+EMU_KERNEL_END(field_morph)
+
+EMU_KERNEL_BEGIN(k_field_sub)
+#include "moho/editor/gpu/field_sub.hlsl"
+EMU_KERNEL_END(field_sub)
 
 // the Gaussian blur of the foundation (EdGpuOps.cpp BlurFieldDevice) and its mask blend run their kernels here too
 EMU_KERNEL_BEGIN(k_blur_pass)
@@ -259,6 +269,56 @@ static void TestThermalMap()
   CheckDeclines("thermal_bad_mask", "thermal_map", Args({}, {}, {{"a", t}, {"mask", TestMask(10, 10, 1)}}));
 }
 
+// ---- morph -----------------------------------------------------------------------------------------------------------------------------------------
+
+static void TestMorph()
+{
+  const GridPtr t = TestTerrain(61, 47, 2.0f, 31, 50.0);
+  for (const char* op : {"dilate", "erode", "open", "close", "gradient", "tophat", "bothat"}) {
+    for (const char* shape : {"square", "disc", "cross", "diamond"}) {
+      const std::string label = std::string("morph_") + op + "_" + shape;
+      CheckSame(label.c_str(), "morph", Args({{"radius", 7.0}}, {{"op", op}, {"shape", shape}}, {{"a", t}}), 0.0);
+    }
+  }
+  {
+    Grid g;
+    RunGpu("morph", Args({{"radius", 8.0}}, {{"op", "dilate"}, {"shape", "disc"}}, {{"a", t}}), g);
+    CHECK(Compare(g, *t).maxAbs > 1.0, "morph changes the terrain (the comparison is not vacuous)");
+  }
+  // radii: 1 sample, the clamp (square 32 samples, others 16), a window larger than the field
+  for (const double rad : {0.1, 2.0, 40.0, 500.0}) {
+    for (const char* shape : {"square", "disc", "diamond", "cross"}) {
+      CheckSame((std::string("morph_r") + std::to_string(static_cast<int>(rad)) + "_" + shape).c_str(), "morph", Args({{"radius", rad}}, {{"op", "open"}, {"shape", shape}}, {{"a", t}}), 0.0);
+    }
+  }
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 80.0);
+    for (const char* shape : {"square", "disc"}) {
+      CheckSame(("morph_" + std::to_string(sz.first) + "x" + std::to_string(sz.second) + "_" + shape).c_str(), "morph", Args({{"radius", 5.0}}, {{"op", "gradient"}, {"shape", shape}}, {{"a", s}}), 0.0);
+    }
+  }
+  // placement: dilate keeps the source's, a `like` with the same placement is fine, another placement is left to the CPU
+  CheckSame("morph_like", "morph", Args({{"radius", 4.0}}, {{"op", "gradient"}}, {{"a", t}, {"like", t}}), 0.0);
+  auto moved = std::make_shared<Grid>(*t);
+  moved->ox += 5.0f;
+  CheckDeclines("morph_like_other_placement", "morph", Args({{"radius", 4.0}}, {{"op", "tophat"}}, {{"a", t}, {"like", moved}}));
+  CheckDeclines("morph_bad_op", "morph", Args({}, {{"op", "bogus"}}, {{"a", t}}));
+  CheckDeclines("morph_bad_shape", "morph", Args({}, {{"shape", "bogus"}}, {{"a", t}}));
+  CheckDeclines("morph_no_input", "morph", Args({}, {}, {}));
+  // a tiny window on the default policy stays on the CPU (the transfer costs more than the work); a big one does not
+  {
+    gpu::GetPolicy().minCells = 65536.0f;
+    const GridPtr big = TestTerrain(300, 300, 1.0f, 3, 30.0);
+    Grid g;
+    bool onGpu = true;
+    RunGpu("morph", Args({{"radius", 1.0}}, {{"op", "dilate"}, {"shape", "cross"}}, {{"a", big}}), g, &onGpu);
+    CHECK(!onGpu, "morph with a 3 sample cross stays on the CPU on the default policy");
+    RunGpu("morph", Args({{"radius", 6.0}}, {{"op", "dilate"}, {"shape", "disc"}}, {{"a", big}}), g, &onGpu);
+    CHECK(onGpu, "morph with a 13 sample disc goes to the GPU on the default policy");
+    gpu::GetPolicy().minCells = 0.0f;
+  }
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -271,6 +331,7 @@ int main(int argc, char** argv)
   field::SetThreads(4);
   TestSettle();
   TestThermalMap();
+  TestMorph();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
