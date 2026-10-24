@@ -224,7 +224,7 @@ static void CheckSame(const char* label, const std::string& op, const OpArgs& a,
   CHECK(!d.nan && d.maxAbs <= tol, "%s: GPU and CPU differ by %.3g (mean %.3g), allowed %.3g", label, d.maxAbs, d.meanAbs, tol);
   if (gVerbose) std::printf("  %-28s max %.3g mean %.3g\n", label, d.maxAbs, d.meanAbs);
   if (diffOut != nullptr) *diffOut = d;
-  if (!gPngDir.empty()) {
+  if (!gPngDir.empty() && std::strncmp(label, "render_", 7) == 0) {
     WriteRaw(std::string(label) + "_gpu", g);
     WriteRaw(std::string(label) + "_cpu", c);
   }
@@ -727,6 +727,207 @@ static void TestTerrainFamily()
   gpu::GetPolicy().minCells = 0.0f;
 }
 
+// ---- quality of the generators (the properties EdLandTest checks for the CPU ops, here for the emulated GPU result) -----------------------------------------
+
+static GridPtr Gen(const std::string& op, const Num& n, const Str& s = {})
+{
+  auto g = std::make_shared<Grid>();
+  bool onGpu = false;
+  if (!RunGpu(op, Args(n, s), *g, &onGpu) || !onGpu) {
+    ++gFailures;
+    std::printf("FAIL: %s did not run on the GPU\n", op.c_str());
+  }
+  return g;
+}
+
+/** Mean |value - 0.5| on the coarse lattice points against the same count of other points: plain octaves all vanish on the lattice, rotated ones must not. */
+static double LatticeRatioOf(const Grid& g, const int step)
+{
+  double on = 0.0, other = 0.0;
+  int n1 = 0, n2 = 0;
+  for (int z = 0; z + step / 2 < g.h; z += step) {
+    for (int x = 0; x + step / 2 < g.w; x += step) {
+      on += std::fabs(static_cast<double>(g.At(x, z)) - 0.5);
+      ++n1;
+      other += std::fabs(static_cast<double>(g.At(x + step / 2, z + step / 2)) - 0.5);
+      ++n2;
+    }
+  }
+  return (on / n1) / std::max(1e-9, other / n2);
+}
+
+static double MeanGradient(const Grid& g, const double cell)
+{
+  double sum = 0.0;
+  long n = 0;
+  for (int z = 1; z + 1 < g.h; ++z) {
+    for (int x = 1; x + 1 < g.w; ++x) {
+      const double gx = 0.5 * (static_cast<double>(g.At(x + 1, z)) - static_cast<double>(g.At(x - 1, z))) / cell;
+      const double gz = 0.5 * (static_cast<double>(g.At(x, z + 1)) - static_cast<double>(g.At(x, z - 1))) / cell;
+      sum += std::sqrt(gx * gx + gz * gz);
+      ++n;
+    }
+  }
+  return sum / static_cast<double>(n);
+}
+
+static void TestGeneratorQuality()
+{
+  // lattice seams: with rotate every octave is in its own frame, the plain sum vanishes on the lattice points (the artefact the option removes)
+  const Num plain = {{"width", 321}, {"height", 321}, {"seed", 3}, {"scale", 32}, {"octaves", 4}};
+  Num rot = plain;
+  rot["rotate"] = 1;
+  const double rPlain = LatticeRatioOf(*Gen("perlin", plain), 32);
+  const double rRot = LatticeRatioOf(*Gen("perlin", rot), 32);
+  CHECK(rPlain < 0.3, "the plain GPU sum is expected to vanish at the lattice points (ratio %.3f)", rPlain);
+  CHECK(rRot > 0.7 && rRot < 1.4, "GPU perlin with rotate shows the lattice (ratio %.3f)", rRot);
+  for (const char* op : {"ridged", "billow", "simplex"}) {
+    const double v = LatticeRatioOf(*Gen(op, rot), 32);
+    CHECK(v > 0.6 && v < 1.5, "GPU %s with rotate: lattice ratio %.3f", op, v);
+  }
+  for (const char* style : {"classic", "erosive"}) {
+    const double v = LatticeRatioOf(*Gen("fractal", {{"width", 321}, {"height", 321}, {"seed", 3}, {"scale", 32}, {"octaves", 4}}, {{"style", style}}), 32);
+    CHECK(v > 0.7 && v < 1.4, "GPU fractal %s: lattice ratio %.3f", style, v);
+  }
+  // isotropy: the variance of the slope along a direction does not depend on the direction (the 8 gradient noise prefers the axes)
+  for (const char* style : {"classic", "erosive"}) {
+    const GridPtr g = Gen("fractal", {{"width", 385}, {"height", 385}, {"seed", 11}, {"scale", 70}, {"octaves", 6}}, {{"style", style}});
+    double var[6] = {};
+    for (int d = 0; d < 6; ++d) {
+      const double a = static_cast<double>(d) * 3.14159265358979 / 6.0;
+      const double cx = std::cos(a), cz = std::sin(a);
+      double sum = 0.0;
+      long n = 0;
+      for (int z = 1; z + 1 < g->h; ++z) {
+        for (int x = 1; x + 1 < g->w; ++x) {
+          const double gx = 0.5 * (static_cast<double>(g->At(x + 1, z)) - static_cast<double>(g->At(x - 1, z)));
+          const double gz = 0.5 * (static_cast<double>(g->At(x, z + 1)) - static_cast<double>(g->At(x, z - 1)));
+          const double dd = gx * cx + gz * cz;
+          sum += dd * dd;
+          ++n;
+        }
+      }
+      var[d] = sum / static_cast<double>(n);
+    }
+    const double lo = *std::min_element(var, var + 6), hi = *std::max_element(var, var + 6);
+    CHECK(hi / lo < 1.2, "GPU fractal %s: the slope variance depends on the direction (ratio %.3f)", style, hi / lo);
+  }
+  // range and NaN: every kind and style stays in 0..1 with a spread
+  for (const char* kind : {"fbm", "billow", "ridged"}) {
+    for (const char* style : {"classic", "erosive"}) {
+      const GridPtr g = Gen("fractal", {{"width", 193}, {"height", 161}, {"seed", 4}, {"scale", 60}, {"octaves", 10}, {"warp", 25}, {"warp_levels", 2}, {"slope_detail", 0.8}}, {{"kind", kind}, {"style", style}});
+      const field::Stats s = field::Measure(*g);
+      bool finite = true;
+      for (const float v : g->v) finite = finite && std::isfinite(v);
+      CHECK(finite && s.min >= 0.0f && s.max <= 1.0f && s.sd > 0.05 && s.sd < 0.3, "GPU fractal %s %s: range %.3f .. %.3f sd %.3f finite %d", kind, style, s.min, s.max, s.sd, finite ? 1 : 0);
+    }
+  }
+  // world position: the same noise at the same place whatever the cell size, also with warp, erosive style, antialias off
+  for (const char* style : {"classic", "erosive"}) {
+    Num fine = {{"width", 129}, {"height", 129}, {"seed", 4}, {"scale", 90}, {"octaves", 8}, {"warp", 12}, {"warp_levels", 2}, {"slope_detail", 0.4}, {"ox", 3000.0}, {"oz", -2000.0}};
+    Num coarse = fine;
+    coarse["width"] = 33;
+    coarse["height"] = 33;
+    coarse["cell"] = 4;
+    const GridPtr f = Gen("fractal", fine, {{"style", style}});
+    const GridPtr c = Gen("fractal", coarse, {{"style", style}});
+    double worst = 0.0;
+    for (int z = 0; z < 33; ++z) {
+      for (int x = 0; x < 33; ++x) worst = std::max(worst, static_cast<double>(std::fabs(f->At(x * 4, z * 4) - c->At(x, z))));
+    }
+    CHECK(worst < 1e-3, "GPU fractal %s: a coarse grid differs from the fine one at the same places by %.3g", style, worst);
+  }
+  // antialias: a coarse preview of a detailed terrain has the slope of the low pass of the full resolution result; without it the octaves finer than the samples alias into extra slope
+  {
+    const Num fullN = {{"width", 513}, {"height", 513}, {"seed", 6}, {"scale", 160}, {"octaves", 10}, {"persistence", 0.75}, {"cell", 1}};
+    Num prevN = fullN;
+    prevN["width"] = 65;
+    prevN["height"] = 65;
+    prevN["cell"] = 8;
+    const GridPtr full = Gen("fractal", fullN);
+    Grid low(65, 65, 8.0f, 0.0f, 0.0f);   // box average of the full result over 8 x 8 samples (the low pass)
+    for (int z = 0; z < 65; ++z) {
+      for (int x = 0; x < 65; ++x) {
+        double s = 0.0;
+        int n = 0;
+        for (int dz = -4; dz <= 4; ++dz) {
+          for (int dx = -4; dx <= 4; ++dx) {
+            const int xx = x * 8 + dx, zz = z * 8 + dz;
+            if (xx < 0 || zz < 0 || xx >= 513 || zz >= 513) continue;
+            s += full->At(xx, zz);
+            ++n;
+          }
+        }
+        low.At(x, z) = static_cast<float>(s / n);
+      }
+    }
+    const double gLow = MeanGradient(low, 8.0);
+    const GridPtr point = Gen("fractal", prevN);
+    Num aaN = prevN;
+    aaN["antialias"] = 1;
+    const GridPtr aa = Gen("fractal", aaN);
+    const double gPoint = MeanGradient(*point, 8.0), gAa = MeanGradient(*aa, 8.0);
+    if (gVerbose) std::printf("  antialias: mean slope low pass %.5f, aliased preview %.5f, antialiased preview %.5f\n", gLow, gPoint, gAa);
+    CHECK(gPoint > 1.15 * gLow, "the test needs an aliased preview (%.5f vs %.5f)", gPoint, gLow);
+    CHECK(gAa < gPoint && std::fabs(gAa - gLow) < std::fabs(gPoint - gLow) * 0.5, "antialias: the preview slope %.5f is not closer to the low pass %.5f than the aliased %.5f", gAa, gLow, gPoint);
+    WriteRaw("preview_full", *full);
+    WriteRaw("preview_aliased", *point);
+    WriteRaw("preview_antialiased", *aa);
+  }
+  // the erosive style damps the finer octaves where the terrain is steep: less roughness on the steepest quarter, relative to the flattest quarter
+  {
+    auto steepRatio = [](const Grid& g) {
+      std::vector<std::pair<float, float>> v;   // (slope, roughness)
+      for (int z = 2; z + 2 < g.h; ++z) {
+        for (int x = 2; x + 2 < g.w; ++x) {
+          const float gx = (g.At(x + 2, z) - g.At(x - 2, z)) * 0.25f, gz = (g.At(x, z + 2) - g.At(x, z - 2)) * 0.25f;
+          const float lap = std::fabs(g.At(x + 1, z) + g.At(x - 1, z) + g.At(x, z + 1) + g.At(x, z - 1) - 4.0f * g.At(x, z));
+          v.push_back({std::sqrt(gx * gx + gz * gz), lap});
+        }
+      }
+      std::sort(v.begin(), v.end());
+      const std::size_t q = v.size() / 4;
+      double flat = 0.0, steep = 0.0;
+      for (std::size_t i = 0; i < q; ++i) {
+        flat += v[i].second;
+        steep += v[v.size() - 1 - i].second;
+      }
+      return steep / std::max(1e-9, flat);
+    };
+    const Num n = {{"width", 257}, {"height", 257}, {"seed", 5}, {"scale", 120}, {"octaves", 9}};
+    const GridPtr c = Gen("fractal", n), e = Gen("fractal", n, {{"style", "erosive"}});
+    const double rc = steepRatio(*c), re = steepRatio(*e);
+    if (gVerbose) std::printf("  erosive: roughness steep / flat classic %.3f erosive %.3f\n", rc, re);
+    CHECK(re < 0.8 * rc, "erosive: the steep ground is not smoother relative to the flat ground (classic %.3f, erosive %.3f)", rc, re);
+  }
+  // pictures of the GPU and CPU results for the hillshade renders (scripts of the lab: --png DIR)
+  if (!gPngDir.empty()) {
+    for (const char* style : {"classic", "erosive"}) {
+      for (const char* kind : {"fbm", "ridged"}) {
+        Num n = {{"width", 513}, {"height", 513}, {"seed", 3}, {"scale", 180}, {"octaves", 9}};
+        CheckSame((std::string("render_") + kind + "_" + style).c_str(), "fractal", Args(n, {{"kind", kind}, {"style", style}}), 1e-3);
+      }
+    }
+    Num w = {{"width", 513}, {"height", 513}, {"seed", 9}, {"scale", 220}, {"octaves", 9}, {"warp", 120}};
+    CheckSame("render_warp1", "fractal", Args(w, {{"style", "erosive"}}), 1e-3);
+    w["warp_levels"] = 2;
+    CheckSame("render_warp2", "fractal", Args(w, {{"style", "erosive"}}), 1e-3);
+    for (const char* op : {"musgrave", "fbm_damped"}) CheckSame((std::string("render_") + op).c_str(), op, Args({{"width", 513}, {"height", 513}, {"seed", 3}, {"scale", 200}, {"octaves", 9}, {"rotate", 1}}), 1e-3);
+    CheckSame("render_cells", "cells", Args({{"width", 513}, {"height", 513}, {"scale", 90}, {"warp", 25}}, {{"mode", "plate"}}), 1e-3);
+    CheckSame("render_cracks", "cracks", Args({{"width", 513}, {"height", 513}, {"scale", 120}}), 1e-3);
+    CheckSame("render_dunes", "dunes", Args({{"width", 513}, {"height", 513}, {"wavelength", 70}, {"angle", 30}}), 1e-3);
+    CheckSame("render_craters", "craters", Args({{"width", 513}, {"height", 513}, {"scale", 120}}), 1e-3);
+    CheckSame("render_island", "island", Args({{"width", 513}, {"height", 513}, {"roughness", 0.5}}), 1e-3);
+    const GridPtr ter = Gen("fractal", {{"width", 513}, {"height", 513}, {"seed", 3}, {"scale", 180}, {"octaves", 9}}, {{"style", "erosive"}});
+    auto scaled = std::make_shared<Grid>(*ter);
+    for (float& v : scaled->v) v *= 120.0f;
+    CheckSame("render_occlusion", "occlusion", Args({{"radius", 40}, {"mode", 2}}, {{"mode", "both"}}, {{"a", scaled}}), 1e-3);
+    CheckSame("render_hillshade", "hillshade", Args({{"z", 1.5}}, {{"mode", "shade"}}, {{"a", scaled}}), 1e-3);
+    CheckSame("render_shadow", "hillshade", Args({{"altitude", 20}, {"shadow_len", 200}}, {{"mode", "lit"}}, {{"a", scaled}}), 1e-3);
+    WriteRaw("render_height", *scaled);
+  }
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i + 1 < argc; ++i) {
@@ -753,6 +954,7 @@ int main(int argc, char** argv)
   TestDWarp();
   TestTerrainFamily();
   TestBlurMask();
+  TestGeneratorQuality();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuGenTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
