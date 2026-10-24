@@ -247,6 +247,46 @@ namespace moho::editor::gpu
       return k;
     }
 
+  } // namespace
+
+  bool BlurAffordable(const int w, const int h, const double sigma)
+  {
+    const int r = std::max(1, static_cast<int>(std::ceil(3.0 * sigma)));
+    const double work = 2.0 * static_cast<double>(w) * static_cast<double>(h) * (2.0 * r + 1.0);
+    return r <= 8192 && work <= 3.0e10;   // one dispatch this long could hit the 2 second driver reset
+  }
+
+  bool BlurDevice(Executor& ex, const Resource& src, Resource& tmp, Resource& dst, const int w, const int h, const double sigma, std::string& err)
+  {
+    const KernelInfo* kernel = FindKernel("blur_pass");
+    if (kernel == nullptr) {
+      err = "kernel blur_pass is missing";
+      return false;
+    }
+    int r = 0;
+    const std::vector<float> weights = MakeKernel(true, sigma, r);
+    std::unique_ptr<Resource> kbuf;
+    if (!MakeBuffer(ex, static_cast<u32>(weights.size()), kbuf, err) || !UploadBuffer(ex, *kbuf, weights.data(), weights.size() * 4, err)) {
+      return false;
+    }
+    hk::BlurParams params{};
+    params.w = static_cast<std::uint32_t>(w);
+    params.h = static_cast<std::uint32_t>(h);
+    params.radius = static_cast<std::uint32_t>(r);
+    params.vertical = 0;
+    Bindings b0;
+    b0.Srv(0, src).Srv(1, *kbuf).Uav(0, tmp);
+    if (!DispatchGrid(ex, *kernel, params.w, params.h, params, b0, err)) {
+      return false;
+    }
+    params.vertical = 1;
+    Bindings b1;
+    b1.Srv(0, tmp).Srv(1, *kbuf).Uav(0, dst);
+    return DispatchGrid(ex, *kernel, params.w, params.h, params, b1, err);
+  }
+
+  namespace
+  {
     const Grid* InputOf(const OpArgs& a, const char* const key)
     {
       const auto it = a.in.find(key);

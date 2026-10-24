@@ -65,6 +65,16 @@ namespace moho::editor::gpu
   [[nodiscard]] std::string LastOpError();
   void SetLastOpError(const std::string& text);
 
+  // ---- building blocks for ops that need a blur --------------------------------------------------------------------------------------------------
+
+  /** True when a Gaussian blur of a w x h field with this sigma (samples) is one dispatch the driver will not reset (the blur op refuses wider ones too: the CPU does them). */
+  [[nodiscard]] bool BlurAffordable(int w, int h, double sigma);
+  /**
+   * Gaussian blur of a field that lives on the device: the CPU GaussBlur (EdFieldUtil.h) = the `blur` op, sigma in samples (> 1e-6), clamped edges. `src` -> `tmp` (rows) -> `dst` (columns):
+   * `dst` may be `src`, `tmp` must be another field of the same size. Same arithmetic as the CPU, in the same order.
+   */
+  [[nodiscard]] bool BlurDevice(Executor& ex, const Resource& src, Resource& tmp, Resource& dst, int w, int h, double sigma, std::string& err);
+
   // ---- self test -----------------------------------------------------------------------------------------------------------------------------
 
   struct SelfTestPart

@@ -29,9 +29,12 @@
 #include "moho/editor/gpu/filt_common.hlsli"
 #include "moho/editor/gpu/field_settle_params.hlsli"
 #include "moho/editor/gpu/field_slide_params.hlsli"
+#include "moho/editor/gpu/field_blurslope_params.hlsli"
 #include "moho/editor/gpu/field_convolve_params.hlsli"
+#include "moho/editor/gpu/field_edge_params.hlsli"
 #include "moho/editor/gpu/field_morph_params.hlsli"
 #include "moho/editor/gpu/field_sub_params.hlsli"
+#include "moho/editor/gpu/field_unsharp_params.hlsli"
 
 EMU_KERNEL_BEGIN(k_field_settle)
 #include "moho/editor/gpu/field_settle.hlsl"
@@ -44,6 +47,18 @@ EMU_KERNEL_END(field_slide_a)
 EMU_KERNEL_BEGIN(k_field_slide_b)
 #include "moho/editor/gpu/field_slide_b.hlsl"
 EMU_KERNEL_END(field_slide_b)
+
+EMU_KERNEL_BEGIN(k_field_blurslope)
+#include "moho/editor/gpu/field_blurslope.hlsl"
+EMU_KERNEL_END(field_blurslope)
+
+EMU_KERNEL_BEGIN(k_field_edge)
+#include "moho/editor/gpu/field_edge.hlsl"
+EMU_KERNEL_END(field_edge)
+
+EMU_KERNEL_BEGIN(k_field_unsharp)
+#include "moho/editor/gpu/field_unsharp.hlsl"
+EMU_KERNEL_END(field_unsharp)
 
 EMU_KERNEL_BEGIN(k_field_convolve)
 #include "moho/editor/gpu/field_convolve.hlsl"
@@ -388,6 +403,80 @@ static void TestConvolve()
   }
 }
 
+// ---- unsharp, edge, blur_slope -----------------------------------------------------------------------------------------------------------------------
+
+static void TestBlurBased()
+{
+  const GridPtr t = TestTerrain(67, 45, 2.0f, 51, 50.0);
+  const GridPtr mask = TestMask(67, 45, 5);
+  // unsharp
+  CheckSame("unsharp_default", "unsharp", Args({}, {}, {{"a", t}}), 1e-5);
+  CheckSame("unsharp_params", "unsharp", Args({{"radius", 9.0}, {"amount", 2.5}, {"threshold", 1.5}}, {}, {{"a", t}}), 1e-5);
+  CheckSame("unsharp_mask", "unsharp", Args({{"radius", 5.0}, {"amount", -0.7}}, {}, {{"a", t}, {"mask", mask}}), 1e-5);
+  {
+    Grid g;
+    RunGpu("unsharp", Args({{"radius", 6.0}, {"amount", 3.0}}, {}, {{"a", t}}), g);
+    CHECK(Compare(g, *t).maxAbs > 0.5, "unsharp changes the terrain (the comparison is not vacuous)");
+  }
+  // edge: every mode, with and without smoothing, signed
+  for (const char* mode : {"sobel", "prewitt", "laplace", "dog"}) {
+    for (const double smooth : {0.0, 6.0}) {
+      for (const double sgn : {0.0, 1.0}) {
+        const std::string label = std::string("edge_") + mode + (smooth > 0.0 ? "_smooth" : "") + (sgn > 0.0 ? "_signed" : "");
+        CheckSame(label.c_str(), "edge", Args({{"gain", 3.0}, {"smooth", smooth}, {"signed", sgn}, {"radius", 3.0}, {"ratio", 2.0}}, {{"mode", mode}}, {{"a", t}}), 1e-5);
+      }
+    }
+  }
+  {
+    Grid g;
+    RunGpu("edge", Args({{"gain", 8.0}}, {{"mode", "sobel"}}, {{"a", t}}), g);
+    double mx = 0.0;
+    for (const float v : g.v) mx = std::max(mx, static_cast<double>(v));
+    CHECK(mx > 0.2, "edge finds edges (max %.3f)", mx);
+  }
+  // blur_slope
+  for (const char* mode : {"flat", "steep"}) {
+    CheckSame((std::string("blur_slope_") + mode).c_str(), "blur_slope", Args({{"radius", 8.0}, {"lo", 0.2}, {"hi", 0.6}, {"amount", 0.8}}, {{"mode", mode}}, {{"a", t}}), 1e-5);
+    CheckSame((std::string("blur_slope_mask_") + mode).c_str(), "blur_slope", Args({{"radius", 4.0}}, {{"mode", mode}}, {{"a", t}, {"mask", mask}}), 1e-5);
+  }
+  // odd sizes (the blur is wider than the field)
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 80.0);
+    const std::string tag = std::to_string(sz.first) + "x" + std::to_string(sz.second);
+    CheckSame(("unsharp_" + tag).c_str(), "unsharp", Args({{"radius", 4.0}, {"amount", 1.0}}, {}, {{"a", s}}), 1e-5);
+    CheckSame(("edge_dog_" + tag).c_str(), "edge", Args({{"radius", 2.0}, {"gain", 2.0}}, {{"mode", "dog"}}, {{"a", s}}), 1e-5);
+    CheckSame(("edge_sobel_" + tag).c_str(), "edge", Args({{"gain", 2.0}}, {{"mode", "sobel"}}, {{"a", s}}), 1e-5);
+    CheckSame(("edge_laplace_" + tag).c_str(), "edge", Args({{"gain", 2.0}, {"smooth", 3.0}}, {{"mode", "laplace"}}, {{"a", s}}), 1e-5);
+    CheckSame(("blur_slope_" + tag).c_str(), "blur_slope", Args({{"radius", 3.0}}, {}, {{"a", s}}), 1e-5);
+  }
+  // a `like` places the result
+  {
+    auto like = std::make_shared<Grid>(*t);
+    like->ox = -50.0f;
+    CheckSame("edge_like", "edge", Args({}, {{"mode", "sobel"}}, {{"a", t}, {"like", like}}), 1e-5);
+    CheckSame("unsharp_like", "unsharp", Args({}, {}, {{"a", t}, {"like", like}}), 1e-5);
+  }
+  CheckDeclines("unsharp_bad_mask", "unsharp", Args({}, {}, {{"a", t}, {"mask", TestMask(9, 9, 1)}}));
+  CheckDeclines("unsharp_no_input", "unsharp", Args({}, {}, {}));
+  CheckDeclines("edge_bad_mode", "edge", Args({}, {{"mode", "bogus"}}, {{"a", t}}));
+  CheckDeclines("blur_slope_bad_mode", "blur_slope", Args({}, {{"mode", "bogus"}}, {{"a", t}}));
+  CheckDeclines("blur_slope_bad_mask", "blur_slope", Args({}, {}, {{"a", t}, {"mask", TestMask(9, 9, 1)}}));
+  // size gates on the default policy: a bare stencil needs a big field, blur based ops always go
+  {
+    gpu::GetPolicy().minCells = 65536.0f;
+    const GridPtr mid = TestTerrain(300, 300, 1.0f, 3, 30.0);
+    Grid g;
+    bool onGpu = true;
+    RunGpu("edge", Args({}, {{"mode", "sobel"}}, {{"a", mid}}), g, &onGpu);
+    CHECK(!onGpu, "a bare sobel on 300 x 300 stays on the CPU on the default policy");
+    RunGpu("edge", Args({{"smooth", 5.0}}, {{"mode", "sobel"}}, {{"a", mid}}), g, &onGpu);
+    CHECK(onGpu, "a smoothed sobel goes to the GPU on the default policy");
+    RunGpu("unsharp", Args({{"radius", 6.0}}, {}, {{"a", mid}}), g, &onGpu);
+    CHECK(onGpu, "an unsharp mask with a 6 sample blur goes to the GPU");
+    gpu::GetPolicy().minCells = 0.0f;
+  }
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -402,6 +491,7 @@ int main(int argc, char** argv)
   TestThermalMap();
   TestMorph();
   TestConvolve();
+  TestBlurBased();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;

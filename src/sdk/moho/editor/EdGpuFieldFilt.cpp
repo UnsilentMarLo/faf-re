@@ -9,9 +9,12 @@
 namespace moho::editor::gpu::hk
 {
   using uint = std::uint32_t;
+#include "moho/editor/gpu/field_blurslope_params.hlsli"
 #include "moho/editor/gpu/field_convolve_params.hlsli"
+#include "moho/editor/gpu/field_edge_params.hlsli"
 #include "moho/editor/gpu/field_morph_params.hlsli"
 #include "moho/editor/gpu/field_sub_params.hlsli"
+#include "moho/editor/gpu/field_unsharp_params.hlsli"
 } // namespace moho::editor::gpu::hk
 
 namespace moho::editor::gpu
@@ -177,12 +180,151 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
+    // ---- unsharp, edge, blur_slope (a gaussian blur on the device and a point pass) ---------------------------------------------------------------------------
+
+    /** Source, mask and output shape of the blur based ops: false = Unsupported (a mask of another size, a bad `like`: the CPU op reports it). */
+    bool BlurOpInputs(const OpArgs& a, const Grid*& src, Shape& shape)
+    {
+      src = Source(a);
+      const Grid* mask = In(a, "mask");
+      return src != nullptr && (mask == nullptr || mask->SameShape(*src)) && ShapeOf(a, shape);
+    }
+
+    OpResult OpUnsharpGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = nullptr;
+      Shape shape;
+      if (!BlurOpInputs(a, src, shape)) return OpResult::Unsupported;
+      const double sigma = std::max(0.3, a.p.N("radius", 4.0) / static_cast<double>(src->cell));
+      if (!WorthIt(BlurTaps(sigma) + 4.0) || !BlurAffordable(src->w, src->h, sigma) || !Fits(ex, src->Count(), 5)) return OpResult::Unsupported;
+      const KernelInfo* ku = FindKernel("field_unsharp");
+      if (ku == nullptr) { err = "kernel field_unsharp is missing"; return OpResult::Failed; }
+      hk::UnsharpParams p{};
+      p.w = static_cast<std::uint32_t>(src->w);
+      p.h = static_cast<std::uint32_t>(src->h);
+      p.amount = static_cast<float>(a.p.N("amount", 1.0));
+      p.thr = std::max(0.0f, static_cast<float>(a.p.N("threshold", 0.0)));
+      Field in, tmp, blur, res;
+      MaskBind mb;
+      if (!UploadGrid(ex, *src, in, err) || !MakeField(ex, src->w, src->h, tmp, err) || !MakeField(ex, src->w, src->h, blur, err) || !MakeField(ex, src->w, src->h, res, err) ||
+          !BindMask(ex, a, mb, err) || !BlurDevice(ex, in.R(), tmp.R(), blur.R(), src->w, src->h, sigma, err)) {
+        return OpResult::Failed;
+      }
+      p.hasMask = mb.has ? 1u : 0u;
+      Bindings b;
+      b.Srv(0, in.R()).Srv(1, blur.R()).Srv(2, mb.R()).Uav(0, res.R());
+      if (!DispatchGrid(ex, *ku, p.w, p.h, p, b, err)) return OpResult::Failed;
+      Grid g = NewGrid(shape);
+      if (!DownloadGrid(ex, res, g, err)) return OpResult::Failed;
+      out = std::move(g);
+      return OpResult::Done;
+    }
+
+    OpResult OpEdgeGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src0 = Source(a);
+      Shape shape;
+      if (src0 == nullptr || !ShapeOf(a, shape)) return OpResult::Unsupported;
+      const std::string mode = a.p.S("mode", "sobel");
+      const int m = mode == "sobel" ? 0 : (mode == "prewitt" ? 1 : (mode == "laplace" ? 2 : (mode == "dog" ? 3 : -1)));
+      if (m < 0) return OpResult::Unsupported;   // the CPU op reports the bad mode
+      const double pre = a.p.N("smooth", 0.0) / static_cast<double>(src0->cell);
+      const bool smoothFirst = pre > 0.05;
+      double s1 = 0.0, s2 = 0.0;
+      double work = 8.0;
+      if (m == 3) {
+        s1 = std::max(0.3, a.p.N("radius", 2.0) / static_cast<double>(src0->cell));
+        s2 = s1 * std::max(1.1, a.p.N("ratio", 1.6));
+        work = BlurTaps(s1) + BlurTaps(s2);
+      }
+      if (smoothFirst) work += BlurTaps(pre);
+      const bool blurs = m == 3 || smoothFirst;
+      if (blurs ? !WorthIt(work) : !BigField(a)) return OpResult::Unsupported;   // a bare 3 x 3 stencil only pays on big fields
+      if ((smoothFirst && !BlurAffordable(src0->w, src0->h, pre)) || (m == 3 && (!BlurAffordable(src0->w, src0->h, s1) || !BlurAffordable(src0->w, src0->h, s2)))) return OpResult::Unsupported;
+      if (!Fits(ex, src0->Count(), 5)) return OpResult::Unsupported;
+      const KernelInfo* ke = FindKernel("field_edge");
+      if (ke == nullptr) { err = "kernel field_edge is missing"; return OpResult::Failed; }
+      hk::EdgeParams p{};
+      p.w = static_cast<std::uint32_t>(src0->w);
+      p.h = static_cast<std::uint32_t>(src0->h);
+      p.mode = static_cast<std::uint32_t>(m);
+      p.gain = static_cast<float>(a.p.N("gain", 1.0));
+      p.sgn = a.p.N("signed", 0) != 0 ? 1u : 0u;
+      const float cell = src0->cell;
+      p.wc = m == 0 ? 2.0f : 1.0f;
+      p.denom = (2.0f + p.wc) * 2.0f * cell;
+      p.cell2 = cell * cell;
+      Field in, tmp, sm, b1, b2, res;
+      if (!UploadGrid(ex, *src0, in, err) || !MakeField(ex, p.w, p.h, res, err)) return OpResult::Failed;
+      const Field* base = &in;   // the (smoothed) field the edge is taken from
+      if (smoothFirst || m == 3) {
+        if (!MakeField(ex, p.w, p.h, tmp, err)) return OpResult::Failed;
+      }
+      if (smoothFirst) {
+        if (!MakeField(ex, p.w, p.h, sm, err) || !BlurDevice(ex, in.R(), tmp.R(), sm.R(), src0->w, src0->h, pre, err)) return OpResult::Failed;
+        base = &sm;
+      }
+      Bindings b;
+      if (m == 3) {
+        if (!MakeField(ex, p.w, p.h, b1, err) || !MakeField(ex, p.w, p.h, b2, err) || !BlurDevice(ex, base->R(), tmp.R(), b1.R(), src0->w, src0->h, s1, err) ||
+            !BlurDevice(ex, base->R(), tmp.R(), b2.R(), src0->w, src0->h, s2, err)) {
+          return OpResult::Failed;
+        }
+        b.Srv(0, b1.R()).Srv(1, b2.R()).Uav(0, res.R());
+      } else {
+        b.Srv(0, base->R()).Srv(1, base->R()).Uav(0, res.R());
+      }
+      if (!DispatchBands(ex, *ke, p.w, p.h, 0.03, p, b, err)) return OpResult::Failed;
+      Grid g = NewGrid(shape);
+      if (!DownloadGrid(ex, res, g, err)) return OpResult::Failed;
+      out = std::move(g);
+      return OpResult::Done;
+    }
+
+    OpResult OpBlurSlopeGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = nullptr;
+      Shape shape;
+      if (!BlurOpInputs(a, src, shape)) return OpResult::Unsupported;
+      const std::string mode = a.p.S("mode", "flat");
+      if (mode != "flat" && mode != "steep") return OpResult::Unsupported;
+      const double sigma = std::max(0.3, a.p.N("radius", 6.0) / static_cast<double>(src->cell));
+      if (!WorthIt(BlurTaps(sigma) + 6.0) || !BlurAffordable(src->w, src->h, sigma) || !Fits(ex, src->Count(), 5)) return OpResult::Unsupported;
+      const KernelInfo* kb = FindKernel("field_blurslope");
+      if (kb == nullptr) { err = "kernel field_blurslope is missing"; return OpResult::Failed; }
+      hk::BlurSlopeParams p{};
+      p.w = static_cast<std::uint32_t>(src->w);
+      p.h = static_cast<std::uint32_t>(src->h);
+      p.flat = mode == "flat" ? 1u : 0u;
+      p.cell = src->cell;
+      p.lo = static_cast<float>(a.p.N("lo", 0.3));
+      p.hi = static_cast<float>(a.p.N("hi", 0.7));
+      p.amount = Clamp01(static_cast<float>(a.p.N("amount", 1.0)));
+      Field in, tmp, blur, res;
+      MaskBind mb;
+      if (!UploadGrid(ex, *src, in, err) || !MakeField(ex, src->w, src->h, tmp, err) || !MakeField(ex, src->w, src->h, blur, err) || !MakeField(ex, src->w, src->h, res, err) ||
+          !BindMask(ex, a, mb, err) || !BlurDevice(ex, in.R(), tmp.R(), blur.R(), src->w, src->h, sigma, err)) {
+        return OpResult::Failed;
+      }
+      p.hasMask = mb.has ? 1u : 0u;
+      Bindings b;
+      b.Srv(0, in.R()).Srv(1, blur.R()).Srv(2, mb.R()).Uav(0, res.R());
+      if (!DispatchGrid(ex, *kb, p.w, p.h, p, b, err)) return OpResult::Failed;
+      Grid g = NewGrid(shape);
+      if (!DownloadGrid(ex, res, g, err)) return OpResult::Failed;
+      out = std::move(g);
+      return OpResult::Done;
+    }
+
     struct Registrar
     {
       Registrar()
       {
         RegisterGpuOp("morph", &OpMorphGpu);
         RegisterGpuOp("convolve", &OpConvolveGpu);
+        RegisterGpuOp("unsharp", &OpUnsharpGpu);
+        RegisterGpuOp("edge", &OpEdgeGpu);
+        RegisterGpuOp("blur_slope", &OpBlurSlopeGpu);
       }
     };
     const Registrar gRegistrar;

@@ -53,6 +53,12 @@ namespace moho::editor::gpu::fops
   inline constexpr double kMinWork = 8.0;
   inline bool WorthIt(const double workPerCell) { return GetPolicy().minCells <= 0.0f || workPerCell >= kMinWork; }
 
+  /** Ops of a few operations per sample (a 3 x 3 stencil) only go to the GPU on big fields: the transfer of input and result costs more than the maths below that. 16 x ed_gpu_min_cells samples (default 1048576). */
+  inline bool BigField(const OpArgs& a) { return CellsOf(a) >= static_cast<double>(GetPolicy().minCells) * 16.0; }
+
+  /** Taps (reads and multiply adds) per sample of a Gaussian blur with this sigma (samples): two passes of 2r + 1. */
+  inline double BlurTaps(const double sigma) { return 2.0 * (2.0 * std::max(1, static_cast<int>(std::ceil(3.0 * sigma))) + 1.0); }
+
   /** An output grid placed like the source. */
   inline Grid LikeOf(const Grid& g) { return Grid(g.w, g.h, g.cell, g.ox, g.oz); }
 
