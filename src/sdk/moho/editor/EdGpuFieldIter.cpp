@@ -193,6 +193,42 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
+    // ---- thermal (EdFieldCore.cpp OpThermal: the same slides with one talus for the whole field) ------------------------------------------------------
+
+    OpResult OpThermalGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = Source(a);
+      const Grid* mask = In(a, "mask");
+      Shape shape;
+      if (src == nullptr || (mask != nullptr && !mask->SameShape(*src)) || !ShapeOf(a, shape)) return OpResult::Unsupported;
+      const int iterations = std::max(0, std::min(100000, static_cast<int>(a.p.N("iterations", 20))));
+      if (iterations == 0 || !Fits(ex, src->Count(), 6)) return OpResult::Unsupported;
+      const int w = src->w, h = src->h;
+      Slider sl;
+      if (!sl.Init(ex, w, h, err)) return OpResult::Failed;
+      sl.p.cell = src->cell;
+      sl.p.rate = std::max(0.0f, std::min(1.0f, static_cast<float>(a.p.N("rate", 0.5))));
+      sl.p.talus = std::max(0.0f, static_cast<float>(a.p.N("talus", 0.6)));
+      PingPong pp;
+      Field rm;
+      if (!UploadGrid(ex, *src, pp.f[0], err) || !MakeField(ex, w, h, pp.f[1], err)) return OpResult::Failed;
+      if (mask != nullptr) {
+        if (!UploadGrid(ex, *mask, rm, err)) return OpResult::Failed;
+        sl.rmask = &rm.R();
+        sl.p.hasMask = 1;
+      }
+      const bool ok = RunIterations(ex, static_cast<u32>(iterations), 60.0, [&](const u32, std::string& e) {
+        if (!sl.Step(ex, pp.Src().R(), pp.Dst().R(), e)) return false;
+        pp.Flip();
+        return true;
+      }, err);
+      if (!ok) return OpResult::Failed;
+      Grid g = NewGrid(shape);
+      if (!DownloadGrid(ex, pp.Src(), g, err)) return OpResult::Failed;
+      out = std::move(g);
+      return OpResult::Done;
+    }
+
     // ---- erode_rocksoil -----------------------------------------------------------------------------------------------------------------------------
 
     OpResult OpRockSoilGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
@@ -508,6 +544,7 @@ namespace moho::editor::gpu
     {
       Registrar()
       {
+        RegisterGpuOp("thermal", &OpThermalGpu, 16384.0f);
         RegisterGpuOp("erode_glacier", &OpGlacierGpu, 16384.0f);
         RegisterGpuOp("erode_wind", &OpWindGpu, 16384.0f);
         RegisterGpuOp("erode_snow", &OpSnowGpu, 16384.0f);

@@ -701,6 +701,32 @@ static void TestGlacier()
   CheckDeclines("glacier_no_input", "erode_glacier", Args({}, {}, {}));
 }
 
+// ---- thermal ---------------------------------------------------------------------------------------------------------------------------------------
+
+static void TestThermal()
+{
+  const GridPtr t = TestTerrain(77, 51, 2.0f, 111, 100.0);
+  const GridPtr mask = TestMask(77, 51, 15);
+  CheckSame("thermal_op_default", "thermal", Args({}, {}, {{"a", t}}), 1e-5);
+  {
+    Grid g;
+    RunGpu("thermal", Args({}, {}, {{"a", t}}), g);
+    CHECK(Compare(g, *t).maxAbs > 1e-2, "thermal changes the terrain (the comparison is not vacuous)");
+  }
+  CheckSame("thermal_op_params", "thermal", Args({{"iterations", 33}, {"talus", 0.25}, {"rate", 0.9}}, {}, {{"a", t}}), 1e-5);
+  CheckSame("thermal_op_mask", "thermal", Args({{"iterations", 11}, {"talus", 0.3}}, {}, {{"a", t}, {"mask", mask}}), 1e-5);
+  auto like = std::make_shared<Grid>(*t);
+  like->ox = 5.0f;
+  CheckSame("thermal_op_like", "thermal", Args({{"iterations", 4}}, {}, {{"a", t}, {"like", like}}), 1e-5);
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 70.0);
+    CheckSame(("thermal_op_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "thermal", Args({{"iterations", 6}, {"talus", 0.2}}, {}, {{"a", s}}), 1e-5);
+  }
+  CheckDeclines("thermal_op_zero_iterations", "thermal", Args({{"iterations", 0}}, {}, {{"a", t}}));
+  CheckDeclines("thermal_op_bad_mask", "thermal", Args({}, {}, {{"a", t}, {"mask", TestMask(9, 9, 1)}}));
+  CheckDeclines("thermal_op_no_input", "thermal", Args({}, {}, {}));
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -713,6 +739,7 @@ int main(int argc, char** argv)
   field::SetThreads(4);
   TestSettle();
   TestThermalMap();
+  TestThermal();
   TestMorph();
   TestConvolve();
   TestBlurBased();
