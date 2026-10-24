@@ -1275,6 +1275,7 @@ if exist "$(FafRunDir)" if exist "$(TargetDir)$(TargetName).pdb" xcopy /D /Y /Q 
     <ClCompile Include="moho\editor\EdGpu.cpp" />
     <ClCompile Include="moho\editor\EdGpuOps.cpp" />
     <ClCompile Include="moho\editor\EdGpuGen.cpp" />
+    <ClCompile Include="moho\editor\EdGpuGenFilt.cpp" />
     <ClCompile Include="moho\editor\EdGpuErosion.cpp" />
     <ClCompile Include="moho\editor\EdGpuLua.cpp" />
     <ClCompile Include="moho\editor\EdTexConv.cpp" />

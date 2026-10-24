@@ -25,6 +25,12 @@
 // every .hlsli at global scope first
 #include "moho/editor/gpu/common.hlsli"
 #include "moho/editor/gpu/gen_noise.hlsli"
+#include "moho/editor/gpu/filt_common.hlsli"
+#include "moho/editor/gpu/filt_bilateral_params.hlsli"
+#include "moho/editor/gpu/filt_blurdir_params.hlsli"
+#include "moho/editor/gpu/filt_diffuse_params.hlsli"
+#include "moho/editor/gpu/filt_dwarp_params.hlsli"
+#include "moho/editor/gpu/filt_occlusion_params.hlsli"
 #include "moho/editor/gpu/gen_fbm_params.hlsli"
 #include "moho/editor/gpu/gen_cells_params.hlsli"
 #include "moho/editor/gpu/gen_craters_params.hlsli"
@@ -33,6 +39,26 @@
 #include "moho/editor/gpu/gen_fractal_params.hlsli"
 #include "moho/editor/gpu/gen_island_params.hlsli"
 #include "moho/editor/gpu/gen_musgrave_params.hlsli"
+
+EMU_KERNEL_BEGIN(k_filt_bilateral)
+#include "moho/editor/gpu/filt_bilateral.hlsl"
+EMU_KERNEL_END(filt_bilateral)
+
+EMU_KERNEL_BEGIN(k_filt_blurdir)
+#include "moho/editor/gpu/filt_blurdir.hlsl"
+EMU_KERNEL_END(filt_blurdir)
+
+EMU_KERNEL_BEGIN(k_filt_diffuse)
+#include "moho/editor/gpu/filt_diffuse.hlsl"
+EMU_KERNEL_END(filt_diffuse)
+
+EMU_KERNEL_BEGIN(k_filt_dwarp)
+#include "moho/editor/gpu/filt_dwarp.hlsl"
+EMU_KERNEL_END(filt_dwarp)
+
+EMU_KERNEL_BEGIN(k_filt_occlusion)
+#include "moho/editor/gpu/filt_occlusion.hlsl"
+EMU_KERNEL_END(filt_occlusion)
 
 EMU_KERNEL_BEGIN(k_gen_cells)
 #include "moho/editor/gpu/gen_cells.hlsl"
@@ -181,6 +207,17 @@ static void CheckSame(const char* label, const std::string& op, const OpArgs& a,
     WriteRaw(std::string(label) + "_gpu", g);
     WriteRaw(std::string(label) + "_cpu", c);
   }
+}
+
+/** A terrain-like input field for the filters: fractal noise (CPU op) in world units, `height` units tall. */
+static GridPtr TestTerrain(const int w, const int h, const float cell, const std::uint32_t seed, const double height = 60.0)
+{
+  auto g = std::make_shared<Grid>();
+  std::string err;
+  const OpArgs a = Args({{"width", static_cast<double>(w)}, {"height", static_cast<double>(h)}, {"cell", static_cast<double>(cell)}, {"seed", static_cast<double>(seed)}, {"scale", 70.0 * cell}, {"octaves", 7}, {"ox", 17.5}, {"oz", -4.0}});
+  if (!field::RunOpCpu("fractal", a, *g, err)) std::printf("terrain failed: %s\n", err.c_str());
+  for (float& v : g->v) v *= static_cast<float>(height);
+  return g;
 }
 
 // ---- kernel table ------------------------------------------------------------------------------------------------------------------------------------
@@ -500,6 +537,93 @@ static void TestScatterOps()
   CHECK(!RunGpu("island", Args({{"width", 8}, {"height", 8}}, {{"output", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad island output is the CPU's error");
 }
 
+// ---- filters -------------------------------------------------------------------------------------------------------------------------------------
+
+static void TestOcclusion()
+{
+  const GridPtr ter = TestTerrain(70, 55, 2.0f, 4);
+  for (const char* mode : {"cavity", "convex", "both"}) {
+    Num n = {{"radius", 40}, {"directions", 12}, {"gain", 2.0}};
+    CheckSame((std::string("occlusion_") + mode).c_str(), "occlusion", Args(n, {{"mode", mode}}, {{"a", ter}}), 5e-5);
+  }
+  {
+    Grid g;
+    CHECK(RunGpu("occlusion", Args({{"radius", 40}, {"gain", 2.0}}, {}, {{"a", ter}}), g) && field::Measure(g).sd > 0.02 && field::Measure(g).max > 0.2, "the occlusion of a rough terrain has structure (sd %.3f)", field::Measure(g).sd);
+  }
+  CheckSame("occlusion_params", "occlusion", Args({{"radius", 9}, {"directions", 5}, {"gain", 0.7}}, {{"mode", "both"}}, {{"a", ter}}), 5e-5);
+  CheckSame("occlusion_big", "occlusion", Args({{"radius", 400}, {"directions", 32}}, {}, {{"a", ter}}), 5e-5);
+  for (const std::pair<int, int> sz : {std::pair<int, int>{1, 19}, {23, 1}, {1, 1}, {17, 13}}) {
+    const GridPtr t = TestTerrain(sz.first, sz.second, 1.0f, 5);
+    CheckSame(("occlusion_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "occlusion", Args({{"radius", 12}}, {}, {{"a", t}}), 5e-5);
+  }
+  Grid g;
+  bool onGpu = true;
+  std::string err;
+  CHECK(!RunGpu("occlusion", Args({}), g, &onGpu, &err) && !onGpu && !err.empty(), "a missing input is the CPU's error: '%s'", err.c_str());
+  CHECK(!RunGpu("occlusion", Args({}, {{"mode", "bogus"}}, {{"a", ter}}), g, &onGpu, &err) && !onGpu, "a bad mode is the CPU's error");
+}
+
+static void TestSmoothingFilters()
+{
+  const GridPtr ter = TestTerrain(61, 47, 1.5f, 6);
+  auto mask = std::make_shared<Grid>(61, 47, 1.5f, 17.5f, -4.0f);
+  for (int z = 0; z < 47; ++z) {
+    for (int x = 0; x < 61; ++x) mask->At(x, z) = static_cast<float>(x) / 60.0f;
+  }
+  for (const bool useMask : {false, true}) {
+    const Inputs in = useMask ? Inputs{{"a", ter}, {"mask", mask}} : Inputs{{"a", ter}};
+    const std::string tag = useMask ? "_mask" : "";
+    CheckSame(("bilateral" + tag).c_str(), "bilateral", Args({{"radius", 6}, {"sigma_r", 3}}, {}, in), 1e-4);
+    CheckSame(("bilateral_r1" + tag).c_str(), "bilateral", Args({{"radius", 1.5}, {"sigma_r", 0.5}}, {}, in), 1e-4);
+    CheckSame(("diffuse" + tag).c_str(), "diffuse", Args({{"iterations", 15}, {"kappa", 0.6}}, {}, in), 1e-4);
+    CheckSame(("diffuse_exp" + tag).c_str(), "diffuse", Args({{"iterations", 7}, {"kappa", 0.3}, {"rate", 0.1}}, {{"g", "exp"}}, in), 1e-4);
+    for (const char* shape : {"box", "tri", "gauss"}) CheckSame((std::string("blur_dir_") + shape + tag).c_str(), "blur_dir", Args({{"angle", 37}, {"length", 25}}, {{"shape", shape}}, in), 1e-4);
+  }
+  for (const std::pair<int, int> sz : {std::pair<int, int>{1, 19}, {23, 1}, {1, 1}, {17, 13}}) {
+    const GridPtr t = TestTerrain(sz.first, sz.second, 1.0f, 7);
+    const std::string tag = std::to_string(sz.first) + "x" + std::to_string(sz.second);
+    CheckSame(("bilateral_" + tag).c_str(), "bilateral", Args({{"radius", 3}}, {}, {{"a", t}}), 1e-4);
+    CheckSame(("diffuse_" + tag).c_str(), "diffuse", Args({{"iterations", 3}}, {}, {{"a", t}}), 1e-4);
+    CheckSame(("blur_dir_" + tag).c_str(), "blur_dir", Args({{"length", 6}}, {}, {{"a", t}}), 1e-4);
+  }
+  // Unsupported: no iterations / no length (the CPU op copies the input), a mask of another size (the CPU op reports it)
+  Grid g;
+  bool onGpu = true;
+  std::string err;
+  CHECK(RunGpu("diffuse", Args({{"iterations", 0}}, {}, {{"a", ter}}), g, &onGpu) && !onGpu, "diffuse with 0 iterations is the CPU's");
+  CHECK(RunGpu("blur_dir", Args({{"length", 0}}, {}, {{"a", ter}}), g, &onGpu) && !onGpu, "blur_dir with length 0 is the CPU's");
+  auto small = std::make_shared<Grid>(5, 5, 1.0f, 0.0f, 0.0f, 0.5f);
+  CHECK(!RunGpu("bilateral", Args({}, {}, {{"a", ter}, {"mask", small}}), g, &onGpu, &err) && !onGpu && !err.empty(), "a mask of another size is the CPU's error: '%s'", err.c_str());
+}
+
+static void TestDWarp()
+{
+  const GridPtr ter = TestTerrain(67, 51, 2.0f, 8);
+  auto mask = std::make_shared<Grid>(67, 51, 2.0f, 17.5f, -4.0f);
+  for (std::size_t i = 0; i < mask->v.size(); ++i) mask->v[i] = static_cast<float>(i % 7) / 6.0f;
+  for (const char* kind : {"fbm", "curl", "swirl", "ripple", "pinch"}) {
+    for (const char* edge : {"clamp", "wrap", "mirror"}) {
+      Num n = {{"strength", 14}, {"size", 40}, {"octaves", 4}, {"seed", 3}, {"angle", 20}, {"wavelength", 30}, {"phase", 0.7}};
+      if (std::string(kind) == "pinch") n["strength"] = 0.5;
+      if (std::string(kind) == "swirl") n["strength"] = 90;
+      CheckSame((std::string("dwarp_") + kind + "_" + edge).c_str(), "dwarp", Args(n, {{"kind", kind}, {"edge", edge}}, {{"a", ter}}), 2e-3);
+    }
+  }
+  Num n = {{"strength", 25}, {"size", 55}, {"iterations", 2}, {"octaves", 5}};
+  CheckSame("dwarp_fbm2", "dwarp", Args(n, {{"kind", "fbm"}}, {{"a", ter}}), 2e-3);
+  n["iterations"] = 3;
+  CheckSame("dwarp_fbm3_mask", "dwarp", Args(n, {{"kind", "fbm"}}, {{"a", ter}, {"mask", mask}}), 2e-3);
+  CheckSame("dwarp_swirl_centre", "dwarp", Args({{"strength", 120}, {"size", 30}, {"cx", 60}, {"cz", 20}}, {{"kind", "swirl"}}, {{"a", ter}}), 2e-3);
+  for (const std::pair<int, int> sz : {std::pair<int, int>{1, 19}, {23, 1}, {17, 13}}) {
+    const GridPtr t = TestTerrain(sz.first, sz.second, 1.0f, 9);
+    CheckSame(("dwarp_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "dwarp", Args({{"strength", 5}, {"size", 10}}, {{"kind", "fbm"}, {"edge", "mirror"}}, {{"a", t}}), 2e-3);
+  }
+  Grid g;
+  bool onGpu = true;
+  std::string err;
+  CHECK(!RunGpu("dwarp", Args({}, {{"kind", "bogus"}}, {{"a", ter}}), g, &onGpu, &err) && !onGpu, "a bad kind is the CPU's error");
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i + 1 < argc; ++i) {
@@ -521,6 +645,9 @@ int main(int argc, char** argv)
   TestMusgraveAndDamped();
   TestCellular();
   TestScatterOps();
+  TestOcclusion();
+  TestSmoothingFilters();
+  TestDWarp();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuGenTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
