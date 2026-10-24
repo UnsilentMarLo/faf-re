@@ -615,6 +615,7 @@ static void TestParameterExtremes()
       "iterations=30,flux_damp=0,speed_pow=0.25,erode_spread=0,depth_gain=1,rain_noise=0",
       "iterations=30,output=sediment", "iterations=30,output=water", "iterations=30,output=flow", "iterations=30,output=wear", "iterations=30,output=deposit",
       "iterations=40,vary=1,rain_vary=1,protect=1,keep_range=1,max_change=0.5,conserve=1,smooth=0.5,smooth_passes=3",
+      "iterations=20,masks=0",
   };
   for (const char* params : hydro) {
     Pair p = Both("erode_hydraulic", params, t);
@@ -628,7 +629,7 @@ static void TestParameterExtremes()
       "density=1,rounds=2,lifetime=5,radius=12,accel=0,drop_vary=1,creep=8,speed=0,water=0",
       "density=1,rounds=3,evaporate=0.1,min_slope=0.2,round_cut=0.01,drain_pits=1,steer_every=1",
       "density=1,rounds=3,smooth=1,smooth_passes=6,thermal=1,thermal_steps=20,talus=0.1",
-      "density=1,rounds=3,output=wear", "density=1,rounds=3,output=deposit", "density=1,rounds=3,output=flow",
+      "density=1,rounds=3,masks=0", "density=1,rounds=3,output=wear", "density=1,rounds=3,output=deposit", "density=1,rounds=3,output=flow",
       "density=1,rounds=5,vary=1,rain_vary=1,protect=1,keep_range=1,max_change=0.3,conserve=1,drop_vary=1",
   };
   for (const char* params : drop) {
@@ -637,6 +638,19 @@ static void TestParameterExtremes()
     CHECK(AllFinite(p.gpu), "droplet [%s]: finite", params);
     CHECK(emu::gOob == 0, "droplet [%s]: %d out of range accesses", params, emu::gOob);
   }
+}
+
+/** A field of 1.1 million samples: several droplet batches per round (the dispatch limit), a grid of more than 65535 thread groups in x for a 1D style index would fail, here every kernel is 2D. */
+static void TestLargeField()
+{
+  const GridPtr t = Rough(1100, 1000, 11);
+  Pair h = Both("erode_hydraulic", "iterations=2,masks=0", t);
+  CHECK(h.cpuOk && h.gpuOk && h.usedGpu && AllFinite(h.gpu), "a 1100 x 1000 field: hydraulic on the GPU");
+  CHECK(emu::gOob == 0, "large hydraulic: %d out of range accesses", emu::gOob);
+  Pair d = Both("erode_droplet", "density=2,rounds=2,lifetime=6,radius=1,creep=0,smooth_passes=0,drain_pits=0,masks=0", t);
+  CHECK(d.cpuOk && d.gpuOk && d.usedGpu && AllFinite(d.gpu), "a 1100 x 1000 field: droplets on the GPU (several batches per round)");
+  CHECK(emu::gOob == 0, "large droplets: %d out of range accesses", emu::gOob);
+  CHECK(MeanAbsChange(*t, d.gpu) > 0.0005, "and they dig (%.5f)", MeanAbsChange(*t, d.gpu));
 }
 
 static void TestUnsupportedAndFallback()
@@ -727,6 +741,7 @@ int main(int argc, char** argv)
   TestDropletProperties();
   TestEdgesAndSmallFields();
   TestParameterExtremes();
+  TestLargeField();
   TestUnsupportedAndFallback();
   if (argc > 1) Lab(argv[1]);
   std::printf("EdGpuErosionTest: %d checks, %d failures\n", gChecks, gFailures);

@@ -62,10 +62,11 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
-    /** wear / deposit / flow (and water, sediment) are needed: the editor asks for them all (a.extra), an output choice, or conserve (which puts the lost volume back where the deposit is). */
+    /** wear / deposit / flow (and water, sediment) are needed: an output choice, or (unless masks=0) the editor asks for them all (a.extra) or conserve puts the lost volume back where the deposit is. */
     bool WantsMasks(const OpArgs& a)
     {
-      return a.extra != nullptr || a.p.S("output", "height") != "height" || a.p.N("conserve", 0.0) > 0.0;
+      if (a.p.S("output", "height") != "height") return true;
+      return a.p.N("masks", 1.0) != 0.0 && (a.extra != nullptr || a.p.N("conserve", 0.0) > 0.0);      // masks=0: the editor does not use them (a preview, a graph that wires none)
     }
 
     /** A field with its own zeroed buffer, or the 1 element dummy a kernel gets for an array that is switched off by a flag (never read or written then). */
@@ -204,7 +205,7 @@ namespace moho::editor::gpu
       hp.deposition = p.deposition;
       hp.invDepthMax = 1.0f / std::max(1e-4f, p.depth_max);
       hp.minSlope = p.min_slope;
-      hp.slopeCap = std::max(0.05f, static_cast<float>(a.p.N("slope_cap", 0.5)));
+      hp.slopeCap = std::max(0.05f, static_cast<float>(a.p.N("slope_cap", 0.25)));
       hp.maxSpeed = p.max_speed;
       hp.cutLimit = p.cut_limit;
       hp.cell = src->cell;
@@ -376,7 +377,7 @@ namespace moho::editor::gpu
           if (sm2 == nullptr) return false;
         }
         tp.amount = amount;
-        tp.frac = frac;
+        tp.blendNext = frac;
         tp.hasMask = mask != nullptr ? 1u : 0u;
         tp.edgeKeep = edgeKeep ? 1u : 0u;
         Bindings bi;

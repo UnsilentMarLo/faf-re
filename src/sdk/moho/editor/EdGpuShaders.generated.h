@@ -220,7 +220,7 @@ void CSMain(KERNEL_IDS)
 #define FN
 
 // out = t + k * (smoothed change - change), the end of the creep and cell noise filter passes: k = amount, times the per cell factor when there is one (rock for the creep, nothing for the filter);
-// `frac` blends the next smoothing pass in (a fractional number of creep passes); edgeKeep leaves the outer ring with its own change.
+// `blendNext` blends the next smoothing pass in (a fractional number of creep passes); edgeKeep leaves the outer ring with its own change.
 // ---- begin common.hlsli
 // Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
 #ifndef GPU_COMMON_HLSLI
@@ -272,7 +272,7 @@ struct ErodeThermalParams
     float tDiag;       // talus * cell * sqrt(2)
     float rate;        // share of the excess that slides
     float amount;      // blend factor (delta filter) / scale (resolve)
-    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    float blendNext;   // blend of the next smoothing pass (creep with a fractional number of passes)
     uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
     uint flags;
     uint pad0;
@@ -300,7 +300,7 @@ void CSMain(KERNEL_IDS)
     if (P.hasMask != 0u) k *= saturate(mask[i]);
     if (P.edgeKeep != 0u && (x == 0 || z == 0 || x == int(P.w) - 1 || z == int(P.h) - 1)) k = 0.0f;
     float s = sm[i];
-    if (P.frac > 0.0f) s += P.frac * (sm2[i] - s);
+    if (P.blendNext > 0.0f) s += P.blendNext * (sm2[i] - s);
     outT[i] = t[i] + k * (s - d[i]);
 }
 
@@ -388,7 +388,7 @@ struct ErodeThermalParams
     float tDiag;       // talus * cell * sqrt(2)
     float rate;        // share of the excess that slides
     float amount;      // blend factor (delta filter) / scale (resolve)
-    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    float blendNext;   // blend of the next smoothing pass (creep with a fractional number of passes)
     uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
     uint flags;
     uint pad0;
@@ -493,7 +493,7 @@ struct ErodeThermalParams
     float tDiag;       // talus * cell * sqrt(2)
     float rate;        // share of the excess that slides
     float amount;      // blend factor (delta filter) / scale (resolve)
-    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    float blendNext;   // blend of the next smoothing pass (creep with a fractional number of passes)
     uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
     uint flags;
     uint pad0;
@@ -932,7 +932,7 @@ struct ErodeThermalParams
     float tDiag;       // talus * cell * sqrt(2)
     float rate;        // share of the excess that slides
     float amount;      // blend factor (delta filter) / scale (resolve)
-    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    float blendNext;   // blend of the next smoothing pass (creep with a fractional number of passes)
     uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
     uint flags;
     uint pad0;
@@ -2079,7 +2079,7 @@ struct ErodeThermalParams
     float tDiag;       // talus * cell * sqrt(2)
     float rate;        // share of the excess that slides
     float amount;      // blend factor (delta filter) / scale (resolve)
-    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    float blendNext;   // blend of the next smoothing pass (creep with a fractional number of passes)
     uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
     uint flags;
     uint pad0;
@@ -2187,7 +2187,7 @@ struct ErodeThermalParams
     float tDiag;       // talus * cell * sqrt(2)
     float rate;        // share of the excess that slides
     float amount;      // blend factor (delta filter) / scale (resolve)
-    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    float blendNext;   // blend of the next smoothing pass (creep with a fractional number of passes)
     uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
     uint flags;
     uint pad0;
@@ -2365,7 +2365,7 @@ struct ErodeThermalParams
     float tDiag;       // talus * cell * sqrt(2)
     float rate;        // share of the excess that slides
     float amount;      // blend factor (delta filter) / scale (resolve)
-    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    float blendNext;   // blend of the next smoothing pass (creep with a fractional number of passes)
     uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
     uint flags;
     uint pad0;
@@ -7205,19 +7205,19 @@ void CSMain(KERNEL_IDS)
   inline const KernelInfo kKernels[] = {
     {"blur_pass", kSource_blur_pass, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x4DACE3E878AF6E80ULL},
     {"buf_to_tex", kSource_buf_to_tex, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x1u, 0x0u, 1u, 0x0C46DE5748B192F2ULL},
-    {"erosion_blend", kSource_erosion_blend, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x84473DD783032943ULL},
-    {"erosion_copy", kSource_erosion_copy, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2E0EFA8454F81E8BULL},
-    {"erosion_delta", kSource_erosion_delta, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2FA986491592B19DULL},
+    {"erosion_blend", kSource_erosion_blend, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x517852962D245D4FULL},
+    {"erosion_copy", kSource_erosion_copy, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xDD8EFFF8E1065D47ULL},
+    {"erosion_delta", kSource_erosion_delta, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x7B59D31E0F2C0B01ULL},
     {"erosion_drop", kSource_erosion_drop, "CSMain", 16u, 16u, 1u, 0x1Fu, 0xFu, 0x0u, 0x0u, 0x0u, 1u, 0x719136D7659EE5EFULL},
-    {"erosion_drop_resolve", kSource_erosion_drop_resolve, "CSMain", 16u, 16u, 1u, 0x0u, 0xFFu, 0x0u, 0x0u, 0x0u, 1u, 0xEBE4BA47D2B76AC2ULL},
+    {"erosion_drop_resolve", kSource_erosion_drop_resolve, "CSMain", 16u, 16u, 1u, 0x0u, 0xFFu, 0x0u, 0x0u, 0x0u, 1u, 0xD5A7C9753881ADB6ULL},
     {"erosion_hydro_apply", kSource_erosion_hydro_apply, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA281888C8F5458A8ULL},
     {"erosion_hydro_flux", kSource_erosion_hydro_flux, "CSMain", 16u, 16u, 1u, 0x7u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x3ED515564EF74104ULL},
     {"erosion_hydro_settle", kSource_erosion_hydro_settle, "CSMain", 16u, 16u, 1u, 0x0u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0xA692430D0663749AULL},
     {"erosion_hydro_transport", kSource_erosion_hydro_transport, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0A5B4B10DFB1D023ULL},
     {"erosion_hydro_water", kSource_erosion_hydro_water, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x7Fu, 0x0u, 0x0u, 0x0u, 1u, 0x6840148772D043C7ULL},
-    {"erosion_steer", kSource_erosion_steer, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x96EC51FB375D87CEULL},
-    {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x7FB3E2E6C7FF78B7ULL},
-    {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9BDED15472D90646ULL},
+    {"erosion_steer", kSource_erosion_steer, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9EB04DF47EC712E6ULL},
+    {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xBE1A1D29F471A31FULL},
+    {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x60030F52065B1C9EULL},
     {"filt_bilateral", kSource_filt_bilateral, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x6B226CC7B6F8A9DFULL},
     {"filt_blurdir", kSource_filt_blurdir, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x7E0FBD4C9A05041EULL},
     {"filt_diffuse", kSource_filt_diffuse, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x40DC1A1D6642A2D3ULL},
