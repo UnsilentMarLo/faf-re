@@ -13,7 +13,9 @@ namespace moho::editor::gpu::hk
 #include "moho/editor/gpu/filt_blurdir_params.hlsli"
 #include "moho/editor/gpu/filt_diffuse_params.hlsli"
 #include "moho/editor/gpu/filt_dwarp_params.hlsli"
+#include "moho/editor/gpu/filt_normal_params.hlsli"
 #include "moho/editor/gpu/filt_occlusion_params.hlsli"
+#include "moho/editor/gpu/filt_terrain_params.hlsli"
 } // namespace moho::editor::gpu::hk
 
 namespace moho::editor::gpu
@@ -288,6 +290,134 @@ namespace moho::editor::gpu
       return Finish(ex, j, out, err);
     }
 
+    // ---- slope, curvature, aspect, hillshade, normal_map (cheap stencils) -----------------------------------------------------------------------------
+
+    /** Ops of a few operations per sample: the transfer of input and result costs more than the maths on a small field. Fields below 16 x ed_gpu_min_cells (default 1048576, 1024 x 1024) stay on the CPU. */
+    bool BigEnough(const OpArgs& a) { return CellsOf(a) >= static_cast<double>(GetPolicy().minCells) * 16.0; }
+
+    OpResult RunTerrain(Executor& ex, Job& j, hk::TerrainParams p, const double units, Grid& out, std::string& err)
+    {
+      const KernelInfo* k = FindKernel("filt_terrain");
+      if (k == nullptr) { err = "kernel filt_terrain is missing"; return OpResult::Failed; }
+      if (!Upload(ex, j, err)) return OpResult::Failed;
+      p.w = static_cast<std::uint32_t>(j.src->w);
+      p.h = static_cast<std::uint32_t>(j.src->h);
+      p.cell = j.src->cell;
+      Bindings b;
+      b.Srv(1, j.in.R()).Uav(0, j.res.R());
+      if (!DispatchBands(ex, *k, p.w, p.h, units, p, b, err)) return OpResult::Failed;
+      return Finish(ex, j, out, err);
+    }
+
+    OpResult OpSlopeGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      Job j;
+      if (!BigEnough(a) || !Begin(ex, a, 2, j)) return OpResult::Unsupported;
+      const std::string mode = a.p.S("mode", "degrees");
+      if (mode != "degrees" && mode != "gradient") return OpResult::Unsupported;   // rating / variation (window maximum) stay on the CPU
+      hk::TerrainParams p{};
+      p.op = 0;
+      p.n = static_cast<std::uint32_t>(std::max(1, std::min(16, static_cast<int>(a.p.N("radius", 1)))));
+      p.mode = mode == "degrees" ? 0u : 1u;
+      p.degK = 180.0f / kPi;
+      return RunTerrain(ex, j, p, 0.05, out, err);
+    }
+
+    OpResult OpCurvatureGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      Job j;
+      if (!BigEnough(a) || !Begin(ex, a, 2, j)) return OpResult::Unsupported;
+      const int n = std::max(1, std::min(32, static_cast<int>(a.p.N("radius", 1))));
+      hk::TerrainParams p{};
+      p.op = 1;
+      p.n = static_cast<std::uint32_t>(n);
+      p.gain = static_cast<float>(a.p.N("gain", 10.0));
+      p.mode = a.p.N("raw", 0) != 0 ? 1u : 0u;
+      p.d2 = static_cast<float>(n) * static_cast<float>(n) * j.src->cell * j.src->cell;
+      return RunTerrain(ex, j, p, 0.05, out, err);
+    }
+
+    OpResult OpAspectGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      Job j;
+      if (!BigEnough(a) || !Begin(ex, a, 2, j)) return OpResult::Unsupported;
+      const std::string mode = a.p.S("mode", "facing");
+      if (mode != "facing" && mode != "degrees") return OpResult::Unsupported;
+      const double ang = a.p.N("azimuth", 0.0) * 3.14159265358979 / 180.0;
+      hk::TerrainParams p{};
+      p.op = 2;
+      p.n = static_cast<std::uint32_t>(std::max(1, std::min(16, static_cast<int>(a.p.N("radius", 1)))));
+      p.mode = mode == "degrees" ? 1u : 0u;
+      p.dirx = static_cast<float>(std::cos(ang));
+      p.dirz = static_cast<float>(std::sin(ang));
+      p.flatK = std::max(1e-6f, static_cast<float>(a.p.N("flat", 0.05)));
+      p.degK = 180.0f / kPi;
+      return RunTerrain(ex, j, p, 0.06, out, err);
+    }
+
+    OpResult OpHillshadeGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      Job j;
+      if (!BigEnough(a) || !Begin(ex, a, 2, j)) return OpResult::Unsupported;
+      const std::string mode = a.p.S("mode", "shade");
+      if (mode != "shade" && mode != "lit" && mode != "shadow") return OpResult::Unsupported;
+      const int m = mode == "shade" ? 0 : (mode == "lit" ? 1 : 2);
+      const double kPiD = 3.14159265358979323846;
+      const double az = a.p.N("azimuth", 315.0) * kPiD / 180.0;
+      const double alt = std::max(1.0, std::min(89.0, a.p.N("altitude", 40.0))) * kPiD / 180.0;
+      hk::TerrainParams p{};
+      p.op = 3;
+      p.mode = static_cast<std::uint32_t>(m);
+      p.zf = static_cast<float>(a.p.N("z", 1.0));
+      p.ambient = std::max(0.0f, std::min(1.0f, static_cast<float>(a.p.N("ambient", 0.15))));
+      p.shadows = (m != 0 || a.p.N("shadows", 0) != 0) ? 1u : 0u;
+      const float cell = j.src->cell;
+      p.len = std::max(cell, static_cast<float>(a.p.N("shadow_len", 150.0))) / cell;
+      p.lx = static_cast<float>(std::cos(alt) * std::cos(az));
+      p.ly = static_cast<float>(std::sin(alt));
+      p.lz = static_cast<float>(std::cos(alt) * std::sin(az));
+      p.dirx = static_cast<float>(std::cos(az));
+      p.dirz = static_cast<float>(std::sin(az));
+      p.tanAlt = static_cast<float>(std::tan(alt));
+      return RunTerrain(ex, j, p, p.shadows != 0 ? 0.6 : 0.08, out, err);
+    }
+
+    OpResult OpNormalMapGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      Job j;
+      if (!BigEnough(a) || !Begin(ex, a, 4, j)) return OpResult::Unsupported;
+      const Grid& src = *j.src;
+      const float span = std::max(0.05f, static_cast<float>(a.p.N("span", 1.0)));
+      const float strength = static_cast<float>(a.p.N("strength", 1.0));
+      const float shiftUnits = static_cast<float>(a.p.N("shift", 0.0));
+      hk::NormalParams p{};
+      p.w = static_cast<std::uint32_t>(src.w);
+      p.h = static_cast<std::uint32_t>(src.h);
+      p.raw = a.p.N("signed", 0.0) != 0.0 ? 1u : 0u;
+      p.shift = shiftUnits / src.cell;
+      p.taps = 0.5f * span / src.cell;
+      p.scale = strength / span;
+      p.cell = src.cell;
+      const KernelInfo* k = FindKernel("filt_normal");
+      if (k == nullptr) { err = "kernel filt_normal is missing"; return OpResult::Failed; }
+      Field fy, fz;
+      if (!Upload(ex, j, err) || !MakeField(ex, src.w, src.h, fy, err) || !MakeField(ex, src.w, src.h, fz, err)) return OpResult::Failed;
+      Bindings b;
+      b.Srv(1, j.in.R()).Uav(0, j.res.R()).Uav(1, fy.R()).Uav(2, fz.R());
+      if (!DispatchBands(ex, *k, p.w, p.h, 0.25, p, b, err)) return OpResult::Failed;
+      Grid gx = NewGrid(j.shape);
+      gx.ox = src.ox + shiftUnits;                   // the result lies where it was computed (as on the CPU)
+      gx.oz = src.oz + shiftUnits;
+      Grid gy(gx.w, gx.h, gx.cell, gx.ox, gx.oz), gz = gy;
+      if (!DownloadGrid(ex, j.res, gx, err) || (a.extra != nullptr && (!DownloadGrid(ex, fy, gy, err) || !DownloadGrid(ex, fz, gz, err)))) return OpResult::Failed;
+      if (a.extra != nullptr) {
+        (*a.extra)["y"] = std::move(gy);
+        (*a.extra)["z"] = std::move(gz);
+      }
+      out = std::move(gx);
+      return OpResult::Done;
+    }
+
     struct Registrar
     {
       Registrar()
@@ -297,6 +427,11 @@ namespace moho::editor::gpu
         RegisterGpuOp("diffuse", &OpDiffuseGpu);
         RegisterGpuOp("blur_dir", &OpBlurDirGpu);
         RegisterGpuOp("dwarp", &OpDWarpGpu);
+        RegisterGpuOp("slope", &OpSlopeGpu);
+        RegisterGpuOp("curvature", &OpCurvatureGpu);
+        RegisterGpuOp("aspect", &OpAspectGpu);
+        RegisterGpuOp("hillshade", &OpHillshadeGpu);
+        RegisterGpuOp("normal_map", &OpNormalMapGpu);
       }
     };
     const Registrar gRegistrar;

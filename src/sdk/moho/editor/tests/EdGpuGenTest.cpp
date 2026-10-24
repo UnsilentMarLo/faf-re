@@ -30,7 +30,9 @@
 #include "moho/editor/gpu/filt_blurdir_params.hlsli"
 #include "moho/editor/gpu/filt_diffuse_params.hlsli"
 #include "moho/editor/gpu/filt_dwarp_params.hlsli"
+#include "moho/editor/gpu/filt_normal_params.hlsli"
 #include "moho/editor/gpu/filt_occlusion_params.hlsli"
+#include "moho/editor/gpu/filt_terrain_params.hlsli"
 #include "moho/editor/gpu/gen_fbm_params.hlsli"
 #include "moho/editor/gpu/gen_cells_params.hlsli"
 #include "moho/editor/gpu/gen_craters_params.hlsli"
@@ -55,6 +57,14 @@ EMU_KERNEL_END(filt_diffuse)
 EMU_KERNEL_BEGIN(k_filt_dwarp)
 #include "moho/editor/gpu/filt_dwarp.hlsl"
 EMU_KERNEL_END(filt_dwarp)
+
+EMU_KERNEL_BEGIN(k_filt_normal)
+#include "moho/editor/gpu/filt_normal.hlsl"
+EMU_KERNEL_END(filt_normal)
+
+EMU_KERNEL_BEGIN(k_filt_terrain)
+#include "moho/editor/gpu/filt_terrain.hlsl"
+EMU_KERNEL_END(filt_terrain)
 
 EMU_KERNEL_BEGIN(k_filt_occlusion)
 #include "moho/editor/gpu/filt_occlusion.hlsl"
@@ -624,6 +634,73 @@ static void TestDWarp()
   CHECK(!RunGpu("dwarp", Args({}, {{"kind", "bogus"}}, {{"a", ter}}), g, &onGpu, &err) && !onGpu, "a bad kind is the CPU's error");
 }
 
+static void TestTerrainFamily()
+{
+  const GridPtr ter = TestTerrain(75, 59, 2.0f, 11);
+  const Inputs in = {{"a", ter}};
+  for (const int n : {1, 3, 16}) {
+    CheckSame(("slope_deg_" + std::to_string(n)).c_str(), "slope", Args({{"radius", static_cast<double>(n)}}, {}, in), 2e-3);
+    CheckSame(("slope_grad_" + std::to_string(n)).c_str(), "slope", Args({{"radius", static_cast<double>(n)}}, {{"mode", "gradient"}}, in), 1e-5);
+  }
+  for (const int n : {1, 2, 32}) {
+    CheckSame(("curvature_" + std::to_string(n)).c_str(), "curvature", Args({{"radius", static_cast<double>(n)}, {"gain", 30}}, {}, in), 1e-5);
+    CheckSame(("curvature_raw_" + std::to_string(n)).c_str(), "curvature", Args({{"radius", static_cast<double>(n)}, {"raw", 1}}, {}, in), 1e-4);
+  }
+  CheckSame("aspect_facing", "aspect", Args({{"azimuth", 120}, {"flat", 0.3}}, {}, in), 1e-5);
+  CheckSame("aspect_degrees", "aspect", Args({{"radius", 2}}, {{"mode", "degrees"}}, in), 5e-3);
+  for (const char* mode : {"shade", "lit", "shadow"}) {
+    CheckSame((std::string("hillshade_") + mode).c_str(), "hillshade", Args({{"azimuth", 300}, {"altitude", 25}, {"z", 2}, {"shadow_len", 80}}, {{"mode", mode}}, in), 1e-3);
+  }
+  CheckSame("hillshade_shadows", "hillshade", Args({{"shadows", 1}, {"ambient", 0.3}}, {}, in), 1e-3);
+  CheckSame("hillshade_plain", "hillshade", Args({{"z", 0.5}}, {}, in), 1e-5);
+  // normal_map: three fields (x is the result, y and z the extras), shifted origin
+  for (const double shift : {0.0, 1.0}) {
+    for (const int sgn : {0, 1}) {
+      OpArgs args = Args({{"span", 2}, {"strength", 1.5}, {"shift", shift}, {"signed", static_cast<double>(sgn)}}, {}, in);
+      std::map<std::string, Grid> exG, exC;
+      OpArgs ag = args, ac = args;
+      ag.extra = &exG;
+      ac.extra = &exC;
+      Grid g, c;
+      bool onGpu = false;
+      const bool ok = RunGpu("normal_map", ag, g, &onGpu) && RunCpu("normal_map", ac, c);
+      CHECK(ok && onGpu, "normal_map: did not run on the GPU");
+      if (!ok) continue;
+      CHECK(Compare(g, c).maxAbs < 2e-5 && std::fabs(g.ox - c.ox) < 1e-6f && std::fabs(g.oz - c.oz) < 1e-6f, "normal_map x: diff %.3g, origin %.3f vs %.3f", Compare(g, c).maxAbs, g.ox, c.ox);
+      for (const char* ch : {"y", "z"}) {
+        CHECK(exG.count(ch) == 1 && exC.count(ch) == 1 && Compare(exG[ch], exC[ch]).maxAbs < 2e-5, "normal_map %s: extra output differs", ch);
+        CHECK(exG.count(ch) == 1 && std::fabs(exG[ch].ox - exC[ch].ox) < 1e-6f, "normal_map %s: origin", ch);
+      }
+    }
+  }
+  {   // without extras the op still runs
+    Grid g;
+    bool onGpu = false;
+    CHECK(RunGpu("normal_map", Args({}, {}, in), g, &onGpu) && onGpu, "normal_map without extra outputs");
+  }
+  for (const std::pair<int, int> sz : {std::pair<int, int>{1, 19}, {23, 1}, {1, 1}, {17, 13}}) {
+    const GridPtr t = TestTerrain(sz.first, sz.second, 1.0f, 12);
+    const std::string tag = std::to_string(sz.first) + "x" + std::to_string(sz.second);
+    CheckSame(("slope_" + tag).c_str(), "slope", Args({}, {}, {{"a", t}}), 2e-3);
+    CheckSame(("curvature_" + tag).c_str(), "curvature", Args({}, {}, {{"a", t}}), 1e-5);
+    CheckSame(("aspect_" + tag).c_str(), "aspect", Args({}, {}, {{"a", t}}), 1e-5);
+    CheckSame(("hillshade_" + tag).c_str(), "hillshade", Args({}, {{"mode", "shadow"}}, {{"a", t}}), 1e-3);
+    CheckSame(("normal_map_" + tag).c_str(), "normal_map", Args({}, {}, {{"a", t}}), 2e-5);
+  }
+  // Unsupported: slope windows (rating / variation), bad modes, and small fields on a default policy (cheap ops stay on the CPU)
+  Grid g;
+  bool onGpu = true;
+  std::string err;
+  CHECK(RunGpu("slope", Args({{"window", 2}}, {{"mode", "rating"}}, in), g, &onGpu) && !onGpu, "slope rating is the CPU's");
+  CHECK(!RunGpu("slope", Args({}, {{"mode", "bogus"}}, in), g, &onGpu, &err) && !onGpu, "a bad slope mode is the CPU's error");
+  CHECK(!RunGpu("hillshade", Args({}, {{"mode", "bogus"}}, in), g, &onGpu, &err) && !onGpu, "a bad hillshade mode is the CPU's error");
+  CHECK(!RunGpu("aspect", Args({}, {{"mode", "bogus"}}, in), g, &onGpu, &err) && !onGpu, "a bad aspect mode is the CPU's error");
+  gpu::GetPolicy().minCells = 65536.0f;
+  CHECK(RunGpu("slope", Args({}, {}, in), g, &onGpu) && !onGpu, "a small field: slope stays on the CPU with the default policy");
+  CHECK(RunGpu("occlusion", Args({{"radius", 10}}, {}, in), g, &onGpu) && !onGpu, "a small field: occlusion stays on the CPU with the default policy (below ed_gpu_min_cells)");
+  gpu::GetPolicy().minCells = 0.0f;
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i + 1 < argc; ++i) {
@@ -648,6 +725,7 @@ int main(int argc, char** argv)
   TestOcclusion();
   TestSmoothingFilters();
   TestDWarp();
+  TestTerrainFamily();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuGenTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
