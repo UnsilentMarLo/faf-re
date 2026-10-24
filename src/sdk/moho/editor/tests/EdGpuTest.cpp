@@ -160,11 +160,20 @@ static void TestShim()
 
 // ---- kernels on the emulator -------------------------------------------------------------------------------------------------------------------------
 
+// Kernels that another test binary emulates and checks (EdGpuGenTest: gen_*, filt_*; the erosion tests: erosion_*): this test does not need an EMU_KERNEL block for them.
+static bool OwnedByAnotherTest(const char* const name)
+{
+  return std::strncmp(name, "gen_", 4) == 0 || std::strncmp(name, "filt_", 5) == 0 || std::strncmp(name, "erosion_", 8) == 0;
+}
+
 static void TestKernelTable()
 {
-  CHECK(gpu::KernelCount() > 0 && static_cast<std::size_t>(gpu::KernelCount()) == emu::Kernels().size(), "the generated table has %d kernels and this test emulates %d: every gpu/*.hlsl needs an EMU_KERNEL block here", gpu::KernelCount(), static_cast<int>(emu::Kernels().size()));
+  int mine = 0;
+  for (int i = 0; i < gpu::KernelCount(); ++i) mine += OwnedByAnotherTest(gpu::KernelAt(i).name) ? 0 : 1;
+  CHECK(mine > 0 && static_cast<std::size_t>(mine) == emu::Kernels().size(), "the generated table has %d kernels for this test and it emulates %d: every gpu/*.hlsl needs an EMU_KERNEL block here", mine, static_cast<int>(emu::Kernels().size()));
   for (int i = 0; i < gpu::KernelCount(); ++i) {
     const gpu::KernelInfo& k = gpu::KernelAt(i);
+    if (OwnedByAnotherTest(k.name)) continue;
     const auto it = emu::Kernels().find(k.name);
     CHECK(it != emu::Kernels().end(), "kernel %s has an emulation in this test", k.name);
     if (it == emu::Kernels().end()) continue;

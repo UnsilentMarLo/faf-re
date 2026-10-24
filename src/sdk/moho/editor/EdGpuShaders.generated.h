@@ -189,6 +189,2398 @@ void CSMain(KERNEL_IDS)
 
 )HLSL";
 
+  // erosion_blend: 16x16x1 threads
+  inline constexpr char kSource_erosion_blend[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// out = t + k * (smoothed change - change), the end of the creep and cell noise filter passes: k = amount, times the per cell factor when there is one (rock for the creep, nothing for the filter);
+// `frac` blends the next smoothing pass in (a fractional number of creep passes); edgeKeep leaves the outer ring with its own change.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_thermal_params.hlsli
+// Constant buffer of the erosion helper kernels (thermal slides, delta filter, settle, droplet resolve).
+#ifndef GPU_EROSION_THERMAL_PARAMS_HLSLI
+#define GPU_EROSION_THERMAL_PARAMS_HLSLI
+
+struct ErodeThermalParams
+{
+    uint w;
+    uint h;
+    uint pinSides;     // bit 0 / 1 = the -x / +x column, bit 2 / 3 = the -z / +z row is left alone
+    uint hasMask;      // 1 = a per cell factor buffer is bound
+    float tAxis;       // talus * cell
+    float tDiag;       // talus * cell * sqrt(2)
+    float rate;        // share of the excess that slides
+    float amount;      // blend factor (delta filter) / scale (resolve)
+    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
+    uint flags;
+    uint pad0;
+};
+
+#endif
+// ---- end erosion_thermal_params.hlsli
+
+CBUFFER(ErodeThermalParams, P, 0)
+SRV_BUFFER(float, t, 0)
+SRV_BUFFER(float, d, 1)
+SRV_BUFFER(float, sm, 2)
+SRV_BUFFER(float, sm2, 3)
+SRV_BUFFER(float, mask, 4)
+UAV_BUFFER(float, outT, 0)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y);
+    uint i = dtid.y * P.w + dtid.x;
+    float k = P.amount;
+    if (P.hasMask != 0u) k *= saturate(mask[i]);
+    if (P.edgeKeep != 0u && (x == 0 || z == 0 || x == int(P.w) - 1 || z == int(P.h) - 1)) k = 0.0f;
+    float s = sm[i];
+    if (P.frac > 0.0f) s += P.frac * (sm2[i] - s);
+    outT[i] = t[i] + k * (s - d[i]);
+}
+
+)HLSL";
+
+  // erosion_copy: 16x16x1 threads
+  inline constexpr char kSource_erosion_copy[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// dst = src, over a w x h field (2D dispatch: a field can have more samples than 65535 groups of a 1D kernel cover).
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_thermal_params.hlsli
+// Constant buffer of the erosion helper kernels (thermal slides, delta filter, settle, droplet resolve).
+#ifndef GPU_EROSION_THERMAL_PARAMS_HLSLI
+#define GPU_EROSION_THERMAL_PARAMS_HLSLI
+
+struct ErodeThermalParams
+{
+    uint w;
+    uint h;
+    uint pinSides;     // bit 0 / 1 = the -x / +x column, bit 2 / 3 = the -z / +z row is left alone
+    uint hasMask;      // 1 = a per cell factor buffer is bound
+    float tAxis;       // talus * cell
+    float tDiag;       // talus * cell * sqrt(2)
+    float rate;        // share of the excess that slides
+    float amount;      // blend factor (delta filter) / scale (resolve)
+    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
+    uint flags;
+    uint pad0;
+};
+
+#endif
+// ---- end erosion_thermal_params.hlsli
+
+CBUFFER(ErodeThermalParams, P, 0)
+SRV_BUFFER(float, src, 0)
+UAV_BUFFER(float, dst, 0)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    uint i = dtid.y * P.w + dtid.x;
+    dst[i] = src[i];
+}
+
+)HLSL";
+
+  // erosion_delta: 16x16x1 threads
+  inline constexpr char kSource_erosion_delta[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// d = t - t0 (the change a run made so far): the input of the creep / delta filter passes.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_thermal_params.hlsli
+// Constant buffer of the erosion helper kernels (thermal slides, delta filter, settle, droplet resolve).
+#ifndef GPU_EROSION_THERMAL_PARAMS_HLSLI
+#define GPU_EROSION_THERMAL_PARAMS_HLSLI
+
+struct ErodeThermalParams
+{
+    uint w;
+    uint h;
+    uint pinSides;     // bit 0 / 1 = the -x / +x column, bit 2 / 3 = the -z / +z row is left alone
+    uint hasMask;      // 1 = a per cell factor buffer is bound
+    float tAxis;       // talus * cell
+    float tDiag;       // talus * cell * sqrt(2)
+    float rate;        // share of the excess that slides
+    float amount;      // blend factor (delta filter) / scale (resolve)
+    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
+    uint flags;
+    uint pad0;
+};
+
+#endif
+// ---- end erosion_thermal_params.hlsli
+
+CBUFFER(ErodeThermalParams, P, 0)
+SRV_BUFFER(float, t, 0)
+SRV_BUFFER(float, t0, 1)
+UAV_BUFFER(float, d, 0)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    uint i = dtid.y * P.w + dtid.x;
+    d[i] = t[i] - t0[i];
+}
+
+)HLSL";
+
+  // erosion_drop: 16x16x1 threads
+  inline constexpr char kSource_erosion_drop[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Droplet erosion (Beyer / Lague, the CPU RunDroplet of EdErosion.cpp), one thread per droplet. A droplet starts at a random place, steers on the bilinear gradient of the steering surface hs
+// (the pit filled terrain) with inertia, picks up sediment where it is fast on a slope and drops it where it slows down or climbs. Everything it digs or drops goes into integer buffers with
+// atomic adds (fixed point, 1/65536 unit): the ground it sees is the round's start height plus that accumulated change, which other droplets are changing at the same time (no order, no
+// determinism: the editor does not need it). erosion_drop_resolve adds the integers to the float fields between rounds.
+//   dig      a cone shaped brush of radius R cells (weights R + 0.5 - distance, normalised, reflected at the map edge), times the rock factor, at most roundCut below the steering surface
+//   drop     bilinear on the four samples around the droplet, never above the spill surface plus a hair
+//   random   a hash of (seed, round, droplet number): the start place, the release test and, with dropVary, the droplet's own size, life, inertia, load, dissolving rate and water
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_drop_params.hlsli
+// Constant buffer of the droplet erosion kernels (erosion_drop.hlsl, erosion_drop_resolve.hlsl). The host (EdGpuErosion.cpp) includes this very file.
+#ifndef GPU_EROSION_DROP_PARAMS_HLSLI
+#define GPU_EROSION_DROP_PARAMS_HLSLI
+
+// fixed point scales of the integer accumulation buffers (atomic adds): the ground and the wear / deposit maps in 1/65536 world unit, the flow in 1/1024
+#define EROSION_DROP_SCALE 65536.0f
+#define EROSION_FLOW_SCALE 1024.0f
+
+struct ErodeDropParams
+{
+    uint w;
+    uint h;
+    uint count;        // droplets of this dispatch
+    uint gw;           // width of the dispatch grid (droplet = y * gw + x)
+    uint seed;
+    uint roundNo;
+    uint flags;        // 1 = release probability map, 2 = rock map, 4 = hardness map (what a droplet takes up), 8 = keep wear / deposit / flow, 16 = droplets differ
+    uint lifetime;
+    float inertia;
+    float capacity;
+    float minSlope;
+    float erode;
+    float deposit;
+    float evaporate;
+    float gravity;
+    float speed;
+    float water;
+    float roundCut;
+    float accel;
+    float dropVary;
+    float cell;
+    uint radius;
+    uint maxLife;
+    uint idOffset;     // the first droplet's number in its round (batches of one round)
+};
+
+#endif
+// ---- end erosion_drop_params.hlsli
+
+CBUFFER(ErodeDropParams, P, 0)
+SRV_BUFFER(float, hs, 0)
+SRV_BUFFER(float, tb, 1)
+SRV_BUFFER(float, accept, 2)
+SRV_BUFFER(float, rock, 3)
+SRV_BUFFER(float, soft, 4)
+UAV_BUFFER(int, dq, 0)
+UAV_BUFFER(int, wq, 1)
+UAV_BUFFER(int, pq, 2)
+UAV_BUFFER(int, fq, 3)
+
+FN float Rand(INOUT(uint) s)
+{
+    s += 0x9E3779B9u;
+    return HashToUnit(Hash32(s));
+}
+
+// the ground now: the round's start height plus the change made so far
+FN float Ground(uint idx)
+{
+    return tb[idx] + float(dq[idx]) * (1.0f / EROSION_DROP_SCALE);
+}
+
+// mirror boundary: -1 -> 1, n -> n - 2; -1 when even that falls outside (a tiny map)
+FN int Reflect(int i, int n)
+{
+    int r = i;
+    if (r < 0) r = -r;
+    if (r > n - 1) r = 2 * (n - 1) - r;
+    if (r < 0 || r > n - 1) return -1;
+    return r;
+}
+
+// drops `amount` on the four samples around (fx, fz) of cell i00, bilinear, never above the spill surface plus a hair; returns what was dropped
+FN float Settle(uint i00, float fx, float fz, float amount, uint w, float cell, uint track)
+{
+    if (amount <= 0.0f) return 0.0f;
+    float done = 0.0f;
+    UNROLL for (int k = 0; k < 4; ++k)
+    {
+        uint idx = i00;
+        float wgt = (1.0f - fx) * (1.0f - fz);
+        if (k == 1) { idx = i00 + 1u; wgt = fx * (1.0f - fz); }
+        if (k == 2) { idx = i00 + w; wgt = (1.0f - fx) * fz; }
+        if (k == 3) { idx = i00 + w + 1u; wgt = fx * fz; }
+        float room = max(0.0f, hs[idx] - Ground(idx) + 0.02f * cell);
+        float a = min(amount * wgt, room);
+        int aq = int(a * EROSION_DROP_SCALE + 0.5f);
+        if (aq > 0)
+        {
+            InterlockedAdd(dq[idx], aq);
+            if (track != 0u) InterlockedAdd(pq[idx], aq);
+            done += float(aq) * (1.0f / EROSION_DROP_SCALE);
+        }
+    }
+    return done;
+}
+
+FN float BrushSum(int R)
+{
+    float wsum = 0.0f;
+    for (int oz = -R; oz <= R; ++oz)
+    {
+        for (int ox = -R; ox <= R; ++ox)
+        {
+            float d = sqrt(float(ox * ox + oz * oz));
+            if (d < float(R) + 0.5f) wsum += float(R) + 0.5f - d;
+        }
+    }
+    return wsum;
+}
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    uint lid = dtid.y * P.gw + dtid.x;
+    if (dtid.x >= P.gw || lid >= P.count) return;
+    uint id = P.idOffset + lid;
+    int w = int(P.w);
+    int h = int(P.h);
+    uint rs = Hash32(P.seed * 0x9E3779B1u + P.roundNo * 0x85EBCA6Bu + id * 0xC2B2AE35u + 0x27D4EB2Fu);
+    float x0 = Rand(rs) * float(w - 1);
+    float z0 = Rand(rs) * float(h - 1);
+    if ((P.flags & 1u) != 0u)
+    {
+        float u = Rand(rs);
+        if (u > accept[uint(int(z0 + 0.5f)) * P.w + uint(int(x0 + 0.5f))]) return;
+    }
+    uint track = (P.flags & 8u) != 0u ? 1u : 0u;
+    float inertia = P.inertia;
+    float capacityK = P.capacity;
+    float erodeK = P.erode;
+    float waterK = P.water;
+)HLSL"
+    R"HLSL(    int R = int(P.radius);
+    int lifetime = int(P.lifetime);
+    if ((P.flags & 16u) != 0u)
+    {
+        float u = P.dropVary;
+        float s0 = Rand(rs) * 2.0f - 1.0f;
+        R = max(1, min(12, int(floor(float(P.radius) * (1.0f + u * s0) + 0.5f))));
+        float s1 = Rand(rs) * 2.0f - 1.0f;
+        lifetime = max(1, min(int(P.maxLife), int(floor(float(P.lifetime) * (1.0f + 0.4f * u * s1) + 0.5f))));
+        float s2 = Rand(rs) * 2.0f - 1.0f;
+        inertia = saturate(min(0.95f, P.inertia * (1.0f + u * s2)));
+        float s3 = Rand(rs) * 2.0f - 1.0f;
+        capacityK = P.capacity * (1.0f + 0.6f * u * s3);
+        float s4 = Rand(rs) * 2.0f - 1.0f;
+        erodeK = P.erode * (1.0f + 0.4f * u * s4);
+        float s5 = Rand(rs) * 2.0f - 1.0f;
+        waterK = P.water * (1.0f + 0.5f * u * s5);
+    }
+    float px = x0;
+    float pz = z0;
+    float dx = 0.0f;
+    float dz = 0.0f;
+    float speed = P.speed;
+    float water = waterK;
+    float sediment = 0.0f;
+    float wsum = BrushSum(R);
+    float cell = P.cell;
+    LOOP for (int life = 0; life < lifetime; ++life)
+    {
+        int ix = int(px);
+        int iz = int(pz);
+        if (ix < 0 || iz < 0 || ix >= w - 1 || iz >= h - 1) break;
+        float fx = px - float(ix);
+        float fz = pz - float(iz);
+        uint i00 = uint(iz) * P.w + uint(ix);
+        float h00 = hs[i00];
+        float h10 = hs[i00 + 1u];
+        float h01 = hs[i00 + P.w];
+        float h11 = hs[i00 + P.w + 1u];
+        float gx = ((h10 - h00) * (1.0f - fz) + (h11 - h01) * fz) / cell;
+        float gz = ((h01 - h00) * (1.0f - fx) + (h11 - h10) * fx) / cell;
+        float height = h00 * (1.0f - fx) * (1.0f - fz) + h10 * fx * (1.0f - fz) + h01 * (1.0f - fx) * fz + h11 * fx * fz;
+        dx = dx * inertia - gx * (1.0f - inertia);
+        dz = dz * inertia - gz * (1.0f - inertia);
+        float len = sqrt(dx * dx + dz * dz);
+        if (len < 1e-6f)
+        {
+            float ang = Rand(rs) * 6.2831853f;
+            dx = cos(ang);
+            dz = sin(ang);
+            len = 1.0f;
+        }
+        dx /= len;
+        dz /= len;
+        px += dx;
+        pz += dz;
+        int nx = int(px);
+        int nz = int(pz);
+        if (px < 0.0f || pz < 0.0f || nx >= w - 1 || nz >= h - 1) return;      // runs off the map with its sediment
+        float ex = px - float(nx);
+        float ez = pz - float(nz);
+        uint j = uint(nz) * P.w + uint(nx);
+        float newHeight = hs[j] * (1.0f - ex) * (1.0f - ez) + hs[j + 1u] * ex * (1.0f - ez) + hs[j + P.w] * (1.0f - ex) * ez + hs[j + P.w + 1u] * ex * ez;
+        float dh = newHeight - height;
+        float cap = max(-dh, P.minSlope * cell) * speed * water * capacityK;
+        if (track != 0u) InterlockedAdd(fq[i00], int(water * EROSION_FLOW_SCALE + 0.5f));
+        if (sediment > cap || dh > 0.0f)
+        {
+            float amount = (sediment - cap) * P.deposit;
+            if (dh > 0.0f) amount = min(dh, sediment);
+            sediment -= Settle(i00, fx, fz, amount, P.w, cell, track);
+        }
+        else
+        {
+            float amount = min((cap - sediment) * erodeK, -dh);
+            // inside a filled basin the droplet runs on the spill surface above the real ground: nothing to dissolve there
+            float ground = Ground(i00) * (1.0f - fx) * (1.0f - fz) + Ground(i00 + 1u) * fx * (1.0f - fz) + Ground(i00 + P.w) * (1.0f - fx) * fz + Ground(i00 + P.w + 1u) * fx * fz;
+            if (height - ground > 0.03f * cell || life < 2) amount = 0.0f;
+            if (amount > 0.0f && (P.flags & 4u) != 0u) amount *= soft[i00];
+            if (amount > 0.0f && wsum > 0.0f)
+            {
+                float taken = 0.0f;
+                for (int oz = -R; oz <= R; ++oz)
+                {
+                    for (int ox = -R; ox <= R; ++ox)
+                    {
+                        float d = sqrt(float(ox * ox + oz * oz));
+                        if (d < float(R) + 0.5f)
+                        {
+                            int cx = Reflect(ix + ox, w);
+                            int cz = Reflect(iz + oz, h);
+                            if (cx >= 0 && cz >= 0)
+                            {
+                                uint jj = uint(cz) * P.w + uint(cx);
+                                float kr = 1.0f;
+                                if ((P.flags & 2u) != 0u) kr = saturate(rock[jj]);
+                                float a = min(amount * (float(R) + 0.5f - d) / wsum * kr, max(0.0f, Ground(jj) - (hs[jj] - P.roundCut * cell)));
+                                int aq = int(a * EROSION_DROP_SCALE + 0.5f);
+                                if (aq > 0)
+                                {
+                                    InterlockedAdd(dq[jj], -aq);
+                                    if (track != 0u) InterlockedAdd(wq[jj], aq);
+                                    taken += float(aq) * (1.0f / EROSION_DROP_SCALE);
+                                }
+                            }
+                        }
+                    }
+                }
+                sediment += taken;
+            }
+        }
+        // accel 1: speeds up going down (v^2 grows by the drop times gravity); accel 0 is the old rule (slows down going down)
+        speed = sqrt(max(0.0f, speed * speed + dh * P.gravity / cell * (1.0f - 2.0f * P.accel)));
+        water *= 1.0f - P.evaporate;
+    }
+    // the rest settles where the droplet stopped
+    if (sediment > 0.0f)
+    {
+        int ix = max(0, min(w - 2, int(px)));
+        int iz = max(0, min(h - 2, int(pz)));
+        Settle(uint(iz) * P.w + uint(ix), px - float(ix), pz - float(iz), sediment, P.w, cell, track);
+    }
+}
+
+)HLSL";
+
+  // erosion_drop_resolve: 16x16x1 threads
+  inline constexpr char kSource_erosion_drop_resolve[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Between droplet rounds: adds the accumulated integer changes to the float fields and clears them. t += dq / scale, wear += wq / scale, dep += pq / scale, flow += fq / flowscale.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_thermal_params.hlsli
+// Constant buffer of the erosion helper kernels (thermal slides, delta filter, settle, droplet resolve).
+#ifndef GPU_EROSION_THERMAL_PARAMS_HLSLI
+#define GPU_EROSION_THERMAL_PARAMS_HLSLI
+
+struct ErodeThermalParams
+{
+    uint w;
+    uint h;
+    uint pinSides;     // bit 0 / 1 = the -x / +x column, bit 2 / 3 = the -z / +z row is left alone
+    uint hasMask;      // 1 = a per cell factor buffer is bound
+    float tAxis;       // talus * cell
+    float tDiag;       // talus * cell * sqrt(2)
+    float rate;        // share of the excess that slides
+    float amount;      // blend factor (delta filter) / scale (resolve)
+    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
+    uint flags;
+    uint pad0;
+};
+
+#endif
+// ---- end erosion_thermal_params.hlsli
+// ---- begin erosion_drop_params.hlsli
+// Constant buffer of the droplet erosion kernels (erosion_drop.hlsl, erosion_drop_resolve.hlsl). The host (EdGpuErosion.cpp) includes this very file.
+#ifndef GPU_EROSION_DROP_PARAMS_HLSLI
+#define GPU_EROSION_DROP_PARAMS_HLSLI
+
+// fixed point scales of the integer accumulation buffers (atomic adds): the ground and the wear / deposit maps in 1/65536 world unit, the flow in 1/1024
+#define EROSION_DROP_SCALE 65536.0f
+#define EROSION_FLOW_SCALE 1024.0f
+
+struct ErodeDropParams
+{
+    uint w;
+    uint h;
+    uint count;        // droplets of this dispatch
+    uint gw;           // width of the dispatch grid (droplet = y * gw + x)
+    uint seed;
+    uint roundNo;
+    uint flags;        // 1 = release probability map, 2 = rock map, 4 = hardness map (what a droplet takes up), 8 = keep wear / deposit / flow, 16 = droplets differ
+    uint lifetime;
+    float inertia;
+    float capacity;
+    float minSlope;
+    float erode;
+    float deposit;
+    float evaporate;
+    float gravity;
+    float speed;
+    float water;
+    float roundCut;
+    float accel;
+    float dropVary;
+    float cell;
+    uint radius;
+    uint maxLife;
+    uint idOffset;     // the first droplet's number in its round (batches of one round)
+};
+
+#endif
+// ---- end erosion_drop_params.hlsli
+
+CBUFFER(ErodeThermalParams, P, 0)
+UAV_BUFFER(float, t, 0)
+UAV_BUFFER(int, dq, 1)
+UAV_BUFFER(float, wearF, 2)
+UAV_BUFFER(int, wq, 3)
+UAV_BUFFER(float, depF, 4)
+UAV_BUFFER(int, pq, 5)
+UAV_BUFFER(float, flowF, 6)
+UAV_BUFFER(int, fq, 7)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    uint i = dtid.y * P.w + dtid.x;
+    t[i] += float(dq[i]) * (1.0f / EROSION_DROP_SCALE);
+    dq[i] = 0;
+    if ((P.flags & 8u) != 0u)
+    {
+        wearF[i] += float(wq[i]) * (1.0f / EROSION_DROP_SCALE);
+        depF[i] += float(pq[i]) * (1.0f / EROSION_DROP_SCALE);
+        flowF[i] += float(fq[i]) * (1.0f / EROSION_FLOW_SCALE);
+        wq[i] = 0;
+        pq[i] = 0;
+        fq[i] = 0;
+    }
+}
+
+)HLSL";
+
+  // erosion_hydro_flux: 16x16x1 threads
+  inline constexpr char kSource_erosion_hydro_flux[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Hydraulic erosion, pass A: the outflow of every cell through its eight pipes (pipe model, Mei et al.). F += gain * (water surface difference), never negative, scaled so a cell gives away no more
+// than the water it has (including this iteration's rain). The flux persists between iterations (momentum); each thread reads and writes only its own pipes, the neighbours' ground and water only
+// through T and D, which this pass does not write. An open edge sees a dry ghost cell whose ground continues the slope of the edge cell; a closed edge has no pipe; a pinned cell has no pipes.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_hydro_params.hlsli
+// Constant buffer of the hydraulic erosion kernels (erosion_hydro_*.hlsl). The host (EdGpuErosion.cpp) includes this very file.
+#ifndef GPU_EROSION_HYDRO_PARAMS_HLSLI
+#define GPU_EROSION_HYDRO_PARAMS_HLSLI
+
+struct ErodeHydroParams
+{
+    uint w;              // field size
+    uint h;
+    uint flags;          // 1 = rain map, 2 = rock map, 4 = open edge, 8 = pinned ring, 16 = keep wear / deposit / flow
+    uint iter;           // iteration number (rain noise pattern)
+    float gain;          // pipe gain of the four axis pipes (the diagonal pipes get a quarter)
+    float evap;          // share of the water that evaporates per iteration
+    float rain;          // water depth added per iteration
+    float capacity;      // sediment capacity factor
+    float erosion;       // share of the missing sediment that is dissolved per iteration
+    float deposition;    // share of the surplus sediment that settles per iteration
+    float invDepthMax;   // 1 / depth at which the capacity saturates
+    float minSlope;      // sin(slope) floor
+    float slopeCap;      // sin(slope) at which the capacity stops growing (soft)
+    float maxSpeed;      // cells per iteration
+    float cutLimit;      // share of the drop to the lowest neighbour one step may dig (0 = unlimited)
+    float cell;          // world units per sample
+    float rainNoise;     // 0..1 amplitude of the white noise on the rain
+    uint seed;
+    float velFloor;      // smallest water depth the speed is divided by
+    float damp;          // share of the old pipe flux that is lost per iteration
+    float vThresh;       // speed below which nothing is dissolved
+    float speedPow;      // exponent of the speed in the capacity
+    float pad0;
+    float pad1;
+};
+
+#endif
+// ---- end erosion_hydro_params.hlsli
+// ---- begin erosion_common.hlsli
+// Helpers of the erosion kernels: the eight pipe directions, the rain at a cell.
+#ifndef GPU_EROSION_COMMON_HLSLI
+#define GPU_EROSION_COMMON_HLSLI
+
+// ---- begin common.hlsli
+
+// ---- end common.hlsli
+
+// directions 0..3 = -x +x -z +z (flux buffer Fa), 4..7 = (-1,-1) (+1,-1) (-1,+1) (+1,+1) (flux buffer Fb); the flux buffers hold the planes k * cells + cell
+static const int kDirX[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+static const int kDirZ[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+// the direction a neighbour's pipe has back to us
+static const int kDirOpp[8] = {1, 0, 3, 2, 7, 6, 5, 4};
+
+FN float DirLen(int k)
+{
+    return k < 4 ? 1.0f : 0.70710678f;   // the unit length share of a lattice step: the speed is a vector sum of unit vectors
+}
+
+// the rain of one cell in one iteration: depth * map * (1 + noise * white noise of (cell, seed, iteration / 4))
+FN float RainAmount(uint i, float mapValue, float rain, float noise, uint seed, uint iter)
+{
+    float r = rain * mapValue;
+    if (noise > 0.0f)
+    {
+        uint hsh = Hash32(i * 747796405u + seed * 2891336453u + (iter >> 2) * 277803737u + 12345u);
+        r *= 1.0f + noise * (2.0f * HashToUnit(hsh) - 1.0f);
+    }
+    return r;
+}
+
+#endif
+// ---- end erosion_common.hlsli
+
+CBUFFER(ErodeHydroParams, P, 0)
+SRV_BUFFER(float, T, 0)
+SRV_BUFFER(float, D, 1)
+SRV_BUFFER(float, rainMap, 2)
+UAV_BUFFER(float, Fa, 0)
+UAV_BUFFER(float, Fb, 1)
+
+FN float RainOf(uint i)
+{
+    float m = 1.0f;
+    if ((P.flags & 1u) != 0u) m = rainMap[i];
+    return RainAmount(i, m, P.rain, P.rainNoise, P.seed, P.iter);
+}
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y);
+    int w = int(P.w);
+    int h = int(P.h);
+    uint n = P.w * P.h;
+    uint i = dtid.y * P.w + dtid.x;
+    bool pinned = (P.flags & 8u) != 0u && (x == 0 || z == 0 || x == w - 1 || z == h - 1);
+    bool openEdge = (P.flags & 4u) != 0u;
+    float a[8];
+    UNROLL for (int k = 0; k < 8; ++k) a[k] = 0.0f;
+    if (!pinned)
+    {
+        float ti = T[i];
+        float di = D[i] + RainOf(i);
+        float hi = ti + di;
+        float sum = 0.0f;
+        UNROLL for (int k = 0; k < 8; ++k)
+        {
+            int nx = x + kDirX[k];
+            int nz = z + kDirZ[k];
+            float gk = P.gain;
+            if (k >= 4) gk = 0.25f * P.gain;
+            float old = 0.0f;
+            if (k < 4) old = Fa[uint(k) * n + i];
+            else old = Fb[uint(k - 4) * n + i];
+            old *= 1.0f - P.damp;
+            bool inside = nx >= 0 && nz >= 0 && nx < w && nz < h;
+            float v = 0.0f;
+            if (inside)
+            {
+                uint j = uint(nz) * P.w + uint(nx);
+                v = max(0.0f, old + gk * (hi - (T[j] + D[j] + RainOf(j))));
+            }
+            else if (openEdge)
+            {
+)HLSL"
+    R"HLSL(                int ox = x - kDirX[k];
+                int oz = z - kDirZ[k];
+                float to = ti;
+                if (ox >= 0 && oz >= 0 && ox < w && oz < h) to = T[uint(oz) * P.w + uint(ox)];
+                v = max(0.0f, old + gk * (hi - (ti + min(0.0f, ti - to))));
+            }
+            a[k] = v;
+            sum += v;
+        }
+        if (sum > di)
+        {
+            float s = 0.0f;
+            if (sum > 0.0f) s = di / sum;
+            UNROLL for (int k = 0; k < 8; ++k) a[k] *= s;
+        }
+        UNROLL for (int k = 0; k < 8; ++k)
+        {
+            if (a[k] < 1e-9f) a[k] = 0.0f;
+        }
+    }
+    UNROLL for (int k = 0; k < 4; ++k)
+    {
+        Fa[uint(k) * n + i] = a[k];
+        Fb[uint(k) * n + i] = a[k + 4];
+    }
+}
+
+)HLSL";
+
+  // erosion_hydro_settle: 16x16x1 threads
+  inline constexpr char kSource_erosion_hydro_settle[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// End of the hydraulic run: the sediment still in suspension settles where it is (conserves mass). T, S and dep are read and written in place, one cell per thread.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_hydro_params.hlsli
+// Constant buffer of the hydraulic erosion kernels (erosion_hydro_*.hlsl). The host (EdGpuErosion.cpp) includes this very file.
+#ifndef GPU_EROSION_HYDRO_PARAMS_HLSLI
+#define GPU_EROSION_HYDRO_PARAMS_HLSLI
+
+struct ErodeHydroParams
+{
+    uint w;              // field size
+    uint h;
+    uint flags;          // 1 = rain map, 2 = rock map, 4 = open edge, 8 = pinned ring, 16 = keep wear / deposit / flow
+    uint iter;           // iteration number (rain noise pattern)
+    float gain;          // pipe gain of the four axis pipes (the diagonal pipes get a quarter)
+    float evap;          // share of the water that evaporates per iteration
+    float rain;          // water depth added per iteration
+    float capacity;      // sediment capacity factor
+    float erosion;       // share of the missing sediment that is dissolved per iteration
+    float deposition;    // share of the surplus sediment that settles per iteration
+    float invDepthMax;   // 1 / depth at which the capacity saturates
+    float minSlope;      // sin(slope) floor
+    float slopeCap;      // sin(slope) at which the capacity stops growing (soft)
+    float maxSpeed;      // cells per iteration
+    float cutLimit;      // share of the drop to the lowest neighbour one step may dig (0 = unlimited)
+    float cell;          // world units per sample
+    float rainNoise;     // 0..1 amplitude of the white noise on the rain
+    uint seed;
+    float velFloor;      // smallest water depth the speed is divided by
+    float damp;          // share of the old pipe flux that is lost per iteration
+    float vThresh;       // speed below which nothing is dissolved
+    float speedPow;      // exponent of the speed in the capacity
+    float pad0;
+    float pad1;
+};
+
+#endif
+// ---- end erosion_hydro_params.hlsli
+
+CBUFFER(ErodeHydroParams, P, 0)
+UAV_BUFFER(float, T, 0)
+UAV_BUFFER(float, S, 1)
+UAV_BUFFER(float, dep, 2)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y);
+    uint i = dtid.y * P.w + dtid.x;
+    bool pinned = (P.flags & 8u) != 0u && (x == 0 || z == 0 || x == int(P.w) - 1 || z == int(P.h) - 1);
+    if (pinned) return;
+    float s = S[i];
+    T[i] += s;
+    if ((P.flags & 16u) != 0u) dep[i] += s;
+    S[i] = 0.0f;
+}
+
+)HLSL";
+
+  // erosion_hydro_transport: 16x16x1 threads
+  inline constexpr char kSource_erosion_hydro_transport[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Hydraulic erosion, pass C: the suspended sediment travels with the water through the same eight pipes (upwind and conservative: what leaves a cell arrives in its neighbours, or leaves the map
+// over an open edge), then the water evaporates. s' = sn * (1 - out / dOld) + sum over the neighbours of sn_j * flux(j -> i) / dOld_j.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_hydro_params.hlsli
+// Constant buffer of the hydraulic erosion kernels (erosion_hydro_*.hlsl). The host (EdGpuErosion.cpp) includes this very file.
+#ifndef GPU_EROSION_HYDRO_PARAMS_HLSLI
+#define GPU_EROSION_HYDRO_PARAMS_HLSLI
+
+struct ErodeHydroParams
+{
+    uint w;              // field size
+    uint h;
+    uint flags;          // 1 = rain map, 2 = rock map, 4 = open edge, 8 = pinned ring, 16 = keep wear / deposit / flow
+    uint iter;           // iteration number (rain noise pattern)
+    float gain;          // pipe gain of the four axis pipes (the diagonal pipes get a quarter)
+    float evap;          // share of the water that evaporates per iteration
+    float rain;          // water depth added per iteration
+    float capacity;      // sediment capacity factor
+    float erosion;       // share of the missing sediment that is dissolved per iteration
+    float deposition;    // share of the surplus sediment that settles per iteration
+    float invDepthMax;   // 1 / depth at which the capacity saturates
+    float minSlope;      // sin(slope) floor
+    float slopeCap;      // sin(slope) at which the capacity stops growing (soft)
+    float maxSpeed;      // cells per iteration
+    float cutLimit;      // share of the drop to the lowest neighbour one step may dig (0 = unlimited)
+    float cell;          // world units per sample
+    float rainNoise;     // 0..1 amplitude of the white noise on the rain
+    uint seed;
+    float velFloor;      // smallest water depth the speed is divided by
+    float damp;          // share of the old pipe flux that is lost per iteration
+    float vThresh;       // speed below which nothing is dissolved
+    float speedPow;      // exponent of the speed in the capacity
+    float pad0;
+    float pad1;
+};
+
+#endif
+// ---- end erosion_hydro_params.hlsli
+// ---- begin erosion_common.hlsli
+// Helpers of the erosion kernels: the eight pipe directions, the rain at a cell.
+#ifndef GPU_EROSION_COMMON_HLSLI
+#define GPU_EROSION_COMMON_HLSLI
+
+// ---- begin common.hlsli
+
+// ---- end common.hlsli
+
+// directions 0..3 = -x +x -z +z (flux buffer Fa), 4..7 = (-1,-1) (+1,-1) (-1,+1) (+1,+1) (flux buffer Fb); the flux buffers hold the planes k * cells + cell
+static const int kDirX[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+static const int kDirZ[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+// the direction a neighbour's pipe has back to us
+static const int kDirOpp[8] = {1, 0, 3, 2, 7, 6, 5, 4};
+
+FN float DirLen(int k)
+{
+    return k < 4 ? 1.0f : 0.70710678f;   // the unit length share of a lattice step: the speed is a vector sum of unit vectors
+}
+
+// the rain of one cell in one iteration: depth * map * (1 + noise * white noise of (cell, seed, iteration / 4))
+FN float RainAmount(uint i, float mapValue, float rain, float noise, uint seed, uint iter)
+{
+    float r = rain * mapValue;
+    if (noise > 0.0f)
+    {
+        uint hsh = Hash32(i * 747796405u + seed * 2891336453u + (iter >> 2) * 277803737u + 12345u);
+        r *= 1.0f + noise * (2.0f * HashToUnit(hsh) - 1.0f);
+    }
+    return r;
+}
+
+#endif
+// ---- end erosion_common.hlsli
+
+CBUFFER(ErodeHydroParams, P, 0)
+SRV_BUFFER(float, Fa, 0)
+SRV_BUFFER(float, Fb, 1)
+SRV_BUFFER(float, SN, 2)
+SRV_BUFFER(float, DO, 3)
+UAV_BUFFER(float, S, 0)
+UAV_BUFFER(float, D, 1)
+
+FN float FluxOf(uint cellIndex, uint n, int k)
+{
+    if (k < 4) return Fa[uint(k) * n + cellIndex];
+    return Fb[uint(k - 4) * n + cellIndex];
+}
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y);
+    int w = int(P.w);
+    int h = int(P.h);
+    uint n = P.w * P.h;
+    uint i = dtid.y * P.w + dtid.x;
+    bool pinned = (P.flags & 8u) != 0u && (x == 0 || z == 0 || x == w - 1 || z == h - 1);
+    if (pinned)
+    {
+        S[i] = 0.0f;
+        D[i] = 0.0f;
+        return;
+    }
+    float sn = SN[i];
+    float v = sn;
+    float dOld = DO[i];
+    if (dOld > 0.0f)
+    {
+        float outSum = 0.0f;
+        UNROLL for (int k = 0; k < 8; ++k) outSum += FluxOf(i, n, k);
+        v -= sn * outSum / dOld;
+    }
+    UNROLL for (int k = 0; k < 8; ++k)
+    {
+        int nx = x + kDirX[k];
+        int nz = z + kDirZ[k];
+        if (nx >= 0 && nz >= 0 && nx < w && nz < h)
+        {
+            uint j = uint(nz) * P.w + uint(nx);
+            float dj = DO[j];
+            if (dj > 0.0f) v += SN[j] * FluxOf(j, n, kDirOpp[k]) / dj;
+        }
+    }
+    if (v < 1e-9f) v = 0.0f;
+    S[i] = v;
+    float dn = D[i] * (1.0f - P.evap);
+    if (dn < 1e-9f) dn = 0.0f;
+    D[i] = dn;
+}
+
+)HLSL";
+
+  // erosion_hydro_water: 16x16x1 threads
+  inline constexpr char kSource_erosion_hydro_water[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Hydraulic erosion, pass B: the water update from the pipe fluxes, the flow speed, then dissolving and settling of sediment.
+//   water   d' = d + rain + inflow - outflow
+//   speed   the vector sum of the unit directions of the in and out fluxes over the mean depth (cells per iteration), at most maxSpeed
+//   slope   sin of the ground's slope (central differences); the capacity uses it softly saturated at slopeCap (steep faces do not dominate) and floored at minSlope
+//   cap     capacity * slope * speed^speedPow * min(1, depth / depth_max); no dissolving below the speed threshold vThresh
+//   dig     erosion * rock * (cap - s) (at most cutLimit of the drop to the lowest of the eight neighbours), or settle deposition * (s - cap)
+// The sediment itself moves in pass C. Outputs: the new ground (Tn), the water (D, in place), the sediment after dissolving / settling (SN) and the water before the update (DO, which pass C divides by).
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_hydro_params.hlsli
+// Constant buffer of the hydraulic erosion kernels (erosion_hydro_*.hlsl). The host (EdGpuErosion.cpp) includes this very file.
+#ifndef GPU_EROSION_HYDRO_PARAMS_HLSLI
+#define GPU_EROSION_HYDRO_PARAMS_HLSLI
+
+struct ErodeHydroParams
+{
+    uint w;              // field size
+    uint h;
+    uint flags;          // 1 = rain map, 2 = rock map, 4 = open edge, 8 = pinned ring, 16 = keep wear / deposit / flow
+    uint iter;           // iteration number (rain noise pattern)
+    float gain;          // pipe gain of the four axis pipes (the diagonal pipes get a quarter)
+    float evap;          // share of the water that evaporates per iteration
+    float rain;          // water depth added per iteration
+    float capacity;      // sediment capacity factor
+    float erosion;       // share of the missing sediment that is dissolved per iteration
+    float deposition;    // share of the surplus sediment that settles per iteration
+    float invDepthMax;   // 1 / depth at which the capacity saturates
+    float minSlope;      // sin(slope) floor
+    float slopeCap;      // sin(slope) at which the capacity stops growing (soft)
+    float maxSpeed;      // cells per iteration
+    float cutLimit;      // share of the drop to the lowest neighbour one step may dig (0 = unlimited)
+    float cell;          // world units per sample
+    float rainNoise;     // 0..1 amplitude of the white noise on the rain
+    uint seed;
+    float velFloor;      // smallest water depth the speed is divided by
+    float damp;          // share of the old pipe flux that is lost per iteration
+    float vThresh;       // speed below which nothing is dissolved
+    float speedPow;      // exponent of the speed in the capacity
+    float pad0;
+    float pad1;
+};
+
+#endif
+// ---- end erosion_hydro_params.hlsli
+// ---- begin erosion_common.hlsli
+// Helpers of the erosion kernels: the eight pipe directions, the rain at a cell.
+#ifndef GPU_EROSION_COMMON_HLSLI
+#define GPU_EROSION_COMMON_HLSLI
+
+// ---- begin common.hlsli
+
+// ---- end common.hlsli
+
+// directions 0..3 = -x +x -z +z (flux buffer Fa), 4..7 = (-1,-1) (+1,-1) (-1,+1) (+1,+1) (flux buffer Fb); the flux buffers hold the planes k * cells + cell
+static const int kDirX[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+static const int kDirZ[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+// the direction a neighbour's pipe has back to us
+static const int kDirOpp[8] = {1, 0, 3, 2, 7, 6, 5, 4};
+
+FN float DirLen(int k)
+{
+    return k < 4 ? 1.0f : 0.70710678f;   // the unit length share of a lattice step: the speed is a vector sum of unit vectors
+}
+
+// the rain of one cell in one iteration: depth * map * (1 + noise * white noise of (cell, seed, iteration / 4))
+FN float RainAmount(uint i, float mapValue, float rain, float noise, uint seed, uint iter)
+{
+    float r = rain * mapValue;
+    if (noise > 0.0f)
+    {
+        uint hsh = Hash32(i * 747796405u + seed * 2891336453u + (iter >> 2) * 277803737u + 12345u);
+        r *= 1.0f + noise * (2.0f * HashToUnit(hsh) - 1.0f);
+    }
+    return r;
+}
+
+#endif
+// ---- end erosion_common.hlsli
+
+CBUFFER(ErodeHydroParams, P, 0)
+SRV_BUFFER(float, T, 0)
+SRV_BUFFER(float, Fa, 1)
+SRV_BUFFER(float, Fb, 2)
+SRV_BUFFER(float, rainMap, 3)
+SRV_BUFFER(float, rock, 4)
+SRV_BUFFER(float, S, 5)
+UAV_BUFFER(float, Tn, 0)
+UAV_BUFFER(float, D, 1)
+UAV_BUFFER(float, SN, 2)
+UAV_BUFFER(float, DO, 3)
+UAV_BUFFER(float, wear, 4)
+UAV_BUFFER(float, dep, 5)
+UAV_BUFFER(float, flow, 6)
+
+FN float FluxOf(uint cellIndex, uint n, int k)
+{
+    if (k < 4) return Fa[uint(k) * n + cellIndex];
+    return Fb[uint(k - 4) * n + cellIndex];
+}
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y);
+    int w = int(P.w);
+    int h = int(P.h);
+    uint n = P.w * P.h;
+    uint i = dtid.y * P.w + dtid.x;
+    bool pinned = (P.flags & 8u) != 0u && (x == 0 || z == 0 || x == w - 1 || z == h - 1);
+    if (pinned)
+    {
+        Tn[i] = T[i];
+        SN[i] = 0.0f;
+        DO[i] = 0.0f;
+        D[i] = 0.0f;
+        return;
+    }
+    float rm = 1.0f;
+    if ((P.flags & 1u) != 0u) rm = rainMap[i];
+    float dOld = D[i] + RainAmount(i, rm, P.rain, P.rainNoise, P.seed, P.iter);
+    float outSum = 0.0f;
+    float inSum = 0.0f;
+    float ux = 0.0f;
+    float uz = 0.0f;
+)HLSL"
+    R"HLSL(    UNROLL for (int k = 0; k < 8; ++k)
+    {
+        float fo = FluxOf(i, n, k);
+        float fi = 0.0f;
+        int nx = x + kDirX[k];
+        int nz = z + kDirZ[k];
+        if (nx >= 0 && nz >= 0 && nx < w && nz < h) fi = FluxOf(uint(nz) * P.w + uint(nx), n, kDirOpp[k]);
+        outSum += fo;
+        inSum += fi;
+        float len = DirLen(k);
+        ux += float(kDirX[k]) * len * (fo - fi);
+        uz += float(kDirZ[k]) * len * (fo - fi);
+    }
+    float dNew = max(0.0f, dOld + inSum - outSum);
+    float dm = 0.5f * (dOld + dNew);
+    float inv = 0.5f / max(dm, P.velFloor);
+    ux *= inv;
+    uz *= inv;
+    float speed = sqrt(ux * ux + uz * uz);
+    if (speed > P.maxSpeed) speed = P.maxSpeed;
+    D[i] = dNew;
+    DO[i] = dOld;
+    // slope from the ground at the start of the pass
+    int xl = max(x - 1, 0);
+    int xr = min(x + 1, w - 1);
+    int zu = max(z - 1, 0);
+    int zd = min(z + 1, h - 1);
+    float gx = (T[uint(z) * P.w + uint(xr)] - T[uint(z) * P.w + uint(xl)]) / (float(xr - xl) * P.cell);
+    float gz = (T[uint(zd) * P.w + uint(x)] - T[uint(zu) * P.w + uint(x)]) / (float(zd - zu) * P.cell);
+    float g = sqrt(gx * gx + gz * gz);
+    float sinA = g / sqrt(1.0f + g * g);
+    float soft = sinA / sqrt(1.0f + (sinA / P.slopeCap) * (sinA / P.slopeCap));
+    float tilt = max(soft, P.minSlope);
+    float sp = speed;
+    if (P.speedPow != 1.0f) sp = pow(max(speed, 1e-6f), P.speedPow);
+    float cap = P.capacity * tilt * sp * min(1.0f, dNew * P.invDepthMax);
+    if (speed < P.vThresh) cap = 0.0f;
+    float ti = T[i];
+    float s0 = S[i];
+    float erode = 0.0f;
+    float deposit = 0.0f;
+    if (cap > s0)
+    {
+        float kr = P.erosion;
+        if ((P.flags & 2u) != 0u) kr *= rock[i];
+        erode = kr * (cap - s0);
+        if (P.cutLimit > 0.0f)
+        {
+            float low = ti;
+            UNROLL for (int k = 0; k < 8; ++k)
+            {
+                int nx = x + kDirX[k];
+                int nz = z + kDirZ[k];
+                if (nx >= 0 && nz >= 0 && nx < w && nz < h) low = min(low, T[uint(nz) * P.w + uint(nx)]);
+            }
+            erode = min(erode, P.cutLimit * (ti - low));
+        }
+        erode = max(0.0f, erode);
+    }
+    else
+    {
+        deposit = P.deposition * (s0 - cap);
+    }
+    Tn[i] = ti - erode + deposit;
+    SN[i] = s0 + erode - deposit;
+    if ((P.flags & 16u) != 0u)
+    {
+        wear[i] += erode;
+        dep[i] += deposit;
+        flow[i] += speed * dNew;
+    }
+}
+
+)HLSL";
+
+  // erosion_steer: 16x16x1 threads
+  inline constexpr char kSource_erosion_steer[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// The droplets' steering surface follows the ground between full refreshes (the pit filling itself is a priority flood on the CPU): where the ground went down since the round started, the
+// surface goes down with it (a valley dug through a filled basin's rim stays a valley); where the ground came up above the surface, the surface comes up. hs = max(hs + min(now - before, 0), now).
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_thermal_params.hlsli
+// Constant buffer of the erosion helper kernels (thermal slides, delta filter, settle, droplet resolve).
+#ifndef GPU_EROSION_THERMAL_PARAMS_HLSLI
+#define GPU_EROSION_THERMAL_PARAMS_HLSLI
+
+struct ErodeThermalParams
+{
+    uint w;
+    uint h;
+    uint pinSides;     // bit 0 / 1 = the -x / +x column, bit 2 / 3 = the -z / +z row is left alone
+    uint hasMask;      // 1 = a per cell factor buffer is bound
+    float tAxis;       // talus * cell
+    float tDiag;       // talus * cell * sqrt(2)
+    float rate;        // share of the excess that slides
+    float amount;      // blend factor (delta filter) / scale (resolve)
+    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
+    uint flags;
+    uint pad0;
+};
+
+#endif
+// ---- end erosion_thermal_params.hlsli
+
+CBUFFER(ErodeThermalParams, P, 0)
+SRV_BUFFER(float, before, 0)
+SRV_BUFFER(float, now, 1)
+UAV_BUFFER(float, hs, 0)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    uint i = dtid.y * P.w + dtid.x;
+    float c = now[i];
+    hs[i] = max(hs[i] + min(c - before[i], 0.0f), c);
+}
+
+)HLSL";
+
+  // erosion_thermal_a: 16x16x1 threads
+  inline constexpr char kSource_erosion_thermal_a[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Thermal slides, pass A (the CPU ThermalImpl of EdErosion.cpp, first loop): for every cell that stands more than the talus above some of its eight neighbours, the share of the excess it gives
+// away (rate * 0.5 * largest excess / sum of the excesses, spread over the lower neighbours in proportion to their excess) and the amount it moves in total. Pass B collects.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_thermal_params.hlsli
+// Constant buffer of the erosion helper kernels (thermal slides, delta filter, settle, droplet resolve).
+#ifndef GPU_EROSION_THERMAL_PARAMS_HLSLI
+#define GPU_EROSION_THERMAL_PARAMS_HLSLI
+
+struct ErodeThermalParams
+{
+    uint w;
+    uint h;
+    uint pinSides;     // bit 0 / 1 = the -x / +x column, bit 2 / 3 = the -z / +z row is left alone
+    uint hasMask;      // 1 = a per cell factor buffer is bound
+    float tAxis;       // talus * cell
+    float tDiag;       // talus * cell * sqrt(2)
+    float rate;        // share of the excess that slides
+    float amount;      // blend factor (delta filter) / scale (resolve)
+    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
+    uint flags;
+    uint pad0;
+};
+
+#endif
+// ---- end erosion_thermal_params.hlsli
+// ---- begin erosion_common.hlsli
+// Helpers of the erosion kernels: the eight pipe directions, the rain at a cell.
+#ifndef GPU_EROSION_COMMON_HLSLI
+#define GPU_EROSION_COMMON_HLSLI
+
+// ---- begin common.hlsli
+
+// ---- end common.hlsli
+
+// directions 0..3 = -x +x -z +z (flux buffer Fa), 4..7 = (-1,-1) (+1,-1) (-1,+1) (+1,+1) (flux buffer Fb); the flux buffers hold the planes k * cells + cell
+static const int kDirX[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+static const int kDirZ[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+// the direction a neighbour's pipe has back to us
+static const int kDirOpp[8] = {1, 0, 3, 2, 7, 6, 5, 4};
+
+FN float DirLen(int k)
+{
+    return k < 4 ? 1.0f : 0.70710678f;   // the unit length share of a lattice step: the speed is a vector sum of unit vectors
+}
+
+// the rain of one cell in one iteration: depth * map * (1 + noise * white noise of (cell, seed, iteration / 4))
+FN float RainAmount(uint i, float mapValue, float rain, float noise, uint seed, uint iter)
+{
+    float r = rain * mapValue;
+    if (noise > 0.0f)
+    {
+        uint hsh = Hash32(i * 747796405u + seed * 2891336453u + (iter >> 2) * 277803737u + 12345u);
+        r *= 1.0f + noise * (2.0f * HashToUnit(hsh) - 1.0f);
+    }
+    return r;
+}
+
+#endif
+// ---- end erosion_common.hlsli
+
+CBUFFER(ErodeThermalParams, P, 0)
+SRV_BUFFER(float, t, 0)
+SRV_BUFFER(float, mask, 1)
+UAV_BUFFER(float, share, 0)
+UAV_BUFFER(float, moved, 1)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y);
+    int w = int(P.w);
+    int h = int(P.h);
+    uint i = dtid.y * P.w + dtid.x;
+    int loX = int(P.pinSides & 1u);
+    int hiX = int((P.pinSides >> 1) & 1u);
+    int loZ = int((P.pinSides >> 2) & 1u);
+    int hiZ = int((P.pinSides >> 3) & 1u);
+    share[i] = 0.0f;
+    moved[i] = 0.0f;
+    if (x < loX || z < loZ || x >= w - hiX || z >= h - hiZ) return;
+    float c = t[i];
+    float maxEx = 0.0f;
+    float sumEx = 0.0f;
+    UNROLL for (int k = 0; k < 8; ++k)
+    {
+        int nx = x + kDirX[k];
+        int nz = z + kDirZ[k];
+        if (nx >= loX && nz >= loZ && nx < w - hiX && nz < h - hiZ)
+        {
+            float thr = P.tAxis;
+            if (k >= 4) thr = P.tDiag;
+            float ex = (c - t[uint(nz) * P.w + uint(nx)]) - thr;
+            if (ex > 0.0f)
+            {
+                sumEx += ex;
+                maxEx = max(maxEx, ex);
+            }
+        }
+    }
+    if (sumEx > 0.0f)
+    {
+        float r = P.rate;
+        if (P.hasMask != 0u) r *= saturate(mask[i]);
+        float s = r * 0.5f * maxEx / sumEx;
+        share[i] = s;
+        moved[i] = s * sumEx;
+    }
+}
+
+)HLSL";
+
+  // erosion_thermal_b: 16x16x1 threads
+  inline constexpr char kSource_erosion_thermal_b[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Thermal slides, pass B: next = ground - what the cell gave away + what its higher neighbours give it (the CPU ThermalImpl, second loop).
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin erosion_thermal_params.hlsli
+// Constant buffer of the erosion helper kernels (thermal slides, delta filter, settle, droplet resolve).
+#ifndef GPU_EROSION_THERMAL_PARAMS_HLSLI
+#define GPU_EROSION_THERMAL_PARAMS_HLSLI
+
+struct ErodeThermalParams
+{
+    uint w;
+    uint h;
+    uint pinSides;     // bit 0 / 1 = the -x / +x column, bit 2 / 3 = the -z / +z row is left alone
+    uint hasMask;      // 1 = a per cell factor buffer is bound
+    float tAxis;       // talus * cell
+    float tDiag;       // talus * cell * sqrt(2)
+    float rate;        // share of the excess that slides
+    float amount;      // blend factor (delta filter) / scale (resolve)
+    float frac;        // blend of the next smoothing pass (creep with a fractional number of passes)
+    uint edgeKeep;     // 1 = the outer ring keeps its own change (delta filter)
+    uint flags;
+    uint pad0;
+};
+
+#endif
+// ---- end erosion_thermal_params.hlsli
+// ---- begin erosion_common.hlsli
+// Helpers of the erosion kernels: the eight pipe directions, the rain at a cell.
+#ifndef GPU_EROSION_COMMON_HLSLI
+#define GPU_EROSION_COMMON_HLSLI
+
+// ---- begin common.hlsli
+
+// ---- end common.hlsli
+
+// directions 0..3 = -x +x -z +z (flux buffer Fa), 4..7 = (-1,-1) (+1,-1) (-1,+1) (+1,+1) (flux buffer Fb); the flux buffers hold the planes k * cells + cell
+static const int kDirX[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
+static const int kDirZ[8] = {0, 0, -1, 1, -1, -1, 1, 1};
+// the direction a neighbour's pipe has back to us
+static const int kDirOpp[8] = {1, 0, 3, 2, 7, 6, 5, 4};
+
+FN float DirLen(int k)
+{
+    return k < 4 ? 1.0f : 0.70710678f;   // the unit length share of a lattice step: the speed is a vector sum of unit vectors
+}
+
+// the rain of one cell in one iteration: depth * map * (1 + noise * white noise of (cell, seed, iteration / 4))
+FN float RainAmount(uint i, float mapValue, float rain, float noise, uint seed, uint iter)
+{
+    float r = rain * mapValue;
+    if (noise > 0.0f)
+    {
+        uint hsh = Hash32(i * 747796405u + seed * 2891336453u + (iter >> 2) * 277803737u + 12345u);
+        r *= 1.0f + noise * (2.0f * HashToUnit(hsh) - 1.0f);
+    }
+    return r;
+}
+
+#endif
+// ---- end erosion_common.hlsli
+
+CBUFFER(ErodeThermalParams, P, 0)
+SRV_BUFFER(float, t, 0)
+SRV_BUFFER(float, share, 1)
+SRV_BUFFER(float, moved, 2)
+UAV_BUFFER(float, next, 0)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y);
+    int w = int(P.w);
+    int h = int(P.h);
+    uint i = dtid.y * P.w + dtid.x;
+    int loX = int(P.pinSides & 1u);
+    int hiX = int((P.pinSides >> 1) & 1u);
+    int loZ = int((P.pinSides >> 2) & 1u);
+    int hiZ = int((P.pinSides >> 3) & 1u);
+    float c = t[i];
+    if (x < loX || z < loZ || x >= w - hiX || z >= h - hiZ)
+    {
+        next[i] = c;
+        return;
+    }
+    float gained = 0.0f;
+    UNROLL for (int k = 0; k < 8; ++k)
+    {
+        int nx = x + kDirX[k];
+        int nz = z + kDirZ[k];
+        if (nx >= loX && nz >= loZ && nx < w - hiX && nz < h - hiZ)
+        {
+            uint j = uint(nz) * P.w + uint(nx);
+            float thr = P.tAxis;
+            if (k >= 4) thr = P.tDiag;
+            float ex = (t[j] - c) - thr;
+            if (ex > 0.0f) gained += share[j] * ex;
+        }
+    }
+    next[i] = c - moved[i] + gained;
+}
+
+)HLSL";
+
+  // gen_fbm: 16x16x1 threads
+  inline constexpr char kSource_gen_fbm[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Ops perlin, simplex, ridged, billow (EdFieldCore.cpp OpNoise / Fbm): fractal sum of gradient noise, 0..1, one thread per sample. The octave table (see gen_noise.hlsli) holds, per octave, the
+// affine map from the sample index to the octave's lattice (rotated and shifted when `rotate` is on, skewed for simplex) and the amplitude; the seeds are in a uint table.
+// ---- begin gen_noise.hlsli
+// Gradient noise for the generator kernels (gen_*.hlsl). The same noise as the CPU ops (EdFieldCore.cpp / EdFieldUtil.h): the same lattice hash, the same 8 / 64 gradient directions,
+// the same quintic fade, so a GPU result matches the CPU result up to float rounding.
+//
+// POSITIONS. The CPU ops compute the lattice position in double from the world position. A float cannot hold ox + x * cell at 4096 samples without losing the fine octaves, so the host
+// (EdGpuGen.cpp) does that part in double and hands the kernel, per octave, an AFFINE MAP from the sample index (x, z) to the lattice: u = u0 + a x + b z, v = v0 + c x + d z, with u0 / v0
+// split into an integer part (exact in float below 2^24) and a fraction. LatticePoint() turns that into the integer cell and the fraction inside it: the float error is then relative
+// to the size of the field in lattice units, not to the distance from the world origin.
+//
+// Octave record in the float table `oct` (16 floats per octave, kernels use what they need): 0 iu0, 1 iv0, 2 fu0, 3 fv0, 4 a, 5 b, 6 c, 7 d (the map), 8 amplitude, 9 and up per kernel.
+#ifndef GPU_GEN_NOISE_HLSLI
+#define GPU_GEN_NOISE_HLSLI
+
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+
+// Lattice hash of the cell (ix, iz): bit exact the CPU's Hash2.
+FN uint Hash2i(int ix, int iz, uint seed)
+{
+    return Hash32(uint(ix) * 0x9E3779B1u ^ Hash32(uint(iz) + seed * 0x85EBCA6Bu + 0x165667B1u));
+}
+
+// The 64 evenly spread gradient directions of the CPU's Gradients64() (angle (k + 0.5) * pi / 32).
+FN float2 Grad64(uint h)
+{
+    float a = (float(h & 63u) + 0.5f) * 0.09817477042468103f;
+    float s = 0.0f;
+    float c = 1.0f;
+    sincos(a, s, c);
+    return float2(c, s);
+}
+
+// The classic 8 directions of the CPU's kGrad table: (1,0) (-1,0) (0,1) (0,-1) and the four diagonals.
+FN float2 Grad8(uint h)
+{
+    uint k = h & 7u;
+    if (k < 2u) return float2(k == 0u ? 1.0f : -1.0f, 0.0f);
+    if (k < 4u) return float2(0.0f, k == 2u ? 1.0f : -1.0f);
+    float q = 0.70710678f;
+    return float2((k & 1u) == 0u ? q : -q, (k & 2u) == 0u ? q : -q);
+}
+
+FN float2 GradOf(uint h, uint fine)
+{
+    if (fine != 0u) return Grad64(h);
+    return Grad8(h);
+}
+
+FN float Fade(float t)
+{
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+FN float FadeD(float t)
+{
+    return 30.0f * t * t * (t - 1.0f) * (t - 1.0f);
+}
+
+// Integer cell and fraction of sample (x, z) for the affine map in the octave record.
+FN void LatticePoint(float iu0, float iv0, float fu0, float fv0, float a, float b, float c, float d, float x, float z, OUT(int) ix, OUT(int) iz, OUT(float) fx, OUT(float) fz)
+{
+    float u = fu0 + a * x + b * z;
+    float v = fv0 + c * x + d * z;
+    float fu = floor(u);
+    float fv = floor(v);
+    ix = int(iu0) + int(fu);
+    iz = int(iv0) + int(fv);
+    fx = u - fu;
+    fz = v - fv;
+}
+
+// Gradient noise about -1..1 with its analytic derivative per lattice unit (EdFieldUtil.h PerlinD). fine: 64 directions, else 8.
+FN float PerlinD(int ix, int iz, float fx, float fz, uint seed, uint fine, OUT(float) dnx, OUT(float) dnz)
+{
+    float u = Fade(fx);
+    float v = Fade(fz);
+    float du = FadeD(fx);
+    float dv = FadeD(fz);
+    float2 ga = GradOf(Hash2i(ix, iz, seed), fine);
+    float2 gb = GradOf(Hash2i(ix + 1, iz, seed), fine);
+    float2 gc = GradOf(Hash2i(ix, iz + 1, seed), fine);
+    float2 gd = GradOf(Hash2i(ix + 1, iz + 1, seed), fine);
+    float va = ga.x * fx + ga.y * fz;
+    float vb = gb.x * (fx - 1.0f) + gb.y * fz;
+    float vc = gc.x * fx + gc.y * (fz - 1.0f);
+    float vd = gd.x * (fx - 1.0f) + gd.y * (fz - 1.0f);
+    float k = va - vb - vc + vd;
+    float n = va + u * (vb - va) + v * (vc - va) + u * v * k;
+    float s = 1.41421356f;
+    dnx = s * (ga.x + u * (gb.x - ga.x) + v * (gc.x - ga.x) + u * v * (ga.x - gb.x - gc.x + gd.x) + du * (vb - va + v * k));
+    dnz = s * (ga.y + u * (gb.y - ga.y) + v * (gc.y - ga.y) + u * v * (ga.y - gb.y - gc.y + gd.y) + dv * (vc - va + u * k));
+    return n * s;
+}
+
+// Value only.
+FN float Perlin(int ix, int iz, float fx, float fz, uint seed, uint fine)
+{
+    float dx = 0.0f;
+    float dz = 0.0f;
+    return PerlinD(ix, iz, fx, fz, seed, fine, dx, dz);
+}
+
+// 2D simplex noise about -1..1 (EdFieldCore.cpp Simplex). (ix, iz, fx, fz) is the position in the SKEWED lattice (the host skews the affine map): ix, iz the simplex cell, fx, fz inside it.
+FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
+{
+    float g2 = 0.21132486540518713f;
+    float t = (sx + sz) * g2;
+    float x0 = sx - t;
+    float y0 = sz - t;
+    int i1 = x0 > y0 ? 1 : 0;
+    int j1 = x0 > y0 ? 0 : 1;
+    float x1 = x0 - float(i1) + g2;
+    float y1 = y0 - float(j1) + g2;
+    float x2 = x0 - 1.0f + 2.0f * g2;
+    float y2 = y0 - 1.0f + 2.0f * g2;
+    float n = 0.0f;
+    float t0 = 0.5f - x0 * x0 - y0 * y0;
+    if (t0 > 0.0f)
+    {
+        t0 *= t0;
+        float2 g = GradOf(Hash2i(i, j, seed), fine);
+)HLSL"
+    R"HLSL(        n += t0 * t0 * (g.x * x0 + g.y * y0);
+    }
+    float t1 = 0.5f - x1 * x1 - y1 * y1;
+    if (t1 > 0.0f)
+    {
+        t1 *= t1;
+        float2 g = GradOf(Hash2i(i + i1, j + j1, seed), fine);
+        n += t1 * t1 * (g.x * x1 + g.y * y1);
+    }
+    float t2 = 0.5f - x2 * x2 - y2 * y2;
+    if (t2 > 0.0f)
+    {
+        t2 *= t2;
+        float2 g = GradOf(Hash2i(i + 1, j + 1, seed), fine);
+        n += t2 * t2 * (g.x * x2 + g.y * y2);
+    }
+    return n * 99.2f;
+}
+
+// The CPU's Fbm01 (EdFieldUtil.h): fractal sum of classic 8 direction Perlin, 0..1, octaves doubling in frequency, every octave its own seed. (iu, iv, fu, fv) is the lattice position at octave 0
+// (cell + fraction); octave o sees it multiplied by 2^o (exact).
+FN float Fbm01(int iu, int iv, float fu, float fv, uint seed, uint octaves, float persistence)
+{
+    float sum = 0.0f;
+    float norm = 0.0f;
+    float amp = 1.0f;
+    float m = 1.0f;
+    int mi = 1;
+    LOOP for (uint o = 0u; o < octaves; ++o)
+    {
+        uint s = Hash32(seed * 131u + o * 7919u + 17u);
+        float fU = fu * m;
+        float fV = fv * m;
+        float fl = floor(fU);
+        float fm = floor(fV);
+        float n = Perlin(iu * mi + int(fl), iv * mi + int(fm), fU - fl, fV - fm, s, 0u);
+        n = max(-1.0f, min(1.0f, n));
+        sum += n * amp;
+        norm += amp;
+        amp *= persistence;
+        m *= 2.0f;
+        mi *= 2;
+    }
+    return saturate(0.5f + 0.5f * sum / norm * 1.4f);
+}
+
+#endif
+// ---- end gen_noise.hlsli
+// ---- begin gen_fbm_params.hlsli
+// Constant buffer of gen_fbm.hlsl (ops perlin, simplex, ridged, billow).
+#ifndef GPU_GEN_FBM_PARAMS_HLSLI
+#define GPU_GEN_FBM_PARAMS_HLSLI
+
+struct FbmParams
+{
+    uint w;           // field width
+    uint z0;          // first row of this dispatch (a big field is split into row bands)
+    uint rows;        // rows in this dispatch
+    uint octaves;
+    uint kind;        // 0 fbm (rolling), 1 ridged, 2 billow
+    uint basis;       // 0 perlin, 1 simplex
+    uint fine;        // 64 gradient directions (the `rotate` option) instead of 8
+    float norm;       // sum of the octave amplitudes
+};
+
+#endif
+// ---- end gen_fbm_params.hlsli
+
+CBUFFER(FbmParams, P, 0)
+SRV_BUFFER(float, oct, 1)
+SRV_BUFFER(uint, octSeed, 2)
+UAV_BUFFER(float, dst, 0)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.rows) return;
+    uint row = dtid.y + P.z0;
+    float x = float(dtid.x);
+    float z = float(row);
+    float sum = 0.0f;
+    LOOP for (uint o = 0u; o < P.octaves; ++o)
+    {
+        uint b = o * 16u;
+        int ix = 0;
+        int iz = 0;
+        float fx = 0.0f;
+        float fz = 0.0f;
+        LatticePoint(oct[b], oct[b + 1u], oct[b + 2u], oct[b + 3u], oct[b + 4u], oct[b + 5u], oct[b + 6u], oct[b + 7u], x, z, ix, iz, fx, fz);
+        float s = 0.0f;
+        if (P.basis == 0u)
+        {
+            s = Perlin(ix, iz, fx, fz, octSeed[o], P.fine);
+        }
+        else
+        {
+            s = Simplex(ix, iz, fx, fz, octSeed[o], P.fine);
+        }
+        s = max(-1.0f, min(1.0f, s));
+        float u = 0.5f * s + 0.5f;
+        if (P.kind == 1u)
+        {
+            u = 1.0f - abs(s);
+            u *= u;
+        }
+        else if (P.kind == 2u)
+        {
+            u = abs(s);
+        }
+        sum += u * oct[b + 8u];
+    }
+    dst[row * P.w + dtid.x] = saturate(sum / P.norm);
+}
+
+)HLSL";
+
   // reduce_sum: 128x1x1 threads
   inline constexpr char kSource_reduce_sum[] =
     R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
@@ -398,9 +2790,22 @@ void CSMain(KERNEL_IDS)
   inline const KernelInfo kKernels[] = {
     {"blur_pass", kSource_blur_pass, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x4DACE3E878AF6E80ULL},
     {"buf_to_tex", kSource_buf_to_tex, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x1u, 0x0u, 1u, 0x0C46DE5748B192F2ULL},
+    {"erosion_blend", kSource_erosion_blend, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x84473DD783032943ULL},
+    {"erosion_copy", kSource_erosion_copy, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2E0EFA8454F81E8BULL},
+    {"erosion_delta", kSource_erosion_delta, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2FA986491592B19DULL},
+    {"erosion_drop", kSource_erosion_drop, "CSMain", 16u, 16u, 1u, 0x1Fu, 0xFu, 0x0u, 0x0u, 0x0u, 1u, 0x719136D7659EE5EFULL},
+    {"erosion_drop_resolve", kSource_erosion_drop_resolve, "CSMain", 16u, 16u, 1u, 0x0u, 0xFFu, 0x0u, 0x0u, 0x0u, 1u, 0xEBE4BA47D2B76AC2ULL},
+    {"erosion_hydro_flux", kSource_erosion_hydro_flux, "CSMain", 16u, 16u, 1u, 0x7u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xBE05787D13EAFEEAULL},
+    {"erosion_hydro_settle", kSource_erosion_hydro_settle, "CSMain", 16u, 16u, 1u, 0x0u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x1EBFDC96401F2C8EULL},
+    {"erosion_hydro_transport", kSource_erosion_hydro_transport, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x20D60F7E07D4F5F1ULL},
+    {"erosion_hydro_water", kSource_erosion_hydro_water, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x7Fu, 0x0u, 0x0u, 0x0u, 1u, 0x724657FABC20593AULL},
+    {"erosion_steer", kSource_erosion_steer, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x96EC51FB375D87CEULL},
+    {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x7FB3E2E6C7FF78B7ULL},
+    {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9BDED15472D90646ULL},
+    {"gen_fbm", kSource_gen_fbm, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x0A645AFE3AE2E4A3ULL},
     {"reduce_sum", kSource_reduce_sum, "CSMain", 128u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x26AB7B22FCAC29ACULL},
     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
   };
-  inline constexpr int kKernelCount = 5;
+  inline constexpr int kKernelCount = 18;
 } // namespace moho::editor::gpu::shaders
