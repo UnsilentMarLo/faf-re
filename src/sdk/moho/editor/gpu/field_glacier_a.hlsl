@@ -43,21 +43,21 @@ void CSMain(KERNEL_IDS)
         if (i == 0u) dmaxNext[0] = 0u;
     }
     sh[gidx] = dv;
-    BARRIER();
+    BARRIER(0);
     if (gidx < 128u) sh[gidx] = max(sh[gidx], sh[gidx + 128u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 64u) sh[gidx] = max(sh[gidx], sh[gidx + 64u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 32u) sh[gidx] = max(sh[gidx], sh[gidx + 32u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 16u) sh[gidx] = max(sh[gidx], sh[gidx + 16u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 8u) sh[gidx] = max(sh[gidx], sh[gidx + 8u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 4u) sh[gidx] = max(sh[gidx], sh[gidx + 4u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 2u) sh[gidx] = max(sh[gidx], sh[gidx + 2u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx == 0u) InterlockedMax(dmaxCur[0], asuint(max(sh[0], sh[1])));
     PHASES_END
 }

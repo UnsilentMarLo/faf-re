@@ -20,7 +20,7 @@ void CSMain(KERNEL_IDS)
     float key = -3.0e38f;
     if (x < P.w && z < P.h) key = hgt[z * P.w + x];
     keys[gtid.x] = key;
-    BARRIER();
+    BARRIER(0);
     uint tile2 = gid.x + P.tile0;
     float mine = keys[gtid.x];
     uint rank = 0u;

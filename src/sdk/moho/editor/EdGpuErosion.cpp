@@ -74,7 +74,7 @@ namespace moho::editor::gpu
     {
       Executor& ex;
       std::string& err;
-      std::unique_ptr<Resource> dummy[4];
+      std::unique_ptr<Resource> dummy[7];   // [0] read only; [1..6] one per unused written slot (one resource is never bound to two UAV slots of a dispatch: the runtime drops the dispatch's writes)
       Dev(Executor& e, std::string& er) : ex(e), err(er) {}
       bool Zero(Field& f, const int w, const int h)
       {
@@ -518,7 +518,7 @@ namespace moho::editor::gpu
           // the end of the round: the integers into the floats, the steering surface follows, creep
           {
             Bindings bi;
-            bi.Uav(0, T.Src().R()).Uav(1, *dq).Uav(2, masks ? wearF.R() : d0).Uav(3, wqR).Uav(4, masks ? depF.R() : d0).Uav(5, pqR).Uav(6, masks ? flowF.R() : d0).Uav(7, fqR);
+            bi.Uav(0, T.Src().R()).Uav(1, *dq).Uav(2, masks ? wearF.R() : *dev.dummy[4]).Uav(3, wqR).Uav(4, masks ? depF.R() : *dev.dummy[5]).Uav(5, pqR).Uav(6, masks ? flowF.R() : *dev.dummy[6]).Uav(7, fqR);
             if (!DispatchGrid(ex, *kResolve, gp.w, gp.h, gp, bi, e)) return false;
           }
           if (creepPasses > 0.0f && !filter.Run(ex, T, t0, creepPasses, 1.0f, fac.rock.empty() ? nullptr : &rockR, false, d0, e)) return false;

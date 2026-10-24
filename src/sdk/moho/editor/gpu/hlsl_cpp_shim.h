@@ -10,7 +10,7 @@
 //   * no `return` value tricks that differ: a kernel is `void CSMain(KERNEL_IDS)`; `return;` is fine (not in kernels that use PHASES_BEGIN).
 //   * no round() (HLSL rounds half to even, C++ half away from zero): use floor(x + 0.5f).
 //   * out / inout parameters are written OUT(T) / INOUT(T).
-//   * group shared memory only through GROUPSHARED and the PHASES_BEGIN / BARRIER() / PHASES_END macros, BARRIER() at the top level of the body (never in a loop or an if).
+//   * group shared memory only through GROUPSHARED and the PHASES_BEGIN / BARRIER(0) / PHASES_END macros, BARRIER(0) at the top level of the body (never in a loop or an if).
 //
 // The emulation runs the threads of a group one after the other (phase by phase for kernels with barriers), single threaded: atomics are plain operations. It reports out of range
 // accesses of buffers and textures (emu::gOob) the way a GPU would silently ignore them. No fast-math, no multiply-add fusing: bit equal to the CPU where the maths is.
@@ -127,7 +127,7 @@ namespace emu
 
   inline int gOob = 0;          // out of range buffer / texture accesses since the last reset (a GPU ignores them; a kernel must not make them)
   inline int gPhase = 0;        // the phase being run (kernels with barriers)
-  inline bool gMore = false;    // set when a BARRIER() was passed: another phase follows
+  inline bool gMore = false;    // set when a BARRIER(0) was passed: another phase follows
 } // namespace emu
 
 using float2 = emu::Vec2<float>;
@@ -533,7 +533,7 @@ namespace emu
 #define KERNEL_IDS [[maybe_unused]] ::uint3 dtid, [[maybe_unused]] ::uint3 gtid, [[maybe_unused]] ::uint3 gid, [[maybe_unused]] ::uint gidx
 
 #define PHASES_BEGIN constexpr int emu_base_ = __COUNTER__; switch (::emu::gPhase) { case 0: {
-#define BARRIER() ::emu::gMore = true; } break; case (__COUNTER__ - emu_base_): {
+#define BARRIER(unused) ::emu::gMore = true; } break; case (__COUNTER__ - emu_base_): {
 #define PHASES_END } break; default: break; }
 
 #define UNROLL

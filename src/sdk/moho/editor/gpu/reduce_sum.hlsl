@@ -18,19 +18,19 @@ void CSMain(KERNEL_IDS)
     if (a < P.count) va = src[a];
     if (b < P.count) vb = src[b];
     sh[gtid.x] = va + vb;
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 64u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 64u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 32u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 32u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 16u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 16u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 8u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 8u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 4u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 4u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 2u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 2u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x == 0u) dst[gid.x] = sh[0] + sh[1];
     PHASES_END
 }

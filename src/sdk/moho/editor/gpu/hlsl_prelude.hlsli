@@ -14,10 +14,11 @@
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]

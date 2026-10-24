@@ -24,10 +24,11 @@ namespace moho::editor::gpu::shaders
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -147,10 +148,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -207,10 +209,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -324,10 +327,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -429,10 +433,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -535,10 +540,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -718,13 +724,13 @@ void CSMain(KERNEL_IDS)
         float u = Rand(rs);
         if (u > accept[uint(int(z0 + 0.5f)) * P.w + uint(int(x0 + 0.5f))]) return;
     }
-    uint track = (P.flags & 8u) != 0u ? 1u : 0u;
+)HLSL"
+    R"HLSL(    uint track = (P.flags & 8u) != 0u ? 1u : 0u;
     float inertia = P.inertia;
     float capacityK = P.capacity;
     float erodeK = P.erode;
     float waterK = P.water;
-)HLSL"
-    R"HLSL(    int R = int(P.radius);
+    int R = int(P.radius);
     int lifetime = int(P.lifetime);
     if ((P.flags & 16u) != 0u)
     {
@@ -868,10 +874,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -1028,10 +1035,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -1184,10 +1192,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -1345,12 +1354,12 @@ void CSMain(KERNEL_IDS)
         float sum = 0.0f;
         UNROLL for (int k = 0; k < 8; ++k)
         {
-            int nx = x + kDirX[k];
+)HLSL"
+    R"HLSL(            int nx = x + kDirX[k];
             int nz = z + kDirZ[k];
             float gk = P.gain;
             if (k >= 4) gk = 0.25f * P.gain;
-)HLSL"
-    R"HLSL(            float old = 0.0f;
+            float old = 0.0f;
             if (k < 4) old = Fa[uint(k) * n + i];
             else old = Fb[uint(k - 4) * n + i];
             old *= 1.0f - P.damp;
@@ -1410,10 +1419,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -1539,10 +1549,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -1711,13 +1722,13 @@ void CSMain(KERNEL_IDS)
         {
             uint j = uint(nz) * P.w + uint(nx);
             float dj = DO[j];
-            if (dj > 0.0f) v += SN[j] * FluxOf(j, n, kDirOpp[k]) / dj;
+)HLSL"
+    R"HLSL(            if (dj > 0.0f) v += SN[j] * FluxOf(j, n, kDirOpp[k]) / dj;
         }
     }
     if (v < 1e-9f) v = 0.0f;
     S[i] = v;
-)HLSL"
-    R"HLSL(    float dn = D[i] * (1.0f - P.evap);
+    float dn = D[i] * (1.0f - P.evap);
     if (dn < 1e-9f) dn = 0.0f;
     D[i] = dn;
 }
@@ -1742,10 +1753,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -1890,15 +1902,15 @@ UAV_BUFFER(float, flow, 6)
 FN float FluxOf(uint cellIndex, uint n, int k)
 {
     if (k < 4) return Fa[uint(k) * n + cellIndex];
-    return Fb[uint(k - 4) * n + cellIndex];
+)HLSL"
+    R"HLSL(    return Fb[uint(k - 4) * n + cellIndex];
 }
 
 NUMTHREADS(16, 16, 1)
 void CSMain(KERNEL_IDS)
 {
     if (dtid.x >= P.w || dtid.y >= P.h) return;
-)HLSL"
-    R"HLSL(    int x = int(dtid.x);
+    int x = int(dtid.x);
     int z = int(dtid.y);
     int w = int(P.w);
     int h = int(P.h);
@@ -2015,10 +2027,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -2123,10 +2136,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -2302,10 +2316,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -2471,10 +2486,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -2588,7 +2604,8 @@ struct BlurSlopeParams
 {
     uint w;
     uint h;
-    uint flat;       // 1 = blur where the ground is flat, 0 = where it is steep
+)HLSL"
+    R"HLSL(    uint flat;       // 1 = blur where the ground is flat, 0 = where it is steep
     uint hasMask;
     float cell;
     float lo;        // soft slope limits (rise per run)
@@ -2597,8 +2614,7 @@ struct BlurSlopeParams
 };
 
 #endif
-)HLSL"
-    R"HLSL(// ---- end field_blurslope_params.hlsli
+// ---- end field_blurslope_params.hlsli
 
 CBUFFER(BlurSlopeParams, P, 0)
 SRV_BUFFER(float, src, 0)
@@ -2646,10 +2662,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -2787,10 +2804,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -2919,10 +2937,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -3030,10 +3049,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -3163,10 +3183,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -3312,10 +3333,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -3395,21 +3417,21 @@ void CSMain(KERNEL_IDS)
         if (i == 0u) dmaxNext[0] = 0u;
     }
     sh[gidx] = dv;
-    BARRIER();
+    BARRIER(0);
     if (gidx < 128u) sh[gidx] = max(sh[gidx], sh[gidx + 128u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 64u) sh[gidx] = max(sh[gidx], sh[gidx + 64u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 32u) sh[gidx] = max(sh[gidx], sh[gidx + 32u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 16u) sh[gidx] = max(sh[gidx], sh[gidx + 16u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 8u) sh[gidx] = max(sh[gidx], sh[gidx + 8u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 4u) sh[gidx] = max(sh[gidx], sh[gidx + 4u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx < 2u) sh[gidx] = max(sh[gidx], sh[gidx + 2u]);
-    BARRIER();
+    BARRIER(0);
     if (gidx == 0u) InterlockedMax(dmaxCur[0], asuint(max(sh[0], sh[1])));
     PHASES_END
 }
@@ -3434,10 +3456,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -3582,10 +3605,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -3728,10 +3752,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -3837,10 +3862,10 @@ FN float SmoothStep(float e0, float e1, float v)
     }
 
 #endif
-// ---- end filt_common.hlsli
-// ---- begin gen_noise.hlsli
 )HLSL"
-    R"HLSL(// Gradient noise for the generator kernels (gen_*.hlsl). The same noise as the CPU ops (EdFieldCore.cpp / EdFieldUtil.h): the same lattice hash, the same 8 / 64 gradient directions,
+    R"HLSL(// ---- end filt_common.hlsli
+// ---- begin gen_noise.hlsli
+// Gradient noise for the generator kernels (gen_*.hlsl). The same noise as the CPU ops (EdFieldCore.cpp / EdFieldUtil.h): the same lattice hash, the same 8 / 64 gradient directions,
 // the same quintic fade, so a GPU result matches the CPU result up to float rounding.
 //
 // POSITIONS. The CPU ops compute the lattice position in double from the world position. A float cannot hold ox + x * cell at 4096 samples without losing the fine octaves, so the host
@@ -4103,10 +4128,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -4212,12 +4238,12 @@ FN float SmoothStep(float e0, float e1, float v)
     }
 
 #endif
-// ---- end filt_common.hlsli
+)HLSL"
+    R"HLSL(// ---- end filt_common.hlsli
 // ---- begin field_settle_params.hlsli
 // Constant buffer of field_settle.hlsl (op settle).
 #ifndef GPU_FIELD_SETTLE_PARAMS_HLSLI
-)HLSL"
-    R"HLSL(#define GPU_FIELD_SETTLE_PARAMS_HLSLI
+#define GPU_FIELD_SETTLE_PARAMS_HLSLI
 
 struct SettleParams
 {
@@ -4301,10 +4327,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -4465,10 +4492,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -4609,10 +4637,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -4695,10 +4724,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -4813,10 +4843,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -4933,11 +4964,11 @@ struct SnowInitParams
     uint hasMask;
     uint pad0;
     float cell;
-    float amount;     // snow depth where it lies
+)HLSL"
+    R"HLSL(    float amount;     // snow depth where it lies
     float lineLo;     // snowline - band
     float lineHi;     // snowline + band
-)HLSL"
-    R"HLSL(    float steepLo;    // no snow on ground steeper than steepLo .. steepHi (rise per run)
+    float steepLo;    // no snow on ground steeper than steepLo .. steepHi (rise per run)
     float steepHi;
     float pad1;
     float pad2;
@@ -4988,10 +5019,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -5098,9 +5130,9 @@ FN float SmoothStep(float e0, float e1, float v)
 
 #endif
 // ---- end filt_common.hlsli
-// ---- begin gen_noise.hlsli
 )HLSL"
-    R"HLSL(// Gradient noise for the generator kernels (gen_*.hlsl). The same noise as the CPU ops (EdFieldCore.cpp / EdFieldUtil.h): the same lattice hash, the same 8 / 64 gradient directions,
+    R"HLSL(// ---- begin gen_noise.hlsli
+// Gradient noise for the generator kernels (gen_*.hlsl). The same noise as the CPU ops (EdFieldCore.cpp / EdFieldUtil.h): the same lattice hash, the same 8 / 64 gradient directions,
 // the same quintic fade, so a GPU result matches the CPU result up to float rounding.
 //
 // POSITIONS. The CPU ops compute the lattice position in double from the world position. A float cannot hold ox + x * cell at 4096 samples without losing the fine octaves, so the host
@@ -5380,10 +5412,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -5442,10 +5475,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -5562,7 +5596,8 @@ struct UnsharpParams
     uint hasMask;
     uint pad0;
     float amount;
-    float thr;       // differences below this are left alone (smoothstep); 0 = every difference counts
+)HLSL"
+    R"HLSL(    float thr;       // differences below this are left alone (smoothstep); 0 = every difference counts
     float pad1;
     float pad2;
 };
@@ -5570,8 +5605,7 @@ struct UnsharpParams
 #endif
 // ---- end field_unsharp_params.hlsli
 
-)HLSL"
-    R"HLSL(CBUFFER(UnsharpParams, P, 0)
+CBUFFER(UnsharpParams, P, 0)
 SRV_BUFFER(float, src, 0)
 SRV_BUFFER(float, blurred, 1)
 SRV_BUFFER(float, mask, 2)
@@ -5610,10 +5644,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -5677,10 +5712,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -5787,7 +5823,8 @@ FN float SmoothStep(float e0, float e1, float v)
 #endif
 // ---- end filt_common.hlsli
 // ---- begin field_wet_params.hlsli
-// Constant buffer of the wetness kernels (field_wetprep, field_wetrank, field_wetsweep, field_wetfinal; op wetness).
+)HLSL"
+    R"HLSL(// Constant buffer of the wetness kernels (field_wetprep, field_wetrank, field_wetsweep, field_wetfinal; op wetness).
 #ifndef GPU_FIELD_WET_PARAMS_HLSLI
 #define GPU_FIELD_WET_PARAMS_HLSLI
 
@@ -5795,8 +5832,7 @@ struct WetParams
 {
     uint w;
     uint h;
-)HLSL"
-    R"HLSL(    uint tilesX;     // tiles of 32 x 32 samples: columns and rows
+    uint tilesX;     // tiles of 32 x 32 samples: columns and rows
     uint tilesZ;
     uint tile0;      // first tile of this dispatch (banded dispatch of the rank kernel)
     uint stage;      // field_wetfinal: 0 = topographic index, 1 = the op's output
@@ -5869,10 +5905,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -6001,10 +6038,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -6057,7 +6095,7 @@ void CSMain(KERNEL_IDS)
     float key = -3.0e38f;
     if (x < P.w && z < P.h) key = hgt[z * P.w + x];
     keys[gtid.x] = key;
-    BARRIER();
+    BARRIER(0);
     uint tile2 = gid.x + P.tile0;
     float mine = keys[gtid.x];
     uint rank = 0u;
@@ -6090,10 +6128,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -6264,10 +6303,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -6382,13 +6422,13 @@ struct WindParams
 {
     uint w;
     uint h;
-    uint pad0;
+)HLSL"
+    R"HLSL(    uint pad0;
     uint pad1;
     float cell;
     float windx;        // wind direction (cos, sin of the azimuth)
     float windz;
-)HLSL"
-    R"HLSL(    float awx;       // |wx|, |wz|
+    float awx;       // |wx|, |wz|
     float awz;
     float speed;     // sand speed on level ground, cells per step
     float abrade;    // most rock abraded per step
@@ -6452,10 +6492,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -6588,10 +6629,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -6707,14 +6749,14 @@ struct BilateralParams
     uint w;
     uint h;
     uint z0;
-    uint rows;
+)HLSL"
+    R"HLSL(    uint rows;
     uint rad;        // window radius in samples
     uint hasMask;
     uint pad0;
     uint pad1;
     float inv;       // 1 / sigma_r^2
-)HLSL"
-    R"HLSL(    float pad2;
+    float pad2;
     float pad3;
     float pad4;
 };
@@ -6785,10 +6827,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -6909,7 +6952,8 @@ struct BlurDirParams
     uint pad0;
     uint pad1;
     float ux;
-    float uz;
+)HLSL"
+    R"HLSL(    float uz;
     float wsum;
     float pad2;
 };
@@ -6919,8 +6963,7 @@ struct BlurDirParams
 
 CBUFFER(BlurDirParams, P, 0)
 SRV_BUFFER(float, wt, 1)
-)HLSL"
-    R"HLSL(SRV_BUFFER(float, src, 2)
+SRV_BUFFER(float, src, 2)
 SRV_BUFFER(float, mask, 3)
 UAV_BUFFER(float, dst, 0)
 
@@ -6969,10 +7012,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -7086,15 +7130,15 @@ FN float SmoothStep(float e0, float e1, float v)
 struct DiffuseParams
 {
     uint w;
-    uint h;
+)HLSL"
+    R"HLSL(    uint h;
     uint z0;
     uint rows;
     uint expo;       // 1 = exponential conductance, 0 = Lorentzian
     uint hasMask;
     uint pad0;
     uint pad1;
-)HLSL"
-    R"HLSL(    float invK2;     // 1 / kappa^2
+    float invK2;     // 1 / kappa^2
     float invCell;
     float rate;
     float pad2;
@@ -7169,10 +7213,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -7330,12 +7375,12 @@ FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
     int i1 = x0 > y0 ? 1 : 0;
     int j1 = x0 > y0 ? 0 : 1;
     float x1 = x0 - float(i1) + g2;
-    float y1 = y0 - float(j1) + g2;
+)HLSL"
+    R"HLSL(    float y1 = y0 - float(j1) + g2;
     float x2 = x0 - 1.0f + 2.0f * g2;
     float y2 = y0 - 1.0f + 2.0f * g2;
     float n = 0.0f;
-)HLSL"
-    R"HLSL(    float t0 = 0.5f - x0 * x0 - y0 * y0;
+    float t0 = 0.5f - x0 * x0 - y0 * y0;
     if (t0 > 0.0f)
     {
         t0 *= t0;
@@ -7516,14 +7561,14 @@ FN int IndexOf(int i, int n)
 
 FN float Fetch(int ix, int iz)
 {
-    return src[uint(IndexOf(iz, int(P.h))) * P.w + uint(IndexOf(ix, int(P.w)))];
+)HLSL"
+    R"HLSL(    return src[uint(IndexOf(iz, int(P.h))) * P.w + uint(IndexOf(ix, int(P.w)))];
 }
 
 NUMTHREADS(16, 16, 1)
 void CSMain(KERNEL_IDS)
 {
-)HLSL"
-    R"HLSL(    if (dtid.x >= P.w || dtid.y >= P.rows) return;
+    if (dtid.x >= P.w || dtid.y >= P.rows) return;
     uint row = dtid.y + P.z0;
     float x = float(dtid.x);
     float z = float(row);
@@ -7645,10 +7690,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -7709,10 +7755,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -7831,10 +7878,10 @@ struct NormalParams
     uint raw;        // 1 = -1..1 instead of 0..1
     uint pad0;
     uint pad1;
-    uint pad2;
-    float taps;      // samples either side of the point (span / 2 / cell)
 )HLSL"
-    R"HLSL(    float scale;     // slope from a difference over the span: strength / span
+    R"HLSL(    uint pad2;
+    float taps;      // samples either side of the point (span / 2 / cell)
+    float scale;     // slope from a difference over the span: strength / span
     float shift;     // samples added to the position
     float cell;
 };
@@ -7893,10 +7940,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -8003,13 +8051,13 @@ FN float SmoothStep(float e0, float e1, float v)
 
 #endif
 // ---- end filt_common.hlsli
-// ---- begin filt_occlusion_params.hlsli
+)HLSL"
+    R"HLSL(// ---- begin filt_occlusion_params.hlsli
 // Constant buffer of filt_occlusion.hlsl (op occlusion).
 #ifndef GPU_FILT_OCCLUSION_PARAMS_HLSLI
 #define GPU_FILT_OCCLUSION_PARAMS_HLSLI
 
-)HLSL"
-    R"HLSL(struct OcclusionParams
+struct OcclusionParams
 {
     uint w;
     uint h;
@@ -8091,10 +8139,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -8202,7 +8251,8 @@ FN float SmoothStep(float e0, float e1, float v)
 // ---- end filt_common.hlsli
 // ---- begin filt_terrain_params.hlsli
 // Constant buffer of filt_terrain.hlsl (ops slope, curvature, aspect, hillshade).
-#ifndef GPU_FILT_TERRAIN_PARAMS_HLSLI
+)HLSL"
+    R"HLSL(#ifndef GPU_FILT_TERRAIN_PARAMS_HLSLI
 #define GPU_FILT_TERRAIN_PARAMS_HLSLI
 
 struct TerrainParams
@@ -8211,8 +8261,7 @@ struct TerrainParams
     uint h;
     uint z0;
     uint rows;
-)HLSL"
-    R"HLSL(    uint op;          // 0 slope, 1 curvature, 2 aspect, 3 hillshade
+    uint op;          // 0 slope, 1 curvature, 2 aspect, 3 hillshade
     uint n;           // difference distance in samples (slope, curvature, aspect)
     uint mode;        // slope: 0 degrees 1 gradient; aspect: 0 facing 1 degrees; curvature: 1 = raw; hillshade: 0 shade 1 lit 2 shadow
     uint shadows;     // hillshade: cast shadows
@@ -8366,10 +8415,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -8525,12 +8575,12 @@ FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
     float x0 = sx - t;
     float y0 = sz - t;
     int i1 = x0 > y0 ? 1 : 0;
-    int j1 = x0 > y0 ? 0 : 1;
+)HLSL"
+    R"HLSL(    int j1 = x0 > y0 ? 0 : 1;
     float x1 = x0 - float(i1) + g2;
     float y1 = y0 - float(j1) + g2;
     float x2 = x0 - 1.0f + 2.0f * g2;
-)HLSL"
-    R"HLSL(    float y2 = y0 - 1.0f + 2.0f * g2;
+    float y2 = y0 - 1.0f + 2.0f * g2;
     float n = 0.0f;
     float t0 = 0.5f - x0 * x0 - y0 * y0;
     if (t0 > 0.0f)
@@ -8769,7 +8819,8 @@ void CSMain(KERNEL_IDS)
             if (P.profile == 2u) c = bd < hw ? 1.0f : 0.0f;
             else if (P.profile == 1u) c = 1.0f - SmoothStep(hw * 0.6f, hw * 1.2f, bd);
             else c = saturate(1.0f - bd / max(hw, 0.001f));
-            best = max(best, c * oct[b + 10u]);
+)HLSL"
+    R"HLSL(            best = max(best, c * oct[b + 10u]);
         }
         result = saturate(best);
     }
@@ -8777,8 +8828,7 @@ void CSMain(KERNEL_IDS)
     {
         int cx = 0;
         int cz = 0;
-)HLSL"
-    R"HLSL(        float lx = 0.0f;
+        float lx = 0.0f;
         float lz = 0.0f;
         float sc = oct[8];
         LatticePoint(oct[0], oct[1], oct[2] + dwx / sc, oct[3] + dwz / sc, oct[4], oct[5], oct[6], oct[7], x, z, cx, cz, lx, lz);
@@ -8873,10 +8923,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -9042,14 +9093,14 @@ FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
         t0 *= t0;
         float2 g = GradOf(Hash2i(i, j, seed), fine);
         n += t0 * t0 * (g.x * x0 + g.y * y0);
-    }
+)HLSL"
+    R"HLSL(    }
     float t1 = 0.5f - x1 * x1 - y1 * y1;
     if (t1 > 0.0f)
     {
         t1 *= t1;
         float2 g = GradOf(Hash2i(i + i1, j + j1, seed), fine);
-)HLSL"
-    R"HLSL(        n += t1 * t1 * (g.x * x1 + g.y * y1);
+        n += t1 * t1 * (g.x * x1 + g.y * y1);
     }
     float t2 = 0.5f - x2 * x2 - y2 * y2;
     if (t2 > 0.0f)
@@ -9177,10 +9228,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -9345,12 +9397,12 @@ FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
     if (t0 > 0.0f)
     {
         t0 *= t0;
-        float2 g = GradOf(Hash2i(i, j, seed), fine);
+)HLSL"
+    R"HLSL(        float2 g = GradOf(Hash2i(i, j, seed), fine);
         n += t0 * t0 * (g.x * x0 + g.y * y0);
     }
     float t1 = 0.5f - x1 * x1 - y1 * y1;
-)HLSL"
-    R"HLSL(    if (t1 > 0.0f)
+    if (t1 > 0.0f)
     {
         t1 *= t1;
         float2 g = GradOf(Hash2i(i + i1, j + j1, seed), fine);
@@ -9475,10 +9527,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -9639,13 +9692,13 @@ FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
     float x2 = x0 - 1.0f + 2.0f * g2;
     float y2 = y0 - 1.0f + 2.0f * g2;
     float n = 0.0f;
-    float t0 = 0.5f - x0 * x0 - y0 * y0;
+)HLSL"
+    R"HLSL(    float t0 = 0.5f - x0 * x0 - y0 * y0;
     if (t0 > 0.0f)
     {
         t0 *= t0;
         float2 g = GradOf(Hash2i(i, j, seed), fine);
-)HLSL"
-    R"HLSL(        n += t0 * t0 * (g.x * x0 + g.y * y0);
+        n += t0 * t0 * (g.x * x0 + g.y * y0);
     }
     float t1 = 0.5f - x1 * x1 - y1 * y1;
     if (t1 > 0.0f)
@@ -9779,10 +9832,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -9946,13 +10000,13 @@ FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
     float t0 = 0.5f - x0 * x0 - y0 * y0;
     if (t0 > 0.0f)
     {
-        t0 *= t0;
+)HLSL"
+    R"HLSL(        t0 *= t0;
         float2 g = GradOf(Hash2i(i, j, seed), fine);
         n += t0 * t0 * (g.x * x0 + g.y * y0);
     }
     float t1 = 0.5f - x1 * x1 - y1 * y1;
-)HLSL"
-    R"HLSL(    if (t1 > 0.0f)
+    if (t1 > 0.0f)
     {
         t1 *= t1;
         float2 g = GradOf(Hash2i(i + i1, j + j1, seed), fine);
@@ -10083,10 +10137,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -10235,11 +10290,11 @@ FN float Perlin(int ix, int iz, float fx, float fz, uint seed, uint fine)
 {
     float dx = 0.0f;
     float dz = 0.0f;
-    return PerlinD(ix, iz, fx, fz, seed, fine, dx, dz);
+)HLSL"
+    R"HLSL(    return PerlinD(ix, iz, fx, fz, seed, fine, dx, dz);
 }
 
-)HLSL"
-    R"HLSL(// 2D simplex noise about -1..1 (EdFieldCore.cpp Simplex). (ix, iz, fx, fz) is the position in the SKEWED lattice (the host skews the affine map): ix, iz the simplex cell, fx, fz inside it.
+// 2D simplex noise about -1..1 (EdFieldCore.cpp Simplex). (ix, iz, fx, fz) is the position in the SKEWED lattice (the host skews the affine map): ix, iz the simplex cell, fx, fz inside it.
 FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
 {
     float g2 = 0.21132486540518713f;
@@ -10494,10 +10549,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -10664,13 +10720,13 @@ FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
         float2 g = GradOf(Hash2i(i, j, seed), fine);
         n += t0 * t0 * (g.x * x0 + g.y * y0);
     }
-    float t1 = 0.5f - x1 * x1 - y1 * y1;
+)HLSL"
+    R"HLSL(    float t1 = 0.5f - x1 * x1 - y1 * y1;
     if (t1 > 0.0f)
     {
         t1 *= t1;
         float2 g = GradOf(Hash2i(i + i1, j + j1, seed), fine);
-)HLSL"
-    R"HLSL(        n += t1 * t1 * (g.x * x1 + g.y * y1);
+        n += t1 * t1 * (g.x * x1 + g.y * y1);
     }
     float t2 = 0.5f - x2 * x2 - y2 * y2;
     if (t2 > 0.0f)
@@ -10808,10 +10864,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -10978,13 +11035,13 @@ FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
         float2 g = GradOf(Hash2i(i, j, seed), fine);
         n += t0 * t0 * (g.x * x0 + g.y * y0);
     }
-    float t1 = 0.5f - x1 * x1 - y1 * y1;
+)HLSL"
+    R"HLSL(    float t1 = 0.5f - x1 * x1 - y1 * y1;
     if (t1 > 0.0f)
     {
         t1 *= t1;
         float2 g = GradOf(Hash2i(i + i1, j + j1, seed), fine);
-)HLSL"
-    R"HLSL(        n += t1 * t1 * (g.x * x1 + g.y * y1);
+        n += t1 * t1 * (g.x * x1 + g.y * y1);
     }
     float t2 = 0.5f - x2 * x2 - y2 * y2;
     if (t2 > 0.0f)
@@ -11132,10 +11189,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -11177,19 +11235,19 @@ void CSMain(KERNEL_IDS)
     if (a < P.count) va = src[a];
     if (b < P.count) vb = src[b];
     sh[gtid.x] = va + vb;
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 64u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 64u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 32u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 32u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 16u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 16u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 8u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 8u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 4u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 4u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x < 2u) sh[gtid.x] = sh[gtid.x] + sh[gtid.x + 2u];
-    BARRIER();
+    BARRIER(0);
     if (gtid.x == 0u) dst[gid.x] = sh[0] + sh[1];
     PHASES_END
 }
@@ -11214,10 +11272,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -11275,10 +11334,11 @@ void CSMain(KERNEL_IDS)
 #define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
 #define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
 
-// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(0); code, ..., PHASES_END. Every phase is its own scope (a local does not
 // live across a BARRIER, on the GPU as in the emulation).
 #define PHASES_BEGIN {
-#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+// (BARRIER takes one dummy argument: the HLSL compiler's preprocessor rejects a macro with an empty parameter list, error X1500 at the #define)
+#define BARRIER(unused) GroupMemoryBarrierWithGroupSync(); } {
 #define PHASES_END }
 
 #define UNROLL [unroll]
@@ -11321,66 +11381,66 @@ void CSMain(KERNEL_IDS)
 )HLSL";
 
   inline const KernelInfo kKernels[] = {
-    {"blur_pass", kSource_blur_pass, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x4DACE3E878AF6E80ULL},
-    {"buf_to_tex", kSource_buf_to_tex, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x1u, 0x0u, 1u, 0x0C46DE5748B192F2ULL},
-    {"erosion_blend", kSource_erosion_blend, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x517852962D245D4FULL},
-    {"erosion_copy", kSource_erosion_copy, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x5D9B8F09C3AB2D4DULL},
-    {"erosion_delta", kSource_erosion_delta, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x7B59D31E0F2C0B01ULL},
-    {"erosion_drop", kSource_erosion_drop, "CSMain", 16u, 16u, 1u, 0x1Fu, 0xFu, 0x0u, 0x0u, 0x0u, 1u, 0x719136D7659EE5EFULL},
-    {"erosion_drop_resolve", kSource_erosion_drop_resolve, "CSMain", 16u, 16u, 1u, 0x0u, 0xFFu, 0x0u, 0x0u, 0x0u, 1u, 0xD5A7C9753881ADB6ULL},
-    {"erosion_hydro_apply", kSource_erosion_hydro_apply, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA281888C8F5458A8ULL},
-    {"erosion_hydro_flux", kSource_erosion_hydro_flux, "CSMain", 16u, 16u, 1u, 0x7u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xADB076A3B47F73D4ULL},
-    {"erosion_hydro_settle", kSource_erosion_hydro_settle, "CSMain", 16u, 16u, 1u, 0x0u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0xA692430D0663749AULL},
-    {"erosion_hydro_transport", kSource_erosion_hydro_transport, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x37C963B5412C4B13ULL},
-    {"erosion_hydro_water", kSource_erosion_hydro_water, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x7Fu, 0x0u, 0x0u, 0x0u, 1u, 0xD8AD27EC8444A6C7ULL},
-    {"erosion_steer", kSource_erosion_steer, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9EB04DF47EC712E6ULL},
-    {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x36C964038468BD87ULL},
-    {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xD889E54F1E4B6956ULL},
-    {"field_blurslope", kSource_field_blurslope, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xEEB771530C2DE722ULL},
-    {"field_convolve", kSource_field_convolve, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2D14850FD687FA27ULL},
-    {"field_edge", kSource_field_edge, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x3F26AAC9638A50ADULL},
-    {"field_flowfinal", kSource_field_flowfinal, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xCDA1C822E9599BB7ULL},
-    {"field_flowprep", kSource_field_flowprep, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x035B09F3380D7C6AULL},
-    {"field_flowsweep", kSource_field_flowsweep, "CSMain", 64u, 1u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xF1F6A69CD46AAFC3ULL},
-    {"field_glacier_a", kSource_field_glacier_a, "CSMain", 16u, 16u, 1u, 0x3u, 0xFu, 0x0u, 0x0u, 0x0u, 1u, 0xE1C04353EC498ADBULL},
-    {"field_glacier_b", kSource_field_glacier_b, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x7A0444BEAB57C8A5ULL},
-    {"field_morph", kSource_field_morph, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x52463243DBBAAFBBULL},
-    {"field_rockiness", kSource_field_rockiness, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x8CF8425D515601CCULL},
-    {"field_settle", kSource_field_settle, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x600636D24769A34FULL},
-    {"field_slide_a", kSource_field_slide_a, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0F632EA329C10980ULL},
-    {"field_slide_b", kSource_field_slide_b, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x8F04CA29A7C94D7AULL},
-    {"field_slopelimit", kSource_field_slopelimit, "CSMain", 16u, 16u, 1u, 0xFu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2B02344E17C970CDULL},
-    {"field_slopescan", kSource_field_slopescan, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x4DB2A8E0930B861FULL},
-    {"field_snowinit", kSource_field_snowinit, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA15762ADF2F092ACULL},
-    {"field_stratify", kSource_field_stratify, "CSMain", 16u, 16u, 1u, 0xFu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x4189E47FBEA2BA7CULL},
-    {"field_sub", kSource_field_sub, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x101759797F1D7EACULL},
-    {"field_unsharp", kSource_field_unsharp, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x51536C353B56C1BDULL},
-    {"field_weather", kSource_field_weather, "CSMain", 16u, 16u, 1u, 0x0u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xD84A62CAB2D4E35CULL},
-    {"field_wetfinal", kSource_field_wetfinal, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xC494E805BCBC81C3ULL},
-    {"field_wetprep", kSource_field_wetprep, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xC6CE8380D785A363ULL},
-    {"field_wetrank", kSource_field_wetrank, "CSMain", 1024u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x85F14B8A1B71D74DULL},
-    {"field_wetsweep", kSource_field_wetsweep, "CSMain", 64u, 1u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xFE462ABB28D7AE53ULL},
-    {"field_wind_a", kSource_field_wind_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x9C31D6B9A4CDF0B1ULL},
-    {"field_wind_b", kSource_field_wind_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x4823B43803A2C019ULL},
-    {"filt_bilateral", kSource_filt_bilateral, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x6B226CC7B6F8A9DFULL},
-    {"filt_blurdir", kSource_filt_blurdir, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x7E0FBD4C9A05041EULL},
-    {"filt_diffuse", kSource_filt_diffuse, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x40DC1A1D6642A2D3ULL},
-    {"filt_dwarp", kSource_filt_dwarp, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xD25852870C76D667ULL},
-    {"filt_lerpmask", kSource_filt_lerpmask, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x535E8DE4338BB7E5ULL},
-    {"filt_normal", kSource_filt_normal, "CSMain", 16u, 16u, 1u, 0x2u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x8E348EF139FEBA7EULL},
-    {"filt_occlusion", kSource_filt_occlusion, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xF7CFFCFD5A7C0F79ULL},
-    {"filt_terrain", kSource_filt_terrain, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x24972E6A8CEF4926ULL},
-    {"gen_cells", kSource_gen_cells, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x248960A238B84B06ULL},
-    {"gen_craters", kSource_gen_craters, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2CBB355B5E28183BULL},
-    {"gen_dunes", kSource_gen_dunes, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xF2EB251DBBCA424DULL},
-    {"gen_fbm", kSource_gen_fbm, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x0A645AFE3AE2E4A3ULL},
-    {"gen_fbmd", kSource_gen_fbmd, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xC4F90F4C5B31D1D4ULL},
-    {"gen_fractal", kSource_gen_fractal, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x844260A51F7EF798ULL},
-    {"gen_island", kSource_gen_island, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x3CC9C2738C8AF3A4ULL},
-    {"gen_musgrave", kSource_gen_musgrave, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x61E7A21CB358E8E2ULL},
-    {"reduce_sum", kSource_reduce_sum, "CSMain", 128u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x26AB7B22FCAC29ACULL},
-    {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
-    {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
+    {"blur_pass", kSource_blur_pass, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x5E161FDE922D4E2DULL},
+    {"buf_to_tex", kSource_buf_to_tex, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x1u, 0x0u, 1u, 0x41A615D5B056BF6BULL},
+    {"erosion_blend", kSource_erosion_blend, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA5B052500F1C298AULL},
+    {"erosion_copy", kSource_erosion_copy, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x708A0EFE064684B0ULL},
+    {"erosion_delta", kSource_erosion_delta, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x84E5762733ADAF96ULL},
+    {"erosion_drop", kSource_erosion_drop, "CSMain", 16u, 16u, 1u, 0x1Fu, 0xFu, 0x0u, 0x0u, 0x0u, 1u, 0x7D8E031E7AB61960ULL},
+    {"erosion_drop_resolve", kSource_erosion_drop_resolve, "CSMain", 16u, 16u, 1u, 0x0u, 0xFFu, 0x0u, 0x0u, 0x0u, 1u, 0xA56C1A5CB0C9C9FFULL},
+    {"erosion_hydro_apply", kSource_erosion_hydro_apply, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xC5AE61361B5DD0E9ULL},
+    {"erosion_hydro_flux", kSource_erosion_hydro_flux, "CSMain", 16u, 16u, 1u, 0x7u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x5C2A51E9788B4DDFULL},
+    {"erosion_hydro_settle", kSource_erosion_hydro_settle, "CSMain", 16u, 16u, 1u, 0x0u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x52D8C1843D89A8FFULL},
+    {"erosion_hydro_transport", kSource_erosion_hydro_transport, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0CC154B5432E0D96ULL},
+    {"erosion_hydro_water", kSource_erosion_hydro_water, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x7Fu, 0x0u, 0x0u, 0x0u, 1u, 0xB9DF792E7E7C4F98ULL},
+    {"erosion_steer", kSource_erosion_steer, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x679A5127D2E44A2DULL},
+    {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xE30D2157FA0612ACULL},
+    {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x07D552B2C049033BULL},
+    {"field_blurslope", kSource_field_blurslope, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x433B807528883DCFULL},
+    {"field_convolve", kSource_field_convolve, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x08F2BD1B75A71708ULL},
+    {"field_edge", kSource_field_edge, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9283478709DC6E7AULL},
+    {"field_flowfinal", kSource_field_flowfinal, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x899F04987A56DB56ULL},
+    {"field_flowprep", kSource_field_flowprep, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x5286B529A68F5773ULL},
+    {"field_flowsweep", kSource_field_flowsweep, "CSMain", 64u, 1u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xBEB7AB9D3A208086ULL},
+    {"field_glacier_a", kSource_field_glacier_a, "CSMain", 16u, 16u, 1u, 0x3u, 0xFu, 0x0u, 0x0u, 0x0u, 1u, 0x1B4208CE4EDEC982ULL},
+    {"field_glacier_b", kSource_field_glacier_b, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x3177CE8D1F23A4A2ULL},
+    {"field_morph", kSource_field_morph, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x0D5AC8F67005B40EULL},
+    {"field_rockiness", kSource_field_rockiness, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xF8D97E78A22A320BULL},
+    {"field_settle", kSource_field_settle, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x1B81D9521AB54154ULL},
+    {"field_slide_a", kSource_field_slide_a, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x3FECC9CE76522067ULL},
+    {"field_slide_b", kSource_field_slide_b, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x202DDCFC8F6EC18FULL},
+    {"field_slopelimit", kSource_field_slopelimit, "CSMain", 16u, 16u, 1u, 0xFu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x6EAB65F8A033CE3CULL},
+    {"field_slopescan", kSource_field_slopescan, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA224555910927A2AULL},
+    {"field_snowinit", kSource_field_snowinit, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xDD13892C29C69EADULL},
+    {"field_stratify", kSource_field_stratify, "CSMain", 16u, 16u, 1u, 0xFu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x368103840824EF95ULL},
+    {"field_sub", kSource_field_sub, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x12985B060E99EE7FULL},
+    {"field_unsharp", kSource_field_unsharp, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xC4DBADC004D2412CULL},
+    {"field_weather", kSource_field_weather, "CSMain", 16u, 16u, 1u, 0x0u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x96BE569AA32B8011ULL},
+    {"field_wetfinal", kSource_field_wetfinal, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x08375151B08EDCBCULL},
+    {"field_wetprep", kSource_field_wetprep, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xF5272B990ED47C58ULL},
+    {"field_wetrank", kSource_field_wetrank, "CSMain", 1024u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xAAE5BEC68870CD90ULL},
+    {"field_wetsweep", kSource_field_wetsweep, "CSMain", 64u, 1u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xECDA446ACEF3DC88ULL},
+    {"field_wind_a", kSource_field_wind_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0781368D60D567DAULL},
+    {"field_wind_b", kSource_field_wind_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x5A0A8D9013028B88ULL},
+    {"filt_bilateral", kSource_filt_bilateral, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xFAC258398AC039BCULL},
+    {"filt_blurdir", kSource_filt_blurdir, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xB63E85C6C8A0CBCFULL},
+    {"filt_diffuse", kSource_filt_diffuse, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xF891CB93A2435142ULL},
+    {"filt_dwarp", kSource_filt_dwarp, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x365D2A1079C0D782ULL},
+    {"filt_lerpmask", kSource_filt_lerpmask, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x5F5515B45CFA2B7CULL},
+    {"filt_normal", kSource_filt_normal, "CSMain", 16u, 16u, 1u, 0x2u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x831F1C1386DF1999ULL},
+    {"filt_occlusion", kSource_filt_occlusion, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x4CADE08E51C32DFCULL},
+    {"filt_terrain", kSource_filt_terrain, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x8343CBE874DA11B9ULL},
+    {"gen_cells", kSource_gen_cells, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x881ABAE64B6CDE11ULL},
+    {"gen_craters", kSource_gen_craters, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x8C32D89AA5F2724CULL},
+    {"gen_dunes", kSource_gen_dunes, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xB25F0B09C8309F40ULL},
+    {"gen_fbm", kSource_gen_fbm, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xEC147992E214B1D2ULL},
+    {"gen_fbmd", kSource_gen_fbmd, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x916685F17C8BCA73ULL},
+    {"gen_fractal", kSource_gen_fractal, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9E75DA88B63A6E5FULL},
+    {"gen_island", kSource_gen_island, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9E40AF636E5E3105ULL},
+    {"gen_musgrave", kSource_gen_musgrave, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x24CF85D117E61C71ULL},
+    {"reduce_sum", kSource_reduce_sum, "CSMain", 128u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xDFFEBE8900057AF3ULL},
+    {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x294FAC2571BFB998ULL},
+    {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x47FF11E48B36EB4CULL},
   };
   inline constexpr int kKernelCount = 60;
 } // namespace moho::editor::gpu::shaders
