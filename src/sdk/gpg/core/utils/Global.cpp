@@ -2503,10 +2503,9 @@ bool gpg::ParseNum(const char* start, const char* end, int* dest) noexcept
     return true;
 }
 
-/**
- * Address: 0x009071D0 (FUN_009071D0, gpg::SetThreadName)
- */
-void gpg::SetThreadName(const unsigned int id, const char* const name)
+namespace {
+// EDITOR: kept out of gpg::SetThreadName because MSVC refuses __try in a function that needs unwinding (C2712): the static initialiser below does.
+void NameThreadForSystem(const unsigned int id, const char* const name)
 {
     // EDITOR: also name the thread for the system (SetThreadDescription, Windows 10 1607 and later): Process Explorer, Process Hacker and profilers show the name, and so does
     // ed_perf_threads. The original only raises the debugger exception below, and only under AQtime.
@@ -2534,6 +2533,15 @@ void gpg::SetThreadName(const unsigned int id, const char* const name)
             }
         }
     }
+}
+} // namespace
+
+/**
+ * Address: 0x009071D0 (FUN_009071D0, gpg::SetThreadName)
+ */
+void gpg::SetThreadName(const unsigned int id, const char* const name)
+{
+    NameThreadForSystem(id, name);
 
     if (moho::APP_GetAqtimeInstrumentationMode() == 0u) {
         return;
