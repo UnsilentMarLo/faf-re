@@ -6,7 +6,7 @@ __pycache__/
 
 # Temporary files of scripts
 scripts/**/*.txt
-src/sdk/moho/editor/*.generated.h
+src/sdk/moho/editor/*generated.h
 
 .vs/
 .tmp/
@@ -68,3 +68,4 @@ RECOVERY_STATUS.md
 
 # Local FFmpeg headers, import libraries and DLLs; see docs/FAF_SFD_COMPATIBILITY.md.
 dependencies/ffmpeg/
+src/sdk/moho/editor/EdGpuShaders.generated.h
