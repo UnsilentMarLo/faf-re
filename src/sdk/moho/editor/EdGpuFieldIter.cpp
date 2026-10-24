@@ -13,6 +13,7 @@ namespace moho::editor::gpu::hk
 #include "moho/editor/gpu/field_slide_params.hlsli"
 #include "moho/editor/gpu/field_snowinit_params.hlsli"
 #include "moho/editor/gpu/field_weather_params.hlsli"
+#include "moho/editor/gpu/field_wind_params.hlsli"
 } // namespace moho::editor::gpu::hk
 
 namespace moho::editor::gpu
@@ -346,10 +347,90 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
+    // ---- erode_wind ---------------------------------------------------------------------------------------------------------------------------------
+
+    OpResult OpWindGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = Source(a);
+      const Grid* sand0 = In(a, "b");
+      if (src == nullptr || (sand0 != nullptr && !sand0->SameShape(*src))) return OpResult::Unsupported;
+      const std::string want = a.p.S("output", "height");
+      if (want != "height" && want != "sand" && want != "abrasion") return OpResult::Unsupported;
+      const int iterations = ItersOf(a, 40);
+      if (iterations == 0) return OpResult::Unsupported;
+      const int w = src->w, h = src->h;
+      const std::size_t n = src->Count();
+      if (!Fits(ex, n, 12)) return OpResult::Unsupported;
+      const KernelInfo* ka = FindKernel("field_wind_a");
+      const KernelInfo* kb = FindKernel("field_wind_b");
+      if (ka == nullptr || kb == nullptr) { err = "kernel field_wind_a / field_wind_b is missing"; return OpResult::Failed; }
+      const double az = a.p.N("azimuth", 0.0) * field::t7::kPiD / 180.0;
+      hk::WindParams p{};
+      p.w = static_cast<std::uint32_t>(w);
+      p.h = static_cast<std::uint32_t>(h);
+      p.cell = src->cell;
+      p.windx = static_cast<float>(std::cos(az));
+      p.windz = static_cast<float>(std::sin(az));
+      p.awx = std::fabs(p.windx);
+      p.awz = std::fabs(p.windz);
+      p.speed = std::max(0.0f, std::min(0.7f, static_cast<float>(a.p.N("speed", 0.5))));
+      p.abrade = std::max(0.0f, static_cast<float>(a.p.N("abrade", 0.02)));
+      p.drag = std::max(0.0f, static_cast<float>(a.p.N("drag", 1.5)));
+      const float repose = std::max(0.05f, static_cast<float>(a.p.N("repose", 0.62)));
+      const float sandConst = std::max(0.0f, static_cast<float>(a.p.N("sand", 0.5)));
+      std::vector<float> sandV(n), rockV(n);
+      for (std::size_t i = 0; i < n; ++i) {
+        sandV[i] = std::max(0.0f, sand0 != nullptr ? sand0->v[i] : sandConst);
+        rockV[i] = src->v[i] - sandV[i];
+      }
+      PingPong sand;
+      Field rock, wear, take, vel;
+      if (!MakeField(ex, w, h, sand.f[0], err) || !MakeField(ex, w, h, sand.f[1], err) || !MakeField(ex, w, h, rock, err) || !UploadField(ex, sand.f[0], sandV.data(), err) ||
+          !UploadField(ex, rock, rockV.data(), err) || !MakeField(ex, w, h, wear, err) || !FillBuffer(ex, wear.R(), 0u, err) || !MakeField(ex, w, h, take, err) || !MakeField(ex, w, h, vel, err)) {
+        return OpResult::Failed;
+      }
+      Slider sl;   // the sand slides at the angle of repose on the rock, always at rate 0.5 (as the CPU op)
+      if (!sl.Init(ex, w, h, err)) return OpResult::Failed;
+      sl.p.cell = src->cell;
+      sl.p.rate = 0.5f;
+      sl.p.talus = repose;
+      sl.p.hasRock = 1;
+      sl.rock = &rock.R();
+      const bool ok = RunIterations(ex, static_cast<u32>(iterations), 60.0, [&](const u32, std::string& e) {
+        Bindings ba;
+        ba.Srv(0, rock.R()).Srv(1, sand.Src().R()).Uav(0, take.R()).Uav(1, vel.R());
+        if (!DispatchGrid(ex, *ka, p.w, p.h, p, ba, e)) return false;
+        Bindings bb;
+        bb.Srv(0, sand.Src().R()).Srv(1, take.R()).Srv(2, vel.R()).Uav(0, sand.Dst().R()).Uav(1, rock.R()).Uav(2, wear.R());
+        if (!DispatchGrid(ex, *kb, p.w, p.h, p, bb, e)) return false;
+        sand.Flip();
+        if (!sl.Step(ex, sand.Src().R(), sand.Dst().R(), e)) return false;
+        sand.Flip();
+        return true;
+      }, err);
+      if (!ok) return OpResult::Failed;
+      Grid gSand = LikeOf(*src), gRock = LikeOf(*src), gWear = LikeOf(*src);
+      if (!DownloadGrid(ex, sand.Src(), gSand, err) || !DownloadGrid(ex, rock, gRock, err) || !DownloadGrid(ex, wear, gWear, err)) return OpResult::Failed;
+      std::map<std::string, Grid> all;
+      all["height"] = LikeOf(*src);
+      all["sand"] = LikeOf(*src);
+      all["abrasion"] = LikeOf(*src);
+      for (std::size_t i = 0; i < n; ++i) {
+        all["height"].v[i] = gRock.v[i] + gSand.v[i];
+        all["sand"].v[i] = gSand.v[i];
+        all["abrasion"].v[i] = Clamp01(gWear.v[i]);
+      }
+      Grid result;
+      if (!Emit(a, result, all, "height")) return OpResult::Unsupported;
+      out = std::move(result);
+      return OpResult::Done;
+    }
+
     struct Registrar
     {
       Registrar()
       {
+        RegisterGpuOp("erode_wind", &OpWindGpu, 16384.0f);
         RegisterGpuOp("erode_snow", &OpSnowGpu, 16384.0f);
         RegisterGpuOp("erode_rocksoil", &OpRockSoilGpu, 16384.0f);
         RegisterGpuOp("settle", &OpSettleGpu, 16384.0f);

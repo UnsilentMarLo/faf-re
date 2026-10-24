@@ -39,6 +39,7 @@
 #include "moho/editor/gpu/field_sub_params.hlsli"
 #include "moho/editor/gpu/field_unsharp_params.hlsli"
 #include "moho/editor/gpu/field_weather_params.hlsli"
+#include "moho/editor/gpu/field_wind_params.hlsli"
 
 EMU_KERNEL_BEGIN(k_field_settle)
 #include "moho/editor/gpu/field_settle.hlsl"
@@ -87,6 +88,14 @@ EMU_KERNEL_END(field_weather)
 EMU_KERNEL_BEGIN(k_field_snowinit)
 #include "moho/editor/gpu/field_snowinit.hlsl"
 EMU_KERNEL_END(field_snowinit)
+
+EMU_KERNEL_BEGIN(k_field_wind_a)
+#include "moho/editor/gpu/field_wind_a.hlsl"
+EMU_KERNEL_END(field_wind_a)
+
+EMU_KERNEL_BEGIN(k_field_wind_b)
+#include "moho/editor/gpu/field_wind_b.hlsl"
+EMU_KERNEL_END(field_wind_b)
 
 EMU_KERNEL_BEGIN(k_field_sub)
 #include "moho/editor/gpu/field_sub.hlsl"
@@ -605,6 +614,35 @@ static void TestSnow()
   CheckDeclines("snow_no_input", "erode_snow", Args({}, {}, {}));
 }
 
+// ---- erode_wind ------------------------------------------------------------------------------------------------------------------------------------
+
+static void TestWind()
+{
+  const GridPtr t = TestTerrain(73, 55, 2.0f, 91, 40.0);
+  auto sand = std::make_shared<Grid>(*TestMask(73, 55, 12));
+  for (float& v : sand->v) v *= 1.2f;
+  CheckSame("wind_default", "erode_wind", Args({{"iterations", 15}}, {}, {{"a", t}}), 1e-5, nullptr, true);
+  {
+    Grid g;
+    RunGpu("erode_wind", Args({{"iterations", 15}}, {}, {{"a", t}}), g);
+    CHECK(Compare(g, *t).maxAbs > 1e-3, "erode_wind changes the terrain (the comparison is not vacuous)");
+  }
+  for (const double az : {0.0, 30.0, 90.0, 180.0, 225.0, 300.0}) {
+    CheckSame(("wind_az" + std::to_string(static_cast<int>(az))).c_str(), "erode_wind", Args({{"iterations", 9}, {"azimuth", az}, {"speed", 0.6}, {"abrade", 0.08}}, {}, {{"a", t}, {"b", sand}}), 1e-5, nullptr, true);
+  }
+  for (const char* o : {"sand", "abrasion"}) {
+    CheckSame((std::string("wind_") + o).c_str(), "erode_wind", Args({{"iterations", 11}, {"azimuth", 45.0}, {"drag", 3.0}, {"repose", 0.3}, {"sand", 1.5}}, {{"output", o}}, {{"a", t}}), 1e-5, nullptr, true);
+  }
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 50.0);
+    CheckSame(("wind_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "erode_wind", Args({{"iterations", 6}, {"azimuth", 60.0}}, {}, {{"a", s}}), 1e-5, nullptr, true);
+  }
+  CheckDeclines("wind_zero_iterations", "erode_wind", Args({{"iterations", 0}}, {}, {{"a", t}}));
+  CheckDeclines("wind_bad_output", "erode_wind", Args({}, {{"output", "bogus"}}, {{"a", t}}));
+  CheckDeclines("wind_bad_sand", "erode_wind", Args({}, {}, {{"a", t}, {"b", TestMask(9, 9, 1)}}));
+  CheckDeclines("wind_no_input", "erode_wind", Args({}, {}, {}));
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -623,6 +661,7 @@ int main(int argc, char** argv)
   TestSlopeLimit();
   TestRockSoil();
   TestSnow();
+  TestWind();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
