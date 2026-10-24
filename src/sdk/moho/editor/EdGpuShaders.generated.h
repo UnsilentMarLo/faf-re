@@ -336,7 +336,7 @@ void CSMain(KERNEL_IDS)
 #define INOUT(T) inout T
 #define FN
 
-// dst = src, over a w x h field (2D dispatch: a field can have more samples than 65535 groups of a 1D kernel cover).
+// copyTo = copyFrom, over a w x h field (2D dispatch: a field can have more samples than 65535 groups of a 1D kernel cover).
 // ---- begin common.hlsli
 // Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
 #ifndef GPU_COMMON_HLSLI
@@ -398,15 +398,15 @@ struct ErodeThermalParams
 // ---- end erosion_thermal_params.hlsli
 
 CBUFFER(ErodeThermalParams, P, 0)
-SRV_BUFFER(float, src, 0)
-UAV_BUFFER(float, dst, 0)
+SRV_BUFFER(float, copyFrom, 0)
+UAV_BUFFER(float, copyTo, 0)
 
 NUMTHREADS(16, 16, 1)
 void CSMain(KERNEL_IDS)
 {
     if (dtid.x >= P.w || dtid.y >= P.h) return;
     uint i = dtid.y * P.w + dtid.x;
-    dst[i] = src[i];
+    copyTo[i] = copyFrom[i];
 }
 
 )HLSL";
@@ -1294,14 +1294,14 @@ FN float DirLen(int k)
     return k < 4 ? 1.0f : 0.70710678f;   // the unit length share of a lattice step: the speed is a vector sum of unit vectors
 }
 
-// the rain of one cell in one iteration: depth * map * (1 + noise * white noise of (cell, seed, iteration / 4))
-FN float RainAmount(uint i, float mapValue, float rain, float noise, uint seed, uint iter)
+// the rain of one cell in one iteration: depth * map * (1 + amplitude * white noise of (cell, seed, iteration / 4))
+FN float RainAmount(uint i, float mapValue, float rain, float amplitude, uint seed, uint iter)
 {
     float r = rain * mapValue;
-    if (noise > 0.0f)
+    if (amplitude > 0.0f)
     {
         uint hsh = Hash32(i * 747796405u + seed * 2891336453u + (iter >> 2) * 277803737u + 12345u);
-        r *= 1.0f + noise * (2.0f * HashToUnit(hsh) - 1.0f);
+        r *= 1.0f + amplitude * (2.0f * HashToUnit(hsh) - 1.0f);
     }
     return r;
 }
@@ -1349,9 +1349,9 @@ void CSMain(KERNEL_IDS)
             int nz = z + kDirZ[k];
             float gk = P.gain;
             if (k >= 4) gk = 0.25f * P.gain;
-            float old = 0.0f;
 )HLSL"
-    R"HLSL(            if (k < 4) old = Fa[uint(k) * n + i];
+    R"HLSL(            float old = 0.0f;
+            if (k < 4) old = Fa[uint(k) * n + i];
             else old = Fb[uint(k - 4) * n + i];
             old *= 1.0f - P.damp;
             bool inside = nx >= 0 && nz >= 0 && nx < w && nz < h;
@@ -1648,14 +1648,14 @@ FN float DirLen(int k)
     return k < 4 ? 1.0f : 0.70710678f;   // the unit length share of a lattice step: the speed is a vector sum of unit vectors
 }
 
-// the rain of one cell in one iteration: depth * map * (1 + noise * white noise of (cell, seed, iteration / 4))
-FN float RainAmount(uint i, float mapValue, float rain, float noise, uint seed, uint iter)
+// the rain of one cell in one iteration: depth * map * (1 + amplitude * white noise of (cell, seed, iteration / 4))
+FN float RainAmount(uint i, float mapValue, float rain, float amplitude, uint seed, uint iter)
 {
     float r = rain * mapValue;
-    if (noise > 0.0f)
+    if (amplitude > 0.0f)
     {
         uint hsh = Hash32(i * 747796405u + seed * 2891336453u + (iter >> 2) * 277803737u + 12345u);
-        r *= 1.0f + noise * (2.0f * HashToUnit(hsh) - 1.0f);
+        r *= 1.0f + amplitude * (2.0f * HashToUnit(hsh) - 1.0f);
     }
     return r;
 }
@@ -1716,9 +1716,9 @@ void CSMain(KERNEL_IDS)
     }
     if (v < 1e-9f) v = 0.0f;
     S[i] = v;
-    float dn = D[i] * (1.0f - P.evap);
 )HLSL"
-    R"HLSL(    if (dn < 1e-9f) dn = 0.0f;
+    R"HLSL(    float dn = D[i] * (1.0f - P.evap);
+    if (dn < 1e-9f) dn = 0.0f;
     D[i] = dn;
 }
 
@@ -1857,14 +1857,14 @@ FN float DirLen(int k)
     return k < 4 ? 1.0f : 0.70710678f;   // the unit length share of a lattice step: the speed is a vector sum of unit vectors
 }
 
-// the rain of one cell in one iteration: depth * map * (1 + noise * white noise of (cell, seed, iteration / 4))
-FN float RainAmount(uint i, float mapValue, float rain, float noise, uint seed, uint iter)
+// the rain of one cell in one iteration: depth * map * (1 + amplitude * white noise of (cell, seed, iteration / 4))
+FN float RainAmount(uint i, float mapValue, float rain, float amplitude, uint seed, uint iter)
 {
     float r = rain * mapValue;
-    if (noise > 0.0f)
+    if (amplitude > 0.0f)
     {
         uint hsh = Hash32(i * 747796405u + seed * 2891336453u + (iter >> 2) * 277803737u + 12345u);
-        r *= 1.0f + noise * (2.0f * HashToUnit(hsh) - 1.0f);
+        r *= 1.0f + amplitude * (2.0f * HashToUnit(hsh) - 1.0f);
     }
     return r;
 }
@@ -1897,9 +1897,9 @@ NUMTHREADS(16, 16, 1)
 void CSMain(KERNEL_IDS)
 {
     if (dtid.x >= P.w || dtid.y >= P.h) return;
-    int x = int(dtid.x);
 )HLSL"
-    R"HLSL(    int z = int(dtid.y);
+    R"HLSL(    int x = int(dtid.x);
+    int z = int(dtid.y);
     int w = int(P.w);
     int h = int(P.h);
     uint n = P.w * P.h;
@@ -2216,14 +2216,14 @@ FN float DirLen(int k)
     return k < 4 ? 1.0f : 0.70710678f;   // the unit length share of a lattice step: the speed is a vector sum of unit vectors
 }
 
-// the rain of one cell in one iteration: depth * map * (1 + noise * white noise of (cell, seed, iteration / 4))
-FN float RainAmount(uint i, float mapValue, float rain, float noise, uint seed, uint iter)
+// the rain of one cell in one iteration: depth * map * (1 + amplitude * white noise of (cell, seed, iteration / 4))
+FN float RainAmount(uint i, float mapValue, float rain, float amplitude, uint seed, uint iter)
 {
     float r = rain * mapValue;
-    if (noise > 0.0f)
+    if (amplitude > 0.0f)
     {
         uint hsh = Hash32(i * 747796405u + seed * 2891336453u + (iter >> 2) * 277803737u + 12345u);
-        r *= 1.0f + noise * (2.0f * HashToUnit(hsh) - 1.0f);
+        r *= 1.0f + amplitude * (2.0f * HashToUnit(hsh) - 1.0f);
     }
     return r;
 }
@@ -2394,14 +2394,14 @@ FN float DirLen(int k)
     return k < 4 ? 1.0f : 0.70710678f;   // the unit length share of a lattice step: the speed is a vector sum of unit vectors
 }
 
-// the rain of one cell in one iteration: depth * map * (1 + noise * white noise of (cell, seed, iteration / 4))
-FN float RainAmount(uint i, float mapValue, float rain, float noise, uint seed, uint iter)
+// the rain of one cell in one iteration: depth * map * (1 + amplitude * white noise of (cell, seed, iteration / 4))
+FN float RainAmount(uint i, float mapValue, float rain, float amplitude, uint seed, uint iter)
 {
     float r = rain * mapValue;
-    if (noise > 0.0f)
+    if (amplitude > 0.0f)
     {
         uint hsh = Hash32(i * 747796405u + seed * 2891336453u + (iter >> 2) * 277803737u + 12345u);
-        r *= 1.0f + noise * (2.0f * HashToUnit(hsh) - 1.0f);
+        r *= 1.0f + amplitude * (2.0f * HashToUnit(hsh) - 1.0f);
     }
     return r;
 }
@@ -7207,18 +7207,18 @@ void CSMain(KERNEL_IDS)
     {"blur_pass", kSource_blur_pass, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x4DACE3E878AF6E80ULL},
     {"buf_to_tex", kSource_buf_to_tex, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x1u, 0x0u, 1u, 0x0C46DE5748B192F2ULL},
     {"erosion_blend", kSource_erosion_blend, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x517852962D245D4FULL},
-    {"erosion_copy", kSource_erosion_copy, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xDD8EFFF8E1065D47ULL},
+    {"erosion_copy", kSource_erosion_copy, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x5D9B8F09C3AB2D4DULL},
     {"erosion_delta", kSource_erosion_delta, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x7B59D31E0F2C0B01ULL},
     {"erosion_drop", kSource_erosion_drop, "CSMain", 16u, 16u, 1u, 0x1Fu, 0xFu, 0x0u, 0x0u, 0x0u, 1u, 0x719136D7659EE5EFULL},
     {"erosion_drop_resolve", kSource_erosion_drop_resolve, "CSMain", 16u, 16u, 1u, 0x0u, 0xFFu, 0x0u, 0x0u, 0x0u, 1u, 0xD5A7C9753881ADB6ULL},
     {"erosion_hydro_apply", kSource_erosion_hydro_apply, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA281888C8F5458A8ULL},
-    {"erosion_hydro_flux", kSource_erosion_hydro_flux, "CSMain", 16u, 16u, 1u, 0x7u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x3ED515564EF74104ULL},
+    {"erosion_hydro_flux", kSource_erosion_hydro_flux, "CSMain", 16u, 16u, 1u, 0x7u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xADB076A3B47F73D4ULL},
     {"erosion_hydro_settle", kSource_erosion_hydro_settle, "CSMain", 16u, 16u, 1u, 0x0u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0xA692430D0663749AULL},
-    {"erosion_hydro_transport", kSource_erosion_hydro_transport, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0A5B4B10DFB1D023ULL},
-    {"erosion_hydro_water", kSource_erosion_hydro_water, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x7Fu, 0x0u, 0x0u, 0x0u, 1u, 0xCD39FBE8BD2331D7ULL},
+    {"erosion_hydro_transport", kSource_erosion_hydro_transport, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x37C963B5412C4B13ULL},
+    {"erosion_hydro_water", kSource_erosion_hydro_water, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x7Fu, 0x0u, 0x0u, 0x0u, 1u, 0xD8AD27EC8444A6C7ULL},
     {"erosion_steer", kSource_erosion_steer, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9EB04DF47EC712E6ULL},
-    {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xBE1A1D29F471A31FULL},
-    {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x60030F52065B1C9EULL},
+    {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x36C964038468BD87ULL},
+    {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xD889E54F1E4B6956ULL},
     {"filt_bilateral", kSource_filt_bilateral, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x6B226CC7B6F8A9DFULL},
     {"filt_blurdir", kSource_filt_blurdir, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x7E0FBD4C9A05041EULL},
     {"filt_diffuse", kSource_filt_diffuse, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x40DC1A1D6642A2D3ULL},

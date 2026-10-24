@@ -15,14 +15,14 @@ FN float DirLen(int k)
     return k < 4 ? 1.0f : 0.70710678f;   // the unit length share of a lattice step: the speed is a vector sum of unit vectors
 }
 
-// the rain of one cell in one iteration: depth * map * (1 + noise * white noise of (cell, seed, iteration / 4))
-FN float RainAmount(uint i, float mapValue, float rain, float noise, uint seed, uint iter)
+// the rain of one cell in one iteration: depth * map * (1 + amplitude * white noise of (cell, seed, iteration / 4))
+FN float RainAmount(uint i, float mapValue, float rain, float amplitude, uint seed, uint iter)
 {
     float r = rain * mapValue;
-    if (noise > 0.0f)
+    if (amplitude > 0.0f)
     {
         uint hsh = Hash32(i * 747796405u + seed * 2891336453u + (iter >> 2) * 277803737u + 12345u);
-        r *= 1.0f + noise * (2.0f * HashToUnit(hsh) - 1.0f);
+        r *= 1.0f + amplitude * (2.0f * HashToUnit(hsh) - 1.0f);
     }
     return r;
 }
