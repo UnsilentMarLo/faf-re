@@ -28,10 +28,19 @@
 #include "moho/editor/gpu/blur_params.hlsli"
 #include "moho/editor/gpu/filt_common.hlsli"
 #include "moho/editor/gpu/field_settle_params.hlsli"
+#include "moho/editor/gpu/field_slide_params.hlsli"
 
 EMU_KERNEL_BEGIN(k_field_settle)
 #include "moho/editor/gpu/field_settle.hlsl"
 EMU_KERNEL_END(field_settle)
+
+EMU_KERNEL_BEGIN(k_field_slide_a)
+#include "moho/editor/gpu/field_slide_a.hlsl"
+EMU_KERNEL_END(field_slide_a)
+
+EMU_KERNEL_BEGIN(k_field_slide_b)
+#include "moho/editor/gpu/field_slide_b.hlsl"
+EMU_KERNEL_END(field_slide_b)
 
 // the Gaussian blur of the foundation (EdGpuOps.cpp BlurFieldDevice) and its mask blend run their kernels here too
 EMU_KERNEL_BEGIN(k_blur_pass)
@@ -222,6 +231,34 @@ static void TestSettle()
   CheckDeclines("settle_no_input", "settle", Args({}, {}, {}));
 }
 
+// ---- thermal_map -----------------------------------------------------------------------------------------------------------------------------------
+
+static void TestThermalMap()
+{
+  const GridPtr t = TestTerrain(75, 49, 2.0f, 21, 90.0);
+  const GridPtr tmap = TestMask(75, 49, 7);
+  const GridPtr mask = TestMask(75, 49, 8);
+  CheckSame("thermal_default", "thermal_map", Args({}, {}, {{"a", t}}), 2e-5, nullptr, true);
+  {
+    Grid g;
+    RunGpu("thermal_map", Args({}, {}, {{"a", t}}), g);
+    CHECK(Compare(g, *t).maxAbs > 1e-2, "thermal_map changes the terrain (the comparison is not vacuous)");
+  }
+  CheckSame("thermal_scree", "thermal_map", Args({{"iterations", 9}, {"scree_scale", 2.5}}, {{"output", "scree"}}, {{"a", t}}), 2e-5, nullptr, true);
+  CheckSame("thermal_moved", "thermal_map", Args({{"iterations", 9}}, {{"output", "moved"}}, {{"a", t}}), 2e-5, nullptr, true);
+  CheckSame("thermal_map", "thermal_map", Args({{"iterations", 12}, {"talus_lo", 0.2}, {"talus_hi", 1.4}}, {}, {{"a", t}, {"b", tmap}}), 2e-5, nullptr, true);
+  CheckSame("thermal_rate_mask", "thermal_map", Args({{"iterations", 12}, {"rate", 0.8}, {"talus", 0.3}}, {}, {{"a", t}, {"mask", mask}}), 2e-5, nullptr, true);
+  CheckSame("thermal_both", "thermal_map", Args({{"iterations", 5}}, {{"output", "scree"}}, {{"a", t}, {"b", tmap}, {"mask", mask}}), 2e-5, nullptr, true);
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 80.0);
+    CheckSame(("thermal_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "thermal_map", Args({{"iterations", 6}, {"talus", 0.2}}, {}, {{"a", s}}), 2e-5, nullptr, true);
+  }
+  CheckDeclines("thermal_zero_iterations", "thermal_map", Args({{"iterations", 0}}, {}, {{"a", t}}));
+  CheckDeclines("thermal_bad_output", "thermal_map", Args({}, {{"output", "bogus"}}, {{"a", t}}));
+  CheckDeclines("thermal_bad_map", "thermal_map", Args({}, {}, {{"a", t}, {"b", TestMask(10, 10, 1)}}));
+  CheckDeclines("thermal_bad_mask", "thermal_map", Args({}, {}, {{"a", t}, {"mask", TestMask(10, 10, 1)}}));
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -233,6 +270,7 @@ int main(int argc, char** argv)
   gpu::GetPolicy().selfTestFirst = false;
   field::SetThreads(4);
   TestSettle();
+  TestThermalMap();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
