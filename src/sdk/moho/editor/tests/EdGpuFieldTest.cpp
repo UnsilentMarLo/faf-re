@@ -28,6 +28,7 @@
 #include "moho/editor/gpu/blur_params.hlsli"
 #include "moho/editor/gpu/filt_common.hlsli"
 #include "moho/editor/gpu/field_settle_params.hlsli"
+#include "moho/editor/gpu/field_glacier_params.hlsli"
 #include "moho/editor/gpu/field_slide_params.hlsli"
 #include "moho/editor/gpu/field_blurslope_params.hlsli"
 #include "moho/editor/gpu/field_convolve_params.hlsli"
@@ -96,6 +97,14 @@ EMU_KERNEL_END(field_wind_a)
 EMU_KERNEL_BEGIN(k_field_wind_b)
 #include "moho/editor/gpu/field_wind_b.hlsl"
 EMU_KERNEL_END(field_wind_b)
+
+EMU_KERNEL_BEGIN(k_field_glacier_a)
+#include "moho/editor/gpu/field_glacier_a.hlsl"
+EMU_KERNEL_END(field_glacier_a)
+
+EMU_KERNEL_BEGIN(k_field_glacier_b)
+#include "moho/editor/gpu/field_glacier_b.hlsl"
+EMU_KERNEL_END(field_glacier_b)
 
 EMU_KERNEL_BEGIN(k_field_sub)
 #include "moho/editor/gpu/field_sub.hlsl"
@@ -643,6 +652,55 @@ static void TestWind()
   CheckDeclines("wind_no_input", "erode_wind", Args({}, {}, {}));
 }
 
+// ---- erode_glacier ---------------------------------------------------------------------------------------------------------------------------------
+
+static void TestGlacier()
+{
+  const GridPtr t = TestTerrain(67, 59, 4.0f, 101, 200.0);
+  const GridPtr acc = TestMask(67, 59, 14);
+  const Num ice = {{"iterations", 25}, {"ela", 70.0}, {"grad", 0.08}, {"flow", 0.2}, {"erode", 0.01}};
+  CheckSame("glacier_default", "erode_glacier", Args(ice, {}, {{"a", t}}), 2e-4, nullptr, true);
+  {
+    Grid g;
+    RunGpu("erode_glacier", Args(ice, {}, {{"a", t}}), g);
+    CHECK(Compare(g, *t).maxAbs > 0.01, "erode_glacier carves the terrain (the comparison is not vacuous)");
+    Grid ig;
+    RunGpu("erode_glacier", Args(ice, {{"output", "ice"}}, {{"a", t}}), ig);
+    double mx = 0.0;
+    for (const float v : ig.v) mx = std::max(mx, static_cast<double>(v));
+    CHECK(mx > 0.5, "erode_glacier grows ice (max %.3f)", mx);
+  }
+  for (const char* o : {"ice", "cover", "carve"}) {
+    CheckSame((std::string("glacier_") + o).c_str(), "erode_glacier", Args(ice, {{"output", o}}, {{"a", t}, {"b", acc}}), 2e-4, nullptr, true);
+  }
+  for (const double pw : {1.0, 2.0, 1.5, 0.8, 2.7}) {
+    Num n = ice;
+    n["erode_pow"] = pw;
+    n["iterations"] = 14;
+    CheckSame(("glacier_pow" + std::to_string(static_cast<int>(pw * 10))).c_str(), "erode_glacier", Args(n, {}, {{"a", t}}), 2e-4, nullptr, true);
+  }
+  {
+    Num n = ice;
+    n["dt"] = 0.05;   // a small time step limit, and a limit that never binds
+    n["max_ice"] = 8;
+    n["acc_max"] = 2;
+    n["abl_max"] = 0.2;
+    n["max_cut"] = 1.5;
+    CheckSame("glacier_limits", "erode_glacier", Args(n, {}, {{"a", t}}), 2e-4, nullptr, true);
+    n["dt"] = 100.0;
+    n["flow"] = 0.0005;
+    CheckSame("glacier_big_dt", "erode_glacier", Args(n, {}, {{"a", t}}), 2e-4, nullptr, true);
+  }
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 3.0f, 5, 150.0);
+    CheckSame(("glacier_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "erode_glacier", Args({{"iterations", 8}, {"ela", 60.0}, {"grad", 0.1}, {"flow", 0.3}}, {}, {{"a", s}}), 2e-4, nullptr, true);
+  }
+  CheckDeclines("glacier_zero_iterations", "erode_glacier", Args({{"iterations", 0}}, {}, {{"a", t}}));
+  CheckDeclines("glacier_bad_output", "erode_glacier", Args({}, {{"output", "bogus"}}, {{"a", t}}));
+  CheckDeclines("glacier_bad_acc", "erode_glacier", Args({}, {}, {{"a", t}, {"b", TestMask(9, 9, 1)}}));
+  CheckDeclines("glacier_no_input", "erode_glacier", Args({}, {}, {}));
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -662,6 +720,7 @@ int main(int argc, char** argv)
   TestRockSoil();
   TestSnow();
   TestWind();
+  TestGlacier();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;

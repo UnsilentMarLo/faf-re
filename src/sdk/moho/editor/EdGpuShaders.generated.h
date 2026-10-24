@@ -2901,6 +2901,276 @@ void CSMain(KERNEL_IDS)
 
 )HLSL";
 
+  // field_glacier_a: 16x16x1 threads
+  inline constexpr char kSource_field_glacier_a[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op erode_glacier (EdFieldEro2.cpp OpGlacier), the first pass of a step (shallow ice approximation): from the ice surface (bed + ice) the ice diffusivity D = flow * H^5 * |grad s|^2 (n = 3)
+// and the surface slope, and the largest D of the field (for the time step): one maximum per group of 256 cells, then one atomic maximum per group on `dmaxCur` (a non negative float
+// compares like its bits). `dmaxNext` is zeroed for the next step, which uses it as its `dmaxCur` (the two buffers alternate, so no extra clearing dispatch is needed).
+// ---- begin field_glacier_params.hlsli
+// Constant buffer of field_glacier_a.hlsl and field_glacier_b.hlsl (op erode_glacier).
+#ifndef GPU_FIELD_GLACIER_PARAMS_HLSLI
+#define GPU_FIELD_GLACIER_PARAMS_HLSLI
+
+struct GlacierParams
+{
+    uint w;
+    uint h;
+    uint hasAcc;      // 1 = an accumulation factor per cell (a buffer)
+    uint powKind;     // erosion power: 1 = v, 2 = v^2, 3 = v^1.5, 0 = pow(v, erodePow)
+    float cell;
+    float cc;         // cell * cell
+    float flow;
+    float ela;        // equilibrium line altitude
+    float grad;       // mass balance gradient
+    float accMax;
+    float ablMax;
+    float maxIce;
+    float erode;
+    float erodePow;
+    float maxCut;
+    float dtMax;
+};
+
+#endif
+// ---- end field_glacier_params.hlsli
+
+CBUFFER(GlacierParams, P, 0)
+SRV_BUFFER(float, bed, 0)
+SRV_BUFFER(float, ice, 1)
+UAV_BUFFER(float, dif, 0)
+UAV_BUFFER(float, gsl, 1)
+UAV_BUFFER(uint, dmaxCur, 2)
+UAV_BUFFER(uint, dmaxNext, 3)
+GROUPSHARED(float, sh, 256)
+
+// ice surface at sample (x, z) (a macro: a kernel with barriers has no early exit, not even in a helper)
+#define SURF(x, z) (bed[uint(z) * P.w + uint(x)] + ice[uint(z) * P.w + uint(x)])
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    PHASES_BEGIN
+    float dv = 0.0f;
+    if (dtid.x < P.w && dtid.y < P.h)
+    {
+        int x = int(dtid.x);
+        int z = int(dtid.y);
+        int w = int(P.w);
+        int h = int(P.h);
+        uint i = dtid.y * P.w + dtid.x;
+        int xl = max(0, x - 1);
+        int xr = min(w - 1, x + 1);
+        int zu = max(0, z - 1);
+        int zd = min(h - 1, z + 1);
+        float gx = (SURF(xr, z) - SURF(xl, z)) / (2.0f * P.cell);
+        float gz = (SURF(x, zd) - SURF(x, zu)) / (2.0f * P.cell);
+        float s2 = gx * gx + gz * gz;
+        float hh = ice[i];
+        float h2 = hh * hh;
+        float d = P.flow * h2 * h2 * hh * s2;
+        dif[i] = d;
+        gsl[i] = sqrt(s2);
+        dv = d;
+        if (i == 0u) dmaxNext[0] = 0u;
+    }
+    sh[gidx] = dv;
+    BARRIER();
+    if (gidx < 128u) sh[gidx] = max(sh[gidx], sh[gidx + 128u]);
+    BARRIER();
+    if (gidx < 64u) sh[gidx] = max(sh[gidx], sh[gidx + 64u]);
+    BARRIER();
+    if (gidx < 32u) sh[gidx] = max(sh[gidx], sh[gidx + 32u]);
+    BARRIER();
+    if (gidx < 16u) sh[gidx] = max(sh[gidx], sh[gidx + 16u]);
+    BARRIER();
+    if (gidx < 8u) sh[gidx] = max(sh[gidx], sh[gidx + 8u]);
+    BARRIER();
+    if (gidx < 4u) sh[gidx] = max(sh[gidx], sh[gidx + 4u]);
+    BARRIER();
+    if (gidx < 2u) sh[gidx] = max(sh[gidx], sh[gidx + 2u]);
+    BARRIER();
+    if (gidx == 0u) InterlockedMax(dmaxCur[0], asuint(max(sh[0], sh[1])));
+    PHASES_END
+}
+
+)HLSL";
+
+  // field_glacier_b: 16x16x1 threads
+  inline constexpr char kSource_field_glacier_b[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op erode_glacier (EdFieldEro2.cpp OpGlacier), the second pass of a step: the time step dt = min(dtMax, 0.2 cell^2 / largest D), the ice flux divergence plus the mass balance (accumulation above
+// the equilibrium line, ablation below, both limited), the new ice thickness, and the bed cut under thick fast ice.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin field_glacier_params.hlsli
+// Constant buffer of field_glacier_a.hlsl and field_glacier_b.hlsl (op erode_glacier).
+#ifndef GPU_FIELD_GLACIER_PARAMS_HLSLI
+#define GPU_FIELD_GLACIER_PARAMS_HLSLI
+
+struct GlacierParams
+{
+    uint w;
+    uint h;
+    uint hasAcc;      // 1 = an accumulation factor per cell (a buffer)
+    uint powKind;     // erosion power: 1 = v, 2 = v^2, 3 = v^1.5, 0 = pow(v, erodePow)
+    float cell;
+    float cc;         // cell * cell
+    float flow;
+    float ela;        // equilibrium line altitude
+    float grad;       // mass balance gradient
+    float accMax;
+    float ablMax;
+    float maxIce;
+    float erode;
+    float erodePow;
+    float maxCut;
+    float dtMax;
+};
+
+#endif
+// ---- end field_glacier_params.hlsli
+
+CBUFFER(GlacierParams, P, 0)
+SRV_BUFFER(float, bed, 0)
+SRV_BUFFER(float, ice, 1)
+SRV_BUFFER(float, dif, 2)
+SRV_BUFFER(float, gsl, 3)
+SRV_BUFFER(float, acc, 4)
+SRV_BUFFER(uint, dmaxBits, 5)
+UAV_BUFFER(float, nxt, 0)
+UAV_BUFFER(float, cut, 1)
+
+FN float Surf(uint j)
+{
+    return bed[j] + ice[j];
+}
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y);
+    int w = int(P.w);
+    int h = int(P.h);
+    uint i = dtid.y * P.w + dtid.x;
+    float dmax = asfloat(dmaxBits[0]);
+    float dt = P.dtMax;
+    if (dmax > 0.0f) dt = min(P.dtMax, 0.2f * P.cc / dmax);
+    float s = Surf(i);
+    float dv = 0.0f;
+    if (x > 0) dv += 0.5f * (dif[i] + dif[i - 1u]) * (Surf(i - 1u) - s) / P.cc;
+    if (x < w - 1) dv += 0.5f * (dif[i] + dif[i + 1u]) * (Surf(i + 1u) - s) / P.cc;
+    if (z > 0) dv += 0.5f * (dif[i] + dif[i - P.w]) * (Surf(i - P.w) - s) / P.cc;
+    if (z < h - 1) dv += 0.5f * (dif[i] + dif[i + P.w]) * (Surf(i + P.w) - s) / P.cc;
+    float b = P.grad * (s - P.ela);
+    float accLimit = P.accMax;
+    if (P.hasAcc != 0u) accLimit = P.accMax * saturate(acc[i]);
+    b = max(-P.ablMax, min(accLimit, b));
+    float nh = max(0.0f, min(P.maxIce, ice[i] + dt * (dv + b)));
+    nxt[i] = nh;
+    if (nh > 0.0f && P.erode > 0.0f && ice[i] > 0.0f)
+    {
+        float v = ice[i] * gsl[i];
+        float p = v;
+        if (P.powKind == 2u) p = v * v;
+        else if (P.powKind == 3u) p = v * sqrt(v);
+        else if (P.powKind == 0u) p = pow(v, P.erodePow);
+        cut[i] = min(P.maxCut, cut[i] + dt * (P.erode * p));
+    }
+}
+
+)HLSL";
+
   // field_morph: 16x16x1 threads
   inline constexpr char kSource_field_morph[] =
     R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
@@ -9322,6 +9592,8 @@ void CSMain(KERNEL_IDS)
     {"field_blurslope", kSource_field_blurslope, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xEEB771530C2DE722ULL},
     {"field_convolve", kSource_field_convolve, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2D14850FD687FA27ULL},
     {"field_edge", kSource_field_edge, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x3F26AAC9638A50ADULL},
+    {"field_glacier_a", kSource_field_glacier_a, "CSMain", 16u, 16u, 1u, 0x3u, 0xFu, 0x0u, 0x0u, 0x0u, 1u, 0xE1C04353EC498ADBULL},
+    {"field_glacier_b", kSource_field_glacier_b, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x7A0444BEAB57C8A5ULL},
     {"field_morph", kSource_field_morph, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x52463243DBBAAFBBULL},
     {"field_settle", kSource_field_settle, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x600636D24769A34FULL},
     {"field_slide_a", kSource_field_slide_a, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0F632EA329C10980ULL},
@@ -9354,5 +9626,5 @@ void CSMain(KERNEL_IDS)
     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
   };
-  inline constexpr int kKernelCount = 49;
+  inline constexpr int kKernelCount = 51;
 } // namespace moho::editor::gpu::shaders

@@ -9,6 +9,7 @@
 namespace moho::editor::gpu::hk
 {
   using uint = std::uint32_t;
+#include "moho/editor/gpu/field_glacier_params.hlsli"
 #include "moho/editor/gpu/field_settle_params.hlsli"
 #include "moho/editor/gpu/field_slide_params.hlsli"
 #include "moho/editor/gpu/field_snowinit_params.hlsli"
@@ -426,10 +427,88 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
+    // ---- erode_glacier ------------------------------------------------------------------------------------------------------------------------------
+
+    OpResult OpGlacierGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = Source(a);
+      const Grid* accMask = In(a, "b");
+      if (src == nullptr || (accMask != nullptr && !accMask->SameShape(*src))) return OpResult::Unsupported;
+      const std::string want = a.p.S("output", "height");
+      if (want != "height" && want != "ice" && want != "cover" && want != "carve") return OpResult::Unsupported;
+      const int iterations = ItersOf(a, 200, 5000);
+      if (iterations == 0) return OpResult::Unsupported;
+      const int w = src->w, h = src->h;
+      const std::size_t n = src->Count();
+      if (!Fits(ex, n, 9)) return OpResult::Unsupported;
+      const KernelInfo* ka = FindKernel("field_glacier_a");
+      const KernelInfo* kb = FindKernel("field_glacier_b");
+      if (ka == nullptr || kb == nullptr) { err = "kernel field_glacier_a / field_glacier_b is missing"; return OpResult::Failed; }
+      hk::GlacierParams p{};
+      p.w = static_cast<std::uint32_t>(w);
+      p.h = static_cast<std::uint32_t>(h);
+      p.cell = src->cell;
+      p.cc = p.cell * p.cell;
+      p.ela = static_cast<float>(a.p.N("ela", 40.0));
+      p.grad = std::max(0.0f, static_cast<float>(a.p.N("grad", 0.02)));
+      p.accMax = std::max(0.0f, static_cast<float>(a.p.N("acc_max", 0.5)));
+      p.ablMax = std::max(0.0f, static_cast<float>(a.p.N("abl_max", 1.0)));
+      p.flow = std::max(0.0f, static_cast<float>(a.p.N("flow", 0.02)));
+      p.maxIce = std::max(1.0f, static_cast<float>(a.p.N("max_ice", 120.0)));
+      p.erode = std::max(0.0f, static_cast<float>(a.p.N("erode", 0.0005)));
+      p.erodePow = std::max(0.5f, static_cast<float>(a.p.N("erode_pow", 1.5)));
+      p.maxCut = std::max(0.0f, static_cast<float>(a.p.N("max_cut", 25.0)));
+      p.dtMax = std::max(1e-4f, static_cast<float>(a.p.N("dt", 1.0)));
+      p.powKind = p.erodePow == 1.0f ? 1u : (p.erodePow == 2.0f ? 2u : (p.erodePow == 1.5f ? 3u : 0u));
+      p.hasAcc = accMask != nullptr ? 1u : 0u;
+      Field bed, dif, gsl, cut, acc;
+      PingPong ice;
+      std::unique_ptr<Resource> dmaxA, dmaxB, dummy;
+      const float zero = 0.0f;
+      if (!UploadGrid(ex, *src, bed, err) || !MakeField(ex, w, h, ice.f[0], err) || !MakeField(ex, w, h, ice.f[1], err) || !FillBuffer(ex, ice.f[0].R(), 0u, err) || !MakeField(ex, w, h, dif, err) ||
+          !MakeField(ex, w, h, gsl, err) || !MakeField(ex, w, h, cut, err) || !FillBuffer(ex, cut.R(), 0u, err) || !MakeBuffer(ex, 1, dmaxA, err) || !MakeBuffer(ex, 1, dmaxB, err) ||
+          !FillBuffer(ex, *dmaxA, 0u, err) || !FillBuffer(ex, *dmaxB, 0u, err) || !MakeBuffer(ex, 1, dummy, err) || !UploadBuffer(ex, *dummy, &zero, 4, err)) {
+        return OpResult::Failed;
+      }
+      if (accMask != nullptr && !UploadGrid(ex, *accMask, acc, err)) return OpResult::Failed;
+      const Resource& accR = accMask != nullptr ? acc.R() : *dummy;
+      const bool ok = RunIterations(ex, static_cast<u32>(iterations), 60.0, [&](const u32 it, std::string& e) {
+        Resource& cur = (it & 1u) != 0u ? *dmaxB : *dmaxA;
+        Resource& nxt = (it & 1u) != 0u ? *dmaxA : *dmaxB;
+        Bindings ba;
+        ba.Srv(0, bed.R()).Srv(1, ice.Src().R()).Uav(0, dif.R()).Uav(1, gsl.R()).Uav(2, cur).Uav(3, nxt);
+        if (!DispatchGrid(ex, *ka, p.w, p.h, p, ba, e)) return false;
+        Bindings bb;
+        bb.Srv(0, bed.R()).Srv(1, ice.Src().R()).Srv(2, dif.R()).Srv(3, gsl.R()).Srv(4, accR).Srv(5, cur).Uav(0, ice.Dst().R()).Uav(1, cut.R());
+        if (!DispatchGrid(ex, *kb, p.w, p.h, p, bb, e)) return false;
+        ice.Flip();
+        return true;
+      }, err);
+      if (!ok) return OpResult::Failed;
+      Grid gIce = LikeOf(*src), gCut = LikeOf(*src);
+      if (!DownloadGrid(ex, ice.Src(), gIce, err) || !DownloadGrid(ex, cut, gCut, err)) return OpResult::Failed;
+      std::map<std::string, Grid> all;
+      all["height"] = LikeOf(*src);
+      all["ice"] = LikeOf(*src);
+      all["cover"] = LikeOf(*src);
+      all["carve"] = LikeOf(*src);
+      for (std::size_t i = 0; i < n; ++i) {
+        all["height"].v[i] = src->v[i] - gCut.v[i];
+        all["ice"].v[i] = gIce.v[i];
+        all["cover"].v[i] = field::t7::SmoothStep(0.0f, 2.0f, gIce.v[i]);
+        all["carve"].v[i] = gCut.v[i];
+      }
+      Grid result;
+      if (!Emit(a, result, all, "height")) return OpResult::Unsupported;
+      out = std::move(result);
+      return OpResult::Done;
+    }
+
     struct Registrar
     {
       Registrar()
       {
+        RegisterGpuOp("erode_glacier", &OpGlacierGpu, 16384.0f);
         RegisterGpuOp("erode_wind", &OpWindGpu, 16384.0f);
         RegisterGpuOp("erode_snow", &OpSnowGpu, 16384.0f);
         RegisterGpuOp("erode_rocksoil", &OpRockSoilGpu, 16384.0f);
