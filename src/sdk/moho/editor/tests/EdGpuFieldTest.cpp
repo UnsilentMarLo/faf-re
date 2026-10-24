@@ -33,6 +33,8 @@
 #include "moho/editor/gpu/field_convolve_params.hlsli"
 #include "moho/editor/gpu/field_edge_params.hlsli"
 #include "moho/editor/gpu/field_morph_params.hlsli"
+#include "moho/editor/gpu/field_slopelimit_params.hlsli"
+#include "moho/editor/gpu/field_slopescan_params.hlsli"
 #include "moho/editor/gpu/field_sub_params.hlsli"
 #include "moho/editor/gpu/field_unsharp_params.hlsli"
 
@@ -67,6 +69,14 @@ EMU_KERNEL_END(field_convolve)
 EMU_KERNEL_BEGIN(k_field_morph)
 #include "moho/editor/gpu/field_morph.hlsl"
 EMU_KERNEL_END(field_morph)
+
+EMU_KERNEL_BEGIN(k_field_slopelimit)
+#include "moho/editor/gpu/field_slopelimit.hlsl"
+EMU_KERNEL_END(field_slopelimit)
+
+EMU_KERNEL_BEGIN(k_field_slopescan)
+#include "moho/editor/gpu/field_slopescan.hlsl"
+EMU_KERNEL_END(field_slopescan)
 
 EMU_KERNEL_BEGIN(k_field_sub)
 #include "moho/editor/gpu/field_sub.hlsl"
@@ -477,6 +487,59 @@ static void TestBlurBased()
   }
 }
 
+// ---- slope_limit -----------------------------------------------------------------------------------------------------------------------------------
+
+/** The largest height difference between two neighbouring samples, divided by the cell size (the slope the pathing rule looks at). */
+static double SteepestStep(const Grid& g)
+{
+  double worst = 0.0;
+  for (int z = 0; z < g.h; ++z) {
+    for (int x = 0; x < g.w; ++x) {
+      if (x + 1 < g.w) worst = std::max(worst, static_cast<double>(std::fabs(g.At(x + 1, z) - g.At(x, z))));
+      if (z + 1 < g.h) worst = std::max(worst, static_cast<double>(std::fabs(g.At(x, z + 1) - g.At(x, z))));
+    }
+  }
+  return worst / static_cast<double>(g.cell);
+}
+
+static void TestSlopeLimit()
+{
+  // the GPU scan runs in float, the CPU op in double: a few 1e-4 on values of a few hundred
+  const GridPtr t = TestTerrain(97, 61, 2.0f, 61, 300.0);
+  const GridPtr mask = TestMask(97, 61, 9);
+  for (const char* mode : {"lower", "raise", "both"}) {
+    const std::string m = mode;
+    CheckSame(("slope_limit_" + m).c_str(), "slope_limit", Args({{"limit", 0.4}}, {{"mode", mode}}, {{"a", t}}), 1e-3);
+    CheckSame(("slope_limit_" + m + "_mask").c_str(), "slope_limit", Args({{"limit", 0.2}, {"strength", 0.7}, {"balance", 0.25}}, {{"mode", mode}}, {{"a", t}, {"mask", mask}}), 1e-3);
+  }
+  {
+    Grid g;
+    RunGpu("slope_limit", Args({{"limit", 0.3}, {"margin", 0.0}}, {{"mode", "both"}}, {{"a", t}}), g);
+    CHECK(Compare(g, *t).maxAbs > 1.0, "slope_limit changes the terrain (the comparison is not vacuous)");
+    const double before = SteepestStep(*t), after = SteepestStep(g);
+    CHECK(after <= 0.3 + 2e-3 && before > 0.4, "slope_limit: the steepest step %.3f becomes %.3f (limit 0.3)", before, after);
+  }
+  CheckSame("slope_limit_default", "slope_limit", Args({}, {}, {{"a", t}}), 1e-3);
+  CheckSame("slope_limit_zero", "slope_limit", Args({{"limit", 0.0}, {"margin", 0.0}}, {{"mode", "lower"}}, {{"a", t}}), 1e-3);   // a flat plane at the lowest point
+  // long chains: a ramp that has to be cut over hundreds of samples, a wide shallow field
+  {
+    auto ramp = std::make_shared<Grid>(701, 9, 1.0f, 0.0f, 0.0f);
+    for (int z = 0; z < ramp->h; ++z) {
+      for (int x = 0; x < ramp->w; ++x) ramp->At(x, z) = (x < 350 ? 0.0f : 300.0f) + 0.01f * static_cast<float>(z);
+    }
+    CheckSame("slope_limit_ramp", "slope_limit", Args({{"limit", 0.5}, {"margin", 0.0}}, {{"mode", "both"}}, {{"a", ramp}}), 1e-3);
+  }
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 80.0);
+    CheckSame(("slope_limit_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "slope_limit", Args({{"limit", 0.3}}, {}, {{"a", s}}), 1e-3);
+  }
+  auto like = std::make_shared<Grid>(5, 5, 9.0f, 1.0f, 1.0f);   // the CPU op ignores `like`
+  CheckSame("slope_limit_like", "slope_limit", Args({{"limit", 0.4}}, {}, {{"a", t}, {"like", like}}), 1e-3);
+  CheckDeclines("slope_limit_bad_mode", "slope_limit", Args({}, {{"mode", "bogus"}}, {{"a", t}}));
+  CheckDeclines("slope_limit_bad_mask", "slope_limit", Args({}, {}, {{"a", t}, {"mask", TestMask(9, 9, 1)}}));
+  CheckDeclines("slope_limit_no_input", "slope_limit", Args({}, {}, {}));
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -492,6 +555,7 @@ int main(int argc, char** argv)
   TestMorph();
   TestConvolve();
   TestBlurBased();
+  TestSlopeLimit();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;

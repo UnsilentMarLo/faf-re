@@ -13,6 +13,8 @@ namespace moho::editor::gpu::hk
 #include "moho/editor/gpu/field_convolve_params.hlsli"
 #include "moho/editor/gpu/field_edge_params.hlsli"
 #include "moho/editor/gpu/field_morph_params.hlsli"
+#include "moho/editor/gpu/field_slopelimit_params.hlsli"
+#include "moho/editor/gpu/field_slopescan_params.hlsli"
 #include "moho/editor/gpu/field_sub_params.hlsli"
 #include "moho/editor/gpu/field_unsharp_params.hlsli"
 } // namespace moho::editor::gpu::hk
@@ -316,10 +318,72 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
+    // ---- slope_limit --------------------------------------------------------------------------------------------------------------------------------
+
+    OpResult OpSlopeLimitGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = In(a, "a");   // (the CPU op ignores `like`: the result is the input with its placement)
+      if (src == nullptr || src->w < 1 || src->h < 1) return OpResult::Unsupported;
+      const std::string mode = a.p.S("mode", "both");
+      if (mode != "lower" && mode != "raise" && mode != "both") return OpResult::Unsupported;
+      const Grid* mask = In(a, "mask");
+      if (mask != nullptr && !mask->SameShape(*src)) return OpResult::Unsupported;
+      if (!WorthIt(24.0) || !Fits(ex, src->Count(), 6)) return OpResult::Unsupported;
+      const KernelInfo* kscan = FindKernel("field_slopescan");
+      const KernelInfo* kapply = FindKernel("field_slopelimit");
+      if (kscan == nullptr || kapply == nullptr) { err = "kernel field_slopescan / field_slopelimit is missing"; return OpResult::Failed; }
+      const double limit = a.p.N("limit", 0.75);
+      const double margin = std::max(0.0, a.p.N("margin", 0.03));
+      const double L = std::max(0.0, (limit - margin)) * static_cast<double>(src->cell);
+      const int w = src->w, h = src->h;
+      Field in, tmp, lo, up, res;
+      MaskBind mb;
+      if (!UploadGrid(ex, *src, in, err) || !MakeField(ex, w, h, tmp, err) || !MakeField(ex, w, h, res, err) || !BindMask(ex, a, mb, err)) return OpResult::Failed;
+      // the lower envelope of sign * source: along every row, then along every column (a Lipschitz surface under the input)
+      const auto envelope = [&](const float sign, Field& dst) {
+        if (!MakeField(ex, w, h, dst, err)) return false;
+        hk::SlopeScanParams p{};
+        p.lim = static_cast<float>(L);
+        p.inSign = sign;
+        p.lines = static_cast<std::uint32_t>(h);
+        p.len = static_cast<std::uint32_t>(w);
+        p.stride = 1;
+        p.lineStride = static_cast<std::uint32_t>(w);
+        Bindings b0;
+        b0.Srv(0, in.R()).Uav(0, tmp.R());
+        if (!DispatchGrid(ex, *kscan, p.lines, 1, p, b0, err)) return false;
+        p.inSign = 1.0f;
+        p.lines = static_cast<std::uint32_t>(w);
+        p.len = static_cast<std::uint32_t>(h);
+        p.stride = static_cast<std::uint32_t>(w);
+        p.lineStride = 1;
+        Bindings b1;
+        b1.Srv(0, tmp.R()).Uav(0, dst.R());
+        return DispatchGrid(ex, *kscan, p.lines, 1, p, b1, err);
+      };
+      if (mode != "raise" && !envelope(1.0f, lo)) return OpResult::Failed;
+      if (mode != "lower" && !envelope(-1.0f, up)) return OpResult::Failed;
+      hk::SlopeLimitParams p{};
+      p.w = static_cast<std::uint32_t>(w);
+      p.h = static_cast<std::uint32_t>(h);
+      p.mode = mode == "lower" ? 0u : (mode == "raise" ? 1u : 2u);
+      p.hasMask = mb.has ? 1u : 0u;
+      p.balance = static_cast<float>(Clamp01(static_cast<float>(a.p.N("balance", 0.5))));
+      p.strength = Clamp01(static_cast<float>(a.p.N("strength", 1.0)));
+      Bindings b;
+      b.Srv(0, in.R()).Srv(1, lo ? lo.R() : up.R()).Srv(2, up ? up.R() : lo.R()).Srv(3, mb.R()).Uav(0, res.R());
+      if (!DispatchGrid(ex, *kapply, p.w, p.h, p, b, err)) return OpResult::Failed;
+      Grid g = LikeOf(*src);
+      if (!DownloadGrid(ex, res, g, err)) return OpResult::Failed;
+      out = std::move(g);
+      return OpResult::Done;
+    }
+
     struct Registrar
     {
       Registrar()
       {
+        RegisterGpuOp("slope_limit", &OpSlopeLimitGpu);
         RegisterGpuOp("morph", &OpMorphGpu);
         RegisterGpuOp("convolve", &OpConvolveGpu);
         RegisterGpuOp("unsharp", &OpUnsharpGpu);

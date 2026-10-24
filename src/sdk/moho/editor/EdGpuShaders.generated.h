@@ -3553,6 +3553,210 @@ void CSMain(KERNEL_IDS)
 
 )HLSL";
 
+  // field_slopelimit: 16x16x1 threads
+  inline constexpr char kSource_field_slopelimit[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op slope_limit (EdFieldSc.cpp OpSlopeLimit), the last step: out = src + (r - src) * strength * mask, r = the lower envelope `lo` (cut peaks), the upper envelope (fill valleys; `up` holds the
+// lower envelope of the negated field, so it is negated back here) or their blend hi + (lo - hi) * balance.
+// ---- begin field_slopelimit_params.hlsli
+// Constant buffer of field_slopelimit.hlsl (op slope_limit).
+#ifndef GPU_FIELD_SLOPELIMIT_PARAMS_HLSLI
+#define GPU_FIELD_SLOPELIMIT_PARAMS_HLSLI
+
+struct SlopeLimitParams
+{
+    uint w;
+    uint h;
+    uint mode;       // 0 lower (cut peaks), 1 raise (fill valleys), 2 both
+    uint hasMask;
+    float balance;   // both: 0 raise .. 1 lower
+    float strength;
+    float pad0;
+    float pad1;
+};
+
+#endif
+// ---- end field_slopelimit_params.hlsli
+
+CBUFFER(SlopeLimitParams, P, 0)
+SRV_BUFFER(float, src, 0)
+SRV_BUFFER(float, lo, 1)
+SRV_BUFFER(float, up, 2)
+SRV_BUFFER(float, mask, 3)
+UAV_BUFFER(float, dst, 0)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    uint i = dtid.y * P.w + dtid.x;
+    float c = src[i];
+    float r = c;
+    if (P.mode == 0u)
+    {
+        r = lo[i];
+    }
+    else if (P.mode == 1u)
+    {
+        r = -up[i];
+    }
+    else
+    {
+        float hi = -up[i];
+        r = hi + (lo[i] - hi) * P.balance;
+    }
+    float s = P.strength;
+    if (P.hasMask != 0u) s *= saturate(mask[i]);
+    dst[i] = c + (r - c) * s;
+}
+
+)HLSL";
+
+  // field_slopescan: 64x1x1 threads
+  inline constexpr char kSource_field_slopescan[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op slope_limit (EdFieldSc.cpp OpSlopeLimit), the envelope of one direction: along every line (a row or a column of the field, one thread each) the lowest function below the input that
+// rises at most `lim` per sample step: forward then backward sweep, c = min(c, previous + lim). The lower envelope of the whole field is the row scan followed by the column scan (the L1
+// distance transform is separable), which is what the CPU op's two sweeps compute.
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+// ---- begin field_slopescan_params.hlsli
+// Constant buffer of field_slopescan.hlsl (op slope_limit).
+#ifndef GPU_FIELD_SLOPESCAN_PARAMS_HLSLI
+#define GPU_FIELD_SLOPESCAN_PARAMS_HLSLI
+
+struct SlopeScanParams
+{
+    uint lines;        // number of lines scanned (one thread each)
+    uint len;          // samples per line
+    uint stride;       // distance between two samples of a line in the buffer
+    uint lineStride;   // distance between the first samples of two lines
+    float lim;         // largest height difference between neighbouring samples
+    float inSign;      // the scan works on inSign * source (-1: the upper envelope is the lower envelope of the negated field; 1 for a second scan of an already signed field)
+    float pad0;
+    float pad1;
+};
+
+#endif
+// ---- end field_slopescan_params.hlsli
+
+CBUFFER(SlopeScanParams, P, 0)
+SRV_BUFFER(float, src, 0)
+UAV_BUFFER(float, dst, 0)
+
+NUMTHREADS(64, 1, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.lines) return;
+    uint base = dtid.x * P.lineStride;
+    float prev = 0.0f;
+    LOOP for (uint k = 0u; k < P.len; ++k)
+    {
+        uint idx = base + k * P.stride;
+        float v = src[idx] * P.inSign;
+        if (k > 0u) v = min(v, prev + P.lim);
+        dst[idx] = v;
+        prev = v;
+    }
+    LOOP for (uint k2 = 1u; k2 < P.len; ++k2)
+    {
+        uint idx = base + (P.len - 1u - k2) * P.stride;
+        float v = min(dst[idx], prev + P.lim);
+        dst[idx] = v;
+        prev = v;
+    }
+}
+
+)HLSL";
+
   // field_sub: 16x16x1 threads
   inline constexpr char kSource_field_sub[] =
     R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
@@ -8556,6 +8760,8 @@ void CSMain(KERNEL_IDS)
     {"field_settle", kSource_field_settle, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x600636D24769A34FULL},
     {"field_slide_a", kSource_field_slide_a, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0F632EA329C10980ULL},
     {"field_slide_b", kSource_field_slide_b, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x8F04CA29A7C94D7AULL},
+    {"field_slopelimit", kSource_field_slopelimit, "CSMain", 16u, 16u, 1u, 0xFu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2B02344E17C970CDULL},
+    {"field_slopescan", kSource_field_slopescan, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x4DB2A8E0930B861FULL},
     {"field_sub", kSource_field_sub, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x101759797F1D7EACULL},
     {"field_unsharp", kSource_field_unsharp, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x51536C353B56C1BDULL},
     {"filt_bilateral", kSource_filt_bilateral, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x6B226CC7B6F8A9DFULL},
@@ -8578,5 +8784,5 @@ void CSMain(KERNEL_IDS)
     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
   };
-  inline constexpr int kKernelCount = 43;
+  inline constexpr int kKernelCount = 45;
 } // namespace moho::editor::gpu::shaders
