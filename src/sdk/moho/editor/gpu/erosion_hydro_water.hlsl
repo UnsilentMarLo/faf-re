@@ -4,7 +4,8 @@
 //   slope   sin of the ground's slope (central differences); the capacity uses it softly saturated at slopeCap (steep faces do not dominate) and floored at minSlope
 //   cap     capacity * slope * speed^speedPow * min(1, depth / depth_max); no dissolving below the speed threshold vThresh
 //   dig     erosion * rock * (cap - s) (at most cutLimit of the drop to the lowest of the eight neighbours), or settle deposition * (s - cap)
-// The sediment itself moves in pass C. Outputs: the new ground (Tn), the water (D, in place), the sediment after dissolving / settling (SN) and the water before the update (DO, which pass C divides by).
+// The sediment itself moves in pass C. Outputs: the change of the ground (dT = dissolved - settled, which erosion_hydro_apply spreads over the neighbourhood and subtracts), the water (D, in
+// place), the sediment after dissolving / settling (SN) and the water before the update (DO, which pass C divides by).
 #include "common.hlsli"
 #include "erosion_hydro_params.hlsli"
 #include "erosion_common.hlsli"
@@ -16,7 +17,7 @@ SRV_BUFFER(float, Fb, 2)
 SRV_BUFFER(float, rainMap, 3)
 SRV_BUFFER(float, rock, 4)
 SRV_BUFFER(float, S, 5)
-UAV_BUFFER(float, Tn, 0)
+UAV_BUFFER(float, dT, 0)
 UAV_BUFFER(float, D, 1)
 UAV_BUFFER(float, SN, 2)
 UAV_BUFFER(float, DO, 3)
@@ -43,7 +44,7 @@ void CSMain(KERNEL_IDS)
     bool pinned = (P.flags & 8u) != 0u && (x == 0 || z == 0 || x == w - 1 || z == h - 1);
     if (pinned)
     {
-        Tn[i] = T[i];
+        dT[i] = 0.0f;
         SN[i] = 0.0f;
         DO[i] = 0.0f;
         D[i] = 0.0f;
@@ -91,7 +92,8 @@ void CSMain(KERNEL_IDS)
     float tilt = max(soft, P.minSlope);
     float sp = speed;
     if (P.speedPow != 1.0f) sp = pow(max(speed, 1e-6f), P.speedPow);
-    float cap = P.capacity * tilt * sp * min(1.0f, dNew * P.invDepthMax);
+    float stress = min(P.rampMax, dNew * P.invDepthMax) * tilt;
+    float cap = P.capacity * sp * max(0.0f, stress - P.tauC);
     if (speed < P.vThresh) cap = 0.0f;
     float ti = T[i];
     float s0 = S[i];
@@ -119,7 +121,7 @@ void CSMain(KERNEL_IDS)
     {
         deposit = P.deposition * (s0 - cap);
     }
-    Tn[i] = ti - erode + deposit;
+    dT[i] = erode - deposit;
     SN[i] = s0 + erode - deposit;
     if ((P.flags & 16u) != 0u)
     {

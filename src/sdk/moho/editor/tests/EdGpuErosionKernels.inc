@@ -26,6 +26,10 @@ EMU_KERNEL_BEGIN(k_erosion_drop_resolve)
 #include "moho/editor/gpu/erosion_drop_resolve.hlsl"
 EMU_KERNEL_END(erosion_drop_resolve)
 
+EMU_KERNEL_BEGIN(k_erosion_hydro_apply)
+#include "moho/editor/gpu/erosion_hydro_apply.hlsl"
+EMU_KERNEL_END(erosion_hydro_apply)
+
 EMU_KERNEL_BEGIN(k_erosion_hydro_flux)
 #include "moho/editor/gpu/erosion_hydro_flux.hlsl"
 EMU_KERNEL_END(erosion_hydro_flux)

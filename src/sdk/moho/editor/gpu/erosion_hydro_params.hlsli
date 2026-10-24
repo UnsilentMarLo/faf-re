@@ -26,8 +26,12 @@ struct ErodeHydroParams
     float damp;          // share of the old pipe flux that is lost per iteration
     float vThresh;       // speed below which nothing is dissolved
     float speedPow;      // exponent of the speed in the capacity
+    float rampMax;       // the water depth factor of the capacity grows up to this many times the depth_max ramp (1 = saturates at depth_max, like the CPU op)
+    float tauC;          // shear threshold: nothing is dissolved while depth factor * slope is below it
+    float spread;        // share of the ground change that is spread over the 3 x 3 neighbourhood (binomial): channels at least 2 - 3 cells wide, no cell wide combs
     float pad0;
     float pad1;
+    float pad2;
 };
 
 #endif

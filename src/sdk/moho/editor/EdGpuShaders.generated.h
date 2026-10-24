@@ -3504,6 +3504,190 @@ void CSMain(KERNEL_IDS)
 
 )HLSL";
 
+  // filt_normal: 16x16x1 threads
+  inline constexpr char kSource_filt_normal[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op normal_map (EdFieldFilt.cpp OpNormalMap): the engine's map normal (left - right, 1, top - bottom) normalised, as three fields: x -> u0 (the op's result), y -> u1, z -> u2.
+// ---- begin filt_common.hlsli
+// Helpers of the filter kernels (filt_*.hlsl). Every filter kernel has a constant buffer P that starts with  uint w, h, z0, rows;  (field size, first row and number of rows of this dispatch) and
+// reads the source field from a structured buffer. Functions that read a buffer cannot take it as an argument in the kernel subset, so they are macros that define a function for the buffer
+// whose name is given (the function reads P.w / P.h, so define it after the CBUFFER).
+#ifndef GPU_FILT_COMMON_HLSLI
+#define GPU_FILT_COMMON_HLSLI
+
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+
+// EdFieldUtil.h SmoothStep (an empty edge range is a step).
+FN float SmoothStep(float e0, float e1, float v)
+{
+    if (e1 == e0) return v < e0 ? 0.0f : 1.0f;
+    float t = saturate((v - e0) / (e1 - e0));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// BilinearC(gx, gz): bilinear sample of buffer BUF at fractional sample coordinates, clamped edges (EdFieldUtil.h BilinearC).
+#define DEFINE_BILINEAR_C(BUF)                                                                  \
+    FN float BilinearC(float gx, float gz)                                                      \
+    {                                                                                           \
+        float mx = float(P.w - 1u);                                                             \
+        float mz = float(P.h - 1u);                                                             \
+        float cx = gx < 0.0f ? 0.0f : (gx > mx ? mx : gx);                                      \
+        float cz = gz < 0.0f ? 0.0f : (gz > mz ? mz : gz);                                      \
+        int ix = int(cx);                                                                       \
+        int iz = int(cz);                                                                       \
+        if (ix >= int(P.w) - 1) ix = max(0, int(P.w) - 2);                                      \
+        if (iz >= int(P.h) - 1) iz = max(0, int(P.h) - 2);                                      \
+        float tx = cx - float(ix);                                                              \
+        float tz = cz - float(iz);                                                              \
+        int ix1 = min(int(P.w) - 1, ix + 1);                                                    \
+        int iz1 = min(int(P.h) - 1, iz + 1);                                                    \
+        uint r0 = uint(iz) * P.w;                                                               \
+        uint r1 = uint(iz1) * P.w;                                                              \
+        float a0 = BUF[r0 + uint(ix)];                                                          \
+        float a1 = BUF[r0 + uint(ix1)];                                                         \
+        float b0 = BUF[r1 + uint(ix)];                                                          \
+        float b1 = BUF[r1 + uint(ix1)];                                                         \
+        float top = a0 + (a1 - a0) * tx;                                                        \
+        float bottom = b0 + (b1 - b0) * tx;                                                     \
+        return top + (bottom - top) * tz;                                                       \
+    }
+
+// GradientAt(x, z, gx, gz): central difference gradient (rise per run, P.cell world units per sample) with clamped edges (EdFieldUtil.h GradientAt).
+#define DEFINE_GRADIENT_AT(BUF)                                                                 \
+    FN void GradientAt(int x, int z, OUT(float) gx, OUT(float) gz)                              \
+    {                                                                                           \
+        int x0 = max(0, x - 1);                                                                 \
+        int x1 = min(int(P.w) - 1, x + 1);                                                      \
+        int z0 = max(0, z - 1);                                                                 \
+        int z1 = min(int(P.h) - 1, z + 1);                                                      \
+        gx = 0.0f;                                                                              \
+        gz = 0.0f;                                                                              \
+        if (x1 > x0) gx = (BUF[uint(z) * P.w + uint(x1)] - BUF[uint(z) * P.w + uint(x0)]) / (float(x1 - x0) * P.cell); \
+        if (z1 > z0) gz = (BUF[uint(z1) * P.w + uint(x)] - BUF[uint(z0) * P.w + uint(x)]) / (float(z1 - z0) * P.cell); \
+    }
+
+#endif
+// ---- end filt_common.hlsli
+// ---- begin filt_normal_params.hlsli
+// Constant buffer of filt_normal.hlsl (op normal_map).
+#ifndef GPU_FILT_NORMAL_PARAMS_HLSLI
+#define GPU_FILT_NORMAL_PARAMS_HLSLI
+
+struct NormalParams
+{
+    uint w;
+    uint h;
+    uint z0;
+    uint rows;
+    uint raw;        // 1 = -1..1 instead of 0..1
+    uint pad0;
+    uint pad1;
+    uint pad2;
+    float taps;      // samples either side of the point (span / 2 / cell)
+)HLSL"
+    R"HLSL(    float scale;     // slope from a difference over the span: strength / span
+    float shift;     // samples added to the position
+    float cell;
+};
+
+#endif
+// ---- end filt_normal_params.hlsli
+
+CBUFFER(NormalParams, P, 0)
+SRV_BUFFER(float, src, 1)
+UAV_BUFFER(float, dstX, 0)
+UAV_BUFFER(float, dstY, 1)
+UAV_BUFFER(float, dstZ, 2)
+
+DEFINE_BILINEAR_C(src)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.rows) return;
+    uint row = dtid.y + P.z0;
+    float fx = float(dtid.x) + P.shift;
+    float fz = float(row) + P.shift;
+    float left = BilinearC(fx - P.taps, fz);
+    float right = BilinearC(fx + P.taps, fz);
+    float top = BilinearC(fx, fz - P.taps);
+    float bottom = BilinearC(fx, fz + P.taps);
+    float nx = (left - right) * P.scale;
+    float nz = (top - bottom) * P.scale;
+    float inv = 1.0f / sqrt(nx * nx + 1.0f + nz * nz);
+    float ex = nx * inv;
+    float ey = inv;
+    float ez = nz * inv;
+    uint idx = row * P.w + dtid.x;
+    dstX[idx] = P.raw != 0u ? ex : ex * 0.5f + 0.5f;
+    dstY[idx] = P.raw != 0u ? ey : ey * 0.5f + 0.5f;
+    dstZ[idx] = P.raw != 0u ? ez : ez * 0.5f + 0.5f;
+}
+
+)HLSL";
+
   // filt_occlusion: 16x16x1 threads
   inline constexpr char kSource_filt_occlusion[] =
     R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
@@ -3698,6 +3882,281 @@ void CSMain(KERNEL_IDS)
     else if (P.mode == 1u) r = saturate(occConvex * P.gain);
     else r = saturate(0.5f + 0.5f * (occConcave - occConvex) * P.gain);
     dst[row * P.w + dtid.x] = r;
+}
+
+)HLSL";
+
+  // filt_terrain: 16x16x1 threads
+  inline constexpr char kSource_filt_terrain[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Ops slope (modes degrees and gradient), curvature, aspect and hillshade (EdFieldCore.cpp OpSlope / OpCurvature / OpAspect, EdFieldFilt.cpp OpHillshade): stencils over the height field, a few
+// operations per sample. The arithmetic is the CPU's, in the same order. They only pay off on big fields (the host op sends small ones to the CPU): see EdGpuGenFilt.cpp.
+// ---- begin filt_common.hlsli
+// Helpers of the filter kernels (filt_*.hlsl). Every filter kernel has a constant buffer P that starts with  uint w, h, z0, rows;  (field size, first row and number of rows of this dispatch) and
+// reads the source field from a structured buffer. Functions that read a buffer cannot take it as an argument in the kernel subset, so they are macros that define a function for the buffer
+// whose name is given (the function reads P.w / P.h, so define it after the CBUFFER).
+#ifndef GPU_FILT_COMMON_HLSLI
+#define GPU_FILT_COMMON_HLSLI
+
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+
+// EdFieldUtil.h SmoothStep (an empty edge range is a step).
+FN float SmoothStep(float e0, float e1, float v)
+{
+    if (e1 == e0) return v < e0 ? 0.0f : 1.0f;
+    float t = saturate((v - e0) / (e1 - e0));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// BilinearC(gx, gz): bilinear sample of buffer BUF at fractional sample coordinates, clamped edges (EdFieldUtil.h BilinearC).
+#define DEFINE_BILINEAR_C(BUF)                                                                  \
+    FN float BilinearC(float gx, float gz)                                                      \
+    {                                                                                           \
+        float mx = float(P.w - 1u);                                                             \
+        float mz = float(P.h - 1u);                                                             \
+        float cx = gx < 0.0f ? 0.0f : (gx > mx ? mx : gx);                                      \
+        float cz = gz < 0.0f ? 0.0f : (gz > mz ? mz : gz);                                      \
+        int ix = int(cx);                                                                       \
+        int iz = int(cz);                                                                       \
+        if (ix >= int(P.w) - 1) ix = max(0, int(P.w) - 2);                                      \
+        if (iz >= int(P.h) - 1) iz = max(0, int(P.h) - 2);                                      \
+        float tx = cx - float(ix);                                                              \
+        float tz = cz - float(iz);                                                              \
+        int ix1 = min(int(P.w) - 1, ix + 1);                                                    \
+        int iz1 = min(int(P.h) - 1, iz + 1);                                                    \
+        uint r0 = uint(iz) * P.w;                                                               \
+        uint r1 = uint(iz1) * P.w;                                                              \
+        float a0 = BUF[r0 + uint(ix)];                                                          \
+        float a1 = BUF[r0 + uint(ix1)];                                                         \
+        float b0 = BUF[r1 + uint(ix)];                                                          \
+        float b1 = BUF[r1 + uint(ix1)];                                                         \
+        float top = a0 + (a1 - a0) * tx;                                                        \
+        float bottom = b0 + (b1 - b0) * tx;                                                     \
+        return top + (bottom - top) * tz;                                                       \
+    }
+
+// GradientAt(x, z, gx, gz): central difference gradient (rise per run, P.cell world units per sample) with clamped edges (EdFieldUtil.h GradientAt).
+#define DEFINE_GRADIENT_AT(BUF)                                                                 \
+    FN void GradientAt(int x, int z, OUT(float) gx, OUT(float) gz)                              \
+    {                                                                                           \
+        int x0 = max(0, x - 1);                                                                 \
+        int x1 = min(int(P.w) - 1, x + 1);                                                      \
+        int z0 = max(0, z - 1);                                                                 \
+        int z1 = min(int(P.h) - 1, z + 1);                                                      \
+        gx = 0.0f;                                                                              \
+        gz = 0.0f;                                                                              \
+        if (x1 > x0) gx = (BUF[uint(z) * P.w + uint(x1)] - BUF[uint(z) * P.w + uint(x0)]) / (float(x1 - x0) * P.cell); \
+        if (z1 > z0) gz = (BUF[uint(z1) * P.w + uint(x)] - BUF[uint(z0) * P.w + uint(x)]) / (float(z1 - z0) * P.cell); \
+    }
+
+#endif
+// ---- end filt_common.hlsli
+// ---- begin filt_terrain_params.hlsli
+// Constant buffer of filt_terrain.hlsl (ops slope, curvature, aspect, hillshade).
+#ifndef GPU_FILT_TERRAIN_PARAMS_HLSLI
+#define GPU_FILT_TERRAIN_PARAMS_HLSLI
+
+struct TerrainParams
+{
+    uint w;
+    uint h;
+    uint z0;
+    uint rows;
+)HLSL"
+    R"HLSL(    uint op;          // 0 slope, 1 curvature, 2 aspect, 3 hillshade
+    uint n;           // difference distance in samples (slope, curvature, aspect)
+    uint mode;        // slope: 0 degrees 1 gradient; aspect: 0 facing 1 degrees; curvature: 1 = raw; hillshade: 0 shade 1 lit 2 shadow
+    uint shadows;     // hillshade: cast shadows
+    float cell;
+    float gain;       // curvature gain
+    float degK;       // 180 / pi
+    float ambient;
+    float zf;         // vertical exaggeration
+    float lx;         // light direction
+    float ly;
+    float lz;
+    float dirx;       // azimuth direction on the ground (aspect: the facing direction)
+    float dirz;
+    float tanAlt;
+    float len;        // shadow length in samples
+    float flatK;      // aspect: slope below which the facing fades
+    float d2;         // curvature: (n * cell)^2
+    float pad0;
+    float pad1;
+};
+
+#endif
+// ---- end filt_terrain_params.hlsli
+
+CBUFFER(TerrainParams, P, 0)
+SRV_BUFFER(float, src, 1)
+UAV_BUFFER(float, dst, 0)
+
+DEFINE_BILINEAR_C(src)
+DEFINE_GRADIENT_AT(src)
+
+// Central difference over +-n samples with clamped edges (the slope and aspect ops).
+FN void GradientN(int x, int z, OUT(float) gx, OUT(float) gz)
+{
+    int n = int(P.n);
+    int x0 = max(0, x - n);
+    int x1 = min(int(P.w) - 1, x + n);
+    int z0 = max(0, z - n);
+    int z1 = min(int(P.h) - 1, z + n);
+    gx = 0.0f;
+    gz = 0.0f;
+    if (x1 > x0) gx = (src[uint(z) * P.w + uint(x1)] - src[uint(z) * P.w + uint(x0)]) / (float(x1 - x0) * P.cell);
+    if (z1 > z0) gz = (src[uint(z1) * P.w + uint(x)] - src[uint(z0) * P.w + uint(x)]) / (float(z1 - z0) * P.cell);
+}
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.rows) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y + P.z0);
+    uint idx = uint(z) * P.w + uint(x);
+    float r = 0.0f;
+    if (P.op == 0u)
+    {
+        float gx = 0.0f;
+        float gz = 0.0f;
+        GradientN(x, z, gx, gz);
+        float g = sqrt(gx * gx + gz * gz);
+        r = P.mode == 0u ? atan(g) * P.degK : g;
+    }
+    else if (P.op == 1u)
+    {
+        int n = int(P.n);
+        float c = src[idx];
+        float lap = (src[uint(z) * P.w + uint(max(0, x - n))] + src[uint(z) * P.w + uint(min(int(P.w) - 1, x + n))] + src[uint(max(0, z - n)) * P.w + uint(x)] +
+                     src[uint(min(int(P.h) - 1, z + n)) * P.w + uint(x)] - 4.0f * c) / P.d2;
+        r = P.mode == 1u ? -lap : saturate(0.5f - P.gain * lap);
+    }
+    else if (P.op == 2u)
+    {
+        float gx = 0.0f;
+        float gz = 0.0f;
+        GradientN(x, z, gx, gz);
+        float g = sqrt(gx * gx + gz * gz);
+        if (P.mode == 1u)
+        {
+            r = 0.0f;
+            if (g > 0.000000001f)
+            {
+                r = atan2(-gz, -gx) * P.degK;
+                if (r < 0.0f) r += 360.0f;
+            }
+        }
+        else
+        {
+            r = 0.5f;
+            if (g > 0.000000001f)
+            {
+                float c = (-gx * P.dirx - gz * P.dirz) / g;
+                r = 0.5f + 0.5f * c * min(1.0f, g / P.flatK);
+            }
+        }
+    }
+    else
+    {
+        float gx = 0.0f;
+        float gz = 0.0f;
+        GradientAt(x, z, gx, gz);
+        gx *= P.zf;
+        gz *= P.zf;
+        float inv = 1.0f / sqrt(gx * gx + gz * gz + 1.0f);
+        float ndl = (-gx * P.lx + P.ly - gz * P.lz) * inv;
+        float lit = ndl > 0.0f ? 1.0f : 0.0f;
+        if (P.shadows != 0u)
+        {
+            float h0 = src[idx];
+            float t = 1.0f;
+            float shade = 1.0f;
+            LOOP while (t < P.len)
+            {
+                float hs = BilinearC(float(x) + P.dirx * t, float(z) + P.dirz * t);
+                float ray = h0 + t * P.cell * P.tanAlt;
+                if (hs > ray + 0.01f)
+                {
+                    shade = 0.0f;
+                    break;
+                }
+                t += 1.0f + t * 0.12f;
+            }
+            lit *= shade;
+            if (P.mode == 2u) r = 1.0f - shade;
+            else if (P.mode == 1u) r = lit * SmoothStep(0.0f, 0.25f, ndl);
+            else r = saturate(P.ambient + (1.0f - P.ambient) * max(0.0f, ndl) * shade);
+        }
+        else
+        {
+            r = saturate(P.ambient + (1.0f - P.ambient) * max(0.0f, ndl));
+        }
+    }
+    dst[idx] = r;
 }
 
 )HLSL";
@@ -6694,7 +7153,9 @@ void CSMain(KERNEL_IDS)
     {"filt_blurdir", kSource_filt_blurdir, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x7E0FBD4C9A05041EULL},
     {"filt_diffuse", kSource_filt_diffuse, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x40DC1A1D6642A2D3ULL},
     {"filt_dwarp", kSource_filt_dwarp, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xD25852870C76D667ULL},
+    {"filt_normal", kSource_filt_normal, "CSMain", 16u, 16u, 1u, 0x2u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x8E348EF139FEBA7EULL},
     {"filt_occlusion", kSource_filt_occlusion, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xF7CFFCFD5A7C0F79ULL},
+    {"filt_terrain", kSource_filt_terrain, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA87505039CA013AAULL},
     {"gen_cells", kSource_gen_cells, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x248960A238B84B06ULL},
     {"gen_craters", kSource_gen_craters, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2CBB355B5E28183BULL},
     {"gen_dunes", kSource_gen_dunes, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xF2EB251DBBCA424DULL},
@@ -6707,5 +7168,5 @@ void CSMain(KERNEL_IDS)
     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
   };
-  inline constexpr int kKernelCount = 31;
+  inline constexpr int kKernelCount = 33;
 } // namespace moho::editor::gpu::shaders

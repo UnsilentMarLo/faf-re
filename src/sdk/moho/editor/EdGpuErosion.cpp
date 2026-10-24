@@ -162,12 +162,13 @@ namespace moho::editor::gpu
       if (p.iterations <= 0) return OpResult::Unsupported;
       const int w = src->w, h = src->h;
       const std::uint64_t n = static_cast<std::uint64_t>(w) * static_cast<std::uint64_t>(h);
-      if (4ull * n > kMaxBufferElements || 24ull * n * 4ull > ex.MaxBytes()) return OpResult::Unsupported;      // the flux planes are 4 n elements; about 24 fields in all
+      if (4ull * n > kMaxBufferElements || 25ull * n * 4ull > ex.MaxBytes()) return OpResult::Unsupported;      // the flux planes are 4 n elements; about 24 fields in all
       const KernelInfo* kFlux = FindKernel("erosion_hydro_flux");
       const KernelInfo* kWater = FindKernel("erosion_hydro_water");
       const KernelInfo* kTrans = FindKernel("erosion_hydro_transport");
       const KernelInfo* kSettle = FindKernel("erosion_hydro_settle");
-      if (kFlux == nullptr || kWater == nullptr || kTrans == nullptr || kSettle == nullptr) {
+      const KernelInfo* kApply = FindKernel("erosion_hydro_apply");
+      if (kFlux == nullptr || kWater == nullptr || kTrans == nullptr || kSettle == nullptr || kApply == nullptr) {
         err = "an erosion_hydro kernel is missing";
         return OpResult::Failed;
       }
@@ -179,11 +180,11 @@ namespace moho::editor::gpu
 
       Dev dev(ex, err);
       PingPong T;
-      Field D, S, SN, DO, rain, rock, thermalRate, wear, dep, flow;
+      Field D, S, SN, DO, dT, rain, rock, thermalRate, wear, dep, flow;
       std::unique_ptr<Resource> Fa, Fb;
       ThermalKit tk;
       if (!dev.Dummies() || !MakeField(ex, w, h, T.f[1], err) || !UploadGrid(ex, *src, T.f[0], err)) return OpResult::Failed;
-      if (!dev.Zero(D, w, h) || !dev.Zero(S, w, h) || !MakeField(ex, w, h, SN, err) || !MakeField(ex, w, h, DO, err)) return OpResult::Failed;
+      if (!dev.Zero(D, w, h) || !dev.Zero(S, w, h) || !MakeField(ex, w, h, SN, err) || !MakeField(ex, w, h, DO, err) || !MakeField(ex, w, h, dT, err)) return OpResult::Failed;
       if (!dev.Zero(Fa, static_cast<u32>(4 * n)) || !dev.Zero(Fb, static_cast<u32>(4 * n))) return OpResult::Failed;
       if (!dev.Optional(fac.rain, w, h, rain) || !dev.Optional(fac.rock, w, h, rock) || !dev.Optional(fac.thermal, w, h, thermalRate)) return OpResult::Failed;
       if (masks && (!dev.Zero(wear, w, h) || !dev.Zero(dep, w, h) || !dev.Zero(flow, w, h))) return OpResult::Failed;
@@ -210,9 +211,12 @@ namespace moho::editor::gpu
       hp.rainNoise = Clamp01(static_cast<float>(a.p.N("rain_noise", 0.2)));
       hp.seed = static_cast<std::uint32_t>(a.p.N("seed", 1.0));
       hp.velFloor = 0.002f;
-      hp.damp = Clamp01(static_cast<float>(a.p.N("flux_damp", 0.0)));
+      hp.damp = Clamp01(static_cast<float>(a.p.N("flux_damp", 0.3)));
       hp.vThresh = std::max(0.0f, static_cast<float>(a.p.N("speed_floor", 0.0)));
       hp.speedPow = std::max(0.25f, static_cast<float>(a.p.N("speed_pow", 1.0)));
+      hp.rampMax = std::max(1.0f, static_cast<float>(a.p.N("depth_gain", 4.0)));
+      hp.tauC = std::max(0.0f, static_cast<float>(a.p.N("shear_floor", 0.0)));
+      hp.spread = Clamp01(static_cast<float>(a.p.N("erode_spread", 0.7)));
       const hk::ErodeThermalParams tp = ThermalParams(w, h, src->cell, p.talus, p.thermal, !fac.thermal.empty(), sides);
 
       const Resource& d0 = *dev.dummy[0];
@@ -230,8 +234,13 @@ namespace moho::editor::gpu
         {
           Bindings b;
           b.Srv(0, T.Src().R()).Srv(1, *Fa).Srv(2, *Fb).Srv(3, Or(rain, d0)).Srv(4, Or(rock, d0)).Srv(5, S.R());
-          b.Uav(0, T.Dst().R()).Uav(1, D.R()).Uav(2, SN.R()).Uav(3, DO.R()).Uav(4, wearR).Uav(5, depR).Uav(6, flowR);
+          b.Uav(0, dT.R()).Uav(1, D.R()).Uav(2, SN.R()).Uav(3, DO.R()).Uav(4, wearR).Uav(5, depR).Uav(6, flowR);
           if (!DispatchGrid(ex, *kWater, hp.w, hp.h, hp, b, e)) return false;
+        }
+        {
+          Bindings b;
+          b.Srv(0, T.Src().R()).Srv(1, dT.R()).Uav(0, T.Dst().R());
+          if (!DispatchGrid(ex, *kApply, hp.w, hp.h, hp, b, e)) return false;
         }
         T.Flip();
         {
