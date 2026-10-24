@@ -2277,6 +2277,1115 @@ void CSMain(KERNEL_IDS)
 
 )HLSL";
 
+  // gen_cells: 16x16x1 threads
+  inline constexpr char kSource_gen_cells[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Ops voronoi (EdFieldCore.cpp OpVoronoi), cells (EdFieldGen.cpp OpCells: metrics and ten modes) and cracks (OpCracks: networks of cracks). Cellular noise: one feature point per lattice cell,
+// searched in the neighbouring cells. oct table, 16 floats per record: 0..7 the affine map of the cell lattice at the level (records 0..2: levels of cracks / the one level of the others),
+// 8 scale in world units of the level, 9 crack width in units, 10 weight; records 3 and 4 hold the maps of the two warp noises (Fbm01, see gen_noise.hlsli: octave 0 map).
+// ---- begin gen_noise.hlsli
+// Gradient noise for the generator kernels (gen_*.hlsl). The same noise as the CPU ops (EdFieldCore.cpp / EdFieldUtil.h): the same lattice hash, the same 8 / 64 gradient directions,
+// the same quintic fade, so a GPU result matches the CPU result up to float rounding.
+//
+// POSITIONS. The CPU ops compute the lattice position in double from the world position. A float cannot hold ox + x * cell at 4096 samples without losing the fine octaves, so the host
+// (EdGpuGen.cpp) does that part in double and hands the kernel, per octave, an AFFINE MAP from the sample index (x, z) to the lattice: u = u0 + a x + b z, v = v0 + c x + d z, with u0 / v0
+// split into an integer part (exact in float below 2^24) and a fraction. LatticePoint() turns that into the integer cell and the fraction inside it: the float error is then relative
+// to the size of the field in lattice units, not to the distance from the world origin.
+//
+// Octave record in the float table `oct` (16 floats per octave, kernels use what they need): 0 iu0, 1 iv0, 2 fu0, 3 fv0, 4 a, 5 b, 6 c, 7 d (the map), 8 amplitude, 9 and up per kernel.
+#ifndef GPU_GEN_NOISE_HLSLI
+#define GPU_GEN_NOISE_HLSLI
+
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+
+// Lattice hash of the cell (ix, iz): bit exact the CPU's Hash2.
+FN uint Hash2i(int ix, int iz, uint seed)
+{
+    return Hash32(uint(ix) * 0x9E3779B1u ^ Hash32(uint(iz) + seed * 0x85EBCA6Bu + 0x165667B1u));
+}
+
+// The 64 evenly spread gradient directions of the CPU's Gradients64() (angle (k + 0.5) * pi / 32).
+FN float2 Grad64(uint h)
+{
+    float a = (float(h & 63u) + 0.5f) * 0.09817477042468103f;
+    float s = 0.0f;
+    float c = 1.0f;
+    sincos(a, s, c);
+    return float2(c, s);
+}
+
+// The classic 8 directions of the CPU's kGrad table: (1,0) (-1,0) (0,1) (0,-1) and the four diagonals.
+FN float2 Grad8(uint h)
+{
+    uint k = h & 7u;
+    if (k < 2u) return float2(k == 0u ? 1.0f : -1.0f, 0.0f);
+    if (k < 4u) return float2(0.0f, k == 2u ? 1.0f : -1.0f);
+    float q = 0.70710678f;
+    return float2((k & 1u) == 0u ? q : -q, (k & 2u) == 0u ? q : -q);
+}
+
+FN float2 GradOf(uint h, uint fine)
+{
+    if (fine != 0u) return Grad64(h);
+    return Grad8(h);
+}
+
+FN float Fade(float t)
+{
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+FN float FadeD(float t)
+{
+    return 30.0f * t * t * (t - 1.0f) * (t - 1.0f);
+}
+
+// Integer cell and fraction of sample (x, z) for the affine map in the octave record.
+FN void LatticePoint(float iu0, float iv0, float fu0, float fv0, float a, float b, float c, float d, float x, float z, OUT(int) ix, OUT(int) iz, OUT(float) fx, OUT(float) fz)
+{
+    float u = fu0 + a * x + b * z;
+    float v = fv0 + c * x + d * z;
+    float fu = floor(u);
+    float fv = floor(v);
+    ix = int(iu0) + int(fu);
+    iz = int(iv0) + int(fv);
+    fx = u - fu;
+    fz = v - fv;
+}
+
+// Gradient noise about -1..1 with its analytic derivative per lattice unit (EdFieldUtil.h PerlinD). fine: 64 directions, else 8.
+FN float PerlinD(int ix, int iz, float fx, float fz, uint seed, uint fine, OUT(float) dnx, OUT(float) dnz)
+{
+    float u = Fade(fx);
+    float v = Fade(fz);
+    float du = FadeD(fx);
+    float dv = FadeD(fz);
+    float2 ga = GradOf(Hash2i(ix, iz, seed), fine);
+    float2 gb = GradOf(Hash2i(ix + 1, iz, seed), fine);
+    float2 gc = GradOf(Hash2i(ix, iz + 1, seed), fine);
+    float2 gd = GradOf(Hash2i(ix + 1, iz + 1, seed), fine);
+    float va = ga.x * fx + ga.y * fz;
+    float vb = gb.x * (fx - 1.0f) + gb.y * fz;
+    float vc = gc.x * fx + gc.y * (fz - 1.0f);
+    float vd = gd.x * (fx - 1.0f) + gd.y * (fz - 1.0f);
+    float k = va - vb - vc + vd;
+    float n = va + u * (vb - va) + v * (vc - va) + u * v * k;
+    float s = 1.41421356f;
+    dnx = s * (ga.x + u * (gb.x - ga.x) + v * (gc.x - ga.x) + u * v * (ga.x - gb.x - gc.x + gd.x) + du * (vb - va + v * k));
+    dnz = s * (ga.y + u * (gb.y - ga.y) + v * (gc.y - ga.y) + u * v * (ga.y - gb.y - gc.y + gd.y) + dv * (vc - va + u * k));
+    return n * s;
+}
+
+// Value only.
+FN float Perlin(int ix, int iz, float fx, float fz, uint seed, uint fine)
+{
+    float dx = 0.0f;
+    float dz = 0.0f;
+    return PerlinD(ix, iz, fx, fz, seed, fine, dx, dz);
+}
+
+// 2D simplex noise about -1..1 (EdFieldCore.cpp Simplex). (ix, iz, fx, fz) is the position in the SKEWED lattice (the host skews the affine map): ix, iz the simplex cell, fx, fz inside it.
+FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
+{
+    float g2 = 0.21132486540518713f;
+    float t = (sx + sz) * g2;
+    float x0 = sx - t;
+    float y0 = sz - t;
+    int i1 = x0 > y0 ? 1 : 0;
+    int j1 = x0 > y0 ? 0 : 1;
+    float x1 = x0 - float(i1) + g2;
+    float y1 = y0 - float(j1) + g2;
+    float x2 = x0 - 1.0f + 2.0f * g2;
+)HLSL"
+    R"HLSL(    float y2 = y0 - 1.0f + 2.0f * g2;
+    float n = 0.0f;
+    float t0 = 0.5f - x0 * x0 - y0 * y0;
+    if (t0 > 0.0f)
+    {
+        t0 *= t0;
+        float2 g = GradOf(Hash2i(i, j, seed), fine);
+        n += t0 * t0 * (g.x * x0 + g.y * y0);
+    }
+    float t1 = 0.5f - x1 * x1 - y1 * y1;
+    if (t1 > 0.0f)
+    {
+        t1 *= t1;
+        float2 g = GradOf(Hash2i(i + i1, j + j1, seed), fine);
+        n += t1 * t1 * (g.x * x1 + g.y * y1);
+    }
+    float t2 = 0.5f - x2 * x2 - y2 * y2;
+    if (t2 > 0.0f)
+    {
+        t2 *= t2;
+        float2 g = GradOf(Hash2i(i + 1, j + 1, seed), fine);
+        n += t2 * t2 * (g.x * x2 + g.y * y2);
+    }
+    return n * 99.2f;
+}
+
+// The CPU's Fbm01 (EdFieldUtil.h): fractal sum of classic 8 direction Perlin, 0..1, octaves doubling in frequency, every octave its own seed. (iu, iv, fu, fv) is the lattice position at octave 0
+// (cell + fraction); octave o sees it multiplied by 2^o (exact).
+FN float Fbm01(int iu, int iv, float fu, float fv, uint seed, uint octaves, float persistence)
+{
+    float sum = 0.0f;
+    float norm = 0.0f;
+    float amp = 1.0f;
+    float m = 1.0f;
+    int mi = 1;
+    LOOP for (uint o = 0u; o < octaves; ++o)
+    {
+        uint s = Hash32(seed * 131u + o * 7919u + 17u);
+        float fU = fu * m;
+        float fV = fv * m;
+        float fl = floor(fU);
+        float fm = floor(fV);
+        float n = Perlin(iu * mi + int(fl), iv * mi + int(fm), fU - fl, fV - fm, s, 0u);
+        n = max(-1.0f, min(1.0f, n));
+        sum += n * amp;
+        norm += amp;
+        amp *= persistence;
+        m *= 2.0f;
+        mi *= 2;
+    }
+    return saturate(0.5f + 0.5f * sum / norm * 1.4f);
+}
+
+#endif
+// ---- end gen_noise.hlsli
+// ---- begin gen_cells_params.hlsli
+// Constant buffer of gen_cells.hlsl (ops voronoi, cells, cracks).
+#ifndef GPU_GEN_CELLS_PARAMS_HLSLI
+#define GPU_GEN_CELLS_PARAMS_HLSLI
+
+struct CellsParams
+{
+    uint w;
+    uint z0;
+    uint rows;
+    uint op;          // 0 voronoi, 1 cells, 2 cracks
+    uint mode;        // voronoi: f1 f2 edge id crack; cells: f1 f2 f3 edge crack id smooth border plate facet
+    uint metric;      // 0 euclid, 1 manhattan, 2 chebyshev, 3 minkowski
+    uint range;       // neighbour cells searched each side (1 or 2)
+    uint levels;      // cracks: networks (1..3)
+    uint seed;
+    uint seedA;       // seeds of the two warp noises
+    uint seedB;
+    uint warpOn;      // 1 = domain warp of the lattice position
+    uint profile;     // cracks: 0 v, 1 u, 2 flat
+    uint warpOct;     // octaves of the warp noise (3)
+    uint pad0;
+    uint pad1;
+    float jitter;
+    float pexp;       // minkowski exponent
+    float ksoft;      // smooth mode sharpness
+    float width;      // voronoi / cells crack thickness
+    float bevel;
+    float drop;
+    float warp;       // world units
+    float pad2;
+};
+
+#endif
+// ---- end gen_cells_params.hlsli
+
+CBUFFER(CellsParams, P, 0)
+SRV_BUFFER(float, oct, 1)
+UAV_BUFFER(float, dst, 0)
+
+FN float SmoothStep(float e0, float e1, float v)
+{
+    if (e1 == e0) return v < e0 ? 0.0f : 1.0f;
+    float t = saturate((v - e0) / (e1 - e0));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+FN float Metric(float ex, float ez)
+{
+    if (P.metric == 1u) return abs(ex) + abs(ez);
+    if (P.metric == 2u) return max(abs(ex), abs(ez));
+    if (P.metric == 3u) return pow(pow(abs(ex), P.pexp) + pow(abs(ez), P.pexp), 1.0f / P.pexp);
+    return sqrt(ex * ex + ez * ez);
+}
+
+FN void FeaturePoint(int cx, int cz, uint seed, OUT(float) jx, OUT(float) jz, OUT(uint) h)
+{
+    h = Hash2i(cx, cz, seed);
+    jx = 0.5f + (HashToUnit(h) - 0.5f) * P.jitter;
+    jz = 0.5f + (HashToUnit(Hash32(h ^ 0x68E31DA4u)) - 0.5f) * P.jitter;
+}
+
+// Nearest three feature points with the chosen metric (EdFieldGen.cpp Nearest).
+FN void Nearest(int cx, int cz, float lx, float lz, uint seed, int rng, OUT(float) f1, OUT(float) f2, OUT(float) f3, OUT(uint) id, OUT(float) hcx, OUT(float) hcz, OUT(float) soft)
+{
+    f1 = 1000000000.0f;
+    f2 = 1000000000.0f;
+    f3 = 1000000000.0f;
+    id = 0u;
+    hcx = 0.0f;
+    hcz = 0.0f;
+    soft = 0.0f;
+    LOOP for (int dz = -rng; dz <= rng; ++dz)
+    {
+        LOOP for (int dx = -rng; dx <= rng; ++dx)
+        {
+            float jx = 0.0f;
+            float jz = 0.0f;
+            uint h = 0u;
+            FeaturePoint(cx + dx, cz + dz, seed, jx, jz, h);
+            float ex = float(dx) + jx - lx;
+            float ez = float(dz) + jz - lz;
+            float d = Metric(ex, ez);
+            soft += exp(-P.ksoft * d);
+            if (d < f1)
+            {
+                f3 = f2;
+                f2 = f1;
+                f1 = d;
+                id = h;
+                hcx = ex;
+                hcz = ez;
+            }
+            else if (d < f2)
+            {
+                f3 = f2;
+                f2 = d;
+            }
+            else if (d < f3)
+            {
+                f3 = d;
+            }
+        }
+    }
+}
+
+// Exact distance (cell units) from the sample to the border of its Voronoi cell (EdFieldGen.cpp BorderDistance).
+FN float BorderDistance(int cx, int cz, float lx, float lz, uint seed, float hcx, float hcz)
+{
+    float best = 1000000000.0f;
+    LOOP for (int dz = -2; dz <= 2; ++dz)
+    {
+        LOOP for (int dx = -2; dx <= 2; ++dx)
+        {
+            float jx = 0.0f;
+            float jz = 0.0f;
+            uint h = 0u;
+            FeaturePoint(cx + dx, cz + dz, seed, jx, jz, h);
+            float ex = float(dx) + jx - lx;
+            float ez = float(dz) + jz - lz;
+            float rx = ex - hcx;
+            float rz = ez - hcz;
+            float len = sqrt(rx * rx + rz * rz);
+            if (len >= 0.00001f)
+            {
+                float d = (0.5f * (hcx + ex) * rx + 0.5f * (hcz + ez) * rz) / len;
+                best = min(best, d);
+            }
+        }
+    }
+    return best;
+}
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.rows) return;
+    uint row = dtid.y + P.z0;
+    float x = float(dtid.x);
+    float z = float(row);
+    // domain warp of the world position (cells, cracks): two Fbm01 noises
+    float dwx = 0.0f;
+    float dwz = 0.0f;
+    if (P.warpOn != 0u)
+    {
+        int ix = 0;
+        int iz = 0;
+        float fx = 0.0f;
+        float fz = 0.0f;
+        LatticePoint(oct[48], oct[49], oct[50], oct[51], oct[52], oct[53], oct[54], oct[55], x, z, ix, iz, fx, fz);
+        float nx = Fbm01(ix, iz, fx, fz, P.seedA, P.warpOct, 0.5f);
+        LatticePoint(oct[64], oct[65], oct[66], oct[67], oct[68], oct[69], oct[70], oct[71], x, z, ix, iz, fx, fz);
+        float nz = Fbm01(ix, iz, fx, fz, P.seedB, P.warpOct, 0.5f);
+        dwx = P.warp * (2.0f * nx - 1.0f);
+        dwz = P.warp * (2.0f * nz - 1.0f);
+    }
+    float result = 0.0f;
+    if (P.op == 2u)
+    {
+        float best = 0.0f;
+        LOOP for (uint lv = 0u; lv < P.levels; ++lv)
+        {
+            uint b = lv * 16u;
+            float sc = oct[b + 8u];
+            int cx = 0;
+            int cz = 0;
+            float lx = 0.0f;
+            float lz = 0.0f;
+            LatticePoint(oct[b], oct[b + 1u], oct[b + 2u] + dwx / sc, oct[b + 3u] + dwz / sc, oct[b + 4u], oct[b + 5u], oct[b + 6u], oct[b + 7u], x, z, cx, cz, lx, lz);
+            uint seed = P.seed + lv * 977u;
+            float f1 = 0.0f;
+            float f2 = 0.0f;
+            float f3 = 0.0f;
+            uint id = 0u;
+            float hcx = 0.0f;
+            float hcz = 0.0f;
+            float soft = 0.0f;
+            Nearest(cx, cz, lx, lz, seed, 1, f1, f2, f3, id, hcx, hcz, soft);
+            float bd = BorderDistance(cx, cz, lx, lz, seed, hcx, hcz) * sc;
+            float hw = oct[b + 9u] * 0.5f;
+            float c = 0.0f;
+            if (P.profile == 2u) c = bd < hw ? 1.0f : 0.0f;
+            else if (P.profile == 1u) c = 1.0f - SmoothStep(hw * 0.6f, hw * 1.2f, bd);
+            else c = saturate(1.0f - bd / max(hw, 0.001f));
+            best = max(best, c * oct[b + 10u]);
+        }
+        result = saturate(best);
+    }
+    else
+    {
+        int cx = 0;
+        int cz = 0;
+)HLSL"
+    R"HLSL(        float lx = 0.0f;
+        float lz = 0.0f;
+        float sc = oct[8];
+        LatticePoint(oct[0], oct[1], oct[2] + dwx / sc, oct[3] + dwz / sc, oct[4], oct[5], oct[6], oct[7], x, z, cx, cz, lx, lz);
+        if (P.op == 0u)
+        {
+            float d1 = 1000000000.0f;
+            float d2 = 1000000000.0f;
+            uint id = 0u;
+            LOOP for (int dz = -1; dz <= 1; ++dz)
+            {
+                LOOP for (int dx = -1; dx <= 1; ++dx)
+                {
+                    float jx = 0.0f;
+                    float jz = 0.0f;
+                    uint h = 0u;
+                    FeaturePoint(cx + dx, cz + dz, P.seed, jx, jz, h);
+                    float ex = float(dx) + jx - lx;
+                    float ez = float(dz) + jz - lz;
+                    float d = ex * ex + ez * ez;
+                    if (d < d1)
+                    {
+                        d2 = d1;
+                        d1 = d;
+                        id = h;
+                    }
+                    else if (d < d2)
+                    {
+                        d2 = d;
+                    }
+                }
+            }
+            float f1 = sqrt(d1);
+            float f2 = sqrt(d2);
+            if (P.mode == 1u) result = saturate(f2);
+            else if (P.mode == 2u) result = saturate(f2 - f1);
+            else if (P.mode == 3u) result = HashToUnit(Hash32(id ^ 0xA511E9B3u));
+            else if (P.mode == 4u) result = 1.0f - SmoothStep(0.0f, P.width, f2 - f1);
+            else result = saturate(f1);
+        }
+        else
+        {
+            float f1 = 0.0f;
+            float f2 = 0.0f;
+            float f3 = 0.0f;
+            uint id = 0u;
+            float hcx = 0.0f;
+            float hcz = 0.0f;
+            float soft = 0.0f;
+            Nearest(cx, cz, lx, lz, P.seed, int(P.range), f1, f2, f3, id, hcx, hcz, soft);
+            uint m = P.mode;
+            if (m == 0u) result = saturate(f1);
+            else if (m == 1u) result = saturate(f2 * (1.0f / 1.4f));
+            else if (m == 2u) result = saturate(f3 * (1.0f / 1.7f));
+            else if (m == 3u) result = saturate(f2 - f1);
+            else if (m == 4u) result = 1.0f - SmoothStep(0.0f, P.width, f2 - f1);
+            else if (m == 5u) result = HashToUnit(Hash32(id ^ 0xA511E9B3u));
+            else if (m == 6u) result = saturate(-log(max(soft, 1.0e-20f)) / P.ksoft);
+            else if (m == 7u) result = saturate(2.0f * BorderDistance(cx, cz, lx, lz, P.seed, hcx, hcz));
+            else if (m == 8u)
+            {
+                float bd = BorderDistance(cx, cz, lx, lz, P.seed, hcx, hcz);
+                float level = HashToUnit(Hash32(id ^ 0xA511E9B3u));
+                result = saturate(level * (1.0f - P.drop * (1.0f - SmoothStep(0.0f, P.bevel, bd))));
+            }
+            else
+            {
+                float level = HashToUnit(Hash32(id ^ 0xA511E9B3u));
+                result = saturate(0.7f * level + 0.3f * (1.0f - saturate(f1)));
+            }
+        }
+    }
+    dst[row * P.w + dtid.x] = result;
+}
+
+)HLSL";
+
+  // gen_craters: 16x16x1 threads
+  inline constexpr char kSource_gen_craters[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op craters (EdFieldGen.cpp OpCraters): a scatter of impact craters (bowl + raised rim), one candidate crater per lattice cell and its eight neighbours. oct record 0 = the cell lattice map.
+// ---- begin gen_noise.hlsli
+// Gradient noise for the generator kernels (gen_*.hlsl). The same noise as the CPU ops (EdFieldCore.cpp / EdFieldUtil.h): the same lattice hash, the same 8 / 64 gradient directions,
+// the same quintic fade, so a GPU result matches the CPU result up to float rounding.
+//
+// POSITIONS. The CPU ops compute the lattice position in double from the world position. A float cannot hold ox + x * cell at 4096 samples without losing the fine octaves, so the host
+// (EdGpuGen.cpp) does that part in double and hands the kernel, per octave, an AFFINE MAP from the sample index (x, z) to the lattice: u = u0 + a x + b z, v = v0 + c x + d z, with u0 / v0
+// split into an integer part (exact in float below 2^24) and a fraction. LatticePoint() turns that into the integer cell and the fraction inside it: the float error is then relative
+// to the size of the field in lattice units, not to the distance from the world origin.
+//
+// Octave record in the float table `oct` (16 floats per octave, kernels use what they need): 0 iu0, 1 iv0, 2 fu0, 3 fv0, 4 a, 5 b, 6 c, 7 d (the map), 8 amplitude, 9 and up per kernel.
+#ifndef GPU_GEN_NOISE_HLSLI
+#define GPU_GEN_NOISE_HLSLI
+
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+
+// Lattice hash of the cell (ix, iz): bit exact the CPU's Hash2.
+FN uint Hash2i(int ix, int iz, uint seed)
+{
+    return Hash32(uint(ix) * 0x9E3779B1u ^ Hash32(uint(iz) + seed * 0x85EBCA6Bu + 0x165667B1u));
+}
+
+// The 64 evenly spread gradient directions of the CPU's Gradients64() (angle (k + 0.5) * pi / 32).
+FN float2 Grad64(uint h)
+{
+    float a = (float(h & 63u) + 0.5f) * 0.09817477042468103f;
+    float s = 0.0f;
+    float c = 1.0f;
+    sincos(a, s, c);
+    return float2(c, s);
+}
+
+// The classic 8 directions of the CPU's kGrad table: (1,0) (-1,0) (0,1) (0,-1) and the four diagonals.
+FN float2 Grad8(uint h)
+{
+    uint k = h & 7u;
+    if (k < 2u) return float2(k == 0u ? 1.0f : -1.0f, 0.0f);
+    if (k < 4u) return float2(0.0f, k == 2u ? 1.0f : -1.0f);
+    float q = 0.70710678f;
+    return float2((k & 1u) == 0u ? q : -q, (k & 2u) == 0u ? q : -q);
+}
+
+FN float2 GradOf(uint h, uint fine)
+{
+    if (fine != 0u) return Grad64(h);
+    return Grad8(h);
+}
+
+FN float Fade(float t)
+{
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+FN float FadeD(float t)
+{
+    return 30.0f * t * t * (t - 1.0f) * (t - 1.0f);
+}
+
+// Integer cell and fraction of sample (x, z) for the affine map in the octave record.
+FN void LatticePoint(float iu0, float iv0, float fu0, float fv0, float a, float b, float c, float d, float x, float z, OUT(int) ix, OUT(int) iz, OUT(float) fx, OUT(float) fz)
+{
+    float u = fu0 + a * x + b * z;
+    float v = fv0 + c * x + d * z;
+    float fu = floor(u);
+    float fv = floor(v);
+    ix = int(iu0) + int(fu);
+    iz = int(iv0) + int(fv);
+    fx = u - fu;
+    fz = v - fv;
+}
+
+// Gradient noise about -1..1 with its analytic derivative per lattice unit (EdFieldUtil.h PerlinD). fine: 64 directions, else 8.
+FN float PerlinD(int ix, int iz, float fx, float fz, uint seed, uint fine, OUT(float) dnx, OUT(float) dnz)
+{
+    float u = Fade(fx);
+    float v = Fade(fz);
+    float du = FadeD(fx);
+    float dv = FadeD(fz);
+    float2 ga = GradOf(Hash2i(ix, iz, seed), fine);
+    float2 gb = GradOf(Hash2i(ix + 1, iz, seed), fine);
+    float2 gc = GradOf(Hash2i(ix, iz + 1, seed), fine);
+    float2 gd = GradOf(Hash2i(ix + 1, iz + 1, seed), fine);
+    float va = ga.x * fx + ga.y * fz;
+    float vb = gb.x * (fx - 1.0f) + gb.y * fz;
+    float vc = gc.x * fx + gc.y * (fz - 1.0f);
+    float vd = gd.x * (fx - 1.0f) + gd.y * (fz - 1.0f);
+    float k = va - vb - vc + vd;
+    float n = va + u * (vb - va) + v * (vc - va) + u * v * k;
+    float s = 1.41421356f;
+    dnx = s * (ga.x + u * (gb.x - ga.x) + v * (gc.x - ga.x) + u * v * (ga.x - gb.x - gc.x + gd.x) + du * (vb - va + v * k));
+    dnz = s * (ga.y + u * (gb.y - ga.y) + v * (gc.y - ga.y) + u * v * (ga.y - gb.y - gc.y + gd.y) + dv * (vc - va + u * k));
+    return n * s;
+}
+
+// Value only.
+FN float Perlin(int ix, int iz, float fx, float fz, uint seed, uint fine)
+{
+    float dx = 0.0f;
+    float dz = 0.0f;
+    return PerlinD(ix, iz, fx, fz, seed, fine, dx, dz);
+}
+
+// 2D simplex noise about -1..1 (EdFieldCore.cpp Simplex). (ix, iz, fx, fz) is the position in the SKEWED lattice (the host skews the affine map): ix, iz the simplex cell, fx, fz inside it.
+FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
+{
+    float g2 = 0.21132486540518713f;
+    float t = (sx + sz) * g2;
+    float x0 = sx - t;
+    float y0 = sz - t;
+    int i1 = x0 > y0 ? 1 : 0;
+    int j1 = x0 > y0 ? 0 : 1;
+    float x1 = x0 - float(i1) + g2;
+    float y1 = y0 - float(j1) + g2;
+    float x2 = x0 - 1.0f + 2.0f * g2;
+    float y2 = y0 - 1.0f + 2.0f * g2;
+    float n = 0.0f;
+    float t0 = 0.5f - x0 * x0 - y0 * y0;
+    if (t0 > 0.0f)
+    {
+        t0 *= t0;
+        float2 g = GradOf(Hash2i(i, j, seed), fine);
+        n += t0 * t0 * (g.x * x0 + g.y * y0);
+    }
+    float t1 = 0.5f - x1 * x1 - y1 * y1;
+    if (t1 > 0.0f)
+    {
+        t1 *= t1;
+        float2 g = GradOf(Hash2i(i + i1, j + j1, seed), fine);
+)HLSL"
+    R"HLSL(        n += t1 * t1 * (g.x * x1 + g.y * y1);
+    }
+    float t2 = 0.5f - x2 * x2 - y2 * y2;
+    if (t2 > 0.0f)
+    {
+        t2 *= t2;
+        float2 g = GradOf(Hash2i(i + 1, j + 1, seed), fine);
+        n += t2 * t2 * (g.x * x2 + g.y * y2);
+    }
+    return n * 99.2f;
+}
+
+// The CPU's Fbm01 (EdFieldUtil.h): fractal sum of classic 8 direction Perlin, 0..1, octaves doubling in frequency, every octave its own seed. (iu, iv, fu, fv) is the lattice position at octave 0
+// (cell + fraction); octave o sees it multiplied by 2^o (exact).
+FN float Fbm01(int iu, int iv, float fu, float fv, uint seed, uint octaves, float persistence)
+{
+    float sum = 0.0f;
+    float norm = 0.0f;
+    float amp = 1.0f;
+    float m = 1.0f;
+    int mi = 1;
+    LOOP for (uint o = 0u; o < octaves; ++o)
+    {
+        uint s = Hash32(seed * 131u + o * 7919u + 17u);
+        float fU = fu * m;
+        float fV = fv * m;
+        float fl = floor(fU);
+        float fm = floor(fV);
+        float n = Perlin(iu * mi + int(fl), iv * mi + int(fm), fU - fl, fV - fm, s, 0u);
+        n = max(-1.0f, min(1.0f, n));
+        sum += n * amp;
+        norm += amp;
+        amp *= persistence;
+        m *= 2.0f;
+        mi *= 2;
+    }
+    return saturate(0.5f + 0.5f * sum / norm * 1.4f);
+}
+
+#endif
+// ---- end gen_noise.hlsli
+// ---- begin gen_craters_params.hlsli
+// Constant buffer of gen_craters.hlsl (op craters).
+#ifndef GPU_GEN_CRATERS_PARAMS_HLSLI
+#define GPU_GEN_CRATERS_PARAMS_HLSLI
+
+struct CratersParams
+{
+    uint w;
+    uint z0;
+    uint rows;
+    uint seed;
+    float density;
+    float rmin;
+    float rmax;
+    float depth;
+    float rim;
+    float shape;
+    float base;
+    float pad0;
+};
+
+#endif
+// ---- end gen_craters_params.hlsli
+
+CBUFFER(CratersParams, P, 0)
+SRV_BUFFER(float, oct, 1)
+UAV_BUFFER(float, dst, 0)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.rows) return;
+    uint row = dtid.y + P.z0;
+    int cx = 0;
+    int cz = 0;
+    float lx = 0.0f;
+    float lz = 0.0f;
+    LatticePoint(oct[0], oct[1], oct[2], oct[3], oct[4], oct[5], oct[6], oct[7], float(dtid.x), float(row), cx, cz, lx, lz);
+    float sum = 0.0f;
+    UNROLL for (int dz = -1; dz <= 1; ++dz)
+    {
+        UNROLL for (int dx = -1; dx <= 1; ++dx)
+        {
+            uint h = Hash2i(cx + dx, cz + dz, P.seed);
+            if (HashToUnit(h) <= P.density)
+            {
+                float rr = P.rmin + (P.rmax - P.rmin) * HashToUnit(Hash32(h ^ 0x1234567u));
+                float fxp = rr + (1.0f - 2.0f * rr) * HashToUnit(Hash32(h ^ 0x9E3779B9u));
+                float fzp = rr + (1.0f - 2.0f * rr) * HashToUnit(Hash32(h ^ 0x7F4A7C15u));
+                float ex = float(dx) + fxp - lx;
+                float ez = float(dz) + fzp - lz;
+                float r = sqrt(ex * ex + ez * ez) / rr;
+                if (r <= 2.2f)
+                {
+                    float d = P.depth * (rr / P.rmax) * (0.7f + 0.3f * HashToUnit(Hash32(h ^ 0x2545F491u)));
+                    float v = 0.0f;
+                    if (r < 1.0f) v -= d * pow(1.0f - r * r, P.shape);
+                    float t = (r - 1.0f) / 0.3f;
+                    v += d * P.rim * exp(-t * t);
+                    sum += v;
+                }
+            }
+        }
+    }
+    dst[row * P.w + dtid.x] = saturate(P.base + sum);
+}
+
+)HLSL";
+
+  // gen_dunes: 16x16x1 threads
+  inline constexpr char kSource_gen_dunes[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op dunes (EdFieldGen.cpp OpDunes): asymmetric dune ridges. The crest phase is a linear function of the sample position (kept as a fraction: only frac(phase) matters), moved by a meandering
+// noise; oct records 0 and 1 are the maps of the two Fbm01 noises (meander, crest height).
+// ---- begin gen_noise.hlsli
+// Gradient noise for the generator kernels (gen_*.hlsl). The same noise as the CPU ops (EdFieldCore.cpp / EdFieldUtil.h): the same lattice hash, the same 8 / 64 gradient directions,
+// the same quintic fade, so a GPU result matches the CPU result up to float rounding.
+//
+// POSITIONS. The CPU ops compute the lattice position in double from the world position. A float cannot hold ox + x * cell at 4096 samples without losing the fine octaves, so the host
+// (EdGpuGen.cpp) does that part in double and hands the kernel, per octave, an AFFINE MAP from the sample index (x, z) to the lattice: u = u0 + a x + b z, v = v0 + c x + d z, with u0 / v0
+// split into an integer part (exact in float below 2^24) and a fraction. LatticePoint() turns that into the integer cell and the fraction inside it: the float error is then relative
+// to the size of the field in lattice units, not to the distance from the world origin.
+//
+// Octave record in the float table `oct` (16 floats per octave, kernels use what they need): 0 iu0, 1 iv0, 2 fu0, 3 fv0, 4 a, 5 b, 6 c, 7 d (the map), 8 amplitude, 9 and up per kernel.
+#ifndef GPU_GEN_NOISE_HLSLI
+#define GPU_GEN_NOISE_HLSLI
+
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+
+// Lattice hash of the cell (ix, iz): bit exact the CPU's Hash2.
+FN uint Hash2i(int ix, int iz, uint seed)
+{
+    return Hash32(uint(ix) * 0x9E3779B1u ^ Hash32(uint(iz) + seed * 0x85EBCA6Bu + 0x165667B1u));
+}
+
+// The 64 evenly spread gradient directions of the CPU's Gradients64() (angle (k + 0.5) * pi / 32).
+FN float2 Grad64(uint h)
+{
+    float a = (float(h & 63u) + 0.5f) * 0.09817477042468103f;
+    float s = 0.0f;
+    float c = 1.0f;
+    sincos(a, s, c);
+    return float2(c, s);
+}
+
+// The classic 8 directions of the CPU's kGrad table: (1,0) (-1,0) (0,1) (0,-1) and the four diagonals.
+FN float2 Grad8(uint h)
+{
+    uint k = h & 7u;
+    if (k < 2u) return float2(k == 0u ? 1.0f : -1.0f, 0.0f);
+    if (k < 4u) return float2(0.0f, k == 2u ? 1.0f : -1.0f);
+    float q = 0.70710678f;
+    return float2((k & 1u) == 0u ? q : -q, (k & 2u) == 0u ? q : -q);
+}
+
+FN float2 GradOf(uint h, uint fine)
+{
+    if (fine != 0u) return Grad64(h);
+    return Grad8(h);
+}
+
+FN float Fade(float t)
+{
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+FN float FadeD(float t)
+{
+    return 30.0f * t * t * (t - 1.0f) * (t - 1.0f);
+}
+
+// Integer cell and fraction of sample (x, z) for the affine map in the octave record.
+FN void LatticePoint(float iu0, float iv0, float fu0, float fv0, float a, float b, float c, float d, float x, float z, OUT(int) ix, OUT(int) iz, OUT(float) fx, OUT(float) fz)
+{
+    float u = fu0 + a * x + b * z;
+    float v = fv0 + c * x + d * z;
+    float fu = floor(u);
+    float fv = floor(v);
+    ix = int(iu0) + int(fu);
+    iz = int(iv0) + int(fv);
+    fx = u - fu;
+    fz = v - fv;
+}
+
+// Gradient noise about -1..1 with its analytic derivative per lattice unit (EdFieldUtil.h PerlinD). fine: 64 directions, else 8.
+FN float PerlinD(int ix, int iz, float fx, float fz, uint seed, uint fine, OUT(float) dnx, OUT(float) dnz)
+{
+    float u = Fade(fx);
+    float v = Fade(fz);
+    float du = FadeD(fx);
+    float dv = FadeD(fz);
+    float2 ga = GradOf(Hash2i(ix, iz, seed), fine);
+    float2 gb = GradOf(Hash2i(ix + 1, iz, seed), fine);
+    float2 gc = GradOf(Hash2i(ix, iz + 1, seed), fine);
+    float2 gd = GradOf(Hash2i(ix + 1, iz + 1, seed), fine);
+    float va = ga.x * fx + ga.y * fz;
+    float vb = gb.x * (fx - 1.0f) + gb.y * fz;
+    float vc = gc.x * fx + gc.y * (fz - 1.0f);
+    float vd = gd.x * (fx - 1.0f) + gd.y * (fz - 1.0f);
+    float k = va - vb - vc + vd;
+    float n = va + u * (vb - va) + v * (vc - va) + u * v * k;
+    float s = 1.41421356f;
+    dnx = s * (ga.x + u * (gb.x - ga.x) + v * (gc.x - ga.x) + u * v * (ga.x - gb.x - gc.x + gd.x) + du * (vb - va + v * k));
+    dnz = s * (ga.y + u * (gb.y - ga.y) + v * (gc.y - ga.y) + u * v * (ga.y - gb.y - gc.y + gd.y) + dv * (vc - va + u * k));
+    return n * s;
+}
+
+// Value only.
+FN float Perlin(int ix, int iz, float fx, float fz, uint seed, uint fine)
+{
+    float dx = 0.0f;
+    float dz = 0.0f;
+    return PerlinD(ix, iz, fx, fz, seed, fine, dx, dz);
+}
+
+// 2D simplex noise about -1..1 (EdFieldCore.cpp Simplex). (ix, iz, fx, fz) is the position in the SKEWED lattice (the host skews the affine map): ix, iz the simplex cell, fx, fz inside it.
+FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
+{
+    float g2 = 0.21132486540518713f;
+    float t = (sx + sz) * g2;
+    float x0 = sx - t;
+    float y0 = sz - t;
+    int i1 = x0 > y0 ? 1 : 0;
+    int j1 = x0 > y0 ? 0 : 1;
+    float x1 = x0 - float(i1) + g2;
+    float y1 = y0 - float(j1) + g2;
+    float x2 = x0 - 1.0f + 2.0f * g2;
+    float y2 = y0 - 1.0f + 2.0f * g2;
+    float n = 0.0f;
+    float t0 = 0.5f - x0 * x0 - y0 * y0;
+    if (t0 > 0.0f)
+    {
+        t0 *= t0;
+        float2 g = GradOf(Hash2i(i, j, seed), fine);
+        n += t0 * t0 * (g.x * x0 + g.y * y0);
+    }
+    float t1 = 0.5f - x1 * x1 - y1 * y1;
+)HLSL"
+    R"HLSL(    if (t1 > 0.0f)
+    {
+        t1 *= t1;
+        float2 g = GradOf(Hash2i(i + i1, j + j1, seed), fine);
+        n += t1 * t1 * (g.x * x1 + g.y * y1);
+    }
+    float t2 = 0.5f - x2 * x2 - y2 * y2;
+    if (t2 > 0.0f)
+    {
+        t2 *= t2;
+        float2 g = GradOf(Hash2i(i + 1, j + 1, seed), fine);
+        n += t2 * t2 * (g.x * x2 + g.y * y2);
+    }
+    return n * 99.2f;
+}
+
+// The CPU's Fbm01 (EdFieldUtil.h): fractal sum of classic 8 direction Perlin, 0..1, octaves doubling in frequency, every octave its own seed. (iu, iv, fu, fv) is the lattice position at octave 0
+// (cell + fraction); octave o sees it multiplied by 2^o (exact).
+FN float Fbm01(int iu, int iv, float fu, float fv, uint seed, uint octaves, float persistence)
+{
+    float sum = 0.0f;
+    float norm = 0.0f;
+    float amp = 1.0f;
+    float m = 1.0f;
+    int mi = 1;
+    LOOP for (uint o = 0u; o < octaves; ++o)
+    {
+        uint s = Hash32(seed * 131u + o * 7919u + 17u);
+        float fU = fu * m;
+        float fV = fv * m;
+        float fl = floor(fU);
+        float fm = floor(fV);
+        float n = Perlin(iu * mi + int(fl), iv * mi + int(fm), fU - fl, fV - fm, s, 0u);
+        n = max(-1.0f, min(1.0f, n));
+        sum += n * amp;
+        norm += amp;
+        amp *= persistence;
+        m *= 2.0f;
+        mi *= 2;
+    }
+    return saturate(0.5f + 0.5f * sum / norm * 1.4f);
+}
+
+#endif
+// ---- end gen_noise.hlsli
+// ---- begin gen_dunes_params.hlsli
+// Constant buffer of gen_dunes.hlsl (op dunes).
+#ifndef GPU_GEN_DUNES_PARAMS_HLSLI
+#define GPU_GEN_DUNES_PARAMS_HLSLI
+
+struct DunesParams
+{
+    uint w;
+    uint z0;
+    uint rows;
+    uint seed;
+    float fu0;          // fraction of the crest phase at sample (0, 0), in wavelengths
+    float pa;           // phase per sample in x and z
+    float pb;
+    float fur0;         // the same for the ripples
+    float pra;
+    float prb;
+    float meanderK;     // phase added per unit of the meander noise (crests): warp * 2 / wavelength
+    float meanderKr;    // the same for the ripples: warp * 1.5 / (wavelength * 0.12)
+    float asym;
+    float variation;
+    float ripples;
+    float pad0;
+};
+
+#endif
+// ---- end gen_dunes_params.hlsli
+
+CBUFFER(DunesParams, P, 0)
+SRV_BUFFER(float, oct, 1)
+UAV_BUFFER(float, dst, 0)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.rows) return;
+    uint row = dtid.y + P.z0;
+    float x = float(dtid.x);
+    float z = float(row);
+    int ix = 0;
+    int iz = 0;
+    float fx = 0.0f;
+    float fz = 0.0f;
+    LatticePoint(oct[0], oct[1], oct[2], oct[3], oct[4], oct[5], oct[6], oct[7], x, z, ix, iz, fx, fz);
+    float meander = Fbm01(ix, iz, fx, fz, P.seed + 31u, 3u, 0.5f) - 0.5f;
+    float s = P.fu0 + P.pa * x + P.pb * z + P.meanderK * meander;
+    float th = 6.28318530717958647692f * (s - floor(s));
+    float wave = 0.5f - 0.5f * cos(th + P.asym * sin(th));
+    LatticePoint(oct[16], oct[17], oct[18], oct[19], oct[20], oct[21], oct[22], oct[23], x, z, ix, iz, fx, fz);
+    float crest = 1.0f - P.variation + P.variation * 2.0f * Fbm01(ix, iz, fx, fz, P.seed + 77u, 2u, 0.5f);
+    float v = wave * saturate(crest);
+    if (P.ripples > 0.0f)
+    {
+        float sr = P.fur0 + P.pra * x + P.prb * z + P.meanderKr * meander;
+        float rp = 0.5f - 0.5f * cos(6.28318530717958647692f * (sr - floor(sr)) + 0.8f);
+        v = v * (1.0f - P.ripples) + P.ripples * rp * (0.3f + 0.7f * wave);
+    }
+    dst[row * P.w + dtid.x] = saturate(v);
+}
+
+)HLSL";
+
   // gen_fbm: 16x16x1 threads
   inline constexpr char kSource_gen_fbm[] =
     R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
@@ -3296,6 +4405,320 @@ void CSMain(KERNEL_IDS)
 
 )HLSL";
 
+  // gen_island: 16x16x1 threads
+  inline constexpr char kSource_gen_island[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op island (EdFieldGen.cpp OpIsland): island height / mask / distance from a ragged disc. oct record 0 = map of the Fbm01 noise that makes the coast ragged.
+// ---- begin gen_noise.hlsli
+// Gradient noise for the generator kernels (gen_*.hlsl). The same noise as the CPU ops (EdFieldCore.cpp / EdFieldUtil.h): the same lattice hash, the same 8 / 64 gradient directions,
+// the same quintic fade, so a GPU result matches the CPU result up to float rounding.
+//
+// POSITIONS. The CPU ops compute the lattice position in double from the world position. A float cannot hold ox + x * cell at 4096 samples without losing the fine octaves, so the host
+// (EdGpuGen.cpp) does that part in double and hands the kernel, per octave, an AFFINE MAP from the sample index (x, z) to the lattice: u = u0 + a x + b z, v = v0 + c x + d z, with u0 / v0
+// split into an integer part (exact in float below 2^24) and a fraction. LatticePoint() turns that into the integer cell and the fraction inside it: the float error is then relative
+// to the size of the field in lattice units, not to the distance from the world origin.
+//
+// Octave record in the float table `oct` (16 floats per octave, kernels use what they need): 0 iu0, 1 iv0, 2 fu0, 3 fv0, 4 a, 5 b, 6 c, 7 d (the map), 8 amplitude, 9 and up per kernel.
+#ifndef GPU_GEN_NOISE_HLSLI
+#define GPU_GEN_NOISE_HLSLI
+
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+
+// Lattice hash of the cell (ix, iz): bit exact the CPU's Hash2.
+FN uint Hash2i(int ix, int iz, uint seed)
+{
+    return Hash32(uint(ix) * 0x9E3779B1u ^ Hash32(uint(iz) + seed * 0x85EBCA6Bu + 0x165667B1u));
+}
+
+// The 64 evenly spread gradient directions of the CPU's Gradients64() (angle (k + 0.5) * pi / 32).
+FN float2 Grad64(uint h)
+{
+    float a = (float(h & 63u) + 0.5f) * 0.09817477042468103f;
+    float s = 0.0f;
+    float c = 1.0f;
+    sincos(a, s, c);
+    return float2(c, s);
+}
+
+// The classic 8 directions of the CPU's kGrad table: (1,0) (-1,0) (0,1) (0,-1) and the four diagonals.
+FN float2 Grad8(uint h)
+{
+    uint k = h & 7u;
+    if (k < 2u) return float2(k == 0u ? 1.0f : -1.0f, 0.0f);
+    if (k < 4u) return float2(0.0f, k == 2u ? 1.0f : -1.0f);
+    float q = 0.70710678f;
+    return float2((k & 1u) == 0u ? q : -q, (k & 2u) == 0u ? q : -q);
+}
+
+FN float2 GradOf(uint h, uint fine)
+{
+    if (fine != 0u) return Grad64(h);
+    return Grad8(h);
+}
+
+FN float Fade(float t)
+{
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+FN float FadeD(float t)
+{
+    return 30.0f * t * t * (t - 1.0f) * (t - 1.0f);
+}
+
+// Integer cell and fraction of sample (x, z) for the affine map in the octave record.
+FN void LatticePoint(float iu0, float iv0, float fu0, float fv0, float a, float b, float c, float d, float x, float z, OUT(int) ix, OUT(int) iz, OUT(float) fx, OUT(float) fz)
+{
+    float u = fu0 + a * x + b * z;
+    float v = fv0 + c * x + d * z;
+    float fu = floor(u);
+    float fv = floor(v);
+    ix = int(iu0) + int(fu);
+    iz = int(iv0) + int(fv);
+    fx = u - fu;
+    fz = v - fv;
+}
+
+// Gradient noise about -1..1 with its analytic derivative per lattice unit (EdFieldUtil.h PerlinD). fine: 64 directions, else 8.
+FN float PerlinD(int ix, int iz, float fx, float fz, uint seed, uint fine, OUT(float) dnx, OUT(float) dnz)
+{
+    float u = Fade(fx);
+    float v = Fade(fz);
+    float du = FadeD(fx);
+    float dv = FadeD(fz);
+    float2 ga = GradOf(Hash2i(ix, iz, seed), fine);
+    float2 gb = GradOf(Hash2i(ix + 1, iz, seed), fine);
+    float2 gc = GradOf(Hash2i(ix, iz + 1, seed), fine);
+    float2 gd = GradOf(Hash2i(ix + 1, iz + 1, seed), fine);
+    float va = ga.x * fx + ga.y * fz;
+    float vb = gb.x * (fx - 1.0f) + gb.y * fz;
+    float vc = gc.x * fx + gc.y * (fz - 1.0f);
+    float vd = gd.x * (fx - 1.0f) + gd.y * (fz - 1.0f);
+    float k = va - vb - vc + vd;
+    float n = va + u * (vb - va) + v * (vc - va) + u * v * k;
+    float s = 1.41421356f;
+    dnx = s * (ga.x + u * (gb.x - ga.x) + v * (gc.x - ga.x) + u * v * (ga.x - gb.x - gc.x + gd.x) + du * (vb - va + v * k));
+    dnz = s * (ga.y + u * (gb.y - ga.y) + v * (gc.y - ga.y) + u * v * (ga.y - gb.y - gc.y + gd.y) + dv * (vc - va + u * k));
+    return n * s;
+}
+
+// Value only.
+FN float Perlin(int ix, int iz, float fx, float fz, uint seed, uint fine)
+{
+    float dx = 0.0f;
+    float dz = 0.0f;
+    return PerlinD(ix, iz, fx, fz, seed, fine, dx, dz);
+}
+
+// 2D simplex noise about -1..1 (EdFieldCore.cpp Simplex). (ix, iz, fx, fz) is the position in the SKEWED lattice (the host skews the affine map): ix, iz the simplex cell, fx, fz inside it.
+FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
+{
+    float g2 = 0.21132486540518713f;
+    float t = (sx + sz) * g2;
+    float x0 = sx - t;
+    float y0 = sz - t;
+    int i1 = x0 > y0 ? 1 : 0;
+    int j1 = x0 > y0 ? 0 : 1;
+    float x1 = x0 - float(i1) + g2;
+    float y1 = y0 - float(j1) + g2;
+    float x2 = x0 - 1.0f + 2.0f * g2;
+    float y2 = y0 - 1.0f + 2.0f * g2;
+    float n = 0.0f;
+    float t0 = 0.5f - x0 * x0 - y0 * y0;
+    if (t0 > 0.0f)
+    {
+        t0 *= t0;
+        float2 g = GradOf(Hash2i(i, j, seed), fine);
+        n += t0 * t0 * (g.x * x0 + g.y * y0);
+    }
+    float t1 = 0.5f - x1 * x1 - y1 * y1;
+    if (t1 > 0.0f)
+    {
+        t1 *= t1;
+        float2 g = GradOf(Hash2i(i + i1, j + j1, seed), fine);
+)HLSL"
+    R"HLSL(        n += t1 * t1 * (g.x * x1 + g.y * y1);
+    }
+    float t2 = 0.5f - x2 * x2 - y2 * y2;
+    if (t2 > 0.0f)
+    {
+        t2 *= t2;
+        float2 g = GradOf(Hash2i(i + 1, j + 1, seed), fine);
+        n += t2 * t2 * (g.x * x2 + g.y * y2);
+    }
+    return n * 99.2f;
+}
+
+// The CPU's Fbm01 (EdFieldUtil.h): fractal sum of classic 8 direction Perlin, 0..1, octaves doubling in frequency, every octave its own seed. (iu, iv, fu, fv) is the lattice position at octave 0
+// (cell + fraction); octave o sees it multiplied by 2^o (exact).
+FN float Fbm01(int iu, int iv, float fu, float fv, uint seed, uint octaves, float persistence)
+{
+    float sum = 0.0f;
+    float norm = 0.0f;
+    float amp = 1.0f;
+    float m = 1.0f;
+    int mi = 1;
+    LOOP for (uint o = 0u; o < octaves; ++o)
+    {
+        uint s = Hash32(seed * 131u + o * 7919u + 17u);
+        float fU = fu * m;
+        float fV = fv * m;
+        float fl = floor(fU);
+        float fm = floor(fV);
+        float n = Perlin(iu * mi + int(fl), iv * mi + int(fm), fU - fl, fV - fm, s, 0u);
+        n = max(-1.0f, min(1.0f, n));
+        sum += n * amp;
+        norm += amp;
+        amp *= persistence;
+        m *= 2.0f;
+        mi *= 2;
+    }
+    return saturate(0.5f + 0.5f * sum / norm * 1.4f);
+}
+
+#endif
+// ---- end gen_noise.hlsli
+// ---- begin gen_island_params.hlsli
+// Constant buffer of gen_island.hlsl (op island).
+#ifndef GPU_GEN_ISLAND_PARAMS_HLSLI
+#define GPU_GEN_ISLAND_PARAMS_HLSLI
+
+struct IslandParams
+{
+    uint w;
+    uint z0;
+    uint rows;
+    uint seed;
+    uint outKind;      // 0 height, 1 mask, 2 distance
+    uint pad0;
+    uint pad1;
+    uint pad2;
+    float u0;         // position relative to the centre, turned and squashed: u = u0 + ua x + ub z, v = v0 + va x + vb z (world units)
+    float ua;
+    float ub;
+    float v0;
+    float va;
+    float vb;
+    float radius;
+    float rough;
+    float edge;
+    float power;
+    float pad3;
+    float pad4;
+};
+
+#endif
+// ---- end gen_island_params.hlsli
+
+CBUFFER(IslandParams, P, 0)
+SRV_BUFFER(float, oct, 1)
+UAV_BUFFER(float, dst, 0)
+
+FN float SmoothStep(float e0, float e1, float v)
+{
+    if (e1 == e0) return v < e0 ? 0.0f : 1.0f;
+    float t = saturate((v - e0) / (e1 - e0));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.rows) return;
+    uint row = dtid.y + P.z0;
+    float x = float(dtid.x);
+    float z = float(row);
+    float u = P.u0 + P.ua * x + P.ub * z;
+    float v = P.v0 + P.va * x + P.vb * z;
+    float q = sqrt(u * u + v * v) / P.radius;
+    int ix = 0;
+    int iz = 0;
+    float fx = 0.0f;
+    float fz = 0.0f;
+    LatticePoint(oct[0], oct[1], oct[2], oct[3], oct[4], oct[5], oct[6], oct[7], x, z, ix, iz, fx, fz);
+    float n = Fbm01(ix, iz, fx, fz, P.seed, 5u, 0.5f);
+    q += P.rough * (n - 0.5f) * 2.0f * (0.3f + 0.7f * min(1.0f, q));
+    float r = 0.0f;
+    if (P.outKind == 1u)
+    {
+        r = 1.0f - SmoothStep(1.0f - P.edge, 1.0f, q);
+    }
+    else if (P.outKind == 2u)
+    {
+        r = saturate(1.0f - q);
+    }
+    else
+    {
+        float land = 1.0f - SmoothStep(1.0f - P.edge, 1.0f, q);
+        r = land * pow(saturate(1.0f - q * 0.9f), P.power);
+    }
+    dst[row * P.w + dtid.x] = r;
+}
+
+)HLSL";
+
   // gen_musgrave: 16x16x1 threads
   inline constexpr char kSource_gen_musgrave[] =
     R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
@@ -3841,13 +5264,17 @@ void CSMain(KERNEL_IDS)
     {"erosion_steer", kSource_erosion_steer, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x96EC51FB375D87CEULL},
     {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x7FB3E2E6C7FF78B7ULL},
     {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9BDED15472D90646ULL},
+    {"gen_cells", kSource_gen_cells, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x248960A238B84B06ULL},
+    {"gen_craters", kSource_gen_craters, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2CBB355B5E28183BULL},
+    {"gen_dunes", kSource_gen_dunes, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xF2EB251DBBCA424DULL},
     {"gen_fbm", kSource_gen_fbm, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x0A645AFE3AE2E4A3ULL},
     {"gen_fbmd", kSource_gen_fbmd, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xC4F90F4C5B31D1D4ULL},
     {"gen_fractal", kSource_gen_fractal, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x844260A51F7EF798ULL},
+    {"gen_island", kSource_gen_island, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x3CC9C2738C8AF3A4ULL},
     {"gen_musgrave", kSource_gen_musgrave, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x61E7A21CB358E8E2ULL},
     {"reduce_sum", kSource_reduce_sum, "CSMain", 128u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x26AB7B22FCAC29ACULL},
     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
   };
-  inline constexpr int kKernelCount = 21;
+  inline constexpr int kKernelCount = 25;
 } // namespace moho::editor::gpu::shaders

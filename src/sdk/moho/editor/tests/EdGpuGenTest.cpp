@@ -26,9 +26,29 @@
 #include "moho/editor/gpu/common.hlsli"
 #include "moho/editor/gpu/gen_noise.hlsli"
 #include "moho/editor/gpu/gen_fbm_params.hlsli"
+#include "moho/editor/gpu/gen_cells_params.hlsli"
+#include "moho/editor/gpu/gen_craters_params.hlsli"
+#include "moho/editor/gpu/gen_dunes_params.hlsli"
 #include "moho/editor/gpu/gen_fbmd_params.hlsli"
 #include "moho/editor/gpu/gen_fractal_params.hlsli"
+#include "moho/editor/gpu/gen_island_params.hlsli"
 #include "moho/editor/gpu/gen_musgrave_params.hlsli"
+
+EMU_KERNEL_BEGIN(k_gen_cells)
+#include "moho/editor/gpu/gen_cells.hlsl"
+EMU_KERNEL_END(gen_cells)
+
+EMU_KERNEL_BEGIN(k_gen_craters)
+#include "moho/editor/gpu/gen_craters.hlsl"
+EMU_KERNEL_END(gen_craters)
+
+EMU_KERNEL_BEGIN(k_gen_dunes)
+#include "moho/editor/gpu/gen_dunes.hlsl"
+EMU_KERNEL_END(gen_dunes)
+
+EMU_KERNEL_BEGIN(k_gen_island)
+#include "moho/editor/gpu/gen_island.hlsl"
+EMU_KERNEL_END(gen_island)
 
 EMU_KERNEL_BEGIN(k_gen_fbmd)
 #include "moho/editor/gpu/gen_fbmd.hlsl"
@@ -346,6 +366,140 @@ static void TestMusgraveAndDamped()
   CHECK(!RunGpu("musgrave", Args({{"width", 8}, {"height", 8}}, {{"mode", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad mode is the CPU's error");
 }
 
+// ---- voronoi, cells, cracks ----------------------------------------------------------------------------------------------------------------------
+
+static void TestCellular()
+{
+  const Num base = {{"width", 83}, {"height", 59}, {"seed", 8}, {"scale", 17}, {"ox", 400.5}, {"oz", -13.0}, {"cell", 1.5}};
+  for (const char* mode : {"f1", "f2", "edge", "id", "crack"}) CheckSame((std::string("voronoi_") + mode).c_str(), "voronoi", Args(base, {{"mode", mode}}), 1e-4);
+  {
+    Num n = base;
+    n["jitter"] = 0.4;
+    n["thickness"] = 0.3;
+    CheckSame("voronoi_crack_params", "voronoi", Args(n, {{"mode", "crack"}}), 1e-4);
+  }
+  for (const char* metric : {"euclid", "manhattan", "chebyshev", "minkowski"}) {
+    for (const char* mode : {"f1", "f2", "f3", "edge", "crack", "id", "smooth", "border", "plate", "facet"}) {
+      Num n = base;
+      n["p"] = 2.6;
+      n["smooth"] = 11;
+      n["warp"] = (std::string(mode) == "f2" || std::string(mode) == "plate") ? 6.0 : 0.0;
+      const std::string label = std::string("cells_") + metric + "_" + mode;
+      // an `id` or a plate level changes with the least rounding difference of a distance comparison: a few samples may pick the neighbour feature point: allow those
+      Grid g, c;
+      bool onGpu = false;
+      const bool ok = RunGpu("cells", Args(n, {{"metric", metric}, {"mode", mode}}), g, &onGpu) && RunCpu("cells", Args(n, {{"metric", metric}, {"mode", mode}}), c);
+      CHECK(ok && onGpu, "%s: the op did not run on the GPU", label.c_str());
+      if (!ok) continue;
+      std::size_t bad = 0;
+      double worst = 0.0;
+      for (std::size_t i = 0; i < g.v.size(); ++i) {
+        const double e = std::fabs(static_cast<double>(g.v[i]) - static_cast<double>(c.v[i]));
+        worst = std::max(worst, e);
+        if (e > 2e-4) ++bad;
+      }
+      if (gVerbose) std::printf("  %-28s max %.3g, %zu of %zu samples differ\n", label.c_str(), worst, bad, g.v.size());
+      CHECK(bad * 200 <= g.v.size(), "%s: %zu of %zu samples differ from the CPU (largest %.3g)", label.c_str(), bad, g.v.size(), worst);
+    }
+  }
+  for (const char* profile : {"v", "u", "flat"}) {
+    for (const int levels : {1, 2, 3}) {
+      Num n = base;
+      n["levels"] = levels;
+      n["crack_width"] = 2.5;
+      n["scale"] = 40;
+      Grid g, c;
+      bool onGpu = false;
+      const OpArgs args = Args(n, {{"profile", profile}});
+      const bool ok = RunGpu("cracks", args, g, &onGpu) && RunCpu("cracks", args, c);
+      CHECK(ok && onGpu, "cracks %s %d: the op did not run on the GPU", profile, levels);
+      if (!ok) continue;
+      const Diff d = Compare(g, c);
+      std::size_t bad = 0;
+      for (std::size_t i = 0; i < g.v.size(); ++i) bad += std::fabs(g.v[i] - c.v[i]) > 2e-3 ? 1 : 0;
+      if (gVerbose) std::printf("  cracks_%s_%d                max %.3g, %zu differ\n", profile, levels, d.maxAbs, bad);
+      CHECK(bad * 200 <= g.v.size(), "cracks %s %d: %zu of %zu samples differ (largest %.3g)", profile, levels, bad, g.v.size(), d.maxAbs);
+    }
+  }
+  Num nw = base;
+  nw["warp"] = 0;
+  CheckSame("cracks_nowarp", "cracks", Args(nw), 2e-3);
+  for (const std::pair<int, int> sz : {std::pair<int, int>{1, 21}, {27, 1}, {17, 13}}) {
+    Num m = base;
+    m["width"] = sz.first;
+    m["height"] = sz.second;
+    CheckSame(("cells_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "cells", Args(m, {{"mode", "edge"}}), 2e-4);
+  }
+  Grid g;
+  bool onGpu = true;
+  std::string err;
+  CHECK(!RunGpu("cells", Args({{"width", 8}, {"height", 8}}, {{"mode", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad mode is the CPU's error");
+  CHECK(!RunGpu("cells", Args({{"width", 8}, {"height", 8}}, {{"metric", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad metric is the CPU's error");
+}
+
+// ---- craters, dunes, island ----------------------------------------------------------------------------------------------------------------------
+
+static void TestScatterOps()
+{
+  const Num base = {{"width", 91}, {"height", 67}, {"seed", 9}, {"ox", -321.5}, {"oz", 1000.0}, {"cell", 2.0}};
+  {
+    Num n = base;
+    n["scale"] = 40;
+    CheckSame("craters", "craters", Args(n), 2e-4);
+    n["density"] = 1;
+    n["rmin"] = 0.05;
+    n["rmax"] = 0.3;
+    n["depth"] = 0.7;
+    n["rim"] = 0.5;
+    n["shape"] = 2.2;
+    CheckSame("craters_params", "craters", Args(n), 2e-4);
+  }
+  {
+    Num n = base;
+    n["wavelength"] = 35;
+    n["angle"] = 33;
+    CheckSame("dunes", "dunes", Args(n), 5e-4);
+    n["asym"] = 1.4;
+    n["warp"] = 40;
+    n["warp_size"] = 80;
+    n["variation"] = 0.8;
+    n["ripples"] = 0.4;
+    CheckSame("dunes_params", "dunes", Args(n), 5e-4);
+    n["ripples"] = 0;
+    CheckSame("dunes_noripples", "dunes", Args(n), 5e-4);
+  }
+  for (const char* output : {"height", "mask", "distance"}) {
+    Num n = base;
+    n["aspect"] = 1.6;
+    n["angle"] = 25;
+    CheckSame((std::string("island_") + output).c_str(), "island", Args(n, {{"output", output}}), 2e-4);
+  }
+  {
+    Num n = base;
+    n["cx"] = -230;
+    n["cz"] = 1060;
+    n["radius"] = 70;
+    n["roughness"] = 0.6;
+    n["noise_scale"] = 30;
+    n["edge"] = 0.2;
+    n["power"] = 2.5;
+    CheckSame("island_params", "island", Args(n), 2e-4);
+  }
+  for (const std::pair<int, int> sz : {std::pair<int, int>{1, 19}, {23, 1}, {17, 13}}) {
+    Num m = base;
+    m["width"] = sz.first;
+    m["height"] = sz.second;
+    const std::string tag = std::to_string(sz.first) + "x" + std::to_string(sz.second);
+    CheckSame(("craters_" + tag).c_str(), "craters", Args(m), 2e-4);
+    CheckSame(("dunes_" + tag).c_str(), "dunes", Args(m), 5e-4);
+    CheckSame(("island_" + tag).c_str(), "island", Args(m), 2e-4);
+  }
+  Grid g;
+  bool onGpu = true;
+  std::string err;
+  CHECK(!RunGpu("island", Args({{"width", 8}, {"height", 8}}, {{"output", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad island output is the CPU's error");
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i + 1 < argc; ++i) {
@@ -365,6 +519,8 @@ int main(int argc, char** argv)
   TestWorldPosition();
   TestFractal();
   TestMusgraveAndDamped();
+  TestCellular();
+  TestScatterOps();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuGenTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
