@@ -37,6 +37,7 @@
 #include "moho/editor/gpu/field_morph_params.hlsli"
 #include "moho/editor/gpu/field_rockiness_params.hlsli"
 #include "moho/editor/gpu/field_slopelimit_params.hlsli"
+#include "moho/editor/gpu/field_stratify_params.hlsli"
 #include "moho/editor/gpu/field_snowinit_params.hlsli"
 #include "moho/editor/gpu/field_slopescan_params.hlsli"
 #include "moho/editor/gpu/field_sub_params.hlsli"
@@ -79,6 +80,10 @@ EMU_KERNEL_END(field_morph)
 EMU_KERNEL_BEGIN(k_field_rockiness)
 #include "moho/editor/gpu/field_rockiness.hlsl"
 EMU_KERNEL_END(field_rockiness)
+
+EMU_KERNEL_BEGIN(k_field_stratify)
+#include "moho/editor/gpu/field_stratify.hlsl"
+EMU_KERNEL_END(field_stratify)
 
 EMU_KERNEL_BEGIN(k_field_slopelimit)
 #include "moho/editor/gpu/field_slopelimit.hlsl"
@@ -778,6 +783,53 @@ static void TestRockiness()
   }
 }
 
+// ---- stratify --------------------------------------------------------------------------------------------------------------------------------------
+
+static void TestStratify()
+{
+  const GridPtr t = TestTerrain(81, 63, 2.0f, 131, 100.0, 512.0, 256.0);
+  const GridPtr mask = TestMask(81, 63, 17);
+  CheckSame("stratify_default", "stratify", Args({{"warp", 3.0}}, {}, {{"a", t}}), 2e-4);
+  {
+    Grid g;
+    RunGpu("stratify", Args({{"warp", 3.0}}, {}, {{"a", t}}), g);
+    CHECK(Compare(g, *t).maxAbs > 0.3, "stratify changes the terrain (the comparison is not vacuous)");
+  }
+  CheckSame("stratify_flat", "stratify", Args({}, {}, {{"a", t}}), 2e-4);
+  CheckSame("stratify_tilt", "stratify", Args({{"tilt_x", 0.2}, {"tilt_z", -0.35}, {"thickness", 5.0}, {"variation", 0.9}, {"sharpness", 0.95}}, {}, {{"a", t}}), 2e-4);
+  CheckSame("stratify_warp", "stratify", Args({{"warp", 12.0}, {"warp_size", 40.0}, {"seed", 9}, {"strength", 0.8}}, {}, {{"a", t}}), 2e-4);
+  CheckSame("stratify_slope", "stratify", Args({{"slope_lo", 0.2}, {"slope_hi", 0.9}, {"warp", 4.0}}, {}, {{"a", t}}), 2e-4);
+  CheckSame("stratify_mask", "stratify", Args({{"sharpness", 0.2}, {"thickness", 1.5}, {"warp", 2.0}}, {}, {{"a", t}, {"mask", mask}}), 2e-4);
+  CheckSame("stratify_thin", "stratify", Args({{"thickness", 0.05}, {"variation", 0.0}, {"warp", 1.0}}, {}, {{"a", t}}), 2e-4);   // thickness is floored at 0.2
+  // heights beyond the 2048 layers of either side clamp to the outermost layer
+  {
+    auto tall = std::make_shared<Grid>(*t);
+    for (float& v : tall->v) v = v * 300.0f - 9000.0f;
+    CheckSame("stratify_tall", "stratify", Args({{"thickness", 3.0}, {"warp", 5.0}}, {}, {{"a", tall}}), 2e-4);
+  }
+  CheckSame("stratify_far", "stratify", Args({{"warp", 5.0}, {"tilt_x", 0.05}}, {}, {{"a", TestTerrain(40, 40, 2.0f, 5, 100.0, 40000.0, 36000.0)}}), 2e-3);
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 80.0);
+    CheckSame(("stratify_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "stratify", Args({{"warp", 2.0}, {"slope_lo", 0.1}, {"slope_hi", 0.5}}, {}, {{"a", s}}), 2e-4);
+  }
+  auto like = std::make_shared<Grid>(*t);
+  like->oz = 99.0f;
+  CheckSame("stratify_like", "stratify", Args({{"warp", 1.0}}, {}, {{"a", t}, {"like", like}}), 2e-4);
+  CheckDeclines("stratify_bad_mask", "stratify", Args({{"warp", 1.0}}, {}, {{"a", t}, {"mask", TestMask(9, 9, 1)}}));
+  CheckDeclines("stratify_no_input", "stratify", Args({}, {}, {}));
+  {
+    gpu::GetPolicy().minCells = 65536.0f;
+    const GridPtr mid = TestTerrain(300, 300, 1.0f, 3, 30.0);
+    Grid g;
+    bool onGpu = true;
+    RunGpu("stratify", Args({}, {}, {{"a", mid}}), g, &onGpu);
+    CHECK(!onGpu, "stratify without the warp stays on the CPU on a 300 x 300 field");
+    RunGpu("stratify", Args({{"warp", 2.0}}, {}, {{"a", mid}}), g, &onGpu);
+    CHECK(onGpu, "stratify with the warp goes to the GPU");
+    gpu::GetPolicy().minCells = 0.0f;
+  }
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -796,6 +848,7 @@ int main(int argc, char** argv)
   TestBlurBased();
   TestSlopeLimit();
   TestRockiness();
+  TestStratify();
   TestRockSoil();
   TestSnow();
   TestWind();

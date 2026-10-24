@@ -16,6 +16,7 @@ namespace moho::editor::gpu::hk
 #include "moho/editor/gpu/field_slopelimit_params.hlsli"
 #include "moho/editor/gpu/field_slopescan_params.hlsli"
 #include "moho/editor/gpu/field_rockiness_params.hlsli"
+#include "moho/editor/gpu/field_stratify_params.hlsli"
 #include "moho/editor/gpu/field_sub_params.hlsli"
 #include "moho/editor/gpu/field_unsharp_params.hlsli"
 } // namespace moho::editor::gpu::hk
@@ -371,6 +372,71 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
+    // ---- stratify -----------------------------------------------------------------------------------------------------------------------------------
+
+    OpResult OpStratifyGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = Source(a);
+      const Grid* mask = In(a, "mask");
+      Shape shape;
+      if (src == nullptr || (mask != nullptr && !mask->SameShape(*src)) || !ShapeOf(a, shape)) return OpResult::Unsupported;
+      const double warp = a.p.N("warp", 0.0);
+      // the layer lookup is a 13 step search; with the warp noise on top the maths pays for the transfer, without it only big fields do
+      if (warp != 0.0 ? !WorthIt(40.0) : !BigField(a)) return OpResult::Unsupported;
+      if (!Fits(ex, src->Count(), 4)) return OpResult::Unsupported;
+      const KernelInfo* ks = FindKernel("field_stratify");
+      if (ks == nullptr) { err = "kernel field_stratify is missing"; return OpResult::Failed; }
+      const std::uint32_t seed = static_cast<std::uint32_t>(static_cast<std::int64_t>(a.p.N("seed", 1)));
+      const float thick = std::max(0.2f, static_cast<float>(a.p.N("thickness", 3.0)));
+      const float variation = Clamp01(static_cast<float>(a.p.N("variation", 0.5)));
+      const double warpSize = std::max(2.0, a.p.N("warp_size", 120.0));
+      const float sharp = Clamp01(static_cast<float>(a.p.N("sharpness", 0.7)));
+      // the table of layer boundaries and hardness values, formed exactly like the CPU op forms it
+      constexpr int K = 2048;
+      std::vector<float> tab(static_cast<std::size_t>(2 * K + 1 + 2 * K), 0.0f);
+      for (int k = 0; k < K; ++k) {
+        const float t = thick * (1.0f + variation * (2.0f * field::t7::Unit(field::t7::Hash2(k, 0, seed)) - 1.0f));
+        tab[static_cast<std::size_t>(K + k + 1)] = tab[static_cast<std::size_t>(K + k)] + t;
+      }
+      for (int k = -1; k >= -K; --k) {
+        const float t = thick * (1.0f + variation * (2.0f * field::t7::Unit(field::t7::Hash2(k, 0, seed)) - 1.0f));
+        tab[static_cast<std::size_t>(K + k)] = tab[static_cast<std::size_t>(K + k + 1)] - t;
+      }
+      for (int i = 0; i < 2 * K; ++i) tab[static_cast<std::size_t>(2 * K + 1 + i)] = 0.25f + 0.5f * field::t7::Unit(field::t7::Hash2(i - K, 1, seed));
+      hk::StratifyParams p{};
+      p.w = static_cast<std::uint32_t>(src->w);
+      p.h = static_cast<std::uint32_t>(src->h);
+      p.seed = seed + 911U;
+      p.warpOn = warp != 0.0 ? 1u : 0u;
+      const float sLo = static_cast<float>(a.p.N("slope_lo", 0.0)), sHi = static_cast<float>(a.p.N("slope_hi", 0.0));
+      p.slopeOn = sHi > sLo ? 1u : 0u;
+      p.cell = src->cell;
+      p.ox = src->ox;
+      p.oz = src->oz;
+      p.tiltX = static_cast<float>(a.p.N("tilt_x", 0.0));
+      p.tiltZ = static_cast<float>(a.p.N("tilt_z", 0.0));
+      p.warp = static_cast<float>(warp);
+      p.wdt = 0.5f * (1.0f - sharp) + 0.02f;
+      p.strength = Clamp01(static_cast<float>(a.p.N("strength", 1.0)));
+      p.slopeLo = sLo;
+      p.slopeHi = sHi;
+      std::vector<float> oct(16u, 0.0f);
+      const double inv = 1.0 / warpSize, step = static_cast<double>(src->cell) * inv;
+      if (!PutMap(oct, 0, static_cast<double>(src->ox) * inv, static_cast<double>(src->oz) * inv, step, 0.0, 0.0, step)) return OpResult::Unsupported;
+      Field in, res;
+      std::unique_ptr<Resource> tabBuf, octBuf;
+      MaskBind mb;
+      if (!UploadGrid(ex, *src, in, err) || !MakeField(ex, p.w, p.h, res, err) || !UploadVec(ex, tab, tabBuf, err) || !UploadVec(ex, oct, octBuf, err) || !BindMask(ex, a, mb, err)) return OpResult::Failed;
+      p.hasMask = mb.has ? 1u : 0u;
+      Bindings b;
+      b.Srv(0, in.R()).Srv(1, mb.R()).Srv(2, *tabBuf).Srv(3, *octBuf).Uav(0, res.R());
+      if (!DispatchBands(ex, *ks, p.w, p.h, warp != 0.0 ? 3.5 : 0.8, p, b, err)) return OpResult::Failed;
+      Grid g = NewGrid(shape);
+      if (!DownloadGrid(ex, res, g, err)) return OpResult::Failed;
+      out = std::move(g);
+      return OpResult::Done;
+    }
+
     // ---- slope_limit --------------------------------------------------------------------------------------------------------------------------------
 
     OpResult OpSlopeLimitGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
@@ -437,6 +503,7 @@ namespace moho::editor::gpu
       Registrar()
       {
         RegisterGpuOp("rockiness", &OpRockinessGpu);
+        RegisterGpuOp("stratify", &OpStratifyGpu);
         RegisterGpuOp("slope_limit", &OpSlopeLimitGpu);
         RegisterGpuOp("morph", &OpMorphGpu);
         RegisterGpuOp("convolve", &OpConvolveGpu);
