@@ -162,10 +162,10 @@ static void TestShim()
 
 // ---- kernels on the emulator -------------------------------------------------------------------------------------------------------------------------
 
-// Kernels that another test binary emulates and checks (EdGpuGenTest: gen_*, filt_*; the erosion tests: erosion_*): this test does not need an EMU_KERNEL block for them.
+// Kernels that another test binary emulates and checks (EdGpuGenTest: gen_*, filt_*; the erosion tests: erosion_*; EdGpuFieldTest: field_*): this test does not need an EMU_KERNEL block for them.
 static bool OwnedByAnotherTest(const char* const name)
 {
-  return std::strncmp(name, "gen_", 4) == 0 || std::strncmp(name, "filt_", 5) == 0 || std::strncmp(name, "erosion_", 8) == 0;
+  return std::strncmp(name, "gen_", 4) == 0 || std::strncmp(name, "filt_", 5) == 0 || std::strncmp(name, "erosion_", 8) == 0 || std::strncmp(name, "field_", 6) == 0;
 }
 
 static void TestKernelTable()
