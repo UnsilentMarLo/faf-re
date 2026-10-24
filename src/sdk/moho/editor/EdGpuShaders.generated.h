@@ -1757,7 +1757,7 @@ void CSMain(KERNEL_IDS)
 // Hydraulic erosion, pass B: the water update from the pipe fluxes, the flow speed, then dissolving and settling of sediment.
 //   water   d' = d + rain + inflow - outflow
 //   speed   the vector sum of the unit directions of the in and out fluxes over the mean depth (cells per iteration), at most maxSpeed
-//   slope   sin of the ground's slope (central differences); the capacity uses it softly saturated at slopeCap (steep faces do not dominate) and floored at minSlope
+//   slope   sin of the ground's slope (central differences); the capacity uses it limited above slopeCap (a plateau, then falling off on cliffs: steep faces do not dominate) and floored at minSlope
 //   cap     capacity * slope * speed^speedPow * min(1, depth / depth_max); no dissolving below the speed threshold vThresh
 //   dig     erosion * rock * (cap - s) (at most cutLimit of the drop to the lowest of the eight neighbours), or settle deposition * (s - cap)
 // The sediment itself moves in pass C. Outputs: the change of the ground (dT = dissolved - settled, which erosion_hydro_apply spreads over the neighbourhood and subtracts), the water (D, in
@@ -1898,9 +1898,9 @@ void CSMain(KERNEL_IDS)
 {
     if (dtid.x >= P.w || dtid.y >= P.h) return;
     int x = int(dtid.x);
-    int z = int(dtid.y);
 )HLSL"
-    R"HLSL(    int w = int(P.w);
+    R"HLSL(    int z = int(dtid.y);
+    int w = int(P.w);
     int h = int(P.h);
     uint n = P.w * P.h;
     uint i = dtid.y * P.w + dtid.x;
@@ -1951,7 +1951,8 @@ void CSMain(KERNEL_IDS)
     float gz = (T[uint(zd) * P.w + uint(x)] - T[uint(zu) * P.w + uint(x)]) / (float(zd - zu) * P.cell);
     float g = sqrt(gx * gx + gz * gz);
     float sinA = g / sqrt(1.0f + g * g);
-    float soft = sinA / sqrt(1.0f + (sinA / P.slopeCap) * (sinA / P.slopeCap));
+    float sr = sinA / P.slopeCap;
+    float soft = sinA / sqrt(1.0f + sr * sr * sr * sr);      // ~ sinA below slopeCap, a plateau above it, falling off again on cliffs
     float tilt = max(soft, P.minSlope);
     float sp = speed;
     if (P.speedPow != 1.0f) sp = pow(max(speed, 1e-6f), P.speedPow);
@@ -4198,7 +4199,7 @@ void CSMain(KERNEL_IDS)
         gz *= P.zf;
         float inv = 1.0f / sqrt(gx * gx + gz * gz + 1.0f);
         float ndl = (-gx * P.lx + P.ly - gz * P.lz) * inv;
-        float lit = ndl > 0.0f ? 1.0f : 0.0f;
+        float lighted = ndl > 0.0f ? 1.0f : 0.0f;
         if (P.shadows != 0u)
         {
             float h0 = src[idx];
@@ -4215,9 +4216,9 @@ void CSMain(KERNEL_IDS)
                 }
                 t += 1.0f + t * 0.12f;
             }
-            lit *= shade;
+            lighted *= shade;
             if (P.mode == 2u) r = 1.0f - shade;
-            else if (P.mode == 1u) r = lit * SmoothStep(0.0f, 0.25f, ndl);
+            else if (P.mode == 1u) r = lighted * SmoothStep(0.0f, 0.25f, ndl);
             else r = saturate(P.ambient + (1.0f - P.ambient) * max(0.0f, ndl) * shade);
         }
         else
@@ -7214,7 +7215,7 @@ void CSMain(KERNEL_IDS)
     {"erosion_hydro_flux", kSource_erosion_hydro_flux, "CSMain", 16u, 16u, 1u, 0x7u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x3ED515564EF74104ULL},
     {"erosion_hydro_settle", kSource_erosion_hydro_settle, "CSMain", 16u, 16u, 1u, 0x0u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0xA692430D0663749AULL},
     {"erosion_hydro_transport", kSource_erosion_hydro_transport, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0A5B4B10DFB1D023ULL},
-    {"erosion_hydro_water", kSource_erosion_hydro_water, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x7Fu, 0x0u, 0x0u, 0x0u, 1u, 0x6840148772D043C7ULL},
+    {"erosion_hydro_water", kSource_erosion_hydro_water, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x7Fu, 0x0u, 0x0u, 0x0u, 1u, 0xCD39FBE8BD2331D7ULL},
     {"erosion_steer", kSource_erosion_steer, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x9EB04DF47EC712E6ULL},
     {"erosion_thermal_a", kSource_erosion_thermal_a, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xBE1A1D29F471A31FULL},
     {"erosion_thermal_b", kSource_erosion_thermal_b, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x60030F52065B1C9EULL},
@@ -7225,7 +7226,7 @@ void CSMain(KERNEL_IDS)
     {"filt_lerpmask", kSource_filt_lerpmask, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x535E8DE4338BB7E5ULL},
     {"filt_normal", kSource_filt_normal, "CSMain", 16u, 16u, 1u, 0x2u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x8E348EF139FEBA7EULL},
     {"filt_occlusion", kSource_filt_occlusion, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xF7CFFCFD5A7C0F79ULL},
-    {"filt_terrain", kSource_filt_terrain, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA87505039CA013AAULL},
+    {"filt_terrain", kSource_filt_terrain, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x24972E6A8CEF4926ULL},
     {"gen_cells", kSource_gen_cells, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x248960A238B84B06ULL},
     {"gen_craters", kSource_gen_craters, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2CBB355B5E28183BULL},
     {"gen_dunes", kSource_gen_dunes, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xF2EB251DBBCA424DULL},

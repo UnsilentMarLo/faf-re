@@ -82,7 +82,7 @@ void CSMain(KERNEL_IDS)
         gz *= P.zf;
         float inv = 1.0f / sqrt(gx * gx + gz * gz + 1.0f);
         float ndl = (-gx * P.lx + P.ly - gz * P.lz) * inv;
-        float lit = ndl > 0.0f ? 1.0f : 0.0f;
+        float lighted = ndl > 0.0f ? 1.0f : 0.0f;
         if (P.shadows != 0u)
         {
             float h0 = src[idx];
@@ -99,9 +99,9 @@ void CSMain(KERNEL_IDS)
                 }
                 t += 1.0f + t * 0.12f;
             }
-            lit *= shade;
+            lighted *= shade;
             if (P.mode == 2u) r = 1.0f - shade;
-            else if (P.mode == 1u) r = lit * SmoothStep(0.0f, 0.25f, ndl);
+            else if (P.mode == 1u) r = lighted * SmoothStep(0.0f, 0.25f, ndl);
             else r = saturate(P.ambient + (1.0f - P.ambient) * max(0.0f, ndl) * shade);
         }
         else
