@@ -3987,6 +3987,73 @@ void CSMain(KERNEL_IDS)
 
 )HLSL";
 
+  // field_weather: 16x16x1 threads
+  inline constexpr char kSource_field_weather[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op erode_rocksoil (EdFieldEro2.cpp OpRockSoil), the weathering step: d = weather * exp(-soil / depth0); rock -= d; soil += d (in place, one thread per cell).
+// ---- begin field_weather_params.hlsli
+// Constant buffer of field_weather.hlsl (op erode_rocksoil).
+#ifndef GPU_FIELD_WEATHER_PARAMS_HLSLI
+#define GPU_FIELD_WEATHER_PARAMS_HLSLI
+
+struct WeatherParams
+{
+    uint w;
+    uint h;
+    uint pad0;
+    uint pad1;
+    float weather;   // rock weathered per step at no soil cover
+    float depth0;    // soil depth at which the weathering has dropped to 1/e
+    float pad2;
+    float pad3;
+};
+
+#endif
+// ---- end field_weather_params.hlsli
+
+CBUFFER(WeatherParams, P, 0)
+UAV_BUFFER(float, rock, 0)
+UAV_BUFFER(float, soil, 1)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    uint i = dtid.y * P.w + dtid.x;
+    float d = P.weather * exp(-soil[i] / P.depth0);
+    rock[i] = rock[i] - d;
+    soil[i] = soil[i] + d;
+}
+
+)HLSL";
+
   // filt_bilateral: 16x16x1 threads
   inline constexpr char kSource_filt_bilateral[] =
     R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
@@ -8764,6 +8831,7 @@ void CSMain(KERNEL_IDS)
     {"field_slopescan", kSource_field_slopescan, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x4DB2A8E0930B861FULL},
     {"field_sub", kSource_field_sub, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x101759797F1D7EACULL},
     {"field_unsharp", kSource_field_unsharp, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x51536C353B56C1BDULL},
+    {"field_weather", kSource_field_weather, "CSMain", 16u, 16u, 1u, 0x0u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0xD84A62CAB2D4E35CULL},
     {"filt_bilateral", kSource_filt_bilateral, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x6B226CC7B6F8A9DFULL},
     {"filt_blurdir", kSource_filt_blurdir, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x7E0FBD4C9A05041EULL},
     {"filt_diffuse", kSource_filt_diffuse, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x40DC1A1D6642A2D3ULL},
@@ -8784,5 +8852,5 @@ void CSMain(KERNEL_IDS)
     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
   };
-  inline constexpr int kKernelCount = 45;
+  inline constexpr int kKernelCount = 46;
 } // namespace moho::editor::gpu::shaders

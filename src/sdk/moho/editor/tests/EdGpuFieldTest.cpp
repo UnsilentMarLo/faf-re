@@ -37,6 +37,7 @@
 #include "moho/editor/gpu/field_slopescan_params.hlsli"
 #include "moho/editor/gpu/field_sub_params.hlsli"
 #include "moho/editor/gpu/field_unsharp_params.hlsli"
+#include "moho/editor/gpu/field_weather_params.hlsli"
 
 EMU_KERNEL_BEGIN(k_field_settle)
 #include "moho/editor/gpu/field_settle.hlsl"
@@ -77,6 +78,10 @@ EMU_KERNEL_END(field_slopelimit)
 EMU_KERNEL_BEGIN(k_field_slopescan)
 #include "moho/editor/gpu/field_slopescan.hlsl"
 EMU_KERNEL_END(field_slopescan)
+
+EMU_KERNEL_BEGIN(k_field_weather)
+#include "moho/editor/gpu/field_weather.hlsl"
+EMU_KERNEL_END(field_weather)
 
 EMU_KERNEL_BEGIN(k_field_sub)
 #include "moho/editor/gpu/field_sub.hlsl"
@@ -540,6 +545,35 @@ static void TestSlopeLimit()
   CheckDeclines("slope_limit_no_input", "slope_limit", Args({}, {}, {}));
 }
 
+// ---- erode_rocksoil ----------------------------------------------------------------------------------------------------------------------------------
+
+static void TestRockSoil()
+{
+  const GridPtr t = TestTerrain(71, 53, 2.0f, 71, 80.0);
+  auto soil = std::make_shared<Grid>(*TestMask(71, 53, 4));
+  for (float& v : soil->v) v *= 1.8f;
+  CheckSame("rocksoil_default", "erode_rocksoil", Args({{"iterations", 20}}, {}, {{"a", t}}), 1e-5, nullptr, true);
+  {
+    Grid g;
+    RunGpu("erode_rocksoil", Args({{"iterations", 20}}, {}, {{"a", t}}), g);
+    CHECK(Compare(g, *t).maxAbs > 1e-3, "erode_rocksoil changes the terrain (the comparison is not vacuous)");
+  }
+  CheckSame("rocksoil_soil_map", "erode_rocksoil", Args({{"iterations", 17}, {"weather", 0.05}, {"depth0", 0.6}}, {}, {{"a", t}, {"b", soil}}), 1e-5, nullptr, true);
+  for (const char* o : {"soil", "rock", "moved"}) {
+    CheckSame((std::string("rocksoil_") + o).c_str(), "erode_rocksoil", Args({{"iterations", 13}, {"rock_every", 3}, {"rock_talus", 0.4}, {"soil_talus", 0.15}}, {{"output", o}}, {{"a", t}, {"b", soil}}), 1e-5, nullptr, true);
+  }
+  CheckSame("rocksoil_no_rock_slide", "erode_rocksoil", Args({{"iterations", 9}, {"rock_talus", 0.0}, {"rate", 0.9}}, {}, {{"a", t}}), 1e-5, nullptr, true);
+  CheckSame("rocksoil_every_1", "erode_rocksoil", Args({{"iterations", 8}, {"rock_every", 1}, {"soil", 2.5}, {"rock_vis", 1.2}}, {}, {{"a", t}}), 1e-5, nullptr, true);
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 60.0);
+    CheckSame(("rocksoil_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "erode_rocksoil", Args({{"iterations", 8}, {"soil_talus", 0.1}, {"rock_talus", 0.3}, {"rock_every", 2}}, {}, {{"a", s}}), 1e-5, nullptr, true);
+  }
+  CheckDeclines("rocksoil_zero_iterations", "erode_rocksoil", Args({{"iterations", 0}}, {}, {{"a", t}}));
+  CheckDeclines("rocksoil_bad_output", "erode_rocksoil", Args({}, {{"output", "bogus"}}, {{"a", t}}));
+  CheckDeclines("rocksoil_bad_soil", "erode_rocksoil", Args({}, {}, {{"a", t}, {"b", TestMask(9, 9, 1)}}));
+  CheckDeclines("rocksoil_no_input", "erode_rocksoil", Args({}, {}, {}));
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -556,6 +590,7 @@ int main(int argc, char** argv)
   TestConvolve();
   TestBlurBased();
   TestSlopeLimit();
+  TestRockSoil();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuFieldTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;

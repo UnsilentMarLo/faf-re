@@ -3,6 +3,7 @@
 // RunIterations: time limited submissions), so only one upload and one download cross the bus. The arithmetic is the CPU op's, in the same order. docs/projects/editor/GPU_COMPUTE.md, "More field ops (GP4)".
 #pragma fp_contract(off)
 
+#include "moho/editor/EdFieldUtil.h"
 #include "moho/editor/EdGpuFieldCommon.h"
 
 namespace moho::editor::gpu::hk
@@ -10,6 +11,7 @@ namespace moho::editor::gpu::hk
   using uint = std::uint32_t;
 #include "moho/editor/gpu/field_settle_params.hlsli"
 #include "moho/editor/gpu/field_slide_params.hlsli"
+#include "moho/editor/gpu/field_weather_params.hlsli"
 } // namespace moho::editor::gpu::hk
 
 namespace moho::editor::gpu
@@ -188,10 +190,93 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
+    // ---- erode_rocksoil -----------------------------------------------------------------------------------------------------------------------------
+
+    OpResult OpRockSoilGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = Source(a);
+      const Grid* soil0 = In(a, "b");
+      if (src == nullptr || (soil0 != nullptr && !soil0->SameShape(*src))) return OpResult::Unsupported;
+      const std::string want = a.p.S("output", "height");
+      if (want != "height" && want != "soil" && want != "rock" && want != "moved") return OpResult::Unsupported;
+      const int iterations = ItersOf(a, 60);
+      if (iterations == 0) return OpResult::Unsupported;
+      const int w = src->w, h = src->h;
+      const std::size_t n = src->Count();
+      if (!Fits(ex, n, 14)) return OpResult::Unsupported;
+      const KernelInfo* kw = FindKernel("field_weather");
+      if (kw == nullptr) { err = "kernel field_weather is missing"; return OpResult::Failed; }
+      const float weather = std::max(0.0f, static_cast<float>(a.p.N("weather", 0.01)));
+      const float depth0 = std::max(1e-3f, static_cast<float>(a.p.N("depth0", 1.0)));
+      const float soilTalus = std::max(0.0f, static_cast<float>(a.p.N("soil_talus", 0.35)));
+      const float rockTalus = std::max(0.0f, static_cast<float>(a.p.N("rock_talus", 1.2)));
+      const int rockEvery = std::max(1, static_cast<int>(a.p.N("rock_every", 4)));
+      const float rate = std::max(0.0f, std::min(1.0f, static_cast<float>(a.p.N("rate", 0.5))));
+      const float vis = std::max(1e-3f, static_cast<float>(a.p.N("rock_vis", 0.4)));
+      const float soilConst = static_cast<float>(a.p.N("soil", 0.8));
+      std::vector<float> soilV(n), rockV(n);
+      for (std::size_t i = 0; i < n; ++i) {
+        soilV[i] = std::max(0.0f, soil0 != nullptr ? soil0->v[i] : soilConst);
+        rockV[i] = src->v[i] - soilV[i];
+      }
+      PingPong soil, rock;
+      Field lost;
+      if (!MakeField(ex, w, h, soil.f[0], err) || !MakeField(ex, w, h, soil.f[1], err) || !MakeField(ex, w, h, rock.f[0], err) || !MakeField(ex, w, h, rock.f[1], err) ||
+          !UploadField(ex, soil.f[0], soilV.data(), err) || !UploadField(ex, rock.f[0], rockV.data(), err) || !MakeField(ex, w, h, lost, err) || !FillBuffer(ex, lost.R(), 0u, err)) {
+        return OpResult::Failed;
+      }
+      Slider onSoil, onRock;   // the soil slides over the rock (surface = rock + soil, capped by the soil), the rock as a layer of its own
+      if (!onSoil.Init(ex, w, h, err) || !onRock.Init(ex, w, h, err)) return OpResult::Failed;
+      onSoil.p.cell = onRock.p.cell = src->cell;
+      onSoil.p.rate = onRock.p.rate = rate;
+      onSoil.p.talus = soilTalus;
+      onSoil.p.hasRock = 1;
+      onSoil.p.hasLost = 1;
+      onSoil.lost = &lost.R();
+      onRock.p.talus = rockTalus;
+      hk::WeatherParams wp{};
+      wp.w = static_cast<std::uint32_t>(w);
+      wp.h = static_cast<std::uint32_t>(h);
+      wp.weather = weather;
+      wp.depth0 = depth0;
+      const bool ok = RunIterations(ex, static_cast<u32>(iterations), 60.0, [&](const u32 it, std::string& e) {
+        Bindings b;
+        b.Uav(0, rock.Src().R()).Uav(1, soil.Src().R());
+        if (!DispatchGrid(ex, *kw, wp.w, wp.h, wp, b, e)) return false;
+        onSoil.rock = &rock.Src().R();
+        if (!onSoil.Step(ex, soil.Src().R(), soil.Dst().R(), e)) return false;
+        soil.Flip();
+        if (rockTalus > 0.0f && (it % static_cast<u32>(rockEvery)) == static_cast<u32>(rockEvery) - 1u) {
+          if (!onRock.Step(ex, rock.Src().R(), rock.Dst().R(), e)) return false;
+          rock.Flip();
+        }
+        return true;
+      }, err);
+      if (!ok) return OpResult::Failed;
+      Grid gSoil = LikeOf(*src), gRock = LikeOf(*src), gLost = LikeOf(*src);
+      if (!DownloadGrid(ex, soil.Src(), gSoil, err) || !DownloadGrid(ex, rock.Src(), gRock, err) || !DownloadGrid(ex, lost, gLost, err)) return OpResult::Failed;
+      std::map<std::string, Grid> all;
+      all["height"] = LikeOf(*src);
+      all["soil"] = LikeOf(*src);
+      all["rock"] = LikeOf(*src);
+      all["moved"] = LikeOf(*src);
+      for (std::size_t i = 0; i < n; ++i) {
+        all["height"].v[i] = gRock.v[i] + gSoil.v[i];
+        all["soil"].v[i] = gSoil.v[i];
+        all["rock"].v[i] = 1.0f - field::t7::SmoothStep(0.0f, vis, gSoil.v[i]);
+        all["moved"].v[i] = Clamp01(gLost.v[i]);
+      }
+      Grid result;
+      if (!Emit(a, result, all, "height")) return OpResult::Unsupported;
+      out = std::move(result);
+      return OpResult::Done;
+    }
+
     struct Registrar
     {
       Registrar()
       {
+        RegisterGpuOp("erode_rocksoil", &OpRockSoilGpu, 16384.0f);
         RegisterGpuOp("settle", &OpSettleGpu, 16384.0f);
         RegisterGpuOp("thermal_map", &OpThermalMapGpu, 16384.0f);
       }
