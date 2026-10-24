@@ -172,7 +172,9 @@ static void TestKernelTable()
 {
   int mine = 0;
   for (int i = 0; i < gpu::KernelCount(); ++i) mine += OwnedByAnotherTest(gpu::KernelAt(i).name) ? 0 : 1;
-  CHECK(mine > 0 && static_cast<std::size_t>(mine) == emu::Kernels().size(), "the generated table has %d kernels for this test and it emulates %d: every gpu/*.hlsl needs an EMU_KERNEL block here", mine, static_cast<int>(emu::Kernels().size()));
+  int emulated = 0;
+  for (const auto& kv : emu::Kernels()) emulated += OwnedByAnotherTest(kv.first.c_str()) ? 0 : 1;
+  CHECK(mine > 0 && mine == emulated, "the generated table has %d kernels for this test and it emulates %d: every gpu/*.hlsl needs an EMU_KERNEL block here", mine, emulated);
   for (int i = 0; i < gpu::KernelCount(); ++i) {
     const gpu::KernelInfo& k = gpu::KernelAt(i);
     if (OwnedByAnotherTest(k.name)) continue;
@@ -339,9 +341,12 @@ static void TestPolicyAndFallback()
     Grid m1, m2;
     g0 = gpuCalls();
     const std::uint64_t f0 = fallbacks();
-    CHECK(field::RunOp("blur", masked, m1, err) && field::RunOpCpu("blur", masked, m2, err) && MaxDiff(m1, m2) == 0.0 && gpuCalls() == g0 && fallbacks() == f0, "a mask is Unsupported: CPU, not counted as a failure");
+    // a mask of the field's shape is blended by the filt_lerpmask kernel (emulated and compared in EdGpuGenTest); a mask of another size is ignored by the CPU op, so it is here
+    masked.in["mask"] = MakeGrid(7, 5, 1.0f, 5);
+    CHECK(field::RunOp("blur", masked, m1, err) && field::RunOpCpu("blur", masked, m2, err) && MaxDiff(m1, m2) <= 1e-5 && gpuCalls() == g0 + 1 && fallbacks() == f0, "a mask of another size is ignored like on the CPU");
     OpArgs zero = args;
     zero.p.num["radius"] = 0.0;
+    g0 = gpuCalls();
     CHECK(field::RunOp("blur", zero, m1, err) && gpuCalls() == g0, "radius 0: CPU");
   }
 

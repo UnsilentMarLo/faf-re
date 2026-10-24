@@ -25,6 +25,7 @@ namespace moho::editor::gpu::hk
   using uint = std::uint32_t;
 #include "moho/editor/gpu/blur_params.hlsli"
 #include "moho/editor/gpu/field_params.hlsli"
+#include "moho/editor/gpu/filt_lerpmask_params.hlsli"
 #include "moho/editor/gpu/reduce_params.hlsli"
 #include "moho/editor/gpu/scale_params.hlsli"
 } // namespace moho::editor::gpu::hk
@@ -262,8 +263,10 @@ namespace moho::editor::gpu
       if (const Grid* like = InputOf(a, "like"); like != nullptr && !like->SameShape(*src)) {
         return OpResult::Unsupported;
       }
-      if (InputOf(a, "mask") != nullptr) {
-        return OpResult::Unsupported;   // the masked blend is not ported; the CPU op does it
+      // the CPU op blends with the mask only when it has the field's shape (else it ignores it): the same here
+      const Grid* mask = InputOf(a, "mask");
+      if (mask != nullptr && !mask->SameShape(*src)) {
+        mask = nullptr;
       }
       const double radius = a.p.N("radius", 4.0) / static_cast<double>(src->cell);   // world units -> samples, as on the CPU
       if (radius <= 1e-6) {
@@ -275,7 +278,7 @@ namespace moho::editor::gpu
       if (r > 8192 || work > 3.0e10) {
         return OpResult::Unsupported;   // one dispatch this long could hit the 2 second driver reset: the CPU does it
       }
-      const std::uint64_t bytes = 2ull * src->Count() * 4ull + weights.size() * 4ull;
+      const std::uint64_t bytes = (mask != nullptr ? 5ull : 2ull) * src->Count() * 4ull + weights.size() * 4ull;
       if (bytes > ex.MaxBytes()) {
         return OpResult::Unsupported;
       }
@@ -305,8 +308,31 @@ namespace moho::editor::gpu
         }
         pp.Flip();
       }
+      Field* resultField = &pp.Src();
+      Field blended;
+      if (mask != nullptr) {
+        // out = src + (blurred - src) * clamp01(mask), one more pass (kernel filt_lerpmask)
+        const KernelInfo* lerpKernel = FindKernel("filt_lerpmask");
+        Field orig, mfield;
+        if (lerpKernel == nullptr) {
+          err = "kernel filt_lerpmask is missing";
+          return OpResult::Failed;
+        }
+        if (!UploadGrid(ex, *src, orig, err) || !UploadGrid(ex, *mask, mfield, err) || !MakeField(ex, src->w, src->h, blended, err)) {
+          return OpResult::Failed;
+        }
+        hk::LerpMaskParams lp{};
+        lp.w = params.w;
+        lp.h = params.h;
+        Bindings lb;
+        lb.Srv(0, orig.R()).Srv(1, pp.Src().R()).Srv(2, mfield.R()).Uav(0, blended.R());
+        if (!DispatchGrid(ex, *lerpKernel, lp.w, lp.h, lp, lb, err)) {
+          return OpResult::Failed;
+        }
+        resultField = &blended;
+      }
       Grid result(src->w, src->h, src->cell, src->ox, src->oz);
-      if (!DownloadGrid(ex, pp.Src(), result, err)) {
+      if (!DownloadGrid(ex, *resultField, result, err)) {
         return OpResult::Failed;
       }
       out = std::move(result);

@@ -1143,15 +1143,20 @@ void CSMain(KERNEL_IDS)
     float avg = c;
     if (P.spread > 0.0f)
     {
+        // symmetric weights (the binomial 3 x 3), a neighbour that is off the map or pinned gives its weight to the centre: what a cell dissolves is all taken from the cells that can lose it
         float sum = 0.0f;
         for (int dz = -1; dz <= 1; ++dz)
         {
             for (int dx = -1; dx <= 1; ++dx)
             {
-                int xx = ClampIndex(x + dx, w);
-                int zz = ClampIndex(z + dz, h);
+                int xx = x + dx;
+                int zz = z + dz;
                 float wt = (dx == 0 ? 0.5f : 0.25f) * (dz == 0 ? 0.5f : 0.25f);
-                sum += wt * dT[uint(zz) * P.w + uint(xx)];
+                bool usable = xx >= 0 && zz >= 0 && xx < w && zz < h;
+                if (usable && (P.flags & 8u) != 0u && (xx == 0 || zz == 0 || xx == w - 1 || zz == h - 1)) usable = false;
+                if (dx == 0 && dz == 0) usable = true;
+                if (usable) sum += wt * dT[uint(zz) * P.w + uint(xx)];
+                else sum += wt * c;
             }
         }
         avg = sum;
@@ -3500,6 +3505,70 @@ void CSMain(KERNEL_IDS)
     uint idx = row * P.w + dtid.x;
     if (P.hasMask != 0u) warped = src[idx] + (warped - src[idx]) * saturate(mask[idx]);
     dst[idx] = warped;
+}
+
+)HLSL";
+
+  // filt_lerpmask: 16x16x1 threads
+  inline constexpr char kSource_filt_lerpmask[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// dst = orig + (filtered - orig) * saturate(mask): the mask blend at the end of ops blur and box (EdFieldCore.cpp OpBlurImpl: Lerp(src, out, Clamp01(mask))).
+// ---- begin filt_lerpmask_params.hlsli
+// Constant buffer of filt_lerpmask.hlsl (the mask of ops blur and box).
+#ifndef GPU_FILT_LERPMASK_PARAMS_HLSLI
+#define GPU_FILT_LERPMASK_PARAMS_HLSLI
+
+struct LerpMaskParams
+{
+    uint w;
+    uint h;
+    uint pad0;
+    uint pad1;
+};
+
+#endif
+// ---- end filt_lerpmask_params.hlsli
+
+CBUFFER(LerpMaskParams, P, 0)
+SRV_BUFFER(float, orig, 0)
+SRV_BUFFER(float, filtered, 1)
+SRV_BUFFER(float, mask, 2)
+UAV_BUFFER(float, dst, 0)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.h) return;
+    uint i = dtid.y * P.w + dtid.x;
+    float o = orig[i];
+    dst[i] = o + (filtered[i] - o) * saturate(mask[i]);
 }
 
 )HLSL";
@@ -7141,7 +7210,7 @@ void CSMain(KERNEL_IDS)
     {"erosion_delta", kSource_erosion_delta, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x2FA986491592B19DULL},
     {"erosion_drop", kSource_erosion_drop, "CSMain", 16u, 16u, 1u, 0x1Fu, 0xFu, 0x0u, 0x0u, 0x0u, 1u, 0x719136D7659EE5EFULL},
     {"erosion_drop_resolve", kSource_erosion_drop_resolve, "CSMain", 16u, 16u, 1u, 0x0u, 0xFFu, 0x0u, 0x0u, 0x0u, 1u, 0xEBE4BA47D2B76AC2ULL},
-    {"erosion_hydro_apply", kSource_erosion_hydro_apply, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x6D614F9C92C48924ULL},
+    {"erosion_hydro_apply", kSource_erosion_hydro_apply, "CSMain", 16u, 16u, 1u, 0x3u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA281888C8F5458A8ULL},
     {"erosion_hydro_flux", kSource_erosion_hydro_flux, "CSMain", 16u, 16u, 1u, 0x7u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x3ED515564EF74104ULL},
     {"erosion_hydro_settle", kSource_erosion_hydro_settle, "CSMain", 16u, 16u, 1u, 0x0u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0xA692430D0663749AULL},
     {"erosion_hydro_transport", kSource_erosion_hydro_transport, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0A5B4B10DFB1D023ULL},
@@ -7153,6 +7222,7 @@ void CSMain(KERNEL_IDS)
     {"filt_blurdir", kSource_filt_blurdir, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x7E0FBD4C9A05041EULL},
     {"filt_diffuse", kSource_filt_diffuse, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x40DC1A1D6642A2D3ULL},
     {"filt_dwarp", kSource_filt_dwarp, "CSMain", 16u, 16u, 1u, 0xEu, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xD25852870C76D667ULL},
+    {"filt_lerpmask", kSource_filt_lerpmask, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x535E8DE4338BB7E5ULL},
     {"filt_normal", kSource_filt_normal, "CSMain", 16u, 16u, 1u, 0x2u, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x8E348EF139FEBA7EULL},
     {"filt_occlusion", kSource_filt_occlusion, "CSMain", 16u, 16u, 1u, 0x6u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xF7CFFCFD5A7C0F79ULL},
     {"filt_terrain", kSource_filt_terrain, "CSMain", 16u, 16u, 1u, 0x2u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0xA87505039CA013AAULL},
@@ -7168,5 +7238,5 @@ void CSMain(KERNEL_IDS)
     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
   };
-  inline constexpr int kKernelCount = 33;
+  inline constexpr int kKernelCount = 34;
 } // namespace moho::editor::gpu::shaders

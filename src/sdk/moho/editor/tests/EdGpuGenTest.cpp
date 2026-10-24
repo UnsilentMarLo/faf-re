@@ -25,7 +25,9 @@
 // every .hlsli at global scope first
 #include "moho/editor/gpu/common.hlsli"
 #include "moho/editor/gpu/gen_noise.hlsli"
+#include "moho/editor/gpu/blur_params.hlsli"
 #include "moho/editor/gpu/filt_common.hlsli"
+#include "moho/editor/gpu/filt_lerpmask_params.hlsli"
 #include "moho/editor/gpu/filt_bilateral_params.hlsli"
 #include "moho/editor/gpu/filt_blurdir_params.hlsli"
 #include "moho/editor/gpu/filt_diffuse_params.hlsli"
@@ -57,6 +59,15 @@ EMU_KERNEL_END(filt_diffuse)
 EMU_KERNEL_BEGIN(k_filt_dwarp)
 #include "moho/editor/gpu/filt_dwarp.hlsl"
 EMU_KERNEL_END(filt_dwarp)
+
+// the blur / box ops of the foundation (EdGpuOps.cpp) run their kernel here too: the mask blend of those ops is a filt_ kernel
+EMU_KERNEL_BEGIN(k_blur_pass)
+#include "moho/editor/gpu/blur_pass.hlsl"
+EMU_KERNEL_END(blur_pass)
+
+EMU_KERNEL_BEGIN(k_filt_lerpmask)
+#include "moho/editor/gpu/filt_lerpmask.hlsl"
+EMU_KERNEL_END(filt_lerpmask)
 
 EMU_KERNEL_BEGIN(k_filt_normal)
 #include "moho/editor/gpu/filt_normal.hlsl"
@@ -252,7 +263,9 @@ static void TestKernelTable()
     CHECK(srv == k.srvMask && uav == k.uavMask, "kernel %s: resource slots (%x/%x) equal the generated table (%x/%x)", k.name, srv, uav, k.srvMask, k.uavMask);
     CHECK((e.cbData != nullptr) == (k.hasCb != 0), "kernel %s: constant buffer presence", k.name);
   }
-  CHECK(mine == static_cast<int>(emu::Kernels().size()), "the generated table has %d gen_/filt_ kernels and this test emulates %d", mine, static_cast<int>(emu::Kernels().size()));
+  int emulated = 0;
+  for (const auto& kv : emu::Kernels()) emulated += Mine(kv.first.c_str()) ? 1 : 0;
+  CHECK(mine == emulated, "the generated table has %d gen_/filt_ kernels and this test emulates %d", mine, emulated);
 }
 
 // ---- perlin simplex ridged billow ----------------------------------------------------------------------------------------------------------------------
@@ -634,6 +647,19 @@ static void TestDWarp()
   CHECK(!RunGpu("dwarp", Args({}, {{"kind", "bogus"}}, {{"a", ter}}), g, &onGpu, &err) && !onGpu, "a bad kind is the CPU's error");
 }
 
+static void TestBlurMask()
+{
+  const GridPtr ter = TestTerrain(66, 49, 1.0f, 13);
+  auto mask = std::make_shared<Grid>(66, 49, 1.0f, 17.5f, -4.0f);
+  for (std::size_t i = 0; i < mask->v.size(); ++i) mask->v[i] = static_cast<float>(i % 11) / 8.0f - 0.2f;   // below 0 and above 1: clamped
+  for (const char* op : {"blur", "box"}) {
+    CheckSame((std::string(op) + "_mask").c_str(), op, Args({{"radius", 4}}, {}, {{"a", ter}, {"mask", mask}}), 2e-5);
+    CheckSame((std::string(op) + "_nomask").c_str(), op, Args({{"radius", 4}}, {}, {{"a", ter}}), 2e-5);
+  }
+  auto other = std::make_shared<Grid>(5, 5, 1.0f, 0.0f, 0.0f, 0.5f);
+  CheckSame("blur_mask_other_shape", "blur", Args({{"radius", 3}}, {}, {{"a", ter}, {"mask", other}}), 2e-5);
+}
+
 static void TestTerrainFamily()
 {
   const GridPtr ter = TestTerrain(75, 59, 2.0f, 11);
@@ -726,6 +752,7 @@ int main(int argc, char** argv)
   TestSmoothingFilters();
   TestDWarp();
   TestTerrainFamily();
+  TestBlurMask();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuGenTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
