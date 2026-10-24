@@ -3317,6 +3317,381 @@ void CSMain(KERNEL_IDS)
 
 )HLSL";
 
+  // field_rockiness: 16x16x1 threads
+  inline constexpr char kSource_field_rockiness[] =
+    R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
+// (hlsl_cpp_shim.h) defines the SAME macro names for g++ / MSVC. A kernel therefore never writes cbuffer, register(), StructuredBuffer, [numthreads], SV_ or groupshared itself.
+//
+// Resource slots: constant buffer b0 (one per kernel), shader resource views t0..t15, unordered access views u0..u7, samplers s0 (linear, clamp) and s1 (point, clamp).
+// The SRV slot numbers are shared between buffers and textures (SRV_BUFFER(.., 0) and SRV_TEX(.., 0) would collide), the same for UAVs.
+
+#define CBUFFER(Type, name, slot) cbuffer name##_cb : register(b##slot) { Type name; };
+#define SRV_BUFFER(T, name, slot) StructuredBuffer<T> name : register(t##slot);
+#define UAV_BUFFER(T, name, slot) RWStructuredBuffer<T> name : register(u##slot);
+#define SRV_TEX(name, slot) Texture2D<float> name : register(t##slot);
+#define UAV_TEX(name, slot) RWTexture2D<float> name : register(u##slot);
+#define SAMPLER(name, slot) SamplerState name : register(s##slot);
+#define GROUPSHARED(T, name, n) groupshared T name[n];
+#define NUMTHREADS(x, y, z) [numthreads(x, y, z)]
+#define KERNEL_IDS uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex
+
+// Kernels with group shared memory split their body into phases at top level: PHASES_BEGIN, code, BARRIER(); code, ..., PHASES_END. Every phase is its own scope (a local does not
+// live across a BARRIER, on the GPU as in the emulation).
+#define PHASES_BEGIN {
+#define BARRIER() GroupMemoryBarrierWithGroupSync(); } {
+#define PHASES_END }
+
+#define UNROLL [unroll]
+#define LOOP [loop]
+#define OUT(T) out T
+#define INOUT(T) inout T
+#define FN
+
+// Op rockiness (EdFieldFilt.cpp OpRockiness): where bare rock shows. A weighted sum of three terms, divided by the sum of the weights, plus a little breakup noise, clamped to 0..1:
+//   steep ground (smoothstep of the slope in degrees), convex ground (the laplacian over +-n samples, smoothstep of 0.5 - gain * lap) and thin soil (1 - smoothstep(0, soilFull, soil)).
+// The noise is the CPU's Fbm01 at 14 world units, 3 octaves; oct (t2) holds the affine map of the sample index to its lattice (see gen_noise.hlsli).
+// ---- begin filt_common.hlsli
+// Helpers of the filter kernels (filt_*.hlsl). Every filter kernel has a constant buffer P that starts with  uint w, h, z0, rows;  (field size, first row and number of rows of this dispatch) and
+// reads the source field from a structured buffer. Functions that read a buffer cannot take it as an argument in the kernel subset, so they are macros that define a function for the buffer
+// whose name is given (the function reads P.w / P.h, so define it after the CBUFFER).
+#ifndef GPU_FILT_COMMON_HLSLI
+#define GPU_FILT_COMMON_HLSLI
+
+// ---- begin common.hlsli
+// Helpers every kernel may use. Plain functions and constants only (this file is compiled as HLSL and as C++ by the test shim). Include it with #include "common.hlsli".
+#ifndef GPU_COMMON_HLSLI
+#define GPU_COMMON_HLSLI
+
+// Row-major index of sample (x, z) in a field of width w.
+FN uint FieldIndex(uint x, uint z, uint w)
+{
+    return z * w + x;
+}
+
+// Integer clamp of a lookup coordinate to 0..n-1 (the CPU ops' "clamp" edge mode).
+FN int ClampIndex(int i, int n)
+{
+    return max(0, min(n - 1, i));
+}
+
+// 32 bit integer hash (lowbias32): equal bits on the CPU and on the GPU.
+FN uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A hash as a float in 0..1 (24 bit steps, exact in float32).
+FN float HashToUnit(uint h)
+{
+    return float(h >> 8) * (1.0f / 16777216.0f);
+}
+
+#endif
+// ---- end common.hlsli
+
+// EdFieldUtil.h SmoothStep (an empty edge range is a step).
+FN float SmoothStep(float e0, float e1, float v)
+{
+    if (e1 == e0) return v < e0 ? 0.0f : 1.0f;
+    float t = saturate((v - e0) / (e1 - e0));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// BilinearC(gx, gz): bilinear sample of buffer BUF at fractional sample coordinates, clamped edges (EdFieldUtil.h BilinearC).
+#define DEFINE_BILINEAR_C(BUF)                                                                  \
+    FN float BilinearC(float gx, float gz)                                                      \
+    {                                                                                           \
+        float mx = float(P.w - 1u);                                                             \
+        float mz = float(P.h - 1u);                                                             \
+        float cx = gx < 0.0f ? 0.0f : (gx > mx ? mx : gx);                                      \
+        float cz = gz < 0.0f ? 0.0f : (gz > mz ? mz : gz);                                      \
+        int ix = int(cx);                                                                       \
+        int iz = int(cz);                                                                       \
+        if (ix >= int(P.w) - 1) ix = max(0, int(P.w) - 2);                                      \
+        if (iz >= int(P.h) - 1) iz = max(0, int(P.h) - 2);                                      \
+        float tx = cx - float(ix);                                                              \
+        float tz = cz - float(iz);                                                              \
+        int ix1 = min(int(P.w) - 1, ix + 1);                                                    \
+        int iz1 = min(int(P.h) - 1, iz + 1);                                                    \
+        uint r0 = uint(iz) * P.w;                                                               \
+        uint r1 = uint(iz1) * P.w;                                                              \
+        float a0 = BUF[r0 + uint(ix)];                                                          \
+        float a1 = BUF[r0 + uint(ix1)];                                                         \
+        float b0 = BUF[r1 + uint(ix)];                                                          \
+        float b1 = BUF[r1 + uint(ix1)];                                                         \
+        float top = a0 + (a1 - a0) * tx;                                                        \
+        float bottom = b0 + (b1 - b0) * tx;                                                     \
+        return top + (bottom - top) * tz;                                                       \
+    }
+
+// GradientAt(x, z, gx, gz): central difference gradient (rise per run, P.cell world units per sample) with clamped edges (EdFieldUtil.h GradientAt).
+#define DEFINE_GRADIENT_AT(BUF)                                                                 \
+    FN void GradientAt(int x, int z, OUT(float) gx, OUT(float) gz)                              \
+    {                                                                                           \
+        int x0 = max(0, x - 1);                                                                 \
+        int x1 = min(int(P.w) - 1, x + 1);                                                      \
+        int z0 = max(0, z - 1);                                                                 \
+        int z1 = min(int(P.h) - 1, z + 1);                                                      \
+        gx = 0.0f;                                                                              \
+        gz = 0.0f;                                                                              \
+        if (x1 > x0) gx = (BUF[uint(z) * P.w + uint(x1)] - BUF[uint(z) * P.w + uint(x0)]) / (float(x1 - x0) * P.cell); \
+        if (z1 > z0) gz = (BUF[uint(z1) * P.w + uint(x)] - BUF[uint(z0) * P.w + uint(x)]) / (float(z1 - z0) * P.cell); \
+    }
+
+#endif
+// ---- end filt_common.hlsli
+// ---- begin gen_noise.hlsli
+)HLSL"
+    R"HLSL(// Gradient noise for the generator kernels (gen_*.hlsl). The same noise as the CPU ops (EdFieldCore.cpp / EdFieldUtil.h): the same lattice hash, the same 8 / 64 gradient directions,
+// the same quintic fade, so a GPU result matches the CPU result up to float rounding.
+//
+// POSITIONS. The CPU ops compute the lattice position in double from the world position. A float cannot hold ox + x * cell at 4096 samples without losing the fine octaves, so the host
+// (EdGpuGen.cpp) does that part in double and hands the kernel, per octave, an AFFINE MAP from the sample index (x, z) to the lattice: u = u0 + a x + b z, v = v0 + c x + d z, with u0 / v0
+// split into an integer part (exact in float below 2^24) and a fraction. LatticePoint() turns that into the integer cell and the fraction inside it: the float error is then relative
+// to the size of the field in lattice units, not to the distance from the world origin.
+//
+// Octave record in the float table `oct` (16 floats per octave, kernels use what they need): 0 iu0, 1 iv0, 2 fu0, 3 fv0, 4 a, 5 b, 6 c, 7 d (the map), 8 amplitude, 9 and up per kernel.
+#ifndef GPU_GEN_NOISE_HLSLI
+#define GPU_GEN_NOISE_HLSLI
+
+// ---- begin common.hlsli
+
+// ---- end common.hlsli
+
+// Lattice hash of the cell (ix, iz): bit exact the CPU's Hash2.
+FN uint Hash2i(int ix, int iz, uint seed)
+{
+    return Hash32(uint(ix) * 0x9E3779B1u ^ Hash32(uint(iz) + seed * 0x85EBCA6Bu + 0x165667B1u));
+}
+
+// The 64 evenly spread gradient directions of the CPU's Gradients64() (angle (k + 0.5) * pi / 32).
+FN float2 Grad64(uint h)
+{
+    float a = (float(h & 63u) + 0.5f) * 0.09817477042468103f;
+    float s = 0.0f;
+    float c = 1.0f;
+    sincos(a, s, c);
+    return float2(c, s);
+}
+
+// The classic 8 directions of the CPU's kGrad table: (1,0) (-1,0) (0,1) (0,-1) and the four diagonals.
+FN float2 Grad8(uint h)
+{
+    uint k = h & 7u;
+    if (k < 2u) return float2(k == 0u ? 1.0f : -1.0f, 0.0f);
+    if (k < 4u) return float2(0.0f, k == 2u ? 1.0f : -1.0f);
+    float q = 0.70710678f;
+    return float2((k & 1u) == 0u ? q : -q, (k & 2u) == 0u ? q : -q);
+}
+
+FN float2 GradOf(uint h, uint fine)
+{
+    if (fine != 0u) return Grad64(h);
+    return Grad8(h);
+}
+
+FN float Fade(float t)
+{
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+FN float FadeD(float t)
+{
+    return 30.0f * t * t * (t - 1.0f) * (t - 1.0f);
+}
+
+// Integer cell and fraction of sample (x, z) for the affine map in the octave record.
+FN void LatticePoint(float iu0, float iv0, float fu0, float fv0, float a, float b, float c, float d, float x, float z, OUT(int) ix, OUT(int) iz, OUT(float) fx, OUT(float) fz)
+{
+    float u = fu0 + a * x + b * z;
+    float v = fv0 + c * x + d * z;
+    float fu = floor(u);
+    float fv = floor(v);
+    ix = int(iu0) + int(fu);
+    iz = int(iv0) + int(fv);
+    fx = u - fu;
+    fz = v - fv;
+}
+
+// Gradient noise about -1..1 with its analytic derivative per lattice unit (EdFieldUtil.h PerlinD). fine: 64 directions, else 8.
+FN float PerlinD(int ix, int iz, float fx, float fz, uint seed, uint fine, OUT(float) dnx, OUT(float) dnz)
+{
+    float u = Fade(fx);
+    float v = Fade(fz);
+    float du = FadeD(fx);
+    float dv = FadeD(fz);
+    float2 ga = GradOf(Hash2i(ix, iz, seed), fine);
+    float2 gb = GradOf(Hash2i(ix + 1, iz, seed), fine);
+    float2 gc = GradOf(Hash2i(ix, iz + 1, seed), fine);
+    float2 gd = GradOf(Hash2i(ix + 1, iz + 1, seed), fine);
+    float va = ga.x * fx + ga.y * fz;
+    float vb = gb.x * (fx - 1.0f) + gb.y * fz;
+    float vc = gc.x * fx + gc.y * (fz - 1.0f);
+    float vd = gd.x * (fx - 1.0f) + gd.y * (fz - 1.0f);
+    float k = va - vb - vc + vd;
+    float n = va + u * (vb - va) + v * (vc - va) + u * v * k;
+    float s = 1.41421356f;
+    dnx = s * (ga.x + u * (gb.x - ga.x) + v * (gc.x - ga.x) + u * v * (ga.x - gb.x - gc.x + gd.x) + du * (vb - va + v * k));
+    dnz = s * (ga.y + u * (gb.y - ga.y) + v * (gc.y - ga.y) + u * v * (ga.y - gb.y - gc.y + gd.y) + dv * (vc - va + u * k));
+    return n * s;
+}
+
+// Value only.
+FN float Perlin(int ix, int iz, float fx, float fz, uint seed, uint fine)
+{
+    float dx = 0.0f;
+    float dz = 0.0f;
+    return PerlinD(ix, iz, fx, fz, seed, fine, dx, dz);
+}
+
+// 2D simplex noise about -1..1 (EdFieldCore.cpp Simplex). (ix, iz, fx, fz) is the position in the SKEWED lattice (the host skews the affine map): ix, iz the simplex cell, fx, fz inside it.
+FN float Simplex(int i, int j, float sx, float sz, uint seed, uint fine)
+{
+    float g2 = 0.21132486540518713f;
+    float t = (sx + sz) * g2;
+    float x0 = sx - t;
+    float y0 = sz - t;
+    int i1 = x0 > y0 ? 1 : 0;
+    int j1 = x0 > y0 ? 0 : 1;
+    float x1 = x0 - float(i1) + g2;
+    float y1 = y0 - float(j1) + g2;
+    float x2 = x0 - 1.0f + 2.0f * g2;
+    float y2 = y0 - 1.0f + 2.0f * g2;
+    float n = 0.0f;
+    float t0 = 0.5f - x0 * x0 - y0 * y0;
+    if (t0 > 0.0f)
+    {
+        t0 *= t0;
+        float2 g = GradOf(Hash2i(i, j, seed), fine);
+        n += t0 * t0 * (g.x * x0 + g.y * y0);
+    }
+    float t1 = 0.5f - x1 * x1 - y1 * y1;
+    if (t1 > 0.0f)
+    {
+        t1 *= t1;
+        float2 g = GradOf(Hash2i(i + i1, j + j1, seed), fine);
+        n += t1 * t1 * (g.x * x1 + g.y * y1);
+    }
+    float t2 = 0.5f - x2 * x2 - y2 * y2;
+    if (t2 > 0.0f)
+    {
+        t2 *= t2;
+        float2 g = GradOf(Hash2i(i + 1, j + 1, seed), fine);
+        n += t2 * t2 * (g.x * x2 + g.y * y2);
+    }
+    return n * 99.2f;
+}
+
+// The CPU's Fbm01 (EdFieldUtil.h): fractal sum of classic 8 direction Perlin, 0..1, octaves doubling in frequency, every octave its own seed. (iu, iv, fu, fv) is the lattice position at octave 0
+// (cell + fraction); octave o sees it multiplied by 2^o (exact).
+FN float Fbm01(int iu, int iv, float fu, float fv, uint seed, uint octaves, float persistence)
+{
+    float sum = 0.0f;
+    float norm = 0.0f;
+    float amp = 1.0f;
+    float m = 1.0f;
+    int mi = 1;
+    LOOP for (uint o = 0u; o < octaves; ++o)
+    {
+        uint s = Hash32(seed * 131u + o * 7919u + 17u);
+        float fU = fu * m;
+        float fV = fv * m;
+        float fl = floor(fU);
+        float fm = floor(fV);
+        float n = Perlin(iu * mi + int(fl), iv * mi + int(fm), fU - fl, fV - fm, s, 0u);
+        n = max(-1.0f, min(1.0f, n));
+        sum += n * amp;
+        norm += amp;
+        amp *= persistence;
+        m *= 2.0f;
+        mi *= 2;
+    }
+    return saturate(0.5f + 0.5f * sum / norm * 1.4f);
+}
+
+#endif
+// ---- end gen_noise.hlsli
+// ---- begin field_rockiness_params.hlsli
+// Constant buffer of field_rockiness.hlsl (op rockiness).
+#ifndef GPU_FIELD_ROCKINESS_PARAMS_HLSLI
+#define GPU_FIELD_ROCKINESS_PARAMS_HLSLI
+
+struct RockinessParams
+{
+    uint w;
+    uint h;
+    uint z0;          // first row of this dispatch (banded dispatch)
+    uint rows;
+    uint n;           // distance of the convexity stencil in samples
+    uint hasSoil;     // 1 = a soil thickness buffer is bound
+    uint seed;
+    uint noiseOn;     // 1 = the breakup noise is added
+    float cell;
+    float d2;         // (n * cell)^2
+    float slopeLo;    // degrees
+    float slopeHi;
+    float gain;       // convexity gain
+    float soilFull;   // soil thickness that hides the rock completely
+    float wSlope;
+    float wConvex;
+    float wSoil;
+    float norm;       // sum of the weights
+    float breakup;    // amplitude of the noise
+    float degK;       // 180 / pi
+};
+
+#endif
+// ---- end field_rockiness_params.hlsli
+
+CBUFFER(RockinessParams, P, 0)
+SRV_BUFFER(float, src, 0)
+SRV_BUFFER(float, soil, 1)
+SRV_BUFFER(float, oct, 2)
+UAV_BUFFER(float, dst, 0)
+
+DEFINE_GRADIENT_AT(src)
+
+NUMTHREADS(16, 16, 1)
+void CSMain(KERNEL_IDS)
+{
+    if (dtid.x >= P.w || dtid.y >= P.rows) return;
+    int x = int(dtid.x);
+    int z = int(dtid.y + P.z0);
+    int w = int(P.w);
+    int h = int(P.h);
+    int n = int(P.n);
+    uint i = uint(z) * P.w + uint(x);
+    float gx;
+    float gz;
+    GradientAt(x, z, gx, gz);
+    float deg = atan(sqrt(gx * gx + gz * gz)) * P.degK;
+    float c = src[i];
+)HLSL"
+    R"HLSL(    float lap = (src[uint(z) * P.w + uint(max(0, x - n))] + src[uint(z) * P.w + uint(min(w - 1, x + n))] + src[uint(max(0, z - n)) * P.w + uint(x)] +
+                 src[uint(min(h - 1, z + n)) * P.w + uint(x)] - 4.0f * c) / P.d2;
+    float convex = saturate(0.5f - P.gain * lap);
+    float v = P.wSlope * SmoothStep(P.slopeLo, P.slopeHi, deg) + P.wConvex * SmoothStep(0.5f, 1.0f, convex);
+    if (P.hasSoil != 0u) v += P.wSoil * (1.0f - SmoothStep(0.0f, P.soilFull, soil[i]));
+    v /= P.norm;
+    if (P.noiseOn != 0u)
+    {
+        int ix;
+        int iz;
+        float fx;
+        float fz;
+        LatticePoint(oct[0], oct[1], oct[2], oct[3], oct[4], oct[5], oct[6], oct[7], float(x), float(z), ix, iz, fx, fz);
+        v += P.breakup * (Fbm01(ix, iz, fx, fz, P.seed, 3u, 0.5f) - 0.5f) * 2.0f;
+    }
+    dst[i] = saturate(v);
+}
+
+)HLSL";
+
   // field_settle: 16x16x1 threads
   inline constexpr char kSource_field_settle[] =
     R"HLSL(// HLSL side of the kernel language (docs/projects/editor/GPU_COMPUTE.md). scripts/gen_gpu_shaders.py puts this file in front of every kernel it embeds; the C++ test shim
@@ -9595,6 +9970,7 @@ void CSMain(KERNEL_IDS)
     {"field_glacier_a", kSource_field_glacier_a, "CSMain", 16u, 16u, 1u, 0x3u, 0xFu, 0x0u, 0x0u, 0x0u, 1u, 0xE1C04353EC498ADBULL},
     {"field_glacier_b", kSource_field_glacier_b, "CSMain", 16u, 16u, 1u, 0x3Fu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x7A0444BEAB57C8A5ULL},
     {"field_morph", kSource_field_morph, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x52463243DBBAAFBBULL},
+    {"field_rockiness", kSource_field_rockiness, "CSMain", 16u, 16u, 1u, 0x7u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x8CF8425D515601CCULL},
     {"field_settle", kSource_field_settle, "CSMain", 16u, 16u, 1u, 0x3u, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x600636D24769A34FULL},
     {"field_slide_a", kSource_field_slide_a, "CSMain", 16u, 16u, 1u, 0xFu, 0x3u, 0x0u, 0x0u, 0x0u, 1u, 0x0F632EA329C10980ULL},
     {"field_slide_b", kSource_field_slide_b, "CSMain", 16u, 16u, 1u, 0x1Fu, 0x7u, 0x0u, 0x0u, 0x0u, 1u, 0x8F04CA29A7C94D7AULL},
@@ -9626,5 +10002,5 @@ void CSMain(KERNEL_IDS)
     {"scale_offset", kSource_scale_offset, "CSMain", 64u, 1u, 1u, 0x1u, 0x1u, 0x0u, 0x0u, 0x0u, 1u, 0x69153DA09D05A533ULL},
     {"tex_resample", kSource_tex_resample, "CSMain", 16u, 16u, 1u, 0x1u, 0x1u, 0x1u, 0x0u, 0x1u, 1u, 0x437363328542E729ULL},
   };
-  inline constexpr int kKernelCount = 51;
+  inline constexpr int kKernelCount = 52;
 } // namespace moho::editor::gpu::shaders

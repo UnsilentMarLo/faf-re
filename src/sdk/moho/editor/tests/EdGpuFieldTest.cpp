@@ -27,6 +27,7 @@
 #include "moho/editor/gpu/common.hlsli"
 #include "moho/editor/gpu/blur_params.hlsli"
 #include "moho/editor/gpu/filt_common.hlsli"
+#include "moho/editor/gpu/gen_noise.hlsli"
 #include "moho/editor/gpu/field_settle_params.hlsli"
 #include "moho/editor/gpu/field_glacier_params.hlsli"
 #include "moho/editor/gpu/field_slide_params.hlsli"
@@ -34,6 +35,7 @@
 #include "moho/editor/gpu/field_convolve_params.hlsli"
 #include "moho/editor/gpu/field_edge_params.hlsli"
 #include "moho/editor/gpu/field_morph_params.hlsli"
+#include "moho/editor/gpu/field_rockiness_params.hlsli"
 #include "moho/editor/gpu/field_slopelimit_params.hlsli"
 #include "moho/editor/gpu/field_snowinit_params.hlsli"
 #include "moho/editor/gpu/field_slopescan_params.hlsli"
@@ -73,6 +75,10 @@ EMU_KERNEL_END(field_convolve)
 EMU_KERNEL_BEGIN(k_field_morph)
 #include "moho/editor/gpu/field_morph.hlsl"
 EMU_KERNEL_END(field_morph)
+
+EMU_KERNEL_BEGIN(k_field_rockiness)
+#include "moho/editor/gpu/field_rockiness.hlsl"
+EMU_KERNEL_END(field_rockiness)
 
 EMU_KERNEL_BEGIN(k_field_slopelimit)
 #include "moho/editor/gpu/field_slopelimit.hlsl"
@@ -727,6 +733,51 @@ static void TestThermal()
   CheckDeclines("thermal_op_no_input", "thermal", Args({}, {}, {}));
 }
 
+// ---- rockiness -------------------------------------------------------------------------------------------------------------------------------------
+
+static void TestRockiness()
+{
+  const GridPtr t = TestTerrain(83, 61, 2.0f, 121, 120.0, 4000.5, -1234.25);
+  auto soil = std::make_shared<Grid>(*TestMask(83, 61, 16));
+  for (float& v : soil->v) v *= 2.5f;
+  CheckSame("rockiness_default", "rockiness", Args({}, {}, {{"a", t}}), 1e-5);
+  {
+    Grid g;
+    RunGpu("rockiness", Args({}, {}, {{"a", t}}), g);
+    double lo = 1e9, hi = -1e9;
+    for (const float v : g.v) {
+      lo = std::min(lo, static_cast<double>(v));
+      hi = std::max(hi, static_cast<double>(v));
+    }
+    CHECK(hi - lo > 0.3, "rockiness has a range (%.3f .. %.3f): the comparison is not vacuous", lo, hi);
+  }
+  CheckSame("rockiness_no_breakup", "rockiness", Args({{"breakup", 0.0}}, {}, {{"a", t}}), 1e-5);
+  CheckSame("rockiness_soil", "rockiness", Args({{"soil_full", 2.0}, {"w_soil", 1.7}}, {}, {{"a", t}, {"b", soil}}), 1e-5);
+  CheckSame("rockiness_params", "rockiness", Args({{"slope_lo", 10.0}, {"slope_hi", 30.0}, {"radius", 20.0}, {"gain", 30.0}, {"w_slope", 0.4}, {"w_convex", 1.3}, {"breakup", 0.4}, {"seed", 7}}, {}, {{"a", t}}), 1e-5);
+  CheckSame("rockiness_weights_zero", "rockiness", Args({{"w_slope", 0.0}, {"w_convex", 0.0}, {"breakup", 0.3}}, {}, {{"a", t}}), 1e-5);
+  CheckSame("rockiness_far", "rockiness", Args({{"breakup", 0.5}}, {}, {{"a", TestTerrain(40, 40, 2.0f, 5, 100.0, 40000.0, 36000.0)}}), 1e-5);
+  for (const auto& sz : kOddSizes) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 80.0);
+    CheckSame(("rockiness_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "rockiness", Args({{"radius", 3.0}}, {}, {{"a", s}}), 1e-5);
+  }
+  auto like = std::make_shared<Grid>(*t);
+  like->cell = 3.0f;
+  CheckSame("rockiness_like", "rockiness", Args({}, {}, {{"a", t}, {"like", like}}), 1e-5);
+  CheckDeclines("rockiness_bad_soil", "rockiness", Args({}, {}, {{"a", t}, {"b", TestMask(9, 9, 1)}}));
+  CheckDeclines("rockiness_no_input", "rockiness", Args({}, {}, {}));
+  {
+    gpu::GetPolicy().minCells = 65536.0f;
+    const GridPtr mid = TestTerrain(300, 300, 1.0f, 3, 30.0);
+    Grid g;
+    bool onGpu = true;
+    RunGpu("rockiness", Args({{"breakup", 0.0}}, {}, {{"a", mid}}), g, &onGpu);
+    CHECK(!onGpu, "rockiness without the noise stays on the CPU on a 300 x 300 field");
+    RunGpu("rockiness", Args({}, {}, {{"a", mid}}), g, &onGpu);
+    CHECK(onGpu, "rockiness with the noise goes to the GPU");
+    gpu::GetPolicy().minCells = 0.0f;
+  }
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
@@ -744,6 +795,7 @@ int main(int argc, char** argv)
   TestConvolve();
   TestBlurBased();
   TestSlopeLimit();
+  TestRockiness();
   TestRockSoil();
   TestSnow();
   TestWind();

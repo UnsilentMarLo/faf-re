@@ -15,6 +15,7 @@ namespace moho::editor::gpu::hk
 #include "moho/editor/gpu/field_morph_params.hlsli"
 #include "moho/editor/gpu/field_slopelimit_params.hlsli"
 #include "moho/editor/gpu/field_slopescan_params.hlsli"
+#include "moho/editor/gpu/field_rockiness_params.hlsli"
 #include "moho/editor/gpu/field_sub_params.hlsli"
 #include "moho/editor/gpu/field_unsharp_params.hlsli"
 } // namespace moho::editor::gpu::hk
@@ -318,6 +319,58 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
+    // ---- rockiness ----------------------------------------------------------------------------------------------------------------------------------
+
+    OpResult OpRockinessGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = Source(a);
+      const Grid* soil = In(a, "b");
+      Shape shape;
+      if (src == nullptr || (soil != nullptr && !soil->SameShape(*src)) || !ShapeOf(a, shape)) return OpResult::Unsupported;
+      const float breakup = static_cast<float>(a.p.N("breakup", 0.15));
+      // with the breakup noise (3 octaves) the maths pays for the transfer; without it this is a 3 x 3 gradient and four taps: only big fields
+      if (breakup != 0.0f ? !WorthIt(40.0) : !BigField(a)) return OpResult::Unsupported;
+      if (!Fits(ex, src->Count(), 4)) return OpResult::Unsupported;
+      const KernelInfo* kr = FindKernel("field_rockiness");
+      if (kr == nullptr) { err = "kernel field_rockiness is missing"; return OpResult::Failed; }
+      hk::RockinessParams p{};
+      p.w = static_cast<std::uint32_t>(src->w);
+      p.h = static_cast<std::uint32_t>(src->h);
+      const int n = std::max(1, std::min(16, static_cast<int>(std::lround(a.p.N("radius", 6.0) / src->cell))));
+      p.n = static_cast<std::uint32_t>(n);
+      p.hasSoil = soil != nullptr ? 1u : 0u;
+      p.seed = static_cast<std::uint32_t>(static_cast<std::int64_t>(a.p.N("seed", 1)));
+      p.noiseOn = breakup != 0.0f ? 1u : 0u;
+      p.cell = src->cell;
+      p.d2 = static_cast<float>(n) * static_cast<float>(n) * src->cell * src->cell;
+      p.slopeLo = static_cast<float>(a.p.N("slope_lo", 25.0));
+      p.slopeHi = static_cast<float>(a.p.N("slope_hi", 50.0));
+      p.gain = static_cast<float>(a.p.N("gain", 14.0));
+      p.soilFull = std::max(1e-3f, static_cast<float>(a.p.N("soil_full", 1.5)));
+      p.wSlope = std::max(0.0f, static_cast<float>(a.p.N("w_slope", 1.0)));
+      p.wConvex = std::max(0.0f, static_cast<float>(a.p.N("w_convex", 0.5)));
+      p.wSoil = soil != nullptr ? std::max(0.0f, static_cast<float>(a.p.N("w_soil", 1.0))) : 0.0f;
+      p.norm = std::max(1e-6f, p.wSlope + p.wConvex + p.wSoil);
+      p.breakup = breakup;
+      p.degK = 180.0f / 3.14159265358979f;
+      // the Fbm01 of the breakup: world position / 14 units as an affine map of the sample index (computed in double)
+      std::vector<float> oct(16u, 0.0f);
+      const double inv = 1.0 / 14.0, step = static_cast<double>(src->cell) * inv;
+      if (!PutMap(oct, 0, static_cast<double>(src->ox) * inv, static_cast<double>(src->oz) * inv, step, 0.0, 0.0, step)) return OpResult::Unsupported;
+      Field in, sf, res;
+      std::unique_ptr<Resource> octBuf, dummy;
+      const float zero = 0.0f;
+      if (!UploadGrid(ex, *src, in, err) || !MakeField(ex, p.w, p.h, res, err) || !UploadVec(ex, oct, octBuf, err) || !MakeBuffer(ex, 1, dummy, err) || !UploadBuffer(ex, *dummy, &zero, 4, err)) return OpResult::Failed;
+      if (soil != nullptr && !UploadGrid(ex, *soil, sf, err)) return OpResult::Failed;
+      Bindings b;
+      b.Srv(0, in.R()).Srv(1, soil != nullptr ? sf.R() : *dummy).Srv(2, *octBuf).Uav(0, res.R());
+      if (!DispatchBands(ex, *kr, p.w, p.h, breakup != 0.0f ? 3.0 : 0.15, p, b, err)) return OpResult::Failed;
+      Grid g = NewGrid(shape);
+      if (!DownloadGrid(ex, res, g, err)) return OpResult::Failed;
+      out = std::move(g);
+      return OpResult::Done;
+    }
+
     // ---- slope_limit --------------------------------------------------------------------------------------------------------------------------------
 
     OpResult OpSlopeLimitGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
@@ -383,6 +436,7 @@ namespace moho::editor::gpu
     {
       Registrar()
       {
+        RegisterGpuOp("rockiness", &OpRockinessGpu);
         RegisterGpuOp("slope_limit", &OpSlopeLimitGpu);
         RegisterGpuOp("morph", &OpMorphGpu);
         RegisterGpuOp("convolve", &OpConvolveGpu);
