@@ -6,6 +6,7 @@ __pycache__/
 
 # Temporary files of scripts
 scripts/**/*.txt
+src/sdk/moho/*.generated.h
 
 .vs/
 .tmp/
