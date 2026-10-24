@@ -19,14 +19,17 @@ namespace moho::editor::gpu
 
   namespace
   {
-    /** Flow accumulation of heights `hgt` (device field, w x h): the catchment of every sample (1 + everything that drains into it, multiple flow direction with exponent `pf`) in `area`. */
-    bool FlowAccumulate(Executor& ex, const Field& hgt, Field& area, const int w, const int h, const float pf, std::string& err)
+    /**
+     * Flow accumulation of heights `hgt` (device field, w x h): the catchment of every sample (1 + everything that drains into it) in `area`. `d8` = every sample gives all it collected to its
+     * steepest lower neighbour (op flow), else it shares it among all lower neighbours in proportion to (drop / distance)^pf (op wetness).
+     */
+    bool FlowAccumulate(Executor& ex, const Field& hgt, Field& area, const int w, const int h, const bool d8, const float pf, std::string& err)
     {
-      const KernelInfo* kprep = FindKernel("field_wetprep");
+      const KernelInfo* kprep = FindKernel(d8 ? "field_flowprep" : "field_wetprep");
       const KernelInfo* krank = FindKernel("field_wetrank");
-      const KernelInfo* ksweep = FindKernel("field_wetsweep");
+      const KernelInfo* ksweep = FindKernel(d8 ? "field_flowsweep" : "field_wetsweep");
       if (kprep == nullptr || krank == nullptr || ksweep == nullptr) {
-        err = "kernel field_wetprep / field_wetrank / field_wetsweep is missing";
+        err = "kernel field_wetprep / field_wetrank / field_wetsweep (field_flowprep / field_flowsweep) is missing";
         return false;
       }
       hk::WetParams p{};
@@ -36,7 +39,7 @@ namespace moho::editor::gpu
       p.tilesZ = static_cast<std::uint32_t>((h + 31) / 32);
       p.pf = pf;
       const std::uint32_t tiles = p.tilesX * p.tilesZ;
-      Field inv;
+      Field inv;   // wetness: 1 / sum of the weights, flow: the target index (a 4 byte element either way)
       PingPong pp;
       std::unique_ptr<Resource> order, changed;
       if (!MakeField(ex, w, h, inv, err) || !MakeBuffer(ex, tiles * 1024u, order, err) || !MakeBuffer(ex, 1, changed, err) || !MakeField(ex, w, h, pp.f[0], err) ||
@@ -105,7 +108,7 @@ namespace moho::editor::gpu
       if (smooth && !BlurAffordable(w, h, sm)) return OpResult::Unsupported;
       Field hgt, area, twi, tmp, sg, res;
       if (!UploadGrid(ex, *src, hgt, err)) return OpResult::Failed;
-      if (!FlowAccumulate(ex, hgt, area, w, h, pf, err)) return OpResult::Failed;
+      if (!FlowAccumulate(ex, hgt, area, w, h, false, pf, err)) return OpResult::Failed;
       hk::WetParams p{};
       p.w = static_cast<std::uint32_t>(w);
       p.h = static_cast<std::uint32_t>(h);
@@ -137,9 +140,43 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
+    OpResult OpFlowGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = Source(a);
+      Shape shape;
+      if (src == nullptr || !ShapeOf(a, shape)) return OpResult::Unsupported;
+      const std::string mode = a.p.S("mode", "log");
+      if (mode != "cells" && mode != "area" && mode != "log") return OpResult::Unsupported;   // the CPU op reports the bad mode
+      // the CPU needs about 250 ns per sample (a sort and a sequential pass): 600 taps
+      if (!WorthIt(a, 600.0) || !Fits(ex, src->Count(), 6)) return OpResult::Unsupported;
+      const KernelInfo* kfin = FindKernel("field_flowfinal");
+      if (kfin == nullptr) { err = "kernel field_flowfinal is missing"; return OpResult::Failed; }
+      const int w = src->w, h = src->h;
+      Field hgt, cells, res;
+      if (!UploadGrid(ex, *src, hgt, err) || !FlowAccumulate(ex, hgt, cells, w, h, true, 1.0f, err) || !MakeField(ex, w, h, res, err)) return OpResult::Failed;
+      hk::WetParams p{};
+      p.w = static_cast<std::uint32_t>(w);
+      p.h = static_cast<std::uint32_t>(h);
+      p.mode = mode == "cells" ? 0u : (mode == "area" ? 1u : 2u);
+      p.hi = src->cell * src->cell;
+      const double range = std::max(2.0, a.p.N("range", 1.0e6));
+      p.lo = static_cast<float>(1.0 / std::log(range));
+      Bindings b;
+      b.Srv(0, cells.R()).Uav(0, res.R());
+      if (!DispatchGrid(ex, *kfin, p.w, p.h, p, b, err)) return OpResult::Failed;
+      Grid g = NewGrid(shape);
+      if (!DownloadGrid(ex, res, g, err)) return OpResult::Failed;
+      out = std::move(g);
+      return OpResult::Done;
+    }
+
     struct Registrar
     {
-      Registrar() { RegisterGpuOp("wetness", &OpWetnessGpu, 16384.0f); }
+      Registrar()
+      {
+        RegisterGpuOp("wetness", &OpWetnessGpu, 16384.0f);
+        RegisterGpuOp("flow", &OpFlowGpu, 16384.0f);
+      }
     };
     const Registrar gRegistrar;
   } // namespace

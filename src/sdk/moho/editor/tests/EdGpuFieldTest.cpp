@@ -102,6 +102,18 @@ EMU_KERNEL_BEGIN(k_field_snowinit)
 #include "moho/editor/gpu/field_snowinit.hlsl"
 EMU_KERNEL_END(field_snowinit)
 
+EMU_KERNEL_BEGIN(k_field_flowfinal)
+#include "moho/editor/gpu/field_flowfinal.hlsl"
+EMU_KERNEL_END(field_flowfinal)
+
+EMU_KERNEL_BEGIN(k_field_flowprep)
+#include "moho/editor/gpu/field_flowprep.hlsl"
+EMU_KERNEL_END(field_flowprep)
+
+EMU_KERNEL_BEGIN(k_field_flowsweep)
+#include "moho/editor/gpu/field_flowsweep.hlsl"
+EMU_KERNEL_END(field_flowsweep)
+
 EMU_KERNEL_BEGIN(k_field_wetfinal)
 #include "moho/editor/gpu/field_wetfinal.hlsl"
 EMU_KERNEL_END(field_wetfinal)
@@ -847,6 +859,40 @@ static void TestWetness()
   CheckDeclines("wetness_no_input", "wetness", Args({}, {}, {}));
 }
 
+static void TestFlow()
+{
+  const GridPtr t = TestTerrain(100, 87, 2.0f, 151, 80.0);
+  for (const char* mode : {"log", "cells", "area"}) {
+    CheckSame((std::string("flow_") + mode).c_str(), "flow", Args({}, {{"mode", mode}}, {{"a", t}}), mode[0] == 'l' ? 1e-5 : 0.0);
+  }
+  {
+    Grid g;
+    RunGpu("flow", Args({}, {{"mode", "cells"}}, {{"a", t}}), g);
+    double mx = 0.0;
+    for (const float v : g.v) mx = std::max(mx, static_cast<double>(v));
+    CHECK(mx > 100.0, "flow collects a catchment of %.0f cells", mx);
+  }
+  CheckSame("flow_range", "flow", Args({{"range", 5000.0}}, {}, {{"a", t}}), 1e-5);
+  CheckSame("flow_snake", "flow", Args({}, {{"mode", "cells"}}, {{"a", SnakeTerrain(70, 70)}}), 0.0);
+  {
+    auto plane = std::make_shared<Grid>(150, 40, 2.0f, 0.0f, 0.0f);
+    for (int z = 0; z < plane->h; ++z) {
+      for (int x = 0; x < plane->w; ++x) plane->At(x, z) = 300.0f - 1.5f * static_cast<float>(x) - 0.3f * static_cast<float>(z) + 0.01f * static_cast<float>((x * 7 + z * 13) % 5);
+    }
+    CheckSame("flow_plane", "flow", Args({}, {{"mode", "cells"}}, {{"a", plane}}), 0.0);
+  }
+  CheckSame("flow_flat", "flow", Args({}, {{"mode", "cells"}}, {{"a", std::make_shared<Grid>(40, 40, 1.0f, 0.0f, 0.0f, 5.0f)}}), 0.0);
+  for (const std::pair<int, int>& sz : {std::pair<int, int>{32, 32}, {33, 33}, {64, 31}, {31, 65}, {1, 37}, {41, 1}, {1, 1}, {17, 33}, {2, 2}}) {
+    const GridPtr s = TestTerrain(sz.first, sz.second, 1.5f, 5, 80.0);
+    CheckSame(("flow_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "flow", Args({}, {{"mode", "cells"}}, {{"a", s}}), 0.0);
+  }
+  auto like = std::make_shared<Grid>(*t);
+  like->oz = 7.0f;
+  CheckSame("flow_like", "flow", Args({}, {{"mode", "area"}}, {{"a", t}, {"like", like}}), 0.0);
+  CheckDeclines("flow_bad_mode", "flow", Args({}, {{"mode", "bogus"}}, {{"a", t}}));
+  CheckDeclines("flow_no_input", "flow", Args({}, {}, {}));
+}
+
 // ---- the work gates on the default policy ---------------------------------------------------------------------------------------------------------------
 
 /** On the default ed_gpu_min_cells a job goes to the GPU when it is worth about 10 ms of CPU time (WorthIt): cells * taps per cell. A bare 3 x 3 stencil only from 16 x min cells. */
@@ -902,6 +948,7 @@ int main(int argc, char** argv)
   TestRockiness();
   TestStratify();
   TestWetness();
+  TestFlow();
   TestGates();
   TestRockSoil();
   TestSnow();
