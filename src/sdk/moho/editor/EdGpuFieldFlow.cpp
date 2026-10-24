@@ -147,8 +147,8 @@ namespace moho::editor::gpu
       if (src == nullptr || !ShapeOf(a, shape)) return OpResult::Unsupported;
       const std::string mode = a.p.S("mode", "log");
       if (mode != "cells" && mode != "area" && mode != "log") return OpResult::Unsupported;   // the CPU op reports the bad mode
-      // the CPU needs about 250 ns per sample (a sort and a sequential pass): 600 taps
-      if (!WorthIt(a, 600.0) || !Fits(ex, src->Count(), 6)) return OpResult::Unsupported;
+      // the CPU needs about 190 ns per sample (a sort and a sequential pass): 500 taps
+      if (!WorthIt(a, 500.0) || !Fits(ex, src->Count(), 6)) return OpResult::Unsupported;
       const KernelInfo* kfin = FindKernel("field_flowfinal");
       if (kfin == nullptr) { err = "kernel field_flowfinal is missing"; return OpResult::Failed; }
       const int w = src->w, h = src->h;
