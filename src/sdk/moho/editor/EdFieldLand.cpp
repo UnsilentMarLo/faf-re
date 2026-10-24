@@ -130,7 +130,7 @@ namespace moho::editor::field
             const float r0 = 1.0f - std::fabs(n);
             float r = s.sharp == 2.0f ? r0 * r0 : std::pow(r0, s.sharp);
             if (erosive) {
-              const float dr = -s.sharp * (s.sharp == 2.0f ? r0 : std::pow(r0, s.sharp - 1.0f)) * (n < 0.0f ? -1.0f : 1.0f) * 2.0f * weight;
+              const float dr = -s.sharp * (s.sharp == 2.0f ? r0 : std::pow(std::max(r0, 1e-6f), s.sharp - 1.0f)) * (n < 0.0f ? -1.0f : 1.0f) * 2.0f * weight;
               sgx *= dr;
               sgz *= dr;
             }

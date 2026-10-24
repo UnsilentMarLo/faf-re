@@ -26,6 +26,21 @@
 #include "moho/editor/gpu/common.hlsli"
 #include "moho/editor/gpu/gen_noise.hlsli"
 #include "moho/editor/gpu/gen_fbm_params.hlsli"
+#include "moho/editor/gpu/gen_fbmd_params.hlsli"
+#include "moho/editor/gpu/gen_fractal_params.hlsli"
+#include "moho/editor/gpu/gen_musgrave_params.hlsli"
+
+EMU_KERNEL_BEGIN(k_gen_fbmd)
+#include "moho/editor/gpu/gen_fbmd.hlsl"
+EMU_KERNEL_END(gen_fbmd)
+
+EMU_KERNEL_BEGIN(k_gen_musgrave)
+#include "moho/editor/gpu/gen_musgrave.hlsl"
+EMU_KERNEL_END(gen_musgrave)
+
+EMU_KERNEL_BEGIN(k_gen_fractal)
+#include "moho/editor/gpu/gen_fractal.hlsl"
+EMU_KERNEL_END(gen_fractal)
 
 EMU_KERNEL_BEGIN(k_gen_fbm)
 #include "moho/editor/gpu/gen_fbm.hlsl"
@@ -235,6 +250,102 @@ static void TestWorldPosition()
   }
 }
 
+// ---- fractal -------------------------------------------------------------------------------------------------------------------------------------
+
+static void TestFractal()
+{
+  const Num base = {{"width", 77}, {"height", 61}, {"seed", 5}, {"scale", 30}, {"octaves", 7}, {"ox", 345.25}, {"oz", -12.5}, {"cell", 1.25}};
+  for (const char* kind : {"fbm", "billow", "ridged"}) {
+    for (const char* style : {"classic", "erosive"}) {
+      for (const int warp : {0, 1, 2}) {
+        Num n = base;
+        Str s = {{"kind", kind}, {"style", style}};
+        if (warp > 0) {
+          n["warp"] = 9;
+          n["warp_levels"] = warp;
+        }
+        n["slope_detail"] = 0.5;
+        const std::string label = std::string("fractal_") + kind + "_" + style + "_w" + std::to_string(warp);
+        CheckSame(label.c_str(), "fractal", Args(n, s), 4e-4);
+      }
+    }
+  }
+  // options: sharpness, finest, rotate 0, persistence, lacunarity, antialias, erosion strength, fit
+  Num n = base;
+  n["sharpness"] = 3.5;
+  n["finest"] = 2.0;
+  n["rotate"] = 0;
+  n["persistence"] = 0.55;
+  n["lacunarity"] = 2.2;
+  CheckSame("fractal_opts", "fractal", Args(n, {{"kind", "ridged"}}), 4e-4);
+  n["antialias"] = 1;
+  n["erosion"] = 3;
+  n["octaves"] = 12;
+  CheckSame("fractal_aa_erosion", "fractal", Args(n, {{"style", "erosive"}}), 4e-4);
+  // odd sizes and a field that starts far from the origin
+  for (const std::pair<int, int> sz : {std::pair<int, int>{1, 29}, {33, 1}, {1, 1}, {19, 17}}) {
+    Num m = base;
+    m["width"] = sz.first;
+    m["height"] = sz.second;
+    m["warp"] = 5;
+    CheckSame(("fractal_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "fractal", Args(m, {{"style", "erosive"}}), 4e-4);
+  }
+  Num far = base;
+  far["ox"] = 20000.0;
+  far["oz"] = 18000.0;
+  far["scale"] = 200;
+  CheckSame("fractal_far", "fractal", Args(far), 4e-4);
+  // a bad option is the CPU op's error
+  Grid g;
+  bool onGpu = true;
+  std::string err;
+  CHECK(!RunGpu("fractal", Args({{"width", 8}, {"height", 8}}, {{"kind", "bogus"}}), g, &onGpu, &err) && !onGpu && err.find("kind") != std::string::npos, "a bad kind is the CPU's error: '%s'", err.c_str());
+  CHECK(!RunGpu("fractal", Args({{"width", 8}, {"height", 8}}, {{"style", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad style is the CPU's error");
+}
+
+// ---- musgrave, fbm_damped ------------------------------------------------------------------------------------------------------------------------
+
+static void TestMusgraveAndDamped()
+{
+  const Num base = {{"width", 71}, {"height", 47}, {"seed", 6}, {"scale", 28}, {"octaves", 7}, {"ox", -250.5}, {"oz", 91.0}, {"cell", 1.5}};
+  for (const char* mode : {"ridged", "hybrid", "hetero"}) {
+    for (const int rot : {0, 1}) {
+      Num n = base;
+      n["rotate"] = rot;
+      CheckSame((std::string("musgrave_") + mode + (rot ? "_rot" : "")).c_str(), "musgrave", Args(n, {{"mode", mode}}), 5e-5);
+    }
+  }
+  Num n = base;
+  n["h"] = 0.7;
+  n["offset"] = 0.8;
+  n["gain"] = 1.5;
+  n["lacunarity"] = 2.4;
+  n["octaves"] = 11;
+  CheckSame("musgrave_params", "musgrave", Args(n, {{"mode", "ridged"}}), 5e-5);
+  for (const int rot : {0, 1}) {
+    Num d = base;
+    d["rotate"] = rot;
+    CheckSame(rot ? "fbm_damped_rot" : "fbm_damped", "fbm_damped", Args(d), 5e-5);
+  }
+  Num d = base;
+  d["damp"] = 4;
+  d["persistence"] = 0.6;
+  d["lacunarity"] = 1.9;
+  d["rotate"] = 1;
+  CheckSame("fbm_damped_params", "fbm_damped", Args(d), 5e-5);
+  for (const std::pair<int, int> sz : {std::pair<int, int>{1, 23}, {19, 1}, {17, 15}}) {
+    Num m = base;
+    m["width"] = sz.first;
+    m["height"] = sz.second;
+    CheckSame(("musgrave_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "musgrave", Args(m), 5e-5);
+    CheckSame(("fbm_damped_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "fbm_damped", Args(m), 5e-5);
+  }
+  Grid g;
+  bool onGpu = true;
+  std::string err;
+  CHECK(!RunGpu("musgrave", Args({{"width", 8}, {"height", 8}}, {{"mode", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad mode is the CPU's error");
+}
+
 int main(int argc, char** argv)
 {
   for (int i = 1; i + 1 < argc; ++i) {
@@ -252,6 +363,8 @@ int main(int argc, char** argv)
   TestKernelTable();
   TestFbmOps();
   TestWorldPosition();
+  TestFractal();
+  TestMusgraveAndDamped();
   gpu::SetBackendForTest(nullptr);
   std::printf("EdGpuGenTest: %d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;
