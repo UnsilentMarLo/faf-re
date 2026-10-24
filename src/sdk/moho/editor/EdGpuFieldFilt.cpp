@@ -84,7 +84,7 @@ namespace moho::editor::gpu
       // taps of one dilation / erosion: two windows for the square, the candidate positions of the window otherwise
       const double tapsPerPass = shape == 0 ? 2.0 * (2.0 * r + 1.0) : (shape == 2 ? 2.0 * (2.0 * r + 1.0) : (shape == 3 ? (r + 1.0) * (r + 1.0) * 2.0 : (2.0 * r + 1.0) * (2.0 * r + 1.0)));
       const int passes = k < 2 ? 1 : 2;
-      if (!WorthIt(tapsPerPass * passes)) return OpResult::Unsupported;
+      if (!WorthIt(a, tapsPerPass * passes)) return OpResult::Unsupported;
       if (!Fits(ex, src->Count(), 5)) return OpResult::Unsupported;
       MorphJob job;
       job.ex = &ex;
@@ -154,7 +154,7 @@ namespace moho::editor::gpu
       if (src == nullptr || kv == nullptr || kv->empty() || !ShapeOf(a, shape)) return OpResult::Unsupported;
       const int n = static_cast<int>(std::lround(std::sqrt(static_cast<double>(kv->size()))));
       if (n * n != static_cast<int>(kv->size()) || n % 2 == 0 || n > 15) return OpResult::Unsupported;   // the CPU op reports the bad kernel
-      if (!WorthIt(static_cast<double>(n) * n) || !Fits(ex, src->Count(), 2)) return OpResult::Unsupported;
+      if (!WorthIt(a, static_cast<double>(n) * n) || !Fits(ex, src->Count(), 2)) return OpResult::Unsupported;
       std::vector<float> k(kv->size());
       double sum = 0.0;
       for (std::size_t i = 0; i < k.size(); ++i) {
@@ -200,7 +200,7 @@ namespace moho::editor::gpu
       Shape shape;
       if (!BlurOpInputs(a, src, shape)) return OpResult::Unsupported;
       const double sigma = std::max(0.3, a.p.N("radius", 4.0) / static_cast<double>(src->cell));
-      if (!WorthIt(BlurTaps(sigma) + 4.0) || !BlurAffordable(src->w, src->h, sigma) || !Fits(ex, src->Count(), 5)) return OpResult::Unsupported;
+      if (!WorthIt(a, BlurTaps(sigma) + 4.0) || !BlurAffordable(src->w, src->h, sigma) || !Fits(ex, src->Count(), 5)) return OpResult::Unsupported;
       const KernelInfo* ku = FindKernel("field_unsharp");
       if (ku == nullptr) { err = "kernel field_unsharp is missing"; return OpResult::Failed; }
       hk::UnsharpParams p{};
@@ -243,7 +243,7 @@ namespace moho::editor::gpu
       }
       if (smoothFirst) work += BlurTaps(pre);
       const bool blurs = m == 3 || smoothFirst;
-      if (blurs ? !WorthIt(work) : !BigField(a)) return OpResult::Unsupported;   // a bare 3 x 3 stencil only pays on big fields
+      if (blurs ? !WorthIt(a, work) : !BigField(a)) return OpResult::Unsupported;   // a bare 3 x 3 stencil only pays on big fields
       if ((smoothFirst && !BlurAffordable(src0->w, src0->h, pre)) || (m == 3 && (!BlurAffordable(src0->w, src0->h, s1) || !BlurAffordable(src0->w, src0->h, s2)))) return OpResult::Unsupported;
       if (!Fits(ex, src0->Count(), 5)) return OpResult::Unsupported;
       const KernelInfo* ke = FindKernel("field_edge");
@@ -293,7 +293,7 @@ namespace moho::editor::gpu
       const std::string mode = a.p.S("mode", "flat");
       if (mode != "flat" && mode != "steep") return OpResult::Unsupported;
       const double sigma = std::max(0.3, a.p.N("radius", 6.0) / static_cast<double>(src->cell));
-      if (!WorthIt(BlurTaps(sigma) + 6.0) || !BlurAffordable(src->w, src->h, sigma) || !Fits(ex, src->Count(), 5)) return OpResult::Unsupported;
+      if (!WorthIt(a, BlurTaps(sigma) + 6.0) || !BlurAffordable(src->w, src->h, sigma) || !Fits(ex, src->Count(), 5)) return OpResult::Unsupported;
       const KernelInfo* kb = FindKernel("field_blurslope");
       if (kb == nullptr) { err = "kernel field_blurslope is missing"; return OpResult::Failed; }
       hk::BlurSlopeParams p{};
@@ -330,7 +330,7 @@ namespace moho::editor::gpu
       if (src == nullptr || (soil != nullptr && !soil->SameShape(*src)) || !ShapeOf(a, shape)) return OpResult::Unsupported;
       const float breakup = static_cast<float>(a.p.N("breakup", 0.15));
       // with the breakup noise (3 octaves) the maths pays for the transfer; without it this is a 3 x 3 gradient and four taps: only big fields
-      if (breakup != 0.0f ? !WorthIt(40.0) : !BigField(a)) return OpResult::Unsupported;
+      if (breakup != 0.0f ? !WorthIt(a, 100.0) : !BigField(a)) return OpResult::Unsupported;
       if (!Fits(ex, src->Count(), 4)) return OpResult::Unsupported;
       const KernelInfo* kr = FindKernel("field_rockiness");
       if (kr == nullptr) { err = "kernel field_rockiness is missing"; return OpResult::Failed; }
@@ -382,7 +382,7 @@ namespace moho::editor::gpu
       if (src == nullptr || (mask != nullptr && !mask->SameShape(*src)) || !ShapeOf(a, shape)) return OpResult::Unsupported;
       const double warp = a.p.N("warp", 0.0);
       // the layer lookup is a 13 step search; with the warp noise on top the maths pays for the transfer, without it only big fields do
-      if (warp != 0.0 ? !WorthIt(40.0) : !BigField(a)) return OpResult::Unsupported;
+      if (warp != 0.0 ? !WorthIt(a, 100.0) : !BigField(a)) return OpResult::Unsupported;
       if (!Fits(ex, src->Count(), 4)) return OpResult::Unsupported;
       const KernelInfo* ks = FindKernel("field_stratify");
       if (ks == nullptr) { err = "kernel field_stratify is missing"; return OpResult::Failed; }
@@ -447,7 +447,7 @@ namespace moho::editor::gpu
       if (mode != "lower" && mode != "raise" && mode != "both") return OpResult::Unsupported;
       const Grid* mask = In(a, "mask");
       if (mask != nullptr && !mask->SameShape(*src)) return OpResult::Unsupported;
-      if (!WorthIt(24.0) || !Fits(ex, src->Count(), 6)) return OpResult::Unsupported;
+      if (!WorthIt(a, mode == "both" ? 125.0 : 70.0) || !Fits(ex, src->Count(), 6)) return OpResult::Unsupported;
       const KernelInfo* kscan = FindKernel("field_slopescan");
       const KernelInfo* kapply = FindKernel("field_slopelimit");
       if (kscan == nullptr || kapply == nullptr) { err = "kernel field_slopescan / field_slopelimit is missing"; return OpResult::Failed; }

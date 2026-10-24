@@ -47,11 +47,18 @@ namespace moho::editor::gpu::fops
   }
 
   /**
-   * Ops with a few operations per sample do not pay for the transfer: `workPerCell` is their cost in "taps" (one memory read and a compare or multiply add). The GPU version runs when
-   * it is at least kMinWork, or when ed_gpu_min_cells is 0 (the tests, and "everything on the GPU"). The registered per op minimum of samples still applies on top (TryRun).
+   * Ops with a few operations per sample do not pay for the transfer. `workPerCell` is the cost of one sample in "taps" (one memory read and a compare or multiply add; calibrated on the
+   * CPU ops: about 0.4 ns per tap with 4 threads). The GPU version runs when the work is at least kMinWork per sample (below that the bus costs more than the CPU does the maths) and
+   * the whole op is worth about 10 ms of CPU time or more (cells * taps >= kTapsPerMinCell * ed_gpu_min_cells = 25e6 at the default): a smaller job loses to the one time compile of the
+   * kernel and the fixed cost of a submission. ed_gpu_min_cells 0 (the tests, and "everything on the GPU") skips both; the registered per op minimum of samples applies on top (TryRun).
    */
   inline constexpr double kMinWork = 8.0;
-  inline bool WorthIt(const double workPerCell) { return GetPolicy().minCells <= 0.0f || workPerCell >= kMinWork; }
+  inline constexpr double kTapsPerMinCell = 380.0;
+  inline bool WorthIt(const OpArgs& a, const double workPerCell)
+  {
+    const double minCells = static_cast<double>(GetPolicy().minCells);
+    return minCells <= 0.0 || (workPerCell >= kMinWork && CellsOf(a) * workPerCell >= kTapsPerMinCell * minCells);
+  }
 
   /** Ops of a few operations per sample (a 3 x 3 stencil) only go to the GPU on big fields: the transfer of input and result costs more than the maths below that. 16 x ed_gpu_min_cells samples (default 1048576). */
   inline bool BigField(const OpArgs& a) { return CellsOf(a) >= static_cast<double>(GetPolicy().minCells) * 16.0; }

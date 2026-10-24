@@ -374,18 +374,6 @@ static void TestMorph()
   CheckDeclines("morph_bad_op", "morph", Args({}, {{"op", "bogus"}}, {{"a", t}}));
   CheckDeclines("morph_bad_shape", "morph", Args({}, {{"shape", "bogus"}}, {{"a", t}}));
   CheckDeclines("morph_no_input", "morph", Args({}, {}, {}));
-  // a tiny window on the default policy stays on the CPU (the transfer costs more than the work); a big one does not
-  {
-    gpu::GetPolicy().minCells = 65536.0f;
-    const GridPtr big = TestTerrain(300, 300, 1.0f, 3, 30.0);
-    Grid g;
-    bool onGpu = true;
-    RunGpu("morph", Args({{"radius", 1.0}}, {{"op", "dilate"}, {"shape", "cross"}}, {{"a", big}}), g, &onGpu);
-    CHECK(!onGpu, "morph with a 3 sample cross stays on the CPU on the default policy");
-    RunGpu("morph", Args({{"radius", 6.0}}, {{"op", "dilate"}, {"shape", "disc"}}, {{"a", big}}), g, &onGpu);
-    CHECK(onGpu, "morph with a 13 sample disc goes to the GPU on the default policy");
-    gpu::GetPolicy().minCells = 0.0f;
-  }
 }
 
 // ---- convolve --------------------------------------------------------------------------------------------------------------------------------------
@@ -439,17 +427,6 @@ static void TestConvolve()
   CheckDeclines("convolve_too_big", "convolve", ConvArgs(std::vector<double>(289, 1.0), t));
   CheckDeclines("convolve_no_kernel", "convolve", Args({}, {}, {{"a", t}}));
   CheckDeclines("convolve_no_input", "convolve", Args({}, {}, {}));
-  {
-    gpu::GetPolicy().minCells = 65536.0f;
-    const GridPtr bigf = TestTerrain(300, 300, 1.0f, 3, 30.0);
-    Grid g;
-    bool onGpu = true;
-    RunGpu("convolve", ConvArgs({0, 1, 0, 1, 1, 1, 0, 1, 0}, bigf), g, &onGpu);
-    CHECK(onGpu, "a 3 x 3 convolution goes to the GPU on the default policy");
-    RunGpu("convolve", ConvArgs({1.0}, bigf), g, &onGpu);
-    CHECK(!onGpu, "a 1 x 1 kernel stays on the CPU on the default policy");
-    gpu::GetPolicy().minCells = 0.0f;
-  }
 }
 
 // ---- unsharp, edge, blur_slope -----------------------------------------------------------------------------------------------------------------------
@@ -510,20 +487,6 @@ static void TestBlurBased()
   CheckDeclines("edge_bad_mode", "edge", Args({}, {{"mode", "bogus"}}, {{"a", t}}));
   CheckDeclines("blur_slope_bad_mode", "blur_slope", Args({}, {{"mode", "bogus"}}, {{"a", t}}));
   CheckDeclines("blur_slope_bad_mask", "blur_slope", Args({}, {}, {{"a", t}, {"mask", TestMask(9, 9, 1)}}));
-  // size gates on the default policy: a bare stencil needs a big field, blur based ops always go
-  {
-    gpu::GetPolicy().minCells = 65536.0f;
-    const GridPtr mid = TestTerrain(300, 300, 1.0f, 3, 30.0);
-    Grid g;
-    bool onGpu = true;
-    RunGpu("edge", Args({}, {{"mode", "sobel"}}, {{"a", mid}}), g, &onGpu);
-    CHECK(!onGpu, "a bare sobel on 300 x 300 stays on the CPU on the default policy");
-    RunGpu("edge", Args({{"smooth", 5.0}}, {{"mode", "sobel"}}, {{"a", mid}}), g, &onGpu);
-    CHECK(onGpu, "a smoothed sobel goes to the GPU on the default policy");
-    RunGpu("unsharp", Args({{"radius", 6.0}}, {}, {{"a", mid}}), g, &onGpu);
-    CHECK(onGpu, "an unsharp mask with a 6 sample blur goes to the GPU");
-    gpu::GetPolicy().minCells = 0.0f;
-  }
 }
 
 // ---- slope_limit -----------------------------------------------------------------------------------------------------------------------------------
@@ -770,17 +733,6 @@ static void TestRockiness()
   CheckSame("rockiness_like", "rockiness", Args({}, {}, {{"a", t}, {"like", like}}), 1e-5);
   CheckDeclines("rockiness_bad_soil", "rockiness", Args({}, {}, {{"a", t}, {"b", TestMask(9, 9, 1)}}));
   CheckDeclines("rockiness_no_input", "rockiness", Args({}, {}, {}));
-  {
-    gpu::GetPolicy().minCells = 65536.0f;
-    const GridPtr mid = TestTerrain(300, 300, 1.0f, 3, 30.0);
-    Grid g;
-    bool onGpu = true;
-    RunGpu("rockiness", Args({{"breakup", 0.0}}, {}, {{"a", mid}}), g, &onGpu);
-    CHECK(!onGpu, "rockiness without the noise stays on the CPU on a 300 x 300 field");
-    RunGpu("rockiness", Args({}, {}, {{"a", mid}}), g, &onGpu);
-    CHECK(onGpu, "rockiness with the noise goes to the GPU");
-    gpu::GetPolicy().minCells = 0.0f;
-  }
 }
 
 // ---- stratify --------------------------------------------------------------------------------------------------------------------------------------
@@ -817,17 +769,39 @@ static void TestStratify()
   CheckSame("stratify_like", "stratify", Args({{"warp", 1.0}}, {}, {{"a", t}, {"like", like}}), 2e-4);
   CheckDeclines("stratify_bad_mask", "stratify", Args({{"warp", 1.0}}, {}, {{"a", t}, {"mask", TestMask(9, 9, 1)}}));
   CheckDeclines("stratify_no_input", "stratify", Args({}, {}, {}));
-  {
-    gpu::GetPolicy().minCells = 65536.0f;
-    const GridPtr mid = TestTerrain(300, 300, 1.0f, 3, 30.0);
+}
+
+// ---- the work gates on the default policy ---------------------------------------------------------------------------------------------------------------
+
+/** On the default ed_gpu_min_cells a job goes to the GPU when it is worth about 10 ms of CPU time (WorthIt): cells * taps per cell. A bare 3 x 3 stencil only from 16 x min cells. */
+static void TestGates()
+{
+  gpu::GetPolicy().minCells = 65536.0f;
+  const GridPtr f = TestTerrain(640, 640, 1.0f, 3, 30.0);   // 409600 samples
+  const auto gate = [&](const char* label, const std::string& op, const OpArgs& a, const bool expectGpu) {
     Grid g;
-    bool onGpu = true;
-    RunGpu("stratify", Args({}, {}, {{"a", mid}}), g, &onGpu);
-    CHECK(!onGpu, "stratify without the warp stays on the CPU on a 300 x 300 field");
-    RunGpu("stratify", Args({{"warp", 2.0}}, {}, {{"a", mid}}), g, &onGpu);
-    CHECK(onGpu, "stratify with the warp goes to the GPU");
-    gpu::GetPolicy().minCells = 0.0f;
-  }
+    bool onGpu = !expectGpu;
+    RunGpu(op, a, g, &onGpu);
+    CHECK(onGpu == expectGpu, "%s: %s on the default policy", label, expectGpu ? "should go to the GPU" : "should stay on the CPU");
+  };
+  gate("morph cross r1", "morph", Args({{"radius", 1.0}}, {{"op", "dilate"}, {"shape", "cross"}}, {{"a", f}}), false);
+  gate("morph disc r6", "morph", Args({{"radius", 6.0}}, {{"op", "dilate"}, {"shape", "disc"}}, {{"a", f}}), true);
+  gate("convolve 3x3", "convolve", ConvArgs({0, 1, 0, 1, 1, 1, 0, 1, 0}, f), false);
+  gate("convolve 15x15", "convolve", ConvArgs(std::vector<double>(225, 1.0), f), true);
+  gate("edge sobel", "edge", Args({}, {{"mode", "sobel"}}, {{"a", f}}), false);
+  gate("edge sobel smooth 5", "edge", Args({{"smooth", 5.0}}, {{"mode", "sobel"}}, {{"a", f}}), true);
+  gate("unsharp r1", "unsharp", Args({{"radius", 1.0}}, {}, {{"a", f}}), false);
+  gate("unsharp r6", "unsharp", Args({{"radius", 6.0}}, {}, {{"a", f}}), true);
+  gate("blur_slope r8", "blur_slope", Args({{"radius", 8.0}}, {}, {{"a", f}}), true);
+  gate("slope_limit", "slope_limit", Args({}, {}, {{"a", f}}), true);
+  gate("rockiness without noise", "rockiness", Args({{"breakup", 0.0}}, {}, {{"a", f}}), false);
+  gate("rockiness", "rockiness", Args({}, {}, {{"a", f}}), true);
+  gate("stratify without warp", "stratify", Args({}, {}, {{"a", f}}), false);
+  gate("stratify warp", "stratify", Args({{"warp", 2.0}}, {}, {{"a", f}}), true);
+  // iterated ops have their own minimum (16384 samples)
+  gate("settle 128 x 128", "settle", Args({{"iterations", 3}}, {}, {{"a", TestTerrain(128, 128, 1.0f, 3, 30.0)}}), true);
+  gate("settle 100 x 100", "settle", Args({{"iterations", 3}}, {}, {{"a", TestTerrain(100, 100, 1.0f, 3, 30.0)}}), false);
+  gpu::GetPolicy().minCells = 0.0f;
 }
 
 int main(int argc, char** argv)
@@ -849,6 +823,7 @@ int main(int argc, char** argv)
   TestSlopeLimit();
   TestRockiness();
   TestStratify();
+  TestGates();
   TestRockSoil();
   TestSnow();
   TestWind();
