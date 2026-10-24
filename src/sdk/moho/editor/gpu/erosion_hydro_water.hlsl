@@ -1,7 +1,7 @@
 // Hydraulic erosion, pass B: the water update from the pipe fluxes, the flow speed, then dissolving and settling of sediment.
 //   water   d' = d + rain + inflow - outflow
 //   speed   the vector sum of the unit directions of the in and out fluxes over the mean depth (cells per iteration), at most maxSpeed
-//   slope   sin of the ground's slope (central differences); the capacity uses it softly saturated at slopeCap (steep faces do not dominate) and floored at minSlope
+//   slope   sin of the ground's slope (central differences); the capacity uses it limited above slopeCap (a plateau, then falling off on cliffs: steep faces do not dominate) and floored at minSlope
 //   cap     capacity * slope * speed^speedPow * min(1, depth / depth_max); no dissolving below the speed threshold vThresh
 //   dig     erosion * rock * (cap - s) (at most cutLimit of the drop to the lowest of the eight neighbours), or settle deposition * (s - cap)
 // The sediment itself moves in pass C. Outputs: the change of the ground (dT = dissolved - settled, which erosion_hydro_apply spreads over the neighbourhood and subtracts), the water (D, in
@@ -88,7 +88,8 @@ void CSMain(KERNEL_IDS)
     float gz = (T[uint(zd) * P.w + uint(x)] - T[uint(zu) * P.w + uint(x)]) / (float(zd - zu) * P.cell);
     float g = sqrt(gx * gx + gz * gz);
     float sinA = g / sqrt(1.0f + g * g);
-    float soft = sinA / sqrt(1.0f + (sinA / P.slopeCap) * (sinA / P.slopeCap));
+    float sr = sinA / P.slopeCap;
+    float soft = sinA / sqrt(1.0f + sr * sr * sr * sr);      // ~ sinA below slopeCap, a plateau above it, falling off again on cliffs
     float tilt = max(soft, P.minSlope);
     float sp = speed;
     if (P.speedPow != 1.0f) sp = pow(max(speed, 1e-6f), P.speedPow);

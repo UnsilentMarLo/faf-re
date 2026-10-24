@@ -205,7 +205,7 @@ namespace moho::editor::gpu
       hp.deposition = p.deposition;
       hp.invDepthMax = 1.0f / std::max(1e-4f, p.depth_max);
       hp.minSlope = p.min_slope;
-      hp.slopeCap = std::max(0.05f, static_cast<float>(a.p.N("slope_cap", 0.25)));
+      hp.slopeCap = std::max(0.05f, static_cast<float>(a.p.N("slope_cap", 0.4)));
       hp.maxSpeed = p.max_speed;
       hp.cutLimit = p.cut_limit;
       hp.cell = src->cell;
