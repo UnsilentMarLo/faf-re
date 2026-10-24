@@ -34,8 +34,11 @@ namespace moho::editor::gpu
   };
   [[nodiscard]] Policy& GetPolicy();
 
-  /** Registers the GPU version of the CPU op `name` (once per name; a second call replaces the first). Static initialisers of op files call this. */
-  void RegisterGpuOp(const char* name, GpuOpFn fn);
+  /** Registers the GPU version of the CPU op `name` (once per name; a second call replaces the first). Static initialisers of op files call this.
+   *  `minCells` >= 0: this op's own threshold (iterated ops like erosion pay off on small fields); the op runs from min(minCells, policy.minCells) samples on. Negative = the policy's. */
+  void RegisterGpuOp(const char* name, GpuOpFn fn, float minCells = -1.0f);
+  /** The op's own threshold (negative = none). */
+  [[nodiscard]] float GpuOpMinCells(const std::string& name);
   [[nodiscard]] std::vector<std::string> GpuOpNames();
 
   /** Samples the op will produce, from its inputs (`a`, else `like`, else width * height). */

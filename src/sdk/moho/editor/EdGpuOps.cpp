@@ -45,6 +45,11 @@ namespace moho::editor::gpu
       static std::map<std::string, GpuOpFn> ops;
       return ops;
     }
+    std::map<std::string, float>& OpMinCells()
+    {
+      static std::map<std::string, float> cells;
+      return cells;
+    }
     std::atomic<bool> gSelfTestPassed{false};
     std::atomic<BeforeUseFn> gHook{nullptr};
     std::atomic<bool> gHookDone{false};
@@ -63,10 +68,18 @@ namespace moho::editor::gpu
     return policy;
   }
 
-  void RegisterGpuOp(const char* const name, const GpuOpFn fn)
+  void RegisterGpuOp(const char* const name, const GpuOpFn fn, const float minCells)
   {
     const std::lock_guard<std::mutex> lock(gRegistryMutex);
     Ops()[name] = fn;
+    OpMinCells()[name] = minCells;
+  }
+
+  float GpuOpMinCells(const std::string& name)
+  {
+    const std::lock_guard<std::mutex> lock(gRegistryMutex);
+    const auto it = OpMinCells().find(name);
+    return it != OpMinCells().end() ? it->second : -1.0f;
   }
 
   std::vector<std::string> GpuOpNames()
@@ -119,6 +132,7 @@ namespace moho::editor::gpu
   {
     try {
       GpuOpFn fn = nullptr;
+      float opMin = -1.0f;
       {
         const std::lock_guard<std::mutex> lock(gRegistryMutex);
         const auto it = Ops().find(name);
@@ -126,9 +140,14 @@ namespace moho::editor::gpu
           return false;
         }
         fn = it->second;
+        const auto m = OpMinCells().find(name);
+        if (m != OpMinCells().end()) {
+          opMin = m->second;
+        }
       }
       const Policy& policy = GetPolicy();
-      if (!policy.enabled || CellsOf(args) < static_cast<double>(policy.minCells)) {
+      const float minCells = opMin >= 0.0f ? std::min(opMin, policy.minCells) : policy.minCells;
+      if (!policy.enabled || CellsOf(args) < static_cast<double>(minCells)) {
         return false;
       }
       Backend& backend = CurrentBackend();
