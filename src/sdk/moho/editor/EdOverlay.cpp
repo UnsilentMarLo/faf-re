@@ -699,6 +699,14 @@ namespace
     b.DrawQuad(a, c, d, e);
   }
 
+  // A ribbon segment from the four screen positions of its ground corners (left / right of each end): a ribbon wider than a line is a rectangle on the GROUND, which on the
+  // screen is a parallelogram, not a rectangle across the screen direction of the spine (that one stood up like a plane when the camera looked along a diagonal).
+  void EmitCorners(moho::CD3DPrimBatcher& b, const Pt& l0, const Pt& r0, const Pt& r1, const Pt& l1, std::uint32_t color)
+  {
+    using V = moho::CD3DPrimBatcher::Vertex;
+    b.DrawQuad(V{l0.x, l0.y, 0.0f, color, 0.0f, 0.0f}, V{r0.x, r0.y, 0.0f, color, 0.0f, 1.0f}, V{r1.x, r1.y, 0.0f, color, 1.0f, 1.0f}, V{l1.x, l1.y, 0.0f, color, 1.0f, 0.0f});
+  }
+
   void Cap(moho::CD3DPrimBatcher& b, float x, float y, float h, std::uint32_t color)
   {
     using V = moho::CD3DPrimBatcher::Vertex;
@@ -717,6 +725,8 @@ namespace
     // screen position, depth and on-screen half width of every vertex
     std::vector<Pt> sp(n);
     std::vector<float> half(n);
+    std::vector<Pt> cl(n), cr(n);          // the projected ground corners left / right of every vertex, already clamped to the pixel limits and grown for the halo
+    std::vector<char> cornersOk(n, 0);
     for (std::size_t i = 0; i < n; ++i) {
       const Wm3::Vector3f p{pl.pts[i * 3], pl.pts[i * 3 + 1], pl.pts[i * 3 + 2]};
       const Wm3::Vector2f s = cam.Project(p, 0.0f, vw, vh, 0.0f);
@@ -736,6 +746,16 @@ namespace
         const Wm3::Vector2f s1 = cam.Project(Wm3::Vector3f{p.x + ox, p.y, p.z + oz}, 0.0f, vw, vh, 0.0f);
         const Wm3::Vector2f s2 = cam.Project(Wm3::Vector3f{p.x - ox, p.y, p.z - oz}, 0.0f, vw, vh, 0.0f);
         px = 0.5f * std::sqrt((s1.x - s2.x) * (s1.x - s2.x) + (s1.y - s2.y) * (s1.y - s2.y));
+        // the corners: from the middle of the vertex to each side, stretched or shrunk to the pixel limits (the halo is a pixel wider on each side)
+        const float want = std::min(pl.maxPx * 0.5f, std::max(pl.minPx * 0.5f, px)) + (halo ? 1.0f : 0.0f);
+        const float ax = 0.5f * (s1.x - s2.x), ay = 0.5f * (s1.y - s2.y);        // half of the way from the right to the left corner
+        const float mx = 0.5f * (s1.x + s2.x), my = 0.5f * (s1.y + s2.y);        // the middle of the ribbon across this vertex on the screen
+        if (px >= pl.minPx * 0.75f && px <= pl.maxPx * 0.5f) {          // a ribbon the pixel limits do not touch is drawn as the ground rectangle it is; a thin line keeps its pixel width across
+          const float k = want / px;
+          cl[i] = {mx + ax * k, my + ay * k, 0.0f};
+          cr[i] = {mx - ax * k, my - ay * k, 0.0f};
+          cornersOk[i] = 1;
+        }
       }
       half[i] = std::min(pl.maxPx * 0.5f, std::max(pl.minPx * 0.5f, px)) + (halo ? 1.0f : 0.0f);
     }
@@ -759,7 +779,11 @@ namespace
         continue;
       }
       if (!halo) gDbg[6] += 1.0f;
-      Emit(b, a.x, a.y, half[i0], c.x, c.y, half[i1], color);
+      if (cornersOk[i0] && cornersOk[i1]) {
+        EmitCorners(b, cl[i0], cr[i0], cr[i1], cl[i1], color);
+      } else {
+        Emit(b, a.x, a.y, half[i0], c.x, c.y, half[i1], color);
+      }
     }
     if (pl.caps) {
       for (std::size_t i = 0; i < n; ++i) {
