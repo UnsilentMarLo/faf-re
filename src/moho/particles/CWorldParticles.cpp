@@ -5,6 +5,7 @@
 
 #include "gpg/gal/RenderProfiler.h"
 
+#include <algorithm>
 #include <cstring>
 #include <cstdlib>
 #include <limits>
@@ -1302,6 +1303,7 @@ namespace moho
     // lower-resolution target, composited onto the scene before the small ones are drawn at full resolution.
     const bool lowResolution = suppressTLight == 0 && camera != nullptr && moho::particlelowres::Begin(*camera);
     std::vector<moho::SParticleRenderBucket*> lowResolutionRun;
+    std::vector<bool> lowResolutionLarge;
     const auto bucketEnd = mParticleBuckets.end();
     for (auto bucketIt = mParticleBuckets.begin(); bucketIt != bucketEnd;) {
       const moho::SParticleBucketKey& bucketKey = bucketIt->first;
@@ -1323,35 +1325,40 @@ namespace moho
 
       if (lowResolution && moho::ParticleLowResEligible(*bucket)) {
         const float runSortScalar = bucketKey.sortScalar;
-        const int runClass = moho::ParticleLowResClass(*bucket);
         lowResolutionRun.clear();
         for (; bucketIt != bucketEnd; ++bucketIt) {
           moho::SParticleRenderBucket* const member = bucketIt->second;
-          if (bucketIt->first.sortScalar != runSortScalar || member == nullptr || !moho::ParticleLowResEligible(*member) ||
-              moho::ParticleLowResClass(*member) != runClass) {
+          if (bucketIt->first.sortScalar != runSortScalar || member == nullptr || !moho::ParticleLowResEligible(*member)) {
             break;
           }
           if (moho::PrepareParticleBucket(*member, static_cast<float>(tick))) {
             lowResolutionRun.push_back(member);
           }
         }
-        bool anyLarge = false;
+        // Only the buckets with a quad that could be large from here take the two-resolution path; the rest draw once, as always.
+        lowResolutionLarge.clear();
+        moho::LargeQuadStats largeStats;
         for (moho::SParticleRenderBucket* const member : lowResolutionRun) {
-          anyLarge = anyLarge || moho::particlelowres::MayHaveLargeQuads(*member);
+          const std::uint32_t before = largeStats.count;
+          moho::ParticleBucketLargeStats(*member, moho::particlelowres::Gate(), static_cast<float>(tick) + frameAlpha, largeStats);
+          lowResolutionLarge.push_back(largeStats.count != before);
         }
-        if (!anyLarge) {
-          // No quad of the run can be large from here: the buckets draw as they always did.
+        const bool anyLarge = moho::particlelowres::WorthIt(largeStats);
+        moho::particlelowres::NoteRun(runSortScalar, lowResolutionRun.size(), largeStats);
+        if (!anyLarge || !moho::particlelowres::BeginAccumulate()) {
           for (moho::SParticleRenderBucket* const member : lowResolutionRun) {
-            moho::DrawParticleBucket(*member, false);
+            moho::DrawParticleBucket(*member, moho::ParticleDrawPass::Normal, moho::particlelowres::Gate());
           }
         } else {
-          moho::particlelowres::BeginAccumulate();
-          for (moho::SParticleRenderBucket* const member : lowResolutionRun) {
-            moho::DrawParticleBucket(*member, true);
+          for (std::size_t index = 0U; index < lowResolutionRun.size(); ++index) {
+            if (lowResolutionLarge[index]) {
+              moho::DrawParticleBucket(*lowResolutionRun[index], moho::ParticleDrawPass::LowResolution, moho::particlelowres::Gate());
+            }
           }
-          moho::particlelowres::Composite(runClass != 0);
-          for (moho::SParticleRenderBucket* const member : lowResolutionRun) {
-            moho::DrawParticleBucket(*member, false);
+          moho::particlelowres::Composite();
+          for (std::size_t index = 0U; index < lowResolutionRun.size(); ++index) {
+            moho::particlelowres::SelectQuads(lowResolutionLarge[index]);
+            moho::DrawParticleBucket(*lowResolutionRun[index], moho::ParticleDrawPass::SmallOnly, moho::particlelowres::Gate());
           }
           moho::particlelowres::EndRun();
         }

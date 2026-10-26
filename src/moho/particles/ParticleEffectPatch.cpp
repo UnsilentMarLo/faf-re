@@ -73,57 +73,20 @@ float LRViewZ(float depth)
 	return Projection[3][2] / (depth - Projection[2][2]);
 }
 
-// 24 bit depth in two 16 bit unorm channels (the low-resolution depth target is RG16).
-float2 LRPackDepth(float depth)
-{
-	float v = floor(depth * 16777215.0 + 0.5);
-	float hi = floor(v / 256.0);
-	return float2(hi / 65535.0, (v - hi * 256.0) / 255.0);
-}
-
-float LRUnpackDepth(float2 value)
-{
-	return (floor(value.x * 65535.0 + 0.5) * 256.0 + floor(value.y * 255.0 + 0.5)) / 16777215.0;
-}
-
-BlendState LR_Accumulate_Alpha
-{
-	BlendEnable[0] = true;
-	RenderTargetWriteMask[0] = 0x0F;
-	SrcBlend = SRC_ALPHA;
-	DestBlend = INV_SRC_ALPHA;
-	BlendOp = ADD;
-	SrcBlendAlpha = ONE;
-	DestBlendAlpha = INV_SRC_ALPHA;
-	BlendOpAlpha = ADD;
-};
-
-BlendState LR_Accumulate_Premod
-{
-	BlendEnable[0] = true;
-	RenderTargetWriteMask[0] = 0x0F;
-	SrcBlend = ONE;
-	DestBlend = INV_SRC_ALPHA;
-	BlendOp = ADD;
-	SrcBlendAlpha = ONE;
-	DestBlendAlpha = INV_SRC_ALPHA;
-	BlendOpAlpha = ADD;
-};
-
 )HLSL";
 
     // Appended at the end of the file (everything it uses is declared above).
     constexpr std::string_view kShaders = R"HLSL(
 
 // ---- FAF: large particles in a lower-resolution target (ParticleLowRes.cpp) ---------------------------------------------------
-PS_OUTPUT WorldPSLR(WORLD_OUTPUT inData)
+// The low-resolution passes blend the "over" classes premultiplied, with the colour factors on every channel (the backends blend alpha with
+// the colour factors, as D3D9 did): the accumulation holds colour*alpha and the coverage 1-(1-a)(1-b)..., exactly. The depth test is the
+// hardware's, against the downsampled scene depth that LRDownsample wrote into the target's depth buffer.
+PS_OUTPUT WorldPSLRPremultiplied(WORLD_OUTPUT inData)
 {
 	PS_OUTPUT o = (PS_OUTPUT)0;
-	float lowDepth = LRUnpackDepth(tex2D(LRDepthSampler, inData.mPos.xy * LRTarget.zw).xy);
 	float4 color = tex2D(ParticleSampler0,inData.mTex0) * tex2D(ParticleSampler1,inData.mTex1);
-	if (inData.mPos.z >= lowDepth)
-		discard;
-	o.color = color;
+	o.color = float4(color.rgb * color.a, color.a);
 	return o;
 }
 
@@ -135,6 +98,11 @@ struct LR_QUAD_IN {
 struct LR_QUAD_OUT {
    float4 mPos : POSITION;
    float2 mTex : TEXCOORD0;
+};
+
+struct LR_DEPTH_OUT {
+   float4 color : COLOR0;
+   float depth : DEPTH;
 };
 
 LR_QUAD_OUT LRQuadVS(LR_QUAD_IN In)
@@ -164,12 +132,15 @@ float4 LRCompositePS(LR_QUAD_OUT inData) : COLOR
 	float4 c10 = tex2D(LRAccumSampler, uv + du);
 	float4 c01 = tex2D(LRAccumSampler, uv + dv);
 	float4 c11 = tex2D(LRAccumSampler, uv + du + dv);
+	// Nothing drawn around here: nothing to blend (and the blend, the costly part of this pass, is skipped).
+	if (max(max(c00.a + c00.r + c00.g + c00.b, c10.a + c10.r + c10.g + c10.b), max(c01.a + c01.r + c01.g + c01.b, c11.a + c11.r + c11.g + c11.b)) <= 0.0)
+		discard;
 
 	float z = LRViewZ(sceneDepth);
-	float e00 = abs(LRViewZ(LRUnpackDepth(tex2D(LRDepthSampler, uv).xy)) - z);
-	float e10 = abs(LRViewZ(LRUnpackDepth(tex2D(LRDepthSampler, uv + du).xy)) - z);
-	float e01 = abs(LRViewZ(LRUnpackDepth(tex2D(LRDepthSampler, uv + dv).xy)) - z);
-	float e11 = abs(LRViewZ(LRUnpackDepth(tex2D(LRDepthSampler, uv + du + dv).xy)) - z);
+	float e00 = abs(LRViewZ(tex2D(LRDepthSampler, uv).x) - z);
+	float e10 = abs(LRViewZ(tex2D(LRDepthSampler, uv + du).x) - z);
+	float e01 = abs(LRViewZ(tex2D(LRDepthSampler, uv + dv).x) - z);
+	float e11 = abs(LRViewZ(tex2D(LRDepthSampler, uv + du + dv).x) - z);
 
 	float4 result = lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
 	if (max(max(e00, e10), max(e01, e11)) > 0.03 * z)
@@ -189,7 +160,7 @@ technique LRDownsample2
 	pass P0
 	{
 		AlphaState( AlphaBlend_Disable )
-		DepthState( Depth_Disable_Write_None )
+		DepthState( Depth_Always )
 		RasterizerState( Rasterizer_Cull_None )
 
 		VertexShader = compile vs_1_1 LRQuadVS();
@@ -202,7 +173,7 @@ technique LRDownsample4
 	pass P0
 	{
 		AlphaState( AlphaBlend_Disable )
-		DepthState( Depth_Disable_Write_None )
+		DepthState( Depth_Always )
 		RasterizerState( Rasterizer_Cull_None )
 
 		VertexShader = compile vs_1_1 LRQuadVS();
@@ -210,20 +181,7 @@ technique LRDownsample4
 	}
 }
 
-technique LRComposite_ADD
-{
-	pass P0
-	{
-		AlphaState( AlphaBlend_One_One_Write_RGB )
-		DepthState( Depth_Disable_Write_None )
-		RasterizerState( Rasterizer_Cull_None )
-
-		VertexShader = compile vs_1_1 LRQuadVS();
-		PixelShader = compile ps_2_0 LRCompositePS();
-	}
-}
-
-technique LRComposite_OVER
+technique LRComposite
 {
 	pass P0
 	{
@@ -243,7 +201,7 @@ technique LRComposite_OVER
       const std::string n = std::to_string(scale);
       const std::string reach = std::to_string(scale - 1);
       std::string text;
-      text += "float4 LRDownsamplePS" + n + "(LR_QUAD_OUT inData) : COLOR\n{\n";
+      text += "LR_DEPTH_OUT LRDownsamplePS" + n + "(LR_QUAD_OUT inData)\n{\n";
       text += "\tfloat2 center = LRView.xy + floor(inData.mPos.xy) * LRRatio.xy;\n";
       text += "\tfloat2 minPixel = LRView.xy;\n\tfloat2 maxPixel = LRView.xy + LRView.zw - float2(1, 1);\n";
       text += "\tfloat farthest = 0;\n";
@@ -252,7 +210,7 @@ technique LRComposite_OVER
       text += "\t\t\tfloat2 pixel = clamp(center + float2(x, y), minPixel, maxPixel);\n";
       text += "\t\t\tfarthest = max(farthest, tex2D(LRSceneDepthSampler, (pixel + float2(0.5, 0.5)) * LRScene.zw).x);\n";
       text += "\t\t}\n\t}\n";
-      text += "\treturn float4(LRPackDepth(farthest), 0, 0);\n}\n";
+      text += "\tLR_DEPTH_OUT o;\n\to.color = float4(0, 0, 0, 0);\n\to.depth = farthest;\n\treturn o;\n}\n";
       return text;
     }
 
@@ -331,14 +289,13 @@ technique LRComposite_OVER
             (body.find("WorldVS(") == std::string::npos && body.find("WorldVSAlign(") == std::string::npos)) {
           continue;
         }
-        if (!add && !ReplaceCallArgument(body, "AlphaState", alpha ? "LR_Accumulate_Alpha" : "LR_Accumulate_Premod")) {
+        if (!add && !ReplaceCallArgument(body, "AlphaState", "AlphaBlend_One_InvSrcAlpha_Write_RGBA")) {
           continue;
         }
-        if (!ReplaceCallArgument(body, "DepthState", "Depth_Disable_Write_None")) {
-          continue;
+        if (alpha) {
+          const std::size_t shader = body.find("WorldPS()");
+          body.replace(shader, 9U, "WorldPSLRPremultiplied()");
         }
-        const std::size_t shader = body.find("WorldPS()");
-        body.replace(shader, 9U, "WorldPSLR()");
         twins += "\ntechnique " + name + "_LR\n" + body + "\n";
         ++count;
       }

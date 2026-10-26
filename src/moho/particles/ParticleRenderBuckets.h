@@ -235,9 +235,55 @@ namespace moho
   bool PrepareParticleBucket(SParticleRenderBucket& bucket, float frameValue);
 
   /**
-   * Engine addition: the second half - selects the technique (its `_LR` twin when `lowResolution`) and draws the prepared bucket.
-   * Called twice per bucket by a low-resolution run, with the vertex shader keeping one size class each time.
+   * Engine addition: how the particle path of the low-resolution target (ParticleLowRes.h) sees a draw. The estimate that decides
+   * whether a pooled particle buffer holds large quads only routes draws; the vertex shader classifies every quad exactly, so a wrong
+   * estimate costs time, never pixels.
    */
+  enum class ParticleDrawPass
+  {
+    Normal,        ///< every quad, the technique the bucket has
+    LowResolution, ///< the large quads (the `_LR` technique); buffers without any are not drawn
+    SmallOnly,     ///< after the composite: buffers that had large quads draw only the small ones, the others draw every quad
+  };
+
+  /** The camera as the estimate needs it. */
+  struct LargeQuadGate
+  {
+    float viewProjection[16] = {}; ///< row-major, row vectors (the engine's own convention)
+    float scaleX = 0.0f;           ///< projection scale times half the viewport, pixels per unit at depth 1
+    float scaleY = 0.0f;
+    float viewportWidth = 0.0f;
+    float viewportHeight = 0.0f;
+    float area = 0.0f;             ///< pixels^2 at full resolution from which a quad counts as large
+  };
+
+  /** What the estimate found: the large quads on the screen, as viewport pixel counts and rectangle. */
+  struct LargeQuadStats
+  {
+    std::uint32_t count = 0U;
+    float pixels = 0.0f; ///< their summed area (overdraw included), clipped to the screen
+    float left = 1.0e30f;
+    float top = 1.0e30f;
+    float right = -1.0e30f;
+    float bottom = -1.0e30f;
+  };
+
+  void DrawParticleBucket(SParticleRenderBucket& bucket, ParticleDrawPass pass, const LargeQuadGate& gate);
+
+  /**
+   * Engine addition: adds to `stats` the large quads of the prepared bucket's live particles at `time` (tick plus the frame's
+   * fraction), worked out on the CPU from the vertex shader's own inputs (which the upload kept), and marks each pooled buffer that has
+   * any for DrawParticleBucket. Only an estimate of what the shader will classify as large, to decide whether the extra passes pay.
+   */
+  void ParticleBucketLargeStats(const SParticleRenderBucket& bucket, const LargeQuadGate& gate, float time, LargeQuadStats& stats);
+
+
+  /**
+   * Engine addition (the low-resolution particle path, ParticleLowRes.h): the first half of `RenderParticleBucket` - drops expired
+   * work items and uploads the pending particles. True when the bucket has something to draw.
+   */
+  bool PrepareParticleBucket(SParticleRenderBucket& bucket, float frameValue);
+
   void DrawParticleBucket(SParticleRenderBucket& bucket, bool lowResolution);
 
   /**

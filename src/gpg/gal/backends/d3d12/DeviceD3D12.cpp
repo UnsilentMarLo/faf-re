@@ -639,8 +639,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       auto* const target = new RenderTargetD3D12(std::move(buffers), &swapChain);
       output.surface.reset(target);
       const RenderTargetContext* const targetContext = target->GetContext();
-      // Sampled: the particle low-resolution passes read the scene depth (src/moho/particles/ParticleLowRes.cpp).
-      const DepthStencilTargetContext depthContext(targetContext->width_, targetContext->height_, 3U, true);
+      const DepthStencilTargetContext depthContext(targetContext->width_, targetContext->height_, 3U, false);
       output.depthStencil = CreateDepthStencilTarget(&depthContext);
       gpg::Logf("D3D12: head %u back buffer target %p (%ux%u)", static_cast<unsigned>(headIndex), target, targetContext->width_,
                 targetContext->height_);
@@ -1281,6 +1280,22 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     MarkDraw("buffer upload");
     mList->CopyBufferRegion(destination.resource.Get(), offset, upload.resource, upload.offset, bytes);
     FinishDraw();
+  }
+
+  bool DeviceD3D12::CopyDepthStencil(DepthStencilTarget& destination, DepthStencilTarget& source)
+  {
+    auto& to = static_cast<DepthStencilTargetD3D12&>(destination);
+    auto& from = static_cast<DepthStencilTargetD3D12&>(source);
+    if (&to == &from || to.GetContext()->width_ != from.GetContext()->width_ || to.GetContext()->height_ != from.GetContext()->height_) {
+      return false;
+    }
+    const std::lock_guard<std::recursive_mutex> lock(mMutex);
+    // In command order: later draws move both back (BindTargets, TransitionSampled).
+    Transition(from.Resource(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    Transition(to.Resource(), D3D12_RESOURCE_STATE_COPY_DEST);
+    FlushBarriers();
+    mList->CopyResource(to.Resource().resource.Get(), from.Resource().resource.Get());
+    return true;
   }
 
   bool DeviceD3D12::CopyVertexBufferRegion(

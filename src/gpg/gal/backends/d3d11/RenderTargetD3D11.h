@@ -55,6 +55,7 @@ namespace gpg::gal
 
     [[nodiscard]] ID3D11DepthStencilView* GetDepthStencilView() const;
     [[nodiscard]] ID3D11ShaderResourceView* GetShaderResourceView() const;
+    [[nodiscard]] ID3D11Texture2D* GetTexture() const { return mTexture.Get(); }
 
   private:
     DepthStencilTargetContext mContext;

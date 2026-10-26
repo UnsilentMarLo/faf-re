@@ -16,6 +16,7 @@
 #include "moho/particles/BeamRenderHelpers.h"
 #include "moho/particles/CParticleTextureCountedPtr.h"
 #include "moho/particles/CWorldParticles.h"
+#include "moho/particles/ParticleLowRes.h"
 #include "moho/particles/ParticleRenderWorkItem.h"
 #include "moho/particles/SWorldBeam.h"
 #include "moho/particles/SWorldParticle.h"
@@ -374,32 +375,53 @@ namespace moho
   namespace
   {
     /**
-     * Engine addition (the low-resolution particle path): where the particles of one pooled buffer can be, and how large their quads
-     * can get, so that a run of buckets without a quad that could be large skips the low-resolution passes (ParticleLowRes.h).
-     * The box covers each particle's start position plus what it can travel in its life (velocity and acceleration; drag only
-     * shortens it); the size is the larger of its begin and end half size.
+     * Engine addition (the low-resolution particle path): what the CPU needs of each uploaded particle to say, per frame, which quads are
+     * large and where they are on the screen - the vertex shader's inputs (position, velocity, acceleration, drag, start, size), kept
+     * beside the pooled buffer by instance index. The vertex shader is still the one that decides each quad (ParticleEffectPatch.h);
+     * this is only the estimate that decides whether the extra passes are worth their cost.
      */
-    struct ParticleBufferBounds
+    struct ShadowParticle
     {
-      float lo[3] = {1.0e30f, 1.0e30f, 1.0e30f};
-      float hi[3] = {-1.0e30f, -1.0e30f, -1.0e30f};
-      float maxHalfSize = 0.0f;
+      float position[3];
+      float velocity[3];
+      float acceleration[3];
+      float drag[3]; // resistance, 1/resistance, 1/resistance^2
+      float start;
+      float lifetime;
+      float size;
+      float sizeDelta;
     };
 
-    std::unordered_map<const ParticleBuffer*, ParticleBufferBounds> sParticleBounds;
-
-    void GrowParticleBounds(ParticleBufferBounds& bounds, const SWorldParticle& particle)
+    struct ParticleBufferShadow
     {
-      const float life = std::max(particle.mLifetime, 0.0f);
-      const float speed = std::sqrt(particle.mDir.x * particle.mDir.x + particle.mDir.y * particle.mDir.y + particle.mDir.z * particle.mDir.z);
-      const float accel = std::sqrt(particle.mAccel.x * particle.mAccel.x + particle.mAccel.y * particle.mAccel.y + particle.mAccel.z * particle.mAccel.z);
-      const float reach = (speed * life + 0.5f * accel * life * life) * 1.25f + 1.0f;
-      const float center[3] = {particle.mPos.x, particle.mPos.y, particle.mPos.z};
-      for (int axis = 0; axis < 3; ++axis) {
-        bounds.lo[axis] = std::min(bounds.lo[axis], center[axis] - reach);
-        bounds.hi[axis] = std::max(bounds.hi[axis], center[axis] + reach);
+      std::vector<ShadowParticle> particles;
+      bool hasLarge = false; // as of the last ParticleBucketLargeStats
+    };
+
+    std::unordered_map<const ParticleBuffer*, ParticleBufferShadow> sParticleShadows;
+
+    void StoreShadow(ParticleBufferShadow& shadow, const std::size_t instance, const SWorldParticle& particle)
+    {
+      if (shadow.particles.size() <= instance) {
+        shadow.particles.resize(instance + 1U);
       }
-      bounds.maxHalfSize = std::max(bounds.maxHalfSize, std::max(std::fabs(particle.mBeginSize), std::fabs(particle.mEndSize)));
+      ShadowParticle& out = shadow.particles[instance];
+      out.position[0] = particle.mPos.x;
+      out.position[1] = particle.mPos.y;
+      out.position[2] = particle.mPos.z;
+      out.velocity[0] = particle.mDir.x;
+      out.velocity[1] = particle.mDir.y;
+      out.velocity[2] = particle.mDir.z;
+      out.acceleration[0] = particle.mAccel.x;
+      out.acceleration[1] = particle.mAccel.y;
+      out.acceleration[2] = particle.mAccel.z;
+      out.drag[0] = particle.mResistance;
+      out.drag[1] = 1.0f / particle.mResistance;
+      out.drag[2] = out.drag[1] * out.drag[1];
+      out.start = particle.mInterop;
+      out.lifetime = particle.mLifetime;
+      out.size = particle.mBeginSize;
+      out.sizeDelta = (particle.mEndSize - particle.mBeginSize) * (1.0f / particle.mLifetime);
     }
   } // namespace
 
@@ -464,11 +486,12 @@ namespace moho
       return;
     }
 
-    ParticleBufferBounds& bufferBounds = sParticleBounds[particleBuffer];
+    ParticleBufferShadow& bufferShadow = sParticleShadows[particleBuffer];
+    const std::size_t firstInstance = workItem.mRenderStartIndex;
     for (std::size_t index = 0U; index < maxUploadCount; ++index) {
       SWorldParticle& particle = pendingParticles[index];
-      GrowParticleBounds(bufferBounds, particle);
       particle.mInterop += frameDelta;
+      StoreShadow(bufferShadow, firstInstance + index, particle);
       (void)AppendInterval(workItem, particle.mInterop, particle.mLifetime);
 
       auto* const instance = reinterpret_cast<SParticleInstance*>(
@@ -934,7 +957,7 @@ namespace moho
    */
   void ForgetMirroredParticles(const ParticleBuffer& particleBuffer)
   {
-    sParticleBounds.erase(&particleBuffer); // the low-resolution path's bounds go with the buffer's contents
+    sParticleShadows.erase(&particleBuffer); // the low-resolution path's copy goes with the buffer's contents
     if (!sParticleMirror.mSlotOf.empty() || !sParticleMirror.mMirrored.empty()) {
       sParticleMirror.Release(particleBuffer);
     }
@@ -993,7 +1016,7 @@ namespace moho
       return false;
     }
 
-    DrawParticleBucket(bucket, false);
+    DrawParticleBucket(bucket, ParticleDrawPass::Normal, LargeQuadGate{});
     return true;
   }
 
@@ -1004,42 +1027,82 @@ namespace moho
     return !bucket.activeWorkItems.empty();
   }
 
-  bool ParticleBucketMayHaveLargeQuads(
-    const SParticleRenderBucket& bucket, const float (&cameraPosition)[3], const float pixelScaleX, const float pixelScaleY, const float areaThreshold
+  void ParticleBucketLargeStats(
+    const SParticleRenderBucket& bucket, const LargeQuadGate& gate, const float time, LargeQuadStats& stats
   )
   {
+    const float* const m = gate.viewProjection;
     for (const SParticleRenderWorkItem* const workItem : bucket.activeWorkItems) {
       if (workItem == nullptr || workItem->mParticleBuffer == nullptr) {
         continue;
       }
-      const auto found = sParticleBounds.find(static_cast<const ParticleBuffer*>(workItem->mParticleBuffer));
-      if (found == sParticleBounds.end()) {
-        return true; // nothing known: it may
+      const auto* const buffer = static_cast<const ParticleBuffer*>(workItem->mParticleBuffer);
+      const auto found = sParticleShadows.find(buffer);
+      if (found == sParticleShadows.end()) {
+        continue;
       }
-      const ParticleBufferBounds& bounds = found->second;
-      float distanceSquared = 0.0f;
-      float radiusSquared = 0.0f;
-      for (int axis = 0; axis < 3; ++axis) {
-        const float center = 0.5f * (bounds.lo[axis] + bounds.hi[axis]);
-        const float half = 0.5f * (bounds.hi[axis] - bounds.lo[axis]);
-        distanceSquared += (center - cameraPosition[axis]) * (center - cameraPosition[axis]);
-        radiusSquared += half * half;
-      }
-      // Nearest the camera any of the particles can be; the view depth is at least half the distance for anything in view.
-      const float nearest = std::max(std::sqrt(distanceSquared) - std::sqrt(radiusSquared), 0.0f);
-      const float depth = std::max(0.5f * nearest, 0.25f);
-      const float area = 4.0f * bounds.maxHalfSize * bounds.maxHalfSize * pixelScaleX * pixelScaleY / (depth * depth);
-      if (area >= areaThreshold) {
-        return true;
+      ParticleBufferShadow& shadow = found->second;
+      shadow.hasLarge = false;
+      const std::size_t first = workItem->mIntervalCursor;
+      const std::size_t end = std::min<std::size_t>(workItem->mRenderStartIndex, shadow.particles.size());
+      for (std::size_t index = first; index < end; ++index) {
+        const ShadowParticle& p = shadow.particles[index];
+        const float t = time - p.start;
+        if (!(t < p.lifetime) || t < 0.0f) {
+          continue;
+        }
+        // The vertex shader's position (particle.fx WorldVS).
+        float position[3];
+        if (bucket.dragEnabled) {
+          const float decay = std::exp(-p.drag[0] * t) - 1.0f;
+          for (int axis = 0; axis < 3; ++axis) {
+            position[axis] = (p.drag[2] * p.acceleration[axis] - p.drag[1] * p.velocity[axis]) * decay + p.drag[1] * p.acceleration[axis] * t +
+                             p.position[axis];
+          }
+        } else {
+          for (int axis = 0; axis < 3; ++axis) {
+            position[axis] = p.position[axis] + p.velocity[axis] * t + 0.5f * p.acceleration[axis] * t * t;
+          }
+        }
+        const float w = position[0] * m[3] + position[1] * m[7] + position[2] * m[11] + m[15];
+        if (w < 0.25f) {
+          continue; // behind the camera, or on top of it
+        }
+        const float half = std::fabs(p.size + p.sizeDelta * t);
+        const float width = 2.0f * half * gate.scaleX / w;
+        const float height = 2.0f * half * gate.scaleY / w;
+        const float area = width * height;
+        if (area < gate.area) {
+          continue;
+        }
+        // On the screen (viewport pixels): the quad's centre and a radius that holds it at any rotation.
+        const float x = (position[0] * m[0] + position[1] * m[4] + position[2] * m[8] + m[12]) / w;
+        const float y = (position[0] * m[1] + position[1] * m[5] + position[2] * m[9] + m[13]) / w;
+        const float centerX = (x + 1.0f) * 0.5f * gate.viewportWidth;
+        const float centerY = (1.0f - y) * 0.5f * gate.viewportHeight;
+        const float radius = 0.72f * std::max(width, height);
+        const float left = std::max(centerX - radius, 0.0f);
+        const float right = std::min(centerX + radius, gate.viewportWidth);
+        const float top = std::max(centerY - radius, 0.0f);
+        const float bottom = std::min(centerY + radius, gate.viewportHeight);
+        if (right <= left || bottom <= top) {
+          continue; // off the screen
+        }
+        shadow.hasLarge = true;
+        ++stats.count;
+        stats.pixels += (right - left) * (bottom - top) * std::min(1.0f, area / std::max((right - left) * (bottom - top), 1.0f));
+        stats.left = std::min(stats.left, left);
+        stats.right = std::max(stats.right, right);
+        stats.top = std::min(stats.top, top);
+        stats.bottom = std::max(stats.bottom, bottom);
       }
     }
-    return false;
   }
 
-  void DrawParticleBucket(SParticleRenderBucket& bucket, const bool lowResolution)
+  void DrawParticleBucket(SParticleRenderBucket& bucket, const ParticleDrawPass pass, const LargeQuadGate& gate)
   {
     const std::size_t activeWorkItemCount = bucket.activeWorkItems.size();
-    bucket.SelectTechnique(lowResolution);
+    bucket.SelectTechnique(pass == ParticleDrawPass::LowResolution);
 
     if (ParticleBatchActive() && RenderParticleBucketBatched(bucket)) {
       return;
@@ -1052,6 +1115,16 @@ namespace moho
       }
 
       auto* const particleBuffer = static_cast<ParticleBuffer*>(workItem->mParticleBuffer);
+      if (pass != ParticleDrawPass::Normal) {
+        const auto shadow = sParticleShadows.find(particleBuffer);
+        const bool large = shadow == sParticleShadows.end() || shadow->second.hasLarge;
+        if (pass == ParticleDrawPass::LowResolution && !large) {
+          continue;
+        }
+        if (pass == ParticleDrawPass::SmallOnly) {
+          particlelowres::SelectQuads(large);
+        }
+      }
       const std::uint32_t startIndex = workItem->mIntervalCursor;
       const std::uint32_t renderCount =
         (workItem->mRenderStartIndex > startIndex) ? (workItem->mRenderStartIndex - startIndex) : 0U;

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 
 #include <d3d9.h>
@@ -19,6 +20,7 @@
 #include "gpg/gal/Error.hpp"
 #include "gpg/gal/OutputContext.hpp"
 #include "gpg/gal/RenderTarget.hpp"
+#include "gpg/gal/RenderProfiler.h"
 #include "gpg/gal/RenderTargetContext.hpp"
 #include "moho/console/CConCommand.h"
 #include "moho/particles/ParticleEffectPatch.h"
@@ -33,6 +35,7 @@ namespace moho
 {
   int ren_ParticleLowRes = 0;
   float ren_ParticleLowResSize = 320.0f;
+  float ren_ParticleLowResMinMpix = 30.0f;
 
   namespace
   {
@@ -73,6 +76,13 @@ namespace moho
       render::RegisterFeature(feature);
       return true;
     }();
+
+    TConVar<float> gTConVar_ren_ParticleLowResMinMpix(
+      "ren_ParticleLowResMinMpix",
+      "Millions of pixels of large particle quads (overdraw included) that a run of particle buckets must be estimated to cover before ren_ParticleLowRes "
+      "takes over for it: below that the extra passes cost more than they save. 0 uses the low-resolution path whenever there is a large quad.",
+      &ren_ParticleLowResMinMpix
+    );
 
     [[nodiscard]] bool EnvironmentValue(const char* const name, double& value)
     {
@@ -130,7 +140,11 @@ namespace moho
     {
       gpg::gal::Device* device = nullptr;
       boost::shared_ptr<gpg::gal::RenderTarget> accum; // premultiplied colour, coverage in alpha
-      boost::shared_ptr<gpg::gal::RenderTarget> depth; // the downsampled scene depth, packed (RG16)
+      boost::shared_ptr<gpg::gal::DepthStencilTarget> depth; // the downsampled scene depth (also the depth buffer of the accumulation passes)
+      boost::shared_ptr<gpg::gal::DepthStencilTarget> sceneCopy; // a sampled copy of the scene depth, made once per RenderEffects call
+      std::uint32_t sceneCopyWidth = 0U;
+      std::uint32_t sceneCopyHeight = 0U;
+      bool copyFailed = false;
       std::uint32_t lowWidth = 0U;
       std::uint32_t lowHeight = 0U;
       std::uint32_t scale = 0U;
@@ -144,14 +158,14 @@ namespace moho
       // One RenderEffects call.
       bool active = false;
       bool depthReady = false;
+      bool depthOk = false;
+      int currentMode = 0; // LRParams.x as last set
       gpg::gal::OutputContext saved;
       D3DVIEWPORT9 savedViewport{};
       std::uint32_t sceneWidth = 0U;
       std::uint32_t sceneHeight = 0U;
-      float areaThreshold = 0.0f;
-      float cameraPosition[3] = {};
-      float pixelScaleX = 0.0f; // projection scale times half the viewport: a quad of half size s at depth d is 2*s*scale/d pixels wide
-      float pixelScaleY = 0.0f;
+      LargeQuadGate gate; // scale: projection scale times half the viewport: a quad of half size s at depth d is 2*s*scale/d pixels wide
+      std::optional<gpg::gal::RenderProfileScope> accumScope; // FAF_GPU_PROFILE: the accumulation draws of a run
       std::uint32_t runs = 0U;
       std::uint32_t frames = 0U;
       std::uint32_t totalRuns = 0U;
@@ -239,9 +253,9 @@ namespace moho
       }
       ReleaseTargets(state);
       try {
-        // 2: B8G8R8A8; 7: R16G16 (render target formats of the dxgi table).
+        // 2: B8G8R8A8 (render target format of the dxgi table); depth format 3: D24S8, sampled (the composite reads it).
         state.accum = gpg::gal::RenderTarget::Create(gpg::gal::RenderTargetContext(width, height, 2U));
-        state.depth = gpg::gal::RenderTarget::Create(gpg::gal::RenderTargetContext(width, height, 7U));
+        state.depth = gpg::gal::DepthStencilTarget::Create(gpg::gal::DepthStencilTargetContext(width, height, 3U, true));
       } catch (const gpg::gal::Error& error) {
         gpg::Warnf("ParticleLowRes: cannot create the %ux%u targets: %s", width, height, error.what());
         ReleaseTargets(state);
@@ -280,8 +294,38 @@ namespace moho
     {
       Variables& vars = GetVariables();
       if (vars.sceneDepth.Exists()) {
-        vars.sceneDepth.mEffectVariable->SetDepthStencil(bind ? state.saved.depthStencil : boost::shared_ptr<gpg::gal::DepthStencilTarget>());
+        vars.sceneDepth.mEffectVariable->SetDepthStencil(bind ? state.sceneCopy : boost::shared_ptr<gpg::gal::DepthStencilTarget>());
       }
+    }
+
+    // A sampled copy of the scene depth: the depth buffer itself stays a depth output (sampling it would move it between states for
+    // every run, and some GPUs decompress it each time).
+    bool CopySceneDepth(State& state)
+    {
+      if (state.copyFailed) {
+        return false;
+      }
+      gpg::gal::DepthStencilTargetContext* const source = state.saved.depthStencil->GetContext();
+      if (state.sceneCopy == nullptr || state.sceneCopyWidth != source->width_ || state.sceneCopyHeight != source->height_) {
+        state.sceneCopy.reset();
+        try {
+          state.sceneCopy = gpg::gal::DepthStencilTarget::Create(
+            gpg::gal::DepthStencilTargetContext(source->width_, source->height_, source->format_, true)
+          );
+        } catch (const gpg::gal::Error& error) {
+          gpg::Warnf("ParticleLowRes: cannot create the scene depth copy: %s", error.what());
+          state.copyFailed = true;
+          return false;
+        }
+        state.sceneCopyWidth = source->width_;
+        state.sceneCopyHeight = source->height_;
+      }
+      if (state.sceneCopy == nullptr || !state.device->CopyDepthStencil(*state.sceneCopy, *state.saved.depthStencil)) {
+        gpg::Warnf("ParticleLowRes: the backend cannot copy the scene depth; the path stays off");
+        state.copyFailed = true;
+        return false;
+      }
+      return true;
     }
 
     void BindTexture(ShaderVar& variable, const boost::shared_ptr<gpg::gal::RenderTarget>& target)
@@ -291,8 +335,16 @@ namespace moho
       }
     }
 
+    void BindDepthTexture(ShaderVar& variable, const boost::shared_ptr<gpg::gal::DepthStencilTarget>& target)
+    {
+      if (variable.Exists()) {
+        variable.mEffectVariable->SetDepthStencil(target);
+      }
+    }
+
     void SetMode(State& state, const int mode)
     {
+      state.currentMode = mode;
       Variables& vars = GetVariables();
       const float side = SizeSetting();
       SetVector(
@@ -302,25 +354,33 @@ namespace moho
     }
 
     // The farthest scene depth of each low-resolution pixel's footprint, into the depth target (once per RenderEffects call).
-    void DownsampleDepth(State& state)
+    bool DownsampleDepth(State& state)
     {
       if (state.depthReady) {
-        return;
+        return state.depthOk;
       }
       state.depthReady = true;
+      state.depthOk = false;
+      const gpg::gal::RenderProfileScope profileDepth("LRDepth");
+      if (!CopySceneDepth(state)) {
+        return false;
+      }
+      state.depthOk = true;
       CD3DDevice* const d3d = D3D_GetDevice();
       gpg::gal::Device* const device = state.device;
 
       SetSceneUniforms(state, state.savedViewport);
       BindSceneDepth(state, true);
 
-      const gpg::gal::OutputContext output(state.depth, boost::shared_ptr<gpg::gal::DepthStencilTarget>());
+      // The pixel shader writes the depth; the colour target is the accumulation target, with every write masked.
+      const gpg::gal::OutputContext output(state.accum, state.depth);
       device->ClearTarget(&output);
       D3DVIEWPORT9 viewport{};
       viewport.Width = state.lowWidth;
       viewport.Height = state.lowHeight;
       viewport.MaxZ = 1.0f;
       device->SetViewport(&viewport);
+      device->SetColorWriteState(false, false);
       SetVector(GetVariables().quad, static_cast<float>(state.lowWidth), static_cast<float>(state.lowHeight),
                 1.0f / static_cast<float>(state.lowWidth), 1.0f / static_cast<float>(state.lowHeight));
       BindQuad(state.lowQuad, state.lowQuadWidth, state.lowQuadHeight, static_cast<float>(state.lowWidth), static_cast<float>(state.lowHeight));
@@ -329,6 +389,8 @@ namespace moho
       BindSceneDepth(state, false);
       device->ClearTarget(&state.saved);
       device->SetViewport(&state.savedViewport);
+      device->SetColorWriteState(true, false);
+      return true;
     }
   } // namespace
 
@@ -349,11 +411,6 @@ namespace moho
       return false;
     }
     return bucket.blendMode == 0 || bucket.blendMode == 3 || bucket.blendMode == 4;
-  }
-
-  int ParticleLowResClass(const SParticleRenderBucket& bucket) noexcept
-  {
-    return bucket.blendMode == 3 ? 0 : 1;
   }
 
   namespace particlelowres
@@ -377,13 +434,13 @@ namespace moho
 
       CD3DDevice* const d3d = D3D_GetDevice();
       CD3DEffect* const effect = d3d != nullptr ? d3d->GetCurEffect() : nullptr;
-      if (effect == nullptr || !HasTechnique(*effect, "LRComposite_ADD") || !HasTechnique(*effect, "LRDownsample2") ||
+      if (effect == nullptr || !HasTechnique(*effect, "LRComposite") || !HasTechnique(*effect, "LRDownsample2") ||
           !HasTechnique(*effect, "LRDownsample4")) {
         return false;
       }
 
       device->GetContext(&state.saved);
-      if (state.saved.surface == nullptr || state.saved.depthStencil == nullptr || !state.saved.depthStencil->GetContext()->field0x10_) {
+      if (state.saved.surface == nullptr || state.saved.depthStencil == nullptr || state.copyFailed) {
         return false;
       }
       device->GetViewport(&state.savedViewport);
@@ -400,12 +457,17 @@ namespace moho
                static_cast<float>(state.sceneHeight));
 
       const float side = SizeSetting();
-      state.areaThreshold = side * side;
-      state.cameraPosition[0] = camera.inverseView.r[3].x;
-      state.cameraPosition[1] = camera.inverseView.r[3].y;
-      state.cameraPosition[2] = camera.inverseView.r[3].z;
-      state.pixelScaleX = camera.projection.r[0].x * static_cast<float>(state.savedViewport.Width) * 0.5f;
-      state.pixelScaleY = camera.projection.r[1].y * static_cast<float>(state.savedViewport.Height) * 0.5f;
+      state.gate.area = side * side;
+      for (int row = 0; row < 4; ++row) {
+        state.gate.viewProjection[row * 4 + 0] = camera.viewProjection.r[row].x;
+        state.gate.viewProjection[row * 4 + 1] = camera.viewProjection.r[row].y;
+        state.gate.viewProjection[row * 4 + 2] = camera.viewProjection.r[row].z;
+        state.gate.viewProjection[row * 4 + 3] = camera.viewProjection.r[row].w;
+      }
+      state.gate.viewportWidth = static_cast<float>(state.savedViewport.Width);
+      state.gate.viewportHeight = static_cast<float>(state.savedViewport.Height);
+      state.gate.scaleX = camera.projection.r[0].x * static_cast<float>(state.savedViewport.Width) * 0.5f;
+      state.gate.scaleY = camera.projection.r[1].y * static_cast<float>(state.savedViewport.Height) * 0.5f;
 
       state.active = true;
       state.depthReady = false;
@@ -414,24 +476,35 @@ namespace moho
       return true;
     }
 
-    bool MayHaveLargeQuads(const SParticleRenderBucket& bucket)
+    const LargeQuadGate& Gate()
     {
-      const State& state = GetState();
-      return ParticleBucketMayHaveLargeQuads(bucket, state.cameraPosition, state.pixelScaleX, state.pixelScaleY, state.areaThreshold);
+      return GetState().gate;
     }
 
-    void BeginAccumulate()
+    bool WorthIt(const LargeQuadStats& stats)
+    {
+      static const float envMinimum = [] {
+        double value = 0.0;
+        return EnvironmentValue("FAF_PARTICLE_LOWRES_MINMPIX", value) ? static_cast<float>(value) : -1.0f;
+      }();
+      const float minimum = envMinimum >= 0.0f ? envMinimum : ren_ParticleLowResMinMpix;
+      return stats.count != 0U && stats.pixels >= minimum * 1.0e6f;
+    }
+
+    bool BeginAccumulate()
     {
       State& state = GetState();
-      DownsampleDepth(state);
+      if (!DownsampleDepth(state)) {
+        return false;
+      }
 
       gpg::gal::Device* const device = state.device;
       SetSceneUniforms(state, state.savedViewport);
       Variables& vars = GetVariables();
-      BindTexture(vars.depth, state.depth);
+      BindDepthTexture(vars.depth, boost::shared_ptr<gpg::gal::DepthStencilTarget>());
       BindTexture(vars.accum, boost::shared_ptr<gpg::gal::RenderTarget>());
 
-      const gpg::gal::OutputContext output(state.accum, boost::shared_ptr<gpg::gal::DepthStencilTarget>());
+      const gpg::gal::OutputContext output(state.accum, state.depth);
       device->ClearTarget(&output);
       D3DVIEWPORT9 viewport{};
       viewport.Width = state.lowWidth;
@@ -442,11 +515,16 @@ namespace moho
       device->Clear(true, false, false, 0x00000000U, 1.0f, 0);
       SetMode(state, 2);
       ++state.runs;
+      state.accumScope.reset();
+      state.accumScope.emplace("LRAccum");
+      return true;
     }
 
-    void Composite(const bool overClass)
+    void Composite()
     {
       State& state = GetState();
+      state.accumScope.reset();
+      const gpg::gal::RenderProfileScope profileComposite("LRComposite");
       gpg::gal::Device* const device = state.device;
       CD3DDevice* const d3d = D3D_GetDevice();
       Variables& vars = GetVariables();
@@ -458,18 +536,35 @@ namespace moho
       device->SetColorWriteState(true, false);
 
       BindTexture(vars.accum, state.accum);
-      BindTexture(vars.depth, state.depth);
+      BindDepthTexture(vars.depth, state.depth);
       BindSceneDepth(state, true);
       SetVector(vars.quad, static_cast<float>(state.sceneWidth), static_cast<float>(state.sceneHeight),
                 1.0f / static_cast<float>(state.sceneWidth), 1.0f / static_cast<float>(state.sceneHeight));
-      SelectAndDraw(*d3d, state.sceneQuad, overClass ? "LRComposite_OVER" : "LRComposite_ADD");
+      SelectAndDraw(*d3d, state.sceneQuad, "LRComposite");
       BindSceneDepth(state, false);
       BindTexture(vars.accum, boost::shared_ptr<gpg::gal::RenderTarget>());
-      BindTexture(vars.depth, boost::shared_ptr<gpg::gal::RenderTarget>());
+      BindDepthTexture(vars.depth, boost::shared_ptr<gpg::gal::DepthStencilTarget>());
 
       device->ClearTarget(&state.saved);
       device->SetViewport(&state.savedViewport);
-      SetMode(state, 1);
+      SetMode(state, 0);
+    }
+
+    void NoteRun(const float sortScalar, const std::size_t buckets, const LargeQuadStats& stats)
+    {
+      State& state = GetState();
+      if (Debugging() && (state.frames / 2U) % 120U == 0U) {
+        gpg::Logf("ParticleLowRes: run sort %g: %u buckets, %u large quads, about %.1f Mpix, rectangle (%.0f %.0f)-(%.0f %.0f)", sortScalar,
+                  static_cast<unsigned>(buckets), stats.count, stats.pixels * 1.0e-6f, stats.left, stats.top, stats.right, stats.bottom);
+      }
+    }
+
+    void SelectQuads(const bool onlySmall)
+    {
+      State& state = GetState();
+      if (state.currentMode != (onlySmall ? 1 : 0)) {
+        SetMode(state, onlySmall ? 1 : 0);
+      }
     }
 
     void EndRun()

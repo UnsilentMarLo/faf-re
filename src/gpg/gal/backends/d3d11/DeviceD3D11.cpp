@@ -675,8 +675,7 @@ namespace gpg::gal
       OutputContext& output = mHeadOutputContexts[headIndex];
       output.surface.reset(new RenderTargetD3D11(backBuffer.Get(), renderTargetView.Get(), shaderResourceView.Get()));
       gpg::Logf("D3D11: head %u back buffer target %p (%ux%u)", static_cast<unsigned>(headIndex), output.surface.get(), desc.Width, desc.Height);
-      // Sampled: the particle low-resolution passes read the scene depth (src/moho/particles/ParticleLowRes.cpp).
-      const DepthStencilTargetContext depthContext(desc.Width, desc.Height, 3U, true);
+      const DepthStencilTargetContext depthContext(desc.Width, desc.Height, 3U, false);
       output.depthStencil = CreateDepthStencilTarget(&depthContext);
     }
 
@@ -2283,6 +2282,17 @@ namespace gpg::gal
     if (mGpuDriven != nullptr) {
       mGpuDriven->EndProfileRegion(region);
     }
+  }
+
+  bool DeviceD3D11::CopyDepthStencil(DepthStencilTarget& destination, DepthStencilTarget& source)
+  {
+    auto& to = static_cast<DepthStencilTargetD3D11&>(destination);
+    auto& from = static_cast<DepthStencilTargetD3D11&>(source);
+    if (&to == &from || to.GetContext()->width_ != from.GetContext()->width_ || to.GetContext()->height_ != from.GetContext()->height_) {
+      return false;
+    }
+    mImmediate->CopyResource(to.GetTexture(), from.GetTexture());
+    return true;
   }
 
   bool DeviceD3D11::CopyVertexBufferRegion(
