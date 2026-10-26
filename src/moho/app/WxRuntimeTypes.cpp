@@ -1167,6 +1167,11 @@ namespace
     WSupComFrame& frame
   )
   {
+    // EDITOR: a minimized window has no client area worth a back buffer; the restore that follows sends its own size message.
+    if (::IsIconic(reinterpret_cast<HWND>(static_cast<std::uintptr_t>(frame.GetHandle()))) != FALSE) {
+      return;
+    }
+
     int width = 0;
     int height = 0;
     frame.GetClientSize(&width, &height);
@@ -1197,6 +1202,7 @@ namespace
     }
 
     gpg::gal::DeviceContext context(*activeContext);
+    const bool sameSize = context.GetHeadCount() > 0 && context.GetHead(0).mWidth == width && context.GetHead(0).mHeight == height;
     if (context.GetHeadCount() > 0) {
       gpg::gal::Head& head = context.GetHead(0);
       head.mWidth = width;
@@ -1208,6 +1214,11 @@ namespace
       return;
     }
 
+    // EDITOR: restoring or maximizing a window whose back buffer already has this size changes nothing for the device; a Reset anyway releases and recreates every
+    // render target, shadow map and dynamic texture, and on a hybrid laptop GPU (the copy to the display adapter is rebuilt too) it showed as seconds of flicker.
+    if (sameSize && d3dDevice->mInitialized != 0) {
+      return;
+    }
     d3dDevice->Clear();
     d3dDevice->InitContext(&context);
   }

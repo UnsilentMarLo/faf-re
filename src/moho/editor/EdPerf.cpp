@@ -24,6 +24,7 @@
 #include "moho/core/Thread.h"
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/lua/CScrLuaInitForm.h"
+#include "moho/render/RenderInfo.h"
 #include "moho/sim/CWldSession.h"
 
 namespace gpg::gal
@@ -41,14 +42,15 @@ namespace moho::editor::perf
     float gFpsLimit = 300.0f;
     float gFpsLoading = 60.0f;
     float gFpsBackground = 60.0f;
-    float gFpsIdle = 0.0f;
-    float gIdleSeconds = 10.0f;
+    float gFpsIdle = 60.0f;
+    float gIdleSeconds = 3.0f;
+    bool gFollowRefresh = true;
 
     TConVar<bool> gConThrottle("ed_fps_throttle", "Editor: 1 = the frame rate limiter of the main loop is on (ed_fps_limit, ed_fps_loading, ed_fps_background, ed_fps_idle)", &gThrottleOn);
     TConVar<float> gConLimit("ed_fps_limit", "Editor: frames per second cap while the editor is in use, 0 = none (default 300)", &gFpsLimit);
     TConVar<float> gConLoading("ed_fps_loading", "Editor: frames per second cap while a map loads, 0 = none (default 60)", &gFpsLoading);
     TConVar<float> gConBackground("ed_fps_background", "Editor: frames per second cap while another program has the focus, 0 = none (default 60)", &gFpsBackground);
-    TConVar<float> gConIdle("ed_fps_idle", "Editor: frames per second cap after ed_idle_seconds without keyboard or mouse input, 0 = none (default 0)", &gFpsIdle);
+    TConVar<float> gConIdle("ed_fps_idle", "Editor: frames per second cap after ed_idle_seconds without keyboard or mouse input, 0 = none (default 60: a still scene needs no more, input lifts the cap at once)", &gFpsIdle);
     bool gPresentWait = true;
     TConVar<bool> gConPresentWait("ed_present_wait", "Editor: 1 = Present waits for the GPU in short sleeps instead of a spin that keeps a core at 100 percent (default 1)", &gPresentWait);
     bool gParallelNormalMap = true;
@@ -61,7 +63,8 @@ namespace moho::editor::perf
     TConVar<float> gConGcMax("ed_gc_max_seconds", "Editor: longest time between two forced Lua collections while the heap does not grow (default 60)", &gGcMaxSeconds);
     GcGate gUiGate;
     GcGate gSimGate;
-    TConVar<float> gConIdleSeconds("ed_idle_seconds", "Editor: seconds without input before ed_fps_idle applies (default 10)", &gIdleSeconds);
+    TConVar<bool> gConFollowRefresh("ed_fps_refresh", "Editor: 1 = the active frame rate cap never exceeds the refresh rate of the monitor the window is on (plus 5 percent), so a driver that does not block in Present (hybrid laptops, vsync off) cannot draw frames nobody sees (default 1)", &gFollowRefresh);
+    TConVar<float> gConIdleSeconds("ed_idle_seconds", "Editor: seconds without input before ed_fps_idle applies (default 3)", &gIdleSeconds);
 
     // ---- clock ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -77,9 +80,31 @@ namespace moho::editor::perf
       std::int64_t at = 0;
       bool foreground = true;
       double idleSeconds = 0.0;
+      float refreshHz = 0.0f;        // refresh rate of the monitor the main window is on, 0 = unknown
+      std::int64_t refreshAt = 0;
     } gSampled;
 
     constexpr std::int64_t kSampleIntervalNs = 200 * 1000 * 1000;
+
+    /** Refresh rate in Hz of the monitor `window` is on; 0 when Windows does not say (or reports the "hardware default" 0 / 1). */
+    float MonitorRefreshHz(void* const window) noexcept
+    {
+      if (window == nullptr) {
+        return 0.0f;
+      }
+      HMONITOR const monitor = ::MonitorFromWindow(static_cast<HWND>(window), MONITOR_DEFAULTTONEAREST);
+      MONITORINFOEXW info{};
+      info.cbSize = sizeof(info);
+      if (monitor == nullptr || ::GetMonitorInfoW(monitor, &info) == FALSE) {
+        return 0.0f;
+      }
+      DEVMODEW mode{};
+      mode.dmSize = sizeof(mode);
+      if (::EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) == FALSE || mode.dmDisplayFrequency <= 1) {
+        return 0.0f;
+      }
+      return static_cast<float>(mode.dmDisplayFrequency);
+    }
 
     void RefreshSampled(const std::int64_t now) noexcept
     {
@@ -300,6 +325,10 @@ namespace moho::editor::perf
 
     const std::int64_t now = NowNs();
     RefreshSampled(now);
+    if (gSampled.refreshAt == 0 || now - gSampled.refreshAt > 5 * 1000 * 1000 * 1000LL) {   // the window can be dragged to another monitor
+      gSampled.refreshAt = now;
+      gSampled.refreshHz = MonitorRefreshHz(mainWindow);
+    }
 
     Situation s;
     s.minimized = mainWindow != nullptr && ::IsIconic(static_cast<HWND>(mainWindow)) != FALSE;
@@ -310,6 +339,10 @@ namespace moho::editor::perf
 
     Caps caps;
     caps.active = gFpsLimit;
+    if (gFollowRefresh && gSampled.refreshHz > 0.0f) {
+      const float shown = gSampled.refreshHz * 1.05f;
+      caps.active = caps.active > 0.0f ? std::min(caps.active, shown) : shown;
+    }
     caps.loading = gFpsLoading;
     caps.background = gFpsBackground;
     caps.idle = gFpsIdle;
@@ -535,6 +568,20 @@ namespace moho::editor::perf
       return 1;
     }
 
+    // ed_engine_info() -> { built = "Oct 26 2026 11:21:00", renderInfo = <the ren_Info text block>, refreshHz, cap, followRefresh }
+    //   Which exe this is (the packaged Lua can be newer than the exe: compare with buildinfo.lua), what the renderer runs on (adapter, driver; on a hybrid laptop the
+    //   proof which GPU draws), and the frame rate bound the limiter derived from the monitor.
+    int __cdecl cfunc_EdEngineInfo(lua_State* const L)
+    {
+      lua_newtable(L);
+      SetString(L, "built", __DATE__ " " __TIME__);
+      SetString(L, "renderInfo", REN_FormatRuntimeInfo().c_str());
+      SetNumber(L, "refreshHz", gSampled.refreshHz);
+      SetNumber(L, "cap", gLastCap);
+      SetBool(L, "followRefresh", gFollowRefresh);
+      return 1;
+    }
+
     [[nodiscard]] CScrLuaInitFormSet& UserLuaInitSet()
     {
       if (CScrLuaInitFormSet* const set = SCR_FindLuaInitFormSet("User"); set != nullptr) {
@@ -551,6 +598,8 @@ namespace moho::editor::perf
         auto& set = UserLuaInitSet();
         (void)new CScrLuaBinder(set, "ed_perf_loop", &cfunc_EdPerfLoop, nullptr, "<global>",
                                 "ed_perf_loop([reset]) -> { fps, frameMs, maxFrameMs, mainMs, dispatchMs, waitMs, idleMs, presentMs, renderMs, cap, state, vsync, frames }");
+        (void)new CScrLuaBinder(set, "ed_engine_info", &cfunc_EdEngineInfo, nullptr, "<global>",
+                                "ed_engine_info() -> { built, renderInfo, refreshHz, cap, followRefresh }");
         (void)new CScrLuaBinder(set, "ed_perf_threads", &cfunc_EdPerfThreads, nullptr, "<global>",
                                 "ed_perf_threads() -> { { id, name, cpu, totalMs, main }, ... } sorted by cpu (percent of one core since the last call)");
       }

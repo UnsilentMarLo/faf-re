@@ -9,8 +9,10 @@
 //   * active    `ed_fps_limit`       default 300: far above any monitor, so it never shows; it only stops an unbounded loop.
 //   * loading   `ed_fps_loading`     default 60 : while a map is being loaded the loader thread does the work, the main thread only draws the loading screen.
 //   * background `ed_fps_background` default 60 : the editor window is not the foreground window of the system (the user works in another program).
-//   * idle      `ed_fps_idle`        default 0 (off): no keyboard / mouse input anywhere for `ed_idle_seconds`. A power saving option; off by default because a test run
-//                                    that is only watched, or a camera animation, is "idle" too and must not lose smoothness.
+//   * idle      `ed_fps_idle`        default 60 after `ed_idle_seconds` (3): no keyboard / mouse input anywhere. A still scene (water and clouds still move) needs no more than
+//                                    60 pictures a second, and a 144 Hz laptop panel doubles the GPU load for nothing; the first input lifts the cap at once. 0 switches it off.
+//   * active    is also bounded by the refresh rate of the monitor (+ 5 percent) unless `ed_fps_refresh 0`: a driver that does not block in Present (hybrid laptops) draws no
+//                                    frame nobody can see. (EdPerf.cpp composes it; the struct below keeps the plain caps so the truth table is tested as it was.)
 // The effective cap is the smallest non-zero cap that applies. Input never waits for a frame: the wait is interrupted by any message (see EdPerf.cpp).
 #pragma once
 

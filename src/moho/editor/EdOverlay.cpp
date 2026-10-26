@@ -1686,14 +1686,17 @@ namespace moho
               }
               lod::TreeParams params;
               params.th = lod::Thresholds{lod::kGridRefinePx, lod::kGridMergePx};
-              params.maxLeaves = lod::kGridMaxLeaves;
+              // The leaf budget follows the screen: leaves are 7-20 px across, so a 2560x1600 view needs more than the 20,000 a 1080p view does. A grid that runs out of
+              // leaves keeps the far ground coarse, and where that border lies moves with every camera change (the grid "switched resolution").
+              const float budgetScale = std::max(1.0f, vw * vh / (1920.0f * 1080.0f));
+              params.maxLeaves = static_cast<int>(static_cast<float>(lod::kGridMaxLeaves) * budgetScale);
               static lod::Tree tree;
               const auto probe = [&](const lod::Key& k) { return ProbeBlock(ctx, table, k, gPerf.buildGridNodesProjected); };
               lod::BuildTree(roots, probe, gGridState, gridTreeFrame, params, tree);
 
               namespace od = moho::editor::overlaydrape;
               od::QuadBudget budget;
-              budget.cap = lod::kGridSegmentCap;
+              budget.cap = static_cast<int>(static_cast<float>(lod::kGridSegmentCap) * budgetScale);
               budget.committed = static_cast<int>(tree.leaves.size()) * 2;
               const auto make = [&ctx](const int x, const int z) { return ProjectGround(ctx, x, z); };
               const auto node = [&](const int x, const int z, od::Node& n) {

@@ -2,6 +2,7 @@
 #include "moho/render/RCamManager.h"
 
 #include <cstring>
+#include <algorithm>
 #include <cstdlib>
 #include <cstdint>
 #include <new>
@@ -326,7 +327,8 @@ namespace moho
       return;
     }
 
-    const int lodIndex = std::atoi(ConCommandArg(args, 1)->c_str());
+    // EDITOR: an index outside 0..2 (a damaged saved setting) read past the table: a random LOD scale for the whole session
+    const int lodIndex = std::min(2, std::max(0, std::atoi(ConCommandArg(args, 1)->c_str())));
     const float lodValues[3] = {cam_LowLOD, cam_MediumLOD, cam_HighLOD};
     const float selectedLod = lodValues[lodIndex];
 

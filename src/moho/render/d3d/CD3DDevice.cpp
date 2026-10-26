@@ -222,6 +222,11 @@ namespace
   // (FAF instrumentation, see DrawStatisticsLog).
   double sPresentSeconds = 0.0;
 
+  // EDITOR: device loss and reset bookkeeping (CD3DDevice::Paint / InitContext).
+  bool sDeviceNeedsRetry = false;   // a Reset failed: Paint polls the device and tries again
+  bool sDeviceWasLost = false;
+  std::chrono::steady_clock::time_point sDeviceLostSince;
+
   class DrawStatisticsLog
   {
   public:
@@ -398,6 +403,16 @@ namespace moho
       return false;
     }
 
+    // EDITOR: what a device reset costs is logged (hybrid laptop GPUs: the log and the Display report show where the time goes).
+    using ResetClock = std::chrono::steady_clock;
+    const auto resetT0 = ResetClock::now();
+    auto resetT1 = resetT0;
+    auto resetT2 = resetT0;
+    auto resetT3 = resetT0;
+    const auto elapsedMs = [](const ResetClock::time_point a, const ResetClock::time_point b) {
+      return std::chrono::duration<double, std::milli>(b - a).count();
+    };
+    const bool wasInitialized = mInitialized != 0;
     try {
       mInitialized = 0;
 
@@ -422,9 +437,11 @@ namespace moho
         ReleaseHeadWriterLocks(headIndex);
       }
 
+      resetT1 = ResetClock::now();
       if (device != nullptr) {
         device->Reset(context);
       }
+      resetT2 = ResetClock::now();
 
       for (std::size_t headIndex = 0U; headIndex < lockHeadCount; ++headIndex) {
         if (device == nullptr) {
@@ -440,6 +457,7 @@ namespace moho
       }
 
       mResources.InitResources(false);
+      resetT3 = ResetClock::now();
 
       if (mViewport != nullptr) {
         mViewport->D3DWindowOnDeviceInit(false);
@@ -458,8 +476,16 @@ namespace moho
       }
 
       mInitialized = 1;
+      sDeviceNeedsRetry = false;
+      gpg::Logf(
+        "EDITOR device reset: %dx%d, release %.1f ms, IDirect3DDevice9::Reset %.1f ms, resources %.1f ms, viewport init and UI relayout %.1f ms, total %.1f ms",
+        headCount > 0 ? context->GetHead(0).mWidth : 0, headCount > 0 ? context->GetHead(0).mHeight : 0, elapsedMs(resetT0, resetT1), elapsedMs(resetT1, resetT2),
+        elapsedMs(resetT2, resetT3), elapsedMs(resetT3, ResetClock::now()), elapsedMs(resetT0, ResetClock::now()));
     } catch (const gpg::gal::Error& error) {
       gpg::Warnf("%s(%d) %s", error.GetFile(), error.GetLine(), error.what());
+      gpg::Warnf("EDITOR device reset failed after %.1f ms (the editor retries while the device is lost)", elapsedMs(resetT0, ResetClock::now()));
+      // The device was lost again before Reset could finish; Paint polls TestCooperativeLevel and tries again (the original waited for the next window message).
+      sDeviceNeedsRetry = wasInitialized;
     }
     return mInitialized != 0;
   }
@@ -1740,6 +1766,23 @@ namespace moho
    */
   void CD3DDevice::Paint()
   {
+    if (mInitialized == 0 && sDeviceNeedsRetry && gpg::gal::Device::IsReady() && mViewport != nullptr) {
+      // EDITOR: a Reset that failed (device lost again) used to stay failed until some window message came; poll ten times a second.
+      static std::chrono::steady_clock::time_point sLastTry;
+      const auto now = std::chrono::steady_clock::now();
+      if (now - sLastTry >= std::chrono::milliseconds(100)) {
+        sLastTry = now;
+        gpg::gal::Device* const lostDevice = gpg::gal::Device::GetInstance();
+        try {
+          if (lostDevice->TestCooperativeLevel() == 1) {
+            (void)InitContext(lostDevice->GetDeviceContext());
+          }
+        } catch (const gpg::gal::Error&) {
+        }
+      }
+      return;
+    }
+
     if (mInitialized == 0 || !gpg::gal::Device::IsReady() || mViewport == nullptr) {
       return;
     }
@@ -1748,11 +1791,31 @@ namespace moho
     try {
       const int coop = device->TestCooperativeLevel();
       if (coop == 2) {
+        if (!sDeviceWasLost) {
+          sDeviceWasLost = true;
+          sDeviceLostSince = std::chrono::steady_clock::now();
+          gpg::Logf("EDITOR device: lost (window minimized, session locked or the driver reset it); drawing stops until it can be reset");
+        }
+        ::Sleep(8);   // EDITOR: a lost device is polled about 100 times a second, not as fast as the loop runs
         return;
+      }
+      if (sDeviceWasLost) {
+        sDeviceWasLost = false;
+        gpg::Logf("EDITOR device: back after %.0f ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sDeviceLostSince).count());
       }
       if (coop == 1) {
         gpg::gal::DeviceContext* const context = device->GetDeviceContext();
-        (void)InitContext(context);
+        if (!InitContext(context)) {
+          return;
+        }
+        // EDITOR: right after a Reset the back buffer holds nothing (swap effect DISCARD); presenting it showed black or old pixels for a frame. Draw first and show
+        // it with the next Paint (a Paint presents the previous frame, then draws the next one).
+        if (mClearEnabled != 0) {
+          Clear();
+        } else {
+          mViewport->D3DWindowOnDeviceRender();
+        }
+        return;
       }
 
       const auto presentStart = std::chrono::steady_clock::now();
