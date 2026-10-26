@@ -35,6 +35,7 @@
 #include "boost/shared_ptr.h"
 #include "boost/weak_ptr.h"
 #include "gpg/core/utils/BoostWrappers.h"
+#include "gpg/core/utils/Logging.h"
 
 #include <d3d9.h>
 #include <d3dx9.h>
@@ -2062,7 +2063,42 @@ namespace gpg::gal
             static_cast<void>(mDirect3D->GetAdapterIdentifier(0U, 0U, &adapterIdentifier));
 
             head.mStrs.clear();
-            if (adapterIdentifier.VendorId != kVendorIdNvidia)
+            // EDITOR: no swap chain anti-aliasing when any NVIDIA adapter is installed. A hybrid NVIDIA + Intel laptop (RTX 4060 Laptop; adapter 0 need not be the card that draws) froze for
+            // good, the main thread waiting inside nvd3dumx.dll, as soon as the 8x mode was active at start. The option list stays empty (the editor offers "Off" only) and
+            // GetHeadParameters then never asks for a mode. FAFSTUDIO_NVIDIA_AA=1 brings the lists back for testing a card on its own.
+            bool editorNoAntiAliasing = false;
+#ifdef FAF_STUDIO_EDITOR
+            {
+                static bool adaptersLogged = false;
+                if (!adaptersLogged)
+                {
+                    adaptersLogged = true;
+                    for (unsigned int listed = 0; listed < mDirect3D->GetAdapterCount(); ++listed)
+                    {
+                        D3DADAPTER_IDENTIFIER9 listedIdentifier{};
+                        if (SUCCEEDED(mDirect3D->GetAdapterIdentifier(listed, 0U, &listedIdentifier)))
+                        {
+                            gpg::Logf("EDITOR D3D9 adapter %u%s: %s (vendor 0x%04X, device 0x%04X)", listed, listed == adapterIndex ? " (head 0)" : "", listedIdentifier.Description,
+                                      static_cast<unsigned int>(listedIdentifier.VendorId), static_cast<unsigned int>(listedIdentifier.DeviceId));
+                        }
+                    }
+                }
+                const char* const override = std::getenv("FAFSTUDIO_NVIDIA_AA");
+                const unsigned int installedAdapters = mDirect3D->GetAdapterCount();
+                for (unsigned int installed = 0; installed < installedAdapters && (override == nullptr || override[0] != '1'); ++installed)
+                {
+                    D3DADAPTER_IDENTIFIER9 installedIdentifier{};
+                    if (SUCCEEDED(mDirect3D->GetAdapterIdentifier(installed, 0U, &installedIdentifier)) && installedIdentifier.VendorId == kVendorIdNvidia)
+                    {
+                        editorNoAntiAliasing = true;
+                    }
+                }
+            }
+#endif
+            if (editorNoAntiAliasing)
+            {
+            }
+            else if (adapterIdentifier.VendorId != kVendorIdNvidia)
             {
                 for (unsigned int sampleType = 2U; sampleType <= 16U; ++sampleType)
                 {
@@ -2081,14 +2117,6 @@ namespace gpg::gal
                     head.mStrs.push_back(option);
                 }
             }
-#ifdef FAF_STUDIO_EDITOR
-            // EDITOR: no swap chain anti-aliasing on NVIDIA adapters. A hybrid NVIDIA + Intel laptop (RTX 4060 Laptop) froze for good, with the main thread waiting inside nvd3dumx.dll,
-            // as soon as the 8x mode (8 samples) was active; every Reset and Present of the editor's D3D9 device follows. The option list stays empty (the editor offers "Off"
-            // only) and GetHeadParameters then never asks for a mode. FAFSTUDIO_NVIDIA_AA=1 brings the list back for testing a card on its own.
-            else if (std::getenv("FAFSTUDIO_NVIDIA_AA") == nullptr || std::getenv("FAFSTUDIO_NVIDIA_AA")[0] != '1')
-            {
-            }
-#endif
             else
             {
                 struct SampleCandidate final
@@ -2313,6 +2341,15 @@ namespace gpg::gal
             new D3DPRESENT_PARAMETERS[static_cast<std::size_t>(context->GetHeadCount())];
         GetDeviceParameters(parameters, context);
 
+        {
+            const unsigned int logHeads = static_cast<unsigned int>(context->GetHeadCount());
+            for (unsigned int logHead = 0; logHead < logHeads; ++logHead)
+            {
+                gpg::Logf("EDITOR D3D9 Reset parameters: head %u %ux%u, MultiSampleType %d quality %u, %s, presentation interval %u", logHead, parameters[logHead].BackBufferWidth,
+                          parameters[logHead].BackBufferHeight, static_cast<int>(parameters[logHead].MultiSampleType), static_cast<unsigned int>(parameters[logHead].MultiSampleQuality),
+                          parameters[logHead].Windowed ? "windowed" : "full screen", static_cast<unsigned int>(parameters[logHead].PresentationInterval));
+            }
+        }
         const HRESULT resetResult = mDevice->Reset(parameters);
         if (resetResult < 0)
         {
