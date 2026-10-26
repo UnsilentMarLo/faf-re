@@ -293,6 +293,15 @@ namespace moho::lights
       out.tint[c] = out.average[c];
     }
     ReduceWhite(out.tint, kTintWhiteReduction);
+    // the tint is a colour, not a brightness (how much of the quad glows is `brightness` / `peak`): its brightest channel is 1
+    const float tintTop = std::max(out.tint[0], std::max(out.tint[1], out.tint[2]));
+    if (tintTop > 1.0e-6f) {
+      for (float& c : out.tint) {
+        c /= tintTop;
+      }
+    } else {
+      out.tint[0] = out.tint[1] = out.tint[2] = 1.0f;
+    }
     out.valid = true;
     return out;
   }

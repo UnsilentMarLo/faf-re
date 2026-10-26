@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 // The light model: the one place that decides how big, how strong and how important a light is.
 //
 // Dynamic lights are INFERRED from what the engine is about to draw (explosion light particles, glow sprites, beams, trails, projectile
@@ -117,22 +119,22 @@ namespace moho::lights::model
   // ------------------------------------------------------------------------------------------------ glow sprites (fire, plasma, flares)
   constexpr float GlowRadius(const float size)
   {
-    return Clamp(2.4f * size, 3.0f, 14.0f);
+    return Clamp(2.4f * size, 3.0f, 40.0f); // a nuke's cloud sprites are tens of units across: they light that far
   }
-  constexpr float GlowEnergy(const float size) // per sprite, before the ramp brightness; sprites overlap, so one alone is faint
+  inline float GlowEnergy(const float size) // per sprite, before the texture and ramp brightness; grows with the root of the size
   {
-    return 0.09f * size + 0.06f;
+    return 0.05f + 0.12f * std::sqrt(size);
   }
 
   // ------------------------------------------------------------------------------------------------ trails and beams
   // Poly trails (projectile streaks) are thin: the Aeon laser bolt has size 0.035.
   constexpr float TrailRadius(const float size)
   {
-    return Clamp(4.5f + 4.0f * size, 4.5f, 12.0f);
+    return Clamp(5.0f + 5.0f * size, 5.0f, 12.0f);
   }
-  constexpr float TrailIntensity(const float size)
+  constexpr float TrailIntensity(const float size) // of the piece at the head; the pieces behind it are weaker
   {
-    return Clamp(0.28f + 0.15f * size, 0.28f, 0.55f);
+    return Clamp(0.40f + 0.2f * size, 0.40f, 0.70f);
   }
 
   // A beam is a long bright line (laser, ion blast, a unit's build or reclaim ray): wider than a trail's thread, brighter than a trail.
@@ -164,5 +166,5 @@ namespace moho::lights::model
   // Big lights (a nuke flash covers the screen) cost a pixel evaluation everywhere: only the strongest few are kept.
   constexpr float kBigLightRadius = 80.0f;
   constexpr int kMaxBigLights = 8;
-  constexpr float kMinVisible = 0.015f; // colour x intensity below this adds nothing visible: the light is dropped
+  constexpr float kMinVisible = 0.035f; // colour x intensity below this adds nothing visible: the light is dropped
 } // namespace moho::lights::model

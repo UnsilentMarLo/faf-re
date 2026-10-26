@@ -298,6 +298,14 @@ namespace
     TCHECK(c.tint[0] > c.tint[1] && c.tint[1] > c.tint[2]);
     TCHECK(c.tint[2] < c.average[2] / c.average[0]); // less blue than the plain average
     TCHECK(Near(c.average[0], 1.0f));
+    TCHECK(Near(c.tint[0], 1.0f)); // normalised: brightest channel 1
+    // a dark texture (a spark: black with one bright texel) has the same tint as a bright one
+    Rgba8Image dark;
+    dark.width = 2;
+    dark.height = 2;
+    dark.rgba = {10, 5, 1, 255, 10, 5, 1, 255, 10, 5, 1, 255, 10, 5, 1, 255};
+    const TextureColour dc = Summarise(dark);
+    TCHECK(Near(dc.tint[0], 1.0f) && dc.tint[1] < 1.0f && dc.tint[2] < dc.tint[1]);
   }
 
   void TestRamp()

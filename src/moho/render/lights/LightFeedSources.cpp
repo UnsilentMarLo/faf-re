@@ -30,7 +30,9 @@ namespace moho::lights
     constexpr float kHoldTicks = 3.0f;       // a tracked light fades out this long after its last refresh
     constexpr float kMergeCell = 3.0f;       // glow sprites born in the same beat inside one cell of this size, with the same texture and similar life, are one light
     constexpr float kGlowPeakMin = 0.20f;    // a texture whose brightest alpha x luminance is below this does not glow (smoke, dust); the census showed fire at 0.25
-    constexpr float kGlowEnergyCap = 0.9f;   // energy of one merged light
+    constexpr float kGlowEnergyCap = 1.2f;   // energy of one merged light
+    constexpr float kAlphaHotMinAlpha = 0.08f; // an alpha-blended sprite whose texture is nearly transparent (noise clouds) is not a flame
+    constexpr float kAlphaHotGain = 0.5f;      // an alpha-blended flame lights less than an additive one: it covers what is behind it
     constexpr float kWhiteReduction = 0.6f;  // how much of the white of texture x ramp is taken out of the light colour
     constexpr float kRampAlphaExponent = 0.6f; // the ramp fades the sprite; the light fades less than the sprite (a faint sprite still colours the ground)
 
@@ -67,8 +69,9 @@ namespace moho::lights
 
     // Fills the colour of `e` from the texture's tint (its average colour with the white reduced) and, when there is a ramp, its curve over
     // the life at row `rampV`: chroma of tint x ramp colour, brightness of the ramp colour x ramp alpha.
-    void FillColour(Emission& e, const TexEntry* texture, const TexEntry* ramp, const float rampV)
+    void FillColour(Emission& e, const TexEntry* texture, const TexEntry* ramp, const float rampV, bool* hotOut = nullptr)
     {
+      bool hot = false;
       const float* tintPtr = texture != nullptr ? texture->colour.tint : kFallbackRgb;
       const float tint[3] = {tintPtr[0], tintPtr[1], tintPtr[2]};
       const float white[3] = {1.0f, 1.0f, 1.0f};
@@ -85,11 +88,23 @@ namespace moho::lights
           const float rampRgb[3] = {rgba[0], rgba[1], rgba[2]};
           LightChroma(tint, rampRgb, chroma, brightness);
           const float level = brightness * std::pow(std::max(0.0f, rgba[3]), kRampAlphaExponent);
+          {
+            // a ramp is "hot" when at some age it is bright, coloured (not grey or white: smoke) and not transparent: a flame, a fireball
+            const float product[3] = {tint[0] * rgba[0], tint[1] * rgba[1], tint[2] * rgba[2]};
+            const float hi = std::max(product[0], std::max(product[1], product[2]));
+            const float lo = std::min(product[0], std::min(product[1], product[2]));
+            if (hi >= 0.55f && hi > 1.0e-4f && (hi - lo) / hi >= 0.35f && rgba[3] >= 0.25f) {
+              hot = true;
+            }
+          }
           for (int c = 0; c < 3; ++c) {
             e.curve[i][c] = chroma[c] * level;
           }
         }
         e.hasCurve = true;
+      }
+      if (hotOut != nullptr) {
+        *hotOut = hot;
       }
     }
 
@@ -128,6 +143,12 @@ namespace moho::lights
     // A beam or a poly trail has no identity in the record: it is sent anew every tick. To light it without a pop the feed matches each record
     // to the one of the last tick it continues (same texture, the beam's start where it was / the trail's start at the old end) and gives it
     // the same key, so the collector moves one light instead of fading a new one in. The key is a counter, never a position.
+    struct TrailPoint
+    {
+      float tick;
+      float p[3];
+    };
+
     struct Followed
     {
       std::uint64_t key = 0;
@@ -139,12 +160,17 @@ namespace moho::lights
       // beams only: the record of the last beat, from which the endpoints are worked out for every frame, and what the light is like
       SWorldBeam beam;
       Emission light;
+      // trails only: where the head has been, newest last, so the light can cover the trail behind the head and not just its last segment
+      std::vector<TrailPoint> history;
     };
     std::vector<Followed> gFollowedBeams;
     std::vector<Followed> gFollowedTrails;
     std::uint64_t gNextFollowKey = 1;
     constexpr std::size_t kMaxFollowed = 2048;
     constexpr int kFollowForgetBeats = 8;
+    constexpr int kTrailPieces = 3;          // a trail's light is this many capsules along its path
+    constexpr float kTrailLightShare = 0.7f; // of the trail's drawn length (ticks) the light covers ...
+    constexpr float kTrailLightMaxTicks = 20.0f; // ... but never more than this
     constexpr int kBeamRefreshTicks = 2;   // a beam is sent every tick; its light is refreshed every frame while its record is this young
     constexpr float kBeamHoldTicks = 1.5f; // and fades out this long after the beam stopped
 
@@ -235,8 +261,9 @@ namespace moho::lights
       const int blend = static_cast<int>(particle.mBlendMode);
       const bool census = CensusEnabled();
       const bool additive = blend == 3 || blend == 4;
-      if (!isLight && !additive && !census) {
-        continue; // alpha, modulate and refraction sprites do not glow
+      const bool alphaBlend = blend == 0; // a flame drawn with alpha blending lights when its ramp is hot, see FillColour
+      if (!isLight && !additive && !alphaBlend && !census) {
+        continue; // modulate and refraction sprites do not glow
       }
       const float peakSize = std::max(particle.mBeginSize, particle.mEndSize);
       const std::string texturePath = PathOf(particle.mTexture);
@@ -252,8 +279,8 @@ namespace moho::lights
         continue;
       }
 
-      const TexEntry* texture = (isLight || additive || census) ? LoadTexture(texturePath) : nullptr;
-      const TexEntry* ramp = (isLight || additive) ? LoadTexture(rampPath) : nullptr;
+      const TexEntry* texture = (isLight || additive || alphaBlend || census) ? LoadTexture(texturePath) : nullptr;
+      const TexEntry* ramp = (isLight || additive || alphaBlend) ? LoadTexture(rampPath) : nullptr;
       const TextureColour* censusColour = texture != nullptr ? &texture->colour : nullptr;
 
       if (isLight) {
@@ -280,13 +307,10 @@ namespace moho::lights
         continue;
       }
 
-      if (!additive) {
-        // alpha, modulate and refraction sprites do not glow: the census still notes whether their texture would
+      if (!additive && !alphaBlend) {
+        // modulate (they darken) and refraction sprites do not glow
         if (census) {
-          const bool bright = texture != nullptr && texture->colour.peak >= kGlowPeakMin;
-          CensusNote(
-            "particle", censusKey, bright ? "no:blend mode is not additive (texture is bright)" : "no:blend mode is not additive", peakSize, censusColour
-          );
+          CensusNote("particle", censusKey, "no:blend mode darkens or refracts", peakSize, censusColour);
         }
         continue;
       }
@@ -298,9 +322,15 @@ namespace moho::lights
         }
         continue;
       }
-      if (texture->colour.peak < kGlowPeakMin) {
+      if (additive && texture->colour.peak < kGlowPeakMin) {
         if (census) {
           CensusNote("particle", censusKey, "no:texture peak below threshold", peakSize, censusColour);
+        }
+        continue;
+      }
+      if (alphaBlend && (ramp == nullptr || texture->colour.alpha < kAlphaHotMinAlpha)) {
+        if (census) {
+          CensusNote("particle", censusKey, "no:alpha sprite without a ramp or with a transparent texture", peakSize, censusColour);
         }
         continue;
       }
@@ -320,7 +350,14 @@ namespace moho::lights
       e.life = particle.mLifetime;
       e.size0 = particle.mBeginSize;
       e.size1 = particle.mEndSize;
-      FillColour(e, texture, ramp, particle.mRampSelection);
+      bool hotRamp = false;
+      FillColour(e, texture, ramp, particle.mRampSelection, &hotRamp);
+      if (alphaBlend && !hotRamp) {
+        if (census) {
+          CensusNote("particle", censusKey, "no:alpha sprite, the ramp is not hot (smoke, dust)", peakSize, censusColour);
+        }
+        continue;
+      }
       if (ramp != nullptr) {
         float curvePeak = 0.0f;
         for (const auto& point : e.curve) {
@@ -333,11 +370,13 @@ namespace moho::lights
           continue;
         }
       }
-      // a texture that is a small bright spot in a dark quad gives less light than one that is bright all over
-      const float spriteGain = (blend == 4 ? 0.7f : 1.0f) * model::Clamp(0.3f + 2.0f * texture->colour.brightness, 0.3f, 1.0f);
+      // the texture decides how much of the sprite is bright: a spark is a small very bright spot (high peak, low mean), a cloud is bright
+      // all over (high mean); a noise cloud with a faint peak gives little
+      const float spriteGain = (blend == 4 ? 0.7f : 1.0f) * (alphaBlend ? kAlphaHotGain : 1.0f) *
+                               model::Clamp(0.15f + 0.5f * texture->colour.peak + 1.5f * texture->colour.brightness, 0.2f, 1.0f);
       const float energy = model::GlowEnergy(peakSize) * spriteGain;
       if (census) {
-        CensusNote("particle", censusKey, "ok:glow sprite", peakSize, censusColour);
+        CensusNote("particle", censusKey, alphaBlend ? "ok:hot alpha sprite" : "ok:glow sprite", peakSize, censusColour);
       }
       std::uint64_t cellKey = Mix(CellKey(particle.mPos.x, particle.mPos.y, particle.mPos.z, kMergeCell), std::hash<std::string>{}(texturePath));
       cellKey = Mix(cellKey, static_cast<std::uint64_t>(static_cast<int>(particle.mLifetime / 6.0f)));
@@ -407,8 +446,48 @@ namespace moho::lights
       const std::uint64_t id = Follow(
         gFollowedTrails, e.pos, e.end, static_cast<std::uint32_t>(std::hash<std::string>{}(texturePath)), beatTick, 6.0f + 3.0f * trail.mSize, true
       );
-      if (id != 0) {
-        (void)collector.Track(kKeyFollow | (2ull << 38) | id, e, now, kHoldTicks);
+      if (id == 0) {
+        continue;
+      }
+      Followed* followed = nullptr;
+      for (Followed& f : gFollowedTrails) {
+        if (f.key == id) {
+          followed = &f;
+          break;
+        }
+      }
+      if (followed == nullptr) {
+        continue;
+      }
+      // The trail is drawn for `mLifetime` ticks behind its head: its light is a chain of capsules over that stretch of the path, strongest at
+      // the head, not one light on the newest segment (which is a round light at the head with nothing behind it).
+      followed->history.push_back(TrailPoint{now, {e.end[0], e.end[1], e.end[2]}});
+      const float visibleTicks = model::Clamp(trail.mLifetime * kTrailLightShare, 2.0f, kTrailLightMaxTicks);
+      while (followed->history.size() > 1 && now - followed->history.front().tick > visibleTicks) {
+        followed->history.erase(followed->history.begin());
+      }
+      if (followed->history.size() > 64) {
+        followed->history.erase(followed->history.begin(), followed->history.end() - 64);
+      }
+      const std::vector<TrailPoint>& path = followed->history;
+      const auto pointAt = [&path](const float fraction, float (&out)[3]) {
+        // the point of the path that far back along it (0 = head, 1 = oldest point we hold), by index
+        const float index = fraction * static_cast<float>(path.size() - 1);
+        const std::size_t newest = path.size() - 1;
+        const std::size_t i0 = newest - std::min<std::size_t>(newest, static_cast<std::size_t>(std::floor(index)));
+        const std::size_t i1 = newest - std::min<std::size_t>(newest, static_cast<std::size_t>(std::ceil(index)));
+        const float f = index - std::floor(index);
+        for (int k = 0; k < 3; ++k) {
+          out[k] = path[i0].p[k] + (path[i1].p[k] - path[i0].p[k]) * f;
+        }
+      };
+      static const float kPieceGain[kTrailPieces] = {1.0f, 0.7f, 0.45f};
+      for (int piece = 0; piece < kTrailPieces; ++piece) {
+        Emission piece_e = e;
+        pointAt(static_cast<float>(piece) / static_cast<float>(kTrailPieces), piece_e.end);
+        pointAt(static_cast<float>(piece + 1) / static_cast<float>(kTrailPieces), piece_e.pos);
+        piece_e.gain = kPieceGain[piece];
+        (void)collector.Track(kKeyFollow | (2ull << 38) | (id << 2) | static_cast<std::uint64_t>(piece), piece_e, now, kHoldTicks);
       }
     }
     ForgetOld(gFollowedTrails, beatTick);

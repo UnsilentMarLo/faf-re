@@ -164,8 +164,12 @@ float4 DynLightsPS(NORMALMAPPED_VERTEX vertex) : COLOR0
     float4 specular = tex2D(specularSampler, vertex.texcoord0.xy);
     float3 albedo = lerp(albedoTex.rgb, vertex.color.rgb * 0.6, saturate(specular.a * 2.5));
     float3 v = normalize(vertex.viewDirection);
-    float3 lit = DynLightsBRDF(dynLightCamera.xyz - v * vertex.depth.y, n, v, albedo, saturate(specular.r), saturate(0.8 - specular.g * 0.5));
-    return float4(lit * (1 - saturate(mirrored)), albedoTex.a);   // alpha: the alpha test of the technique still applies
+    float3 lit = float3(0, 0, 0);
+    if (mirrored < 0.5)   // the water reflection pass draws the mesh again: it gets no lights (the result was masked away, now it is not even computed)
+    {
+        lit = DynLightsBRDF(dynLightCamera.xyz - v * vertex.depth.y, n, v, albedo, saturate(specular.r), saturate(0.8 - specular.g * 0.5));
+    }
+    return float4(lit, albedoTex.a);   // alpha: the alpha test of the technique still applies
 }
 
 // vertex-normal props (trees, rocks, ...): no tangent frame, no specular map
@@ -173,8 +177,12 @@ float4 DynLightsVertexNormalPS(VERTEXNORMAL_VERTEX vertex) : COLOR0
 {
     float4 albedoTex = tex2D(albedoSampler, vertex.texcoord0.xy);
     float3 v = normalize(vertex.viewDirection);
-    float3 lit = DynLightsBRDF(dynLightCamera.xyz - v * vertex.texcoord0.z, normalize(vertex.normal), v, albedoTex.rgb, 0.0, 0.8);
-    return float4(lit * (1 - saturate(mirrored)), albedoTex.a);
+    float3 lit = float3(0, 0, 0);
+    if (mirrored < 0.5)
+    {
+        lit = DynLightsBRDF(dynLightCamera.xyz - v * vertex.texcoord0.z, normalize(vertex.normal), v, albedoTex.rgb, 0.0, 0.8);
+    }
+    return float4(lit, albedoTex.a);
 }
 )HLSL";
 
