@@ -548,7 +548,7 @@ namespace
     const std::size_t count = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
     for (std::size_t i = 0; i < count; ++i) {
       lua_rawgeti(L, 4, static_cast<int>(i + 1));
-      const std::uint32_t rgb = static_cast<std::uint32_t>(std::max(0.0, lua_tonumber(L, -1))) & 0xFFFFFFu;
+      const std::uint32_t rgb = static_cast<std::uint32_t>(std::max(0.0, static_cast<double>(lua_tonumber(L, -1)))) & 0xFFFFFFu;
       lua_settop(L, -2);
       Put32(dds, 0xFF000000u | rgb);        // B, G, R, A in memory = 0xAARRGGBB little endian
     }

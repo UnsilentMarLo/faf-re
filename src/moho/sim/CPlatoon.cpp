@@ -61,7 +61,18 @@
 
 namespace moho
 {
-  // CScrLuaMetatableFactory<CPlatoon>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
+  template <>
+  class CScrLuaMetatableFactory<CPlatoon> final : public CScrLuaObjectFactory
+  {
+  public:
+    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+
+  protected:
+    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+
+  private:
+    static CScrLuaMetatableFactory sInstance;
+  };
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CPlatoon>) == 0x08, "CScrLuaMetatableFactory<CPlatoon> size must be 0x08"

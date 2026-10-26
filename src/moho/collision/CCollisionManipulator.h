@@ -195,7 +195,22 @@ namespace moho
    * VFTABLE: 0x00E219F8
    * COL: 0x00E7B574
    */
-  // CScrLuaMetatableFactory<CCollisionManipulator>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
+  template <>
+  class CScrLuaMetatableFactory<CCollisionManipulator> final : public CScrLuaObjectFactory
+  {
+  public:
+    static CScrLuaMetatableFactory& Instance();
+    explicit CScrLuaMetatableFactory(std::int32_t factoryObjectIndex);
+
+  protected:
+    /**
+     * Address: 0x00638640 (FUN_00638640)
+     *
+     * What it does:
+     * Builds the metatable used for `CCollisionManipulator` Lua userdata.
+     */
+    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+  };
 
   /**
    * VFTABLE: 0x00E21A30

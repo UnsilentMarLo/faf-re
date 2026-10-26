@@ -54,7 +54,21 @@ namespace moho
   static_assert(offsetof(CPrefetchSet, mHandles) == 0x00, "CPrefetchSet::mHandles offset must be 0x00");
   static_assert(sizeof(CPrefetchSet) == 0x10, "CPrefetchSet size must be 0x10");
 
-  // CScrLuaMetatableFactory<CPrefetchSet>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
+  template <>
+  class CScrLuaMetatableFactory<CPrefetchSet> final : public CScrLuaObjectFactory
+  {
+  public:
+    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
+
+  protected:
+    /**
+     * Address: 0x004A5FC0 (FUN_004A5FC0, Moho::CScrLuaMetatableFactory<Moho::CPrefetchSet>::Create)
+     */
+    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+
+  private:
+    static CScrLuaMetatableFactory sInstance;
+  };
 
   static_assert(sizeof(CScrLuaMetatableFactory<CPrefetchSet>) == 0x08, "CScrLuaMetatableFactory<CPrefetchSet> size must be 0x08");
 

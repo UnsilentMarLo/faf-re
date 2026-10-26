@@ -1,0 +1,51 @@
+# The FAF Studio editor: the translation units added to the engine when it is configured with -DFAF_EDITOR=ON (src/CMakeLists.txt).
+# Generated from the list of main_ed.vcxproj of the MSBuild days; keep it in step with the files of src/moho/editor.
+set(FAF_EDITOR_SOURCES
+  moho/editor/EditorLua.cpp
+  moho/editor/MapDocument.cpp
+  moho/editor/EditorDocument.cpp
+  moho/editor/EdBootstrap.cpp
+  moho/editor/EdTextBackend.cpp
+  moho/editor/EdPopout.cpp
+  moho/editor/EdOverlay.cpp
+  moho/editor/EdStrata.cpp
+  moho/editor/EdField.cpp
+  moho/editor/EdFieldCore.cpp
+  moho/editor/EdErosion.cpp
+  moho/editor/EdErosionLua.cpp
+  moho/editor/EdBrush.cpp
+  moho/editor/EdFieldPath.cpp
+  moho/editor/EdFieldSc.cpp
+  moho/editor/EdFieldInterop.cpp
+  moho/editor/EdFieldGen.cpp
+  moho/editor/EdFieldFilt.cpp
+  moho/editor/EdFieldEro2.cpp
+  moho/editor/EdFieldLand.cpp
+  moho/editor/EdInteropLua.cpp
+  moho/editor/EdWorld.cpp
+  moho/editor/EdEnv.cpp
+  moho/editor/EdScmapEnv.cpp
+  moho/editor/EdPropBulk.cpp
+  moho/editor/EdImageIO.cpp
+  moho/editor/EdIcon.cpp
+  moho/editor/EdPerf.cpp
+  moho/editor/EdActivity.cpp
+  moho/editor/EdRenderStats.cpp
+  moho/editor/EdGpu.cpp
+  moho/editor/EdGpuOps.cpp
+  moho/editor/EdGpuGen.cpp
+  moho/editor/EdGpuGenFilt.cpp
+  moho/editor/EdGpuErosion.cpp
+  moho/editor/EdGpuFieldIter.cpp
+  moho/editor/EdGpuFieldFilt.cpp
+  moho/editor/EdGpuFieldFlow.cpp
+  moho/editor/EdGpuLua.cpp
+  moho/editor/EdTexConv.cpp
+  moho/editor/EdUnitBones.cpp
+  moho/editor/EdWindow.cpp
+  moho/editor/EdTerrainType.cpp
+  moho/editor/EdSimResources.cpp
+  moho/editor/EdMeshData.cpp
+  moho/editor/EdMeshDraw.cpp
+  moho/editor/EdMeshLua.cpp
+)

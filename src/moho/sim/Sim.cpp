@@ -23805,26 +23805,6 @@ moho::CScrLuaInitForm* moho::func_GetTimeForProfileUser_LuaFuncDef()
  * `GetDepositsAroundPoint` (`.exxt` def chain node 0x0128EA8C, function
  * slot 0x0128B884).
  */
-/**
- * What it does:
- * Publishes the user-lane (UI Lua state) binder for global `GetDepositsAroundPoint`.
- * `/lua/ui/controls/worldview.lua` calls it on every mouse event; the shipped binary
- * registers the same body for both lanes and resolves the resource view through the
- * active world session when no Sim is attached to the Lua state.
- */
-moho::CScrLuaInitForm* moho::func_GetDepositsAroundPointUser_LuaFuncDef()
-{
-  static CScrLuaBinder binder(
-    UserLuaInitSet(),
-    "GetDepositsAroundPoint",
-    &moho::cfunc_GetDepositsAroundPoint,
-    nullptr,
-    "<global>",
-    kGetDepositsAroundPointHelpText
-  );
-  return &binder;
-}
-
 moho::CScrLuaInitForm* moho::func_GetDepositsAroundPoint_LuaFuncDef()
 {
   static CScrLuaBinder binder(
@@ -27363,7 +27343,6 @@ namespace
       (void)::moho::func_GetTimeForProfileSim_LuaFuncDef();
       (void)::moho::func_GetMouseWorldPosSim_LuaFuncDef();
       (void)::moho::func_GetDepositsAroundPoint_LuaFuncDef();
-      (void)::moho::func_GetDepositsAroundPointUser_LuaFuncDef();
       (void)::moho::func_SetCommandSourceSim_LuaFuncDef();
       (void)::moho::func_SessionIsBeingRecorded_LuaFuncDef();
       (void)::moho::func_SessionIsMultiplayer_LuaFuncDef();

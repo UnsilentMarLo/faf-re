@@ -104,7 +104,22 @@ namespace moho
   static_assert(offsetof(MotorSinkAway, mSinkDeltaY) == 0x38, "MotorSinkAway::mSinkDeltaY offset must be 0x38");
   static_assert(sizeof(MotorSinkAway) == 0x3C, "MotorSinkAway size must be 0x3C");
 
-  // CScrLuaMetatableFactory<MotorSinkAway>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
+  template <>
+  class CScrLuaMetatableFactory<MotorSinkAway> final : public CScrLuaObjectFactory
+  {
+  public:
+    [[nodiscard]]
+    static CScrLuaMetatableFactory& Instance();
+
+  protected:
+    /**
+     * Address: 0x00696FD0 (FUN_00696FD0, Moho::CScrLuaMetatableFactory<Moho::MotorSinkAway>::Create)
+     */
+    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+
+  private:
+    static CScrLuaMetatableFactory sInstance;
+  };
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<MotorSinkAway>) == 0x08,

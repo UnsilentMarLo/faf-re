@@ -215,7 +215,25 @@ namespace moho
    * VFTABLE: 0x00E21770
    * COL: 0x00E7AD54
    */
-  // CScrLuaMetatableFactory<CAnimationManipulator>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
+  template <>
+  class CScrLuaMetatableFactory<CAnimationManipulator> final : public CScrLuaObjectFactory
+  {
+  public:
+    static CScrLuaMetatableFactory& Instance();
+
+  protected:
+    /**
+     * Address: 0x00641E10 (FUN_00641E10, ?Create@?$CScrLuaMetatableFactory@VCAnimationManipulator@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
+     *
+     * What it does:
+     * Builds the metatable object used for `CAnimationManipulator` Lua userdata.
+     */
+    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
+
+  private:
+    CScrLuaMetatableFactory();
+    static CScrLuaMetatableFactory sInstance;
+  };
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CAnimationManipulator>) == 0x8,

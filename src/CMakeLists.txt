@@ -18,6 +18,19 @@ set(FAF_OUTPUT_NAME "${_faf_default_name}" CACHE STRING "Engine executable name,
 
 add_library(faf_engine OBJECT ${FAF_ENGINE_SOURCES})
 
+# --- The FAF Studio editor ------------------------------------------------------------
+# -DFAF_EDITOR=ON builds the map and mission editor into the executable: the translation
+# units of moho/editor (editor_sources.cmake), the FAF_STUDIO_EDITOR define the engine
+# files test, and the Windows imaging / dialog libraries the natives use. Give the build
+# another name with -DFAF_OUTPUT_NAME=main_ed_x64 so it sits beside the game's executable.
+option(FAF_EDITOR "Build the FAF Studio editor into the executable (src/moho/editor)" OFF)
+if(FAF_EDITOR)
+  include(moho/editor/editor_sources.cmake)
+  target_sources(faf_engine PRIVATE ${FAF_EDITOR_SOURCES})
+  target_compile_definitions(faf_engine PUBLIC FAF_STUDIO_EDITOR)
+  target_link_libraries(faf_engine PUBLIC windowscodecs ole32 comdlg32 uuid)
+endif()
+
 add_executable(faf_main WIN32)
 set_target_properties(faf_main PROPERTIES OUTPUT_NAME "${FAF_OUTPUT_NAME}")
 target_link_libraries(faf_main PRIVATE faf_engine)

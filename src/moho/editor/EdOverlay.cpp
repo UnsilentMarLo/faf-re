@@ -971,7 +971,7 @@ namespace
     if (const char* const text = lua_tostring(L, 7)) {
       g.rgb = static_cast<std::uint32_t>(std::strtoul(text, nullptr, 16)) & 0xFFFFFFu;
     }
-    if (lua_type(L, 8) == LUA_TNUMBER) g.maxAlpha = static_cast<std::uint32_t>(std::max(0.0, std::min(255.0, lua_tonumber(L, 8))));
+    if (lua_type(L, 8) == LUA_TNUMBER) g.maxAlpha = static_cast<std::uint32_t>(std::max(0.0, std::min(255.0, static_cast<double>(lua_tonumber(L, 8)))));
     if (lua_type(L, 9) == LUA_TNUMBER) g.step = std::max(1, std::min(64, static_cast<int>(lua_tonumber(L, 9))));
     // the same grid again (a caller that sends its layers every time): keep what is there, with its cell runs and projections
     const auto existing = NodeGrids().find(lua_tostring(L, 1));
@@ -1082,7 +1082,7 @@ namespace
     }
     std::uint32_t maxAlpha = 0xC0u;
     if (lua_type(L, 4) == LUA_TNUMBER) {
-      maxAlpha = static_cast<std::uint32_t>(std::max(0.0, std::min(255.0, lua_tonumber(L, 4))));
+      maxAlpha = static_cast<std::uint32_t>(std::max(0.0, std::min(255.0, static_cast<double>(lua_tonumber(L, 4)))));
     }
     of::MapOpts map;
     map.scale = static_cast<float>(LuaOptNumber(L, 5, "scale", 1.0));

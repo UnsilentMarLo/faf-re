@@ -116,7 +116,7 @@ namespace
   {
     // the window rule of ErodeSession::Dab, without running it
     const double cx = luaL_checknumber(L, 1), cz = luaL_checknumber(L, 2);
-    const double radius = std::max(1.0, luaL_checknumber(L, 3));
+    const double radius = std::max(1.0, static_cast<double>(luaL_checknumber(L, 3)));
     er::BrushDab probe;
     probe.cx = cx;
     probe.cz = cz;
