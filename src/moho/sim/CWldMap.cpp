@@ -10,7 +10,9 @@
 #include <memory>
 #include <new>
 #include <stdexcept>
+#include <functional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -27,12 +29,15 @@
 #include "legacy/containers/Map.h"
 #include "legacy/containers/Tree.h"
 #include "legacy/containers/Vector.h"
+#include "moho/editor/EdFieldCore.h"
+#include "moho/editor/EdPerf.h"
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/math/Vector4f.h"
 #include "moho/math/MathReflection.h"
 #include "moho/math/QuaternionMath.h"
+#include "moho/console/CConCommand.h"
 #include "moho/console/CVarAccess.h"
 #include "moho/render/Cartographic.h"
 #include "moho/render/RCamManager.h"
@@ -548,6 +553,198 @@ namespace
   }
 
 
+  // ---- EDITOR: the water map at a finer resolution --------------------------------------------------------------------------------------------------------
+  // The water map of a map has one texel per 2 x 2 cells (and the shore flag is "any of the four corners is land", the water alpha mask is a test against that flag with bilinear
+  // filtering): the edge of a lake is a staircase of 2 unit steps, a texel wider than the real shore. The editor keeps a second water map for RENDERING with `ed_water_hires` texels
+  // per cell (default 4, at most 4096 texels a side; 0 = the half resolution one): every texel centre reads the BILINEAR height, the flag is "the ground there is above the water",
+  // the depth byte is the exact depth there; foam and flatness come from the half resolution masks. The half resolution water map (what is saved, what the foam brush edits) is not
+  // touched: GetWaterMap() hands the finer one to the renderers, and every writer of the water map marks the cells it changed (MarkWaterHiResDirty) so only those are rebuilt.
+  struct WaterHiRes
+  {
+    boost::shared_ptr<moho::CD3DDynamicTextureSheet> sheet;
+    std::int32_t texelsPerCell = 0;
+    std::int32_t width = 0;
+    std::int32_t height = 0;
+    bool dirtyAll = true;
+    bool dirty = false;
+    std::int32_t x0 = 0, z0 = 0, x1 = 0, z1 = 0;   // dirty cells, inclusive
+  };
+
+  std::unordered_map<const moho::CWldTerrainRes*, WaterHiRes> gWaterHiRes;
+  float gWaterHiResTexels = 4.0f;
+  moho::TConVar<float> gConWaterHiRes(
+    "ed_water_hires",
+    "Editor: texels per cell of the water map used for rendering (the shore of a lake is a staircase of this size), 0 = the half resolution map of the map file (default 4, at most 4096 texels a side)",
+    &gWaterHiResTexels
+  );
+
+  void MarkWaterHiResDirty(const moho::CWldTerrainRes* const res, const std::int32_t x0, const std::int32_t z0, const std::int32_t x1, const std::int32_t z1)
+  {
+    if (gWaterHiResTexels < 0.5f) {
+      return;
+    }
+    WaterHiRes& st = gWaterHiRes[res];
+    if (st.dirtyAll) {
+      return;
+    }
+    if (!st.dirty) {
+      st.x0 = x0; st.z0 = z0; st.x1 = x1; st.z1 = z1;
+      st.dirty = true;
+    } else {
+      st.x0 = std::min(st.x0, x0); st.z0 = std::min(st.z0, z0);
+      st.x1 = std::max(st.x1, x1); st.z1 = std::max(st.z1, z1);
+    }
+  }
+
+  void ForgetWaterHiRes(const moho::CWldTerrainRes* const res)
+  {
+    gWaterHiRes.erase(res);
+  }
+
+  /// Fills the texels of the cells [cx0, cx1] x [cz0, cz1] (a cell more on every side: the bilinear taps and the filter of the alpha test reach over the border).
+  void FillWaterHiRes(const moho::CWldTerrainRes& res, WaterHiRes& st, std::int32_t cx0, std::int32_t cz0, std::int32_t cx1, std::int32_t cz1)
+  {
+    constexpr float kNoWaterElevation = -10000.0f;
+    const moho::STIMap* const map = res.mMap;
+    const moho::CHeightField* const field = map->mHeightField.get();
+    if (st.sheet.get() == nullptr || field == nullptr) {
+      return;
+    }
+    const std::int32_t cellsX = field->width - 1;
+    const std::int32_t cellsZ = field->height - 1;
+    const std::int32_t k = st.texelsPerCell;
+    cx0 = std::max(0, cx0 - 1);
+    cz0 = std::max(0, cz0 - 1);
+    cx1 = std::min(cellsX - 1, cx1 + 1);
+    cz1 = std::min(cellsZ - 1, cz1 + 1);
+    if (cx1 < cx0 || cz1 < cz0) {
+      return;
+    }
+    const float waterElevation = map->mWaterEnabled != 0u ? map->mWaterElevation : kNoWaterElevation;
+    const float waterAbyssElevation = map->mWaterEnabled != 0u ? map->mWaterElevationAbyss : kNoWaterElevation;
+    const float depthDenominator = waterElevation - waterAbyssElevation;
+    const std::int32_t halfWidth = std::max(1, cellsX >> 1);
+    const std::int32_t halfHeight = std::max(1, cellsZ >> 1);
+
+    std::uint32_t pitchBytes = 0;
+    void* mappedBits = nullptr;
+    if (!st.sheet->Lock(&pitchBytes, &mappedBits)) {
+      return;
+    }
+    auto* const bits = static_cast<std::uint8_t*>(mappedBits);
+    const std::int32_t tz0 = cz0 * k;
+    const std::int32_t tz1 = (cz1 + 1) * k - 1;
+    const std::int32_t tx0 = cx0 * k;
+    const std::int32_t tx1 = (cx1 + 1) * k - 1;
+    const float inv = 1.0f / static_cast<float>(k);
+
+    const auto row = [&](const int index) {
+      const std::int32_t tz = tz0 + index;
+      const float z = (static_cast<float>(tz) + 0.5f) * inv;
+      const std::int32_t iz = static_cast<std::int32_t>(std::floor(z));
+      const float fz = z - static_cast<float>(iz);
+      const std::int32_t halfZ = std::min(halfHeight - 1, iz >> 1);
+      auto* const out = reinterpret_cast<std::uint32_t*>(bits + static_cast<std::size_t>(tz) * pitchBytes);
+      for (std::int32_t tx = tx0; tx <= tx1; ++tx) {
+        const float x = (static_cast<float>(tx) + 0.5f) * inv;
+        const std::int32_t ix = static_cast<std::int32_t>(std::floor(x));
+        const float fx = x - static_cast<float>(ix);
+        const float h00 = SampleTerrainHeightWordScaled(*field, ix, iz);
+        const float h10 = SampleTerrainHeightWordScaled(*field, ix + 1, iz);
+        const float h01 = SampleTerrainHeightWordScaled(*field, ix, iz + 1);
+        const float h11 = SampleTerrainHeightWordScaled(*field, ix + 1, iz + 1);
+        const float h = (h00 * (1.0f - fx) + h10 * fx) * (1.0f - fz) + (h01 * (1.0f - fx) + h11 * fx) * fz;
+        float depthByte = ((waterElevation - h) / depthDenominator) * 255.0f;
+        if (depthByte >= 255.0f) {
+          depthByte = 255.0f;
+        }
+        if (depthByte < 0.0f) {
+          depthByte = 0.0f;
+        }
+        const std::int32_t halfX = std::min(halfWidth - 1, ix >> 1);
+        const std::size_t maskIndex = static_cast<std::size_t>(halfX) + static_cast<std::size_t>(halfZ) * static_cast<std::size_t>(halfWidth);
+        std::uint32_t packed = 0;
+        if (res.mWaterFoam != nullptr) {
+          packed |= static_cast<std::uint32_t>(res.mWaterFoam[maskIndex]) << 24u;
+        }
+        if (res.mWaterFlatness != nullptr) {
+          packed |= static_cast<std::uint32_t>(res.mWaterFlatness[maskIndex]) << 16u;
+        }
+        packed |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(depthByte)) << 8u;
+        if (h > waterElevation) {
+          packed |= 0xFFu;
+        }
+        out[tx] = packed;
+      }
+    };
+    const std::int32_t rows = tz1 - tz0 + 1;
+    if (static_cast<std::int64_t>(rows) * (tx1 - tx0 + 1) >= 65536) {
+      moho::editor::field::ParallelFor(rows, row);
+    } else {
+      for (std::int32_t i = 0; i < rows; ++i) {
+        row(i);
+      }
+    }
+    (void)st.sheet->Unlock();
+  }
+
+  /// The water map the renderers should use: the finer one (made and refreshed here, when something marked cells dirty), or null for the half resolution one.
+  [[nodiscard]] boost::shared_ptr<moho::CD3DDynamicTextureSheet> WaterHiResSheet(const moho::CWldTerrainRes& res)
+  {
+    const float want = gWaterHiResTexels;
+    if (want < 0.5f) {
+      if (!gWaterHiRes.empty()) {
+        gWaterHiRes.erase(&res);
+      }
+      return {};
+    }
+    const auto it = gWaterHiRes.find(&res);
+    if (it == gWaterHiRes.end()) {
+      return {};    // nothing has built the water map yet: the half resolution one is what there is
+    }
+    WaterHiRes& st = it->second;
+    const moho::CHeightField* const field = res.mMap != nullptr ? res.mMap->mHeightField.get() : nullptr;
+    if (field == nullptr) {
+      return {};
+    }
+    const std::int32_t cellsX = field->width - 1;
+    const std::int32_t cellsZ = field->height - 1;
+    std::int32_t k = std::max(1, std::min(4, static_cast<std::int32_t>(want + 0.5f)));
+    while (k > 1 && (cellsX * k > 4096 || cellsZ * k > 4096)) {
+      --k;
+    }
+    if (cellsX * k > 4096 || cellsZ * k > 4096 || cellsX < 2 || cellsZ < 2) {
+      return {};    // a map this big keeps its half resolution water map
+    }
+    if (st.sheet.get() == nullptr || st.texelsPerCell != k) {
+      moho::CD3DDevice* const device = moho::D3D_GetDevice();
+      moho::ID3DDeviceResources* const resources = device != nullptr ? device->GetResources() : nullptr;
+      if (resources == nullptr) {
+        return {};
+      }
+      boost::shared_ptr<moho::CD3DDynamicTextureSheet> sheet;
+      resources->NewDynamicTextureSheet(sheet, cellsX * k, cellsZ * k, 2);
+      if (sheet.get() == nullptr) {
+        return {};
+      }
+      st.sheet = sheet;
+      st.texelsPerCell = k;
+      st.width = cellsX * k;
+      st.height = cellsZ * k;
+      st.dirtyAll = true;
+    }
+    if (st.dirtyAll) {
+      FillWaterHiRes(res, st, 0, 0, cellsX - 1, cellsZ - 1);
+      st.dirtyAll = false;
+      st.dirty = false;
+    } else if (st.dirty) {
+      FillWaterHiRes(res, st, st.x0, st.z0, st.x1, st.z1);
+      st.dirty = false;
+    }
+    return st.sheet;
+  }
+
+
   void RebuildWaterMapRect(moho::CWldTerrainRes& terrainRes, const gpg::Rect2i& updateRect)
   {
     constexpr float kNoWaterElevation = -10000.0f;
@@ -577,6 +774,9 @@ namespace
 
     const float waterElevation = map->mWaterEnabled != 0u ? map->mWaterElevation : kNoWaterElevation;
     const float waterAbyssElevation = map->mWaterEnabled != 0u ? map->mWaterElevationAbyss : kNoWaterElevation;
+
+    // EDITOR: the finer water map follows (rebuilt when a renderer asks for it)
+    MarkWaterHiResDirty(&terrainRes, x0, z0, x1, z1);
 
     const std::int32_t halfX0 = x0 >> 1;
     const std::int32_t halfX1 = x1 >> 1;
@@ -886,6 +1086,7 @@ namespace
     defaultEntry.mBlueprintPath.tidy(false, 0U);
     defaultEntry.mTransform.orient_ = Wm3::Quatf{1.0f, 0.0f, 0.0f, 0.0f};
     defaultEntry.mTransform.pos_ = Wm3::Vec3f{0.0f, 0.0f, 0.0f};
+    defaultEntry.mScale = Wm3::Vec3f{1.0f, 1.0f, 1.0f};
     return defaultEntry;
   }
 
@@ -897,10 +1098,16 @@ namespace
    * storage record.
    */
   moho::CWldPropEntry*
-  PackWldPropEntry(moho::CWldPropEntry& outEntry, const moho::VTransform& transform, const msvc8::string& path)
+  PackWldPropEntry(
+    moho::CWldPropEntry& outEntry,
+    const moho::VTransform& transform,
+    const msvc8::string& path,
+    const Wm3::Vec3f& scale = Wm3::Vec3f{1.0f, 1.0f, 1.0f}
+  )
   {
     outEntry.mBlueprintPath.assign_owned(path.c_str());
     outEntry.mTransform = transform;
+    outEntry.mScale = scale;
     return &outEntry;
   }
 
@@ -910,6 +1117,9 @@ namespace
       loadControl.mHandle->UpdateLoadingProgress();
     }
   }
+
+  /// EDITOR: normal map updates smaller than this many 4x4 blocks (a brush dab is a few dozen) stay on the calling thread.
+  constexpr std::int64_t kParallelNormalMapMinBlocks = 4096;
 } // namespace
 
 namespace moho
@@ -1060,6 +1270,7 @@ namespace moho
     ::operator delete[](mWaterDepthBias);
     ::operator delete[](mWaterFlatness);
     ::operator delete[](mWaterFoam);
+    ForgetWaterHiRes(this);
 
     if (mEditWordBuffer.begin != nullptr) {
       ::operator delete(mEditWordBuffer.begin);
@@ -1093,7 +1304,7 @@ namespace moho
    * What it does:
    * Reads world-prop entries from stream, converts matrix orientation to a
    * normalized quaternion lane, and stores packed 7-float transform data for
-   * each entry.
+   * each entry. Editor build: the per-prop scale lanes are stored as well.
    */
   bool CWldProps::Load(gpg::BinaryReader& reader, CBackgroundTaskControl& loadControl)
   {
@@ -1121,12 +1332,13 @@ namespace moho
         reader.ReadExact(row.z);
       }
 
-      float ignoredLane0 = 0.0f;
-      float ignoredLane1 = 0.0f;
-      float ignoredLane2 = 0.0f;
-      reader.ReadExact(ignoredLane0);
-      reader.ReadExact(ignoredLane1);
-      reader.ReadExact(ignoredLane2);
+      // The three scale lanes retail reads and drops (EDITOR DIVERGENCE: kept, see CWldPropEntry::mScale).
+      float scaleX = 1.0f;
+      float scaleY = 1.0f;
+      float scaleZ = 1.0f;
+      reader.ReadExact(scaleX);
+      reader.ReadExact(scaleY);
+      reader.ReadExact(scaleZ);
 
       MatrixToQuat(matrixRows, &transform.orient_);
       Wm3::Quatf& orientation = transform.orient_;
@@ -1145,7 +1357,7 @@ namespace moho
         orientation = Wm3::Quatf{0.0f, 0.0f, 0.0f, 0.0f};
       }
 
-      PackWldPropEntry(mEntries[index], transform, blueprintPath);
+      PackWldPropEntry(mEntries[index], transform, blueprintPath, Wm3::Vec3f{scaleX, scaleY, scaleZ});
     }
 
     return true;
@@ -1156,7 +1368,7 @@ namespace moho
    *
    * What it does:
    * Saves all prop entries as blueprint path + position + rotation matrix
-   * lanes in the world-map binary format.
+   * lanes + scale lanes in the world-map binary format (retail writes 1,1,1).
    */
   bool CWldProps::Save(gpg::BinaryWriter& writer) const
   {
@@ -1182,10 +1394,9 @@ namespace moho
       writer.Write(matrix.vZ.y);
       writer.Write(matrix.vZ.z);
 
-      constexpr float kScaleIdentity = 1.0f;
-      writer.Write(kScaleIdentity);
-      writer.Write(kScaleIdentity);
-      writer.Write(kScaleIdentity);
+      writer.Write(entry.mScale.x);
+      writer.Write(entry.mScale.y);
+      writer.Write(entry.mScale.z);
     }
 
     return true;
@@ -1861,6 +2072,11 @@ namespace moho
    */
   boost::shared_ptr<ID3DTextureSheet> CWldTerrainRes::GetWaterMap() const
   {
+    // EDITOR: the finer water map for rendering (ed_water_hires), the half resolution one when that is off or the map is too big
+    const boost::shared_ptr<CD3DDynamicTextureSheet> fine = WaterHiResSheet(*this);
+    if (fine.get() != nullptr) {
+      return boost::static_pointer_cast<ID3DTextureSheet>(fine);
+    }
     return boost::static_pointer_cast<ID3DTextureSheet>(mWaterMapTexture);
   }
 
@@ -2851,8 +3067,8 @@ namespace moho
           continue;
         }
 
-        auto* blockRowBytes = static_cast<std::uint8_t*>(mappedBits);
-        for (std::int32_t localZ = lockRect.z0; localZ < lockRect.z1; localZ += 4) {
+        // One row of 4x4 blocks: reads the height field, writes only its own row of the locked texture.
+        const auto encodeBlockRow = [&](const std::int32_t localZ, std::uint8_t* const blockRowBytes) {
           auto* blockOutput = reinterpret_cast<std::uint64_t*>(blockRowBytes);
           for (std::int32_t localX = lockRect.x0; localX < lockRect.x1; localX += 4) {
             TerrainNormalEncodeBlock block{};
@@ -2871,11 +3087,34 @@ namespace moho
 
             *blockOutput++ = moho::DXT_EncodeAlphaBlock(block.mNormalX, 1, 4);
             *blockOutput++ = moho::DXT_EncodeGreenBlock(block.mNormalZ);
-
-            TickLoadingProgress(loadControl);
           }
+        };
 
-          blockRowBytes += pitchBytes;
+        auto* const lockedBytes = static_cast<std::uint8_t*>(mappedBits);
+        const std::int32_t blockRowCount = (lockRect.z1 - lockRect.z0 + 3) / 4;
+        const std::int64_t blockCount = static_cast<std::int64_t>(blockRowCount) * ((lockRect.x1 - lockRect.x0 + 3) / 4);
+        if (blockCount >= kParallelNormalMapMinBlocks && moho::editor::perf::ParallelNormalMapEnabled()) {
+          // EDITOR: block rows are independent (pure reads of the height field, each writes its own row of the texture), so a big update (a map load, a whole map edit)
+          // is split over the field engine's worker pool in batches of rows; the loading progress (which is also the abort check and throws) stays on this thread, once
+          // per row after each batch. The bytes are identical to the serial loop below (docs/projects/editor/PERFORMANCE.md).
+          constexpr std::int32_t kBatchRows = 64;
+          for (std::int32_t batchStart = 0; batchStart < blockRowCount; batchStart += kBatchRows) {
+            const std::int32_t batchEnd = std::min(blockRowCount, batchStart + kBatchRows);
+            moho::editor::field::ParallelFor(batchEnd - batchStart, [&](const int index) {
+              const std::int32_t blockRow = batchStart + index;
+              encodeBlockRow(lockRect.z0 + blockRow * 4, lockedBytes + static_cast<std::size_t>(blockRow) * pitchBytes);
+            });
+            for (std::int32_t row = batchStart; row < batchEnd; ++row) {
+              TickLoadingProgress(loadControl);
+            }
+          }
+        } else {
+          auto* blockRowBytes = lockedBytes;
+          for (std::int32_t localZ = lockRect.z0; localZ < lockRect.z1; localZ += 4) {
+            encodeBlockRow(localZ, blockRowBytes);
+            TickLoadingProgress(loadControl);
+            blockRowBytes += pitchBytes;
+          }
         }
 
         (void)sheet->Unlock();
@@ -3028,6 +3267,11 @@ namespace moho
     (void)sheet->GetDimensions(&dimensions);
     const std::int32_t textureWidth = static_cast<std::int32_t>(dimensions.x);
 
+    // EDITOR: a channel of the water map was painted (foam, flatness): the finer water map copies those masks
+    if (sheet == mWaterMapTexture.get()) {
+      MarkWaterHiResDirty(this, columnStart * 2, rowStart * 2, columnEnd * 2 + 1, rowEnd * 2 + 1);
+    }
+
     std::uint32_t pitchBytes = 0;
     void* mappedBits = nullptr;
     if (!sheet->Lock(&pitchBytes, &mappedBits)) {
@@ -3176,7 +3420,10 @@ namespace moho
       ((stratumIndex / 4) != 0) ? ShareAsDynamicSheet(mStrata.mStratumMask1)
                                 : ShareAsDynamicSheet(mStrata.mStratumMask0);
 
-    GetTextureChannel(sourceTexture, kChannelMask[channel], kChannelShift[channel], outMask);
+    // EDITOR: kChannelMask keeps the OTHER lanes (UpdateTextureChannel ANDs the pixel with it); GetTextureChannel isolates its lane with
+    // `pixel & mask`, so it needs the complement. With the same table the read returned the other three lanes shifted (zeros for a
+    // painted mask), which only showed once the editor read a mask back.
+    GetTextureChannel(sourceTexture, ~kChannelMask[channel], kChannelShift[channel], outMask);
   }
 
   /**
@@ -4224,6 +4471,32 @@ namespace moho
 
     // 0x008911F0-0x00891210: each stage's status byte is discarded by the
     // binary - a partial save still reports success to the caller.
+    (void)mMapPreviewChunk->Save(writer);
+    (void)mTerrainRes->Save(writer);
+    (void)mProps->Save(writer);
+
+    stream->VirtClose(gpg::Stream::ModeBoth);
+    return true;
+  }
+
+  /**
+   * Editor addition (not part of the recovered binary): the same container `MapSave` writes, to an explicit
+   * disk path instead of a path resolved through the virtual file system.
+   */
+  bool CWldMap::MapSaveToDiskPath(const char* const diskPath)
+  {
+    if (mMapPreviewChunk == nullptr || mTerrainRes == nullptr || mProps == nullptr || diskPath == nullptr) {
+      return false;
+    }
+
+    msvc8::auto_ptr<gpg::Stream> stream = DISK_OpenFileWrite(diskPath);
+    if (stream.get() == nullptr) {
+      return false;
+    }
+
+    gpg::BinaryWriter writer(stream.get());
+    const SWorldMapFileHeader header{kWorldMapFileMagic, kWorldMapFileVersion};
+    writer.Write(header);
     (void)mMapPreviewChunk->Save(writer);
     (void)mTerrainRes->Save(writer);
     (void)mProps->Save(writer);

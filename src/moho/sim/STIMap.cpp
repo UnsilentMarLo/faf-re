@@ -1839,9 +1839,12 @@ namespace moho
       x0 = 0;
     }
 
+    // CRASHFIX (editor): the copy below is inclusive (x <= x1, z <= z1) over a width x height buffer, so the last valid
+    // index is width-1 / height-1. The recovered clamp was `height` for both axes: a rect ending on the map edge (the editor's
+    // whole-map commits, SyncTerrain of a dirty rect that touches the edge) wrote one row past the allocation (heap overflow).
     std::int32_t x1 = rect.x1;
-    if (x1 >= height) {
-      x1 = height;
+    if (x1 >= width - 1) {
+      x1 = width - 1;
     }
 
     std::int32_t z0 = rect.z0;
@@ -1850,11 +1853,11 @@ namespace moho
     }
 
     std::int32_t z1 = rect.z1;
-    if (z1 >= height) {
-      z1 = height;
+    if (z1 >= height - 1) {
+      z1 = height - 1;
     }
 
-    if (x0 >= x1 || z0 >= z1) {
+    if (x0 > x1 || z0 > z1) {
       return;
     }
 

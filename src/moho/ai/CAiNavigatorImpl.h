@@ -172,27 +172,7 @@ namespace moho
    * VFTABLE: 0x00E1C0B8
    * COL:  0x00E71714
    */
-  template <>
-  class CScrLuaMetatableFactory<CAiNavigatorImpl> final : public CScrLuaObjectFactory
-  {
-  public:
-    /**
-     * Address: 0x1001FDE0 (MohoEngine.dll constructor shape)
-     */
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]]
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x005A7310 (FUN_005A7310, ?Create@?$CScrLuaMetatableFactory@VCAiNavigatorImpl@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CAiNavigatorImpl>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CAiNavigatorImpl>) == 0x08,

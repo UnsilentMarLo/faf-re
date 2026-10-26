@@ -12,4 +12,9 @@ namespace moho
    * logs the selected path, and initializes water render sheets.
    */
   [[nodiscard]] WaterSurface* CreateWaterFidelity(IWldTerrainRes* terrainResource);
+
+  /**
+   * EDITOR: rebuilds the water surface quad of every fidelity that exists, from the terrain's current water switch and elevation.
+   */
+  void EdRefreshWaterSurfaces(IWldTerrainRes* terrainResource);
 } // namespace moho

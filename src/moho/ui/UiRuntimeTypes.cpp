@@ -75,6 +75,8 @@
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/d3d/CD3DFont.h"
 #include "moho/render/d3d/CD3DPrimBatcher.h"
+#include "moho/editor/EdRenderStats.h"
+#include "moho/editor/EdUiCull.h"
 #include "moho/render/d3d/RD3DTextureResource.h"
 #include "moho/render/IRenderWorldView.h"
 #include "moho/render/RCamManager.h"
@@ -179,288 +181,84 @@ namespace moho
 
 namespace moho
 {
-  template <>
-  class CScrLuaMetatableFactory<CLuaWldUIProvider> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CLuaWldUIProvider>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CLuaWldUIProvider>) == 0x8,
     "CScrLuaMetatableFactory<CLuaWldUIProvider> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CUIWorldMesh> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CUIWorldMesh>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CUIWorldMesh>) == 0x8,
     "CScrLuaMetatableFactory<CUIWorldMesh> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CUIWorldView> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CUIWorldView>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CUIWorldView>) == 0x8,
     "CScrLuaMetatableFactory<CUIWorldView> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CUIMapPreview> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CUIMapPreview>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CUIMapPreview>) == 0x8,
     "CScrLuaMetatableFactory<CUIMapPreview> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiControl> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00783070 (FUN_00783070, Moho::CScrLuaMetatableFactory<Moho::CMauiControl>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiControl`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiControl>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiControl>) == 0x8,
     "CScrLuaMetatableFactory<CMauiControl> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiBorder> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00786180 (FUN_00786180, Moho::CScrLuaMetatableFactory<Moho::CMauiBorder>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiBorder`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiBorder>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiBorder>) == 0x8,
     "CScrLuaMetatableFactory<CMauiBorder> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiBitmap> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00783040 (FUN_00783040, Moho::CScrLuaMetatableFactory<Moho::CMauiBitmap>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiBitmap`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiBitmap>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiBitmap>) == 0x8,
     "CScrLuaMetatableFactory<CMauiBitmap> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiCursor> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x0078D940 (FUN_0078D940, Moho::CScrLuaMetatableFactory<Moho::CMauiCursor>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiCursor`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiCursor>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiCursor>) == 0x8,
     "CScrLuaMetatableFactory<CMauiCursor> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiLuaDragger> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x0078E660 (FUN_0078E660, Moho::CScrLuaMetatableFactory<Moho::CMauiLuaDragger>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiLuaDragger`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiLuaDragger>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiLuaDragger>) == 0x8,
     "CScrLuaMetatableFactory<CMauiLuaDragger> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiEdit> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00794E90 (FUN_00794E90, Moho::CScrLuaMetatableFactory<Moho::CMauiEdit>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiEdit`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiEdit>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiEdit>) == 0x8,
     "CScrLuaMetatableFactory<CMauiEdit> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiScrollbar> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x007A2470 (FUN_007A2470, Moho::CScrLuaMetatableFactory<Moho::CMauiScrollbar>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiScrollbar`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiScrollbar>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiScrollbar>) == 0x8,
     "CScrLuaMetatableFactory<CMauiScrollbar> size must be 0x8"
   );
 
-  template <>
-  class CScrLuaMetatableFactory<CMauiText> final : public CScrLuaObjectFactory
-  {
-  public:
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]] static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x007A4250 (FUN_007A4250, Moho::CScrLuaMetatableFactory<Moho::CMauiText>::Create)
-     *
-     * What it does:
-     * Builds one simple Lua metatable object for `CMauiText`.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CMauiText>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CMauiText>) == 0x8,
@@ -10373,9 +10171,9 @@ int moho::cfunc_CMauiEditSetNewFontL(
   if (lua_type(state->m_state, 3) != LUA_TNUMBER) {
     LuaPlus::LuaStackObject::TypeError(&pointSizeArg, "integer");
   }
-  const int pointSize = static_cast<int>(lua_tonumber(state->m_state, 3));
+  const float pointSize = static_cast<float>(lua_tonumber(state->m_state, 3)); // editor: fractional sizes reach `ed:` fonts
 
-  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::Create(pointSize, familyName);
+  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::CreateF(pointSize, familyName);
   if (createdFont.px != nullptr) {
     ApplyEditFontAndRefreshClip(edit, createdFont);
     lua_settop(state->m_state, 1);
@@ -13339,9 +13137,9 @@ int moho::cfunc_CMauiItemListSetNewFontL(
   if (lua_type(state->m_state, 3) != LUA_TNUMBER) {
     LuaPlus::LuaStackObject::TypeError(&pointSizeArg, "integer");
   }
-  const int pointSize = static_cast<int>(lua_tonumber(state->m_state, 3));
+  const float pointSize = static_cast<float>(lua_tonumber(state->m_state, 3)); // editor: fractional sizes reach `ed:` fonts
 
-  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::Create(pointSize, familyName);
+  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::CreateF(pointSize, familyName);
   if (createdFont.px != nullptr) {
     itemList->SetFont(createdFont.px);
     lua_settop(state->m_state, 1);
@@ -16725,6 +16523,22 @@ void moho::CMauiText::DoRender(
     baselineY = font->mAscent + top;
   }
 
+  // EDITOR: a run that starts to the right of the window, whose baseline is far above or below it, or that ends left of it, has no glyph on the screen (EdUiCull.h). The width
+  // of the string is asked only when the run starts left of the window (a parked control): the layout is cached by the text backend.
+  moho::editor::renderstats::Frame& uiStats = moho::editor::renderstats::gCur;
+  if (moho::ui_CullOffscreen) {
+    float viewW = 0.0f;
+    float viewH = 0.0f;
+    if (UI_GetRenderViewSize(viewW, viewH)) {
+      const float runWidth = originX < 0.0f ? font->GetAdvance(text, 0) : -1.0f;
+      if (moho::editor::uicull::TextOutside(originX, baselineY, runWidth, viewW, viewH, 256.0f)) {
+        ++uiStats.uiTextsCulled;
+        return;
+      }
+    }
+  }
+  ++uiStats.uiTextsDrawn;
+
   const Wm3::Vector3f xAxis{1.0f, 0.0f, 0.0f};
   const Wm3::Vector3f yAxis{0.0f, -1.0f, 0.0f};
 
@@ -16812,9 +16626,9 @@ int moho::cfunc_CMauiTextSetNewFontL(
   if (lua_type(state->m_state, 3) != LUA_TNUMBER) {
     LuaPlus::LuaStackObject::TypeError(&pointSizeArg, "integer");
   }
-  const int pointSize = static_cast<int>(lua_tonumber(state->m_state, 3));
+  const float pointSize = static_cast<float>(lua_tonumber(state->m_state, 3)); // editor: fractional sizes reach `ed:` fonts
 
-  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::Create(pointSize, familyName);
+  boost::SharedPtrRaw<CD3DFont> createdFont = CD3DFont::CreateF(pointSize, familyName);
   if (createdFont.px != nullptr) {
     textControl->SetNewFont(createdFont.px);
     lua_settop(state->m_state, 1);
@@ -17623,8 +17437,10 @@ namespace moho
 
     std::size_t index = 0;
     for (wxWindow* const inputWindow : g_UIManager->mInputWindows) {
-      suspended[index].push_back(inputWindow->PopEventHandler(false));
-      suspended[index].push_back(inputWindow->PopEventHandler(false));
+      if (inputWindow != nullptr) { // editor: removed pop-out slots are null
+        suspended[index].push_back(inputWindow->PopEventHandler(false));
+        suspended[index].push_back(inputWindow->PopEventHandler(false));
+      }
       ++index;
     }
 
@@ -17634,8 +17450,10 @@ namespace moho
 
     index = 0;
     for (wxWindow* const inputWindow : g_UIManager->mInputWindows) {
-      inputWindow->PushEventHandler(suspended[index][1]);
-      inputWindow->PushEventHandler(suspended[index][0]);
+      if (inputWindow != nullptr) {
+        inputWindow->PushEventHandler(suspended[index][1]);
+        inputWindow->PushEventHandler(suspended[index][0]);
+      }
       ++index;
     }
   }
@@ -21865,7 +21683,8 @@ void moho::CUIWorldView::Frame(
       }
     }
 
-    const bool iconsVisible = !mCameraRotationActive && !cam_Free;
+    // EDITOR: see CUIWorldView::Render - the free camera does not hide strategic icons
+    const bool iconsVisible = !mCameraRotationActive;
     if (iconsVisible != mIconsVisible) {
       mIconsVisible = iconsVisible;
       RunScriptWithBool("OnIconsVisible", iconsVisible);
@@ -23247,10 +23066,28 @@ void moho::CMauiBitmap::DoRender(
     return;
   }
 
+  // EDITOR: a bitmap with alpha 0, or one that lies completely outside the window (a control parked off screen: Maui does not clip), puts no pixel on the screen: it is not built,
+  // not queued and its texture is not put into the atlas (moho/editor/EdUiCull.h; ui_SkipTransparent / ui_CullOffscreen 0 draw every bitmap as before).
+  moho::editor::renderstats::Frame& uiStats = moho::editor::renderstats::gCur;
+  if (moho::ui_SkipTransparent && moho::editor::uicull::ColorTransparent(mVertexAlpha)) {
+    ++uiStats.uiBitmapsTransparent;
+    return;
+  }
+
   const float bottom = CScriptLazyVar_float::GetValue(&mBottomLV);
   const float right = CScriptLazyVar_float::GetValue(&mRightLV);
   const float top = CScriptLazyVar_float::GetValue(&mTopLV);
   const float left = CScriptLazyVar_float::GetValue(&mLeftLV);
+
+  if (moho::ui_CullOffscreen) {
+    float viewW = 0.0f;
+    float viewH = 0.0f;
+    if (UI_GetRenderViewSize(viewW, viewH) && moho::editor::uicull::QuadOutside(left, top, right, bottom, viewW, viewH)) {
+      ++uiStats.uiBitmapsCulled;
+      return;
+    }
+  }
+  ++uiStats.uiBitmapsDrawn;
 
   gpg::Rect2f destRect;
   destRect.x0 = left;
@@ -25606,6 +25443,25 @@ void moho::CMauiBorder::DoRender(
     static_cast<float>(FloorFrndintAdjustDown(CScriptLazyVar_float::GetValue(&mBorderWidthLV)));
   const float borderHeight =
     static_cast<float>(FloorFrndintAdjustDown(CScriptLazyVar_float::GetValue(&mBorderHeightLV)));
+
+  // EDITOR: alpha 0 or completely outside the window: nothing to draw (EdUiCull.h). The rectangle is grown by the border size: the strips lie inside it, this is only a margin.
+  {
+    moho::editor::renderstats::Frame& uiStats = moho::editor::renderstats::gCur;
+    if (moho::ui_SkipTransparent && moho::editor::uicull::ColorTransparent(mVertexAlpha)) {
+      ++uiStats.uiBordersCulled;
+      return;
+    }
+    float viewW = 0.0f;
+    float viewH = 0.0f;
+    if (moho::ui_CullOffscreen && UI_GetRenderViewSize(viewW, viewH)) {
+      const float margin = std::max(std::fabs(borderWidth), std::fabs(borderHeight));
+      if (moho::editor::uicull::QuadOutside(left - margin, top - margin, right + margin, bottom + margin, viewW, viewH)) {
+        ++uiStats.uiBordersCulled;
+        return;
+      }
+    }
+    ++uiStats.uiBordersDrawn;
+  }
 
   const float innerLeft = left + borderWidth;
   const float innerRight = right - borderWidth;

@@ -11,6 +11,7 @@
 
 #include "gpg/core/utils/BoostWrappers.h"
 #include "gpg/gal/EffectVariable.hpp"
+#include "moho/editor/EdRenderStats.h"
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/ID3DIndexSheet.h"
 #include "moho/render/ID3DTextureSheet.h"
@@ -74,6 +75,10 @@ namespace
     sizeof(moho::VMatrix4) == sizeof(gpg::gal::Matrix),
     "CD3DPrimBatcher camera matrix lanes must match VMatrix4 storage"
   );
+
+  // EDITOR: the viewport of the UI pass in progress (see UI_GetRenderViewSize). 0 = unknown.
+  float gUiViewWidth = 0.0f;
+  float gUiViewHeight = 0.0f;
 
   [[nodiscard]] moho::Vector3f BuildGlyphCorner(
     const moho::Vector3f& origin,
@@ -261,6 +266,7 @@ namespace moho
    */
   CD3DPrimBatcher* CD3DPrimBatcher::Setup(const char* const techniqueName)
   {
+    EndTextRun(); // editor: pending LCD glyph quads must be drawn with their own technique first
     CD3DDevice* const device = D3D_GetDevice();
     device->SelectFxFile("primbatcher");
     device->SelectTechnique(techniqueName);
@@ -387,8 +393,15 @@ namespace moho
   {
     auto* const runtime = this;
 
-    const std::uint32_t atlasHalfWidth = static_cast<std::uint32_t>(runtime->mTextureBatcher->mWidth) >> 1u;
-    const std::uint32_t atlasHalfHeight = static_cast<std::uint32_t>(runtime->mTextureBatcher->mHeight) >> 1u;
+    // Editor: textures that ask for the A8R8G8B8 sheet format (text glyphs) are packed into the second atlas.
+    const bool argb = texture->GetSheetFormat() == 2u;
+    if (!argb && runtime->mLcdTextActive) {
+      EndTextRun(); // a non-glyph quad follows: back to the UI technique
+    }
+    CD3DTextureBatcher* const atlas = argb ? &CD3DTextureBatcher::GetArgbAtlas() : runtime->mTextureBatcher;
+
+    const std::uint32_t atlasHalfWidth = static_cast<std::uint32_t>(atlas->mWidth) >> 1u;
+    const std::uint32_t atlasHalfHeight = static_cast<std::uint32_t>(atlas->mHeight) >> 1u;
     const bool useDirectTexture = texture->mWidth >= atlasHalfWidth || texture->mHeight >= atlasHalfHeight;
 
     if (useDirectTexture) {
@@ -396,6 +409,7 @@ namespace moho
         Flush();
       }
 
+      runtime->mArgbAtlasInUse = nullptr;
       runtime->mTexture = texture;
 
       CD3DBatchTexture::TextureSheetHandle textureSheet{};
@@ -411,18 +425,21 @@ namespace moho
       return;
     }
 
-    if (!runtime->mVertices.empty() && runtime->mDynamicTexSheet) {
+    // Flush when leaving the direct-sheet mode or when switching between the DXT5 and the A8R8G8B8 atlas.
+    if (!runtime->mVertices.empty() &&
+        (runtime->mDynamicTexSheet || ((runtime->mArgbAtlasInUse != nullptr) != argb))) {
       Flush();
     }
 
-    const gpg::Rect2f* uvRect = runtime->mTextureBatcher->AddTexture(texture);
+    const gpg::Rect2f* uvRect = atlas->AddTexture(texture);
     if (uvRect == nullptr) {
       if (!runtime->mVertices.empty()) {
         Flush();
       }
-      runtime->mTextureBatcher->Reset();
-      uvRect = runtime->mTextureBatcher->AddTexture(texture);
+      atlas->Reset();
+      uvRect = atlas->AddTexture(texture);
     }
+    runtime->mArgbAtlasInUse = argb ? atlas : nullptr;
 
     // Binary order: 0x00438728 `lea eax, [edi+44h]` -> call 0x0043A8B0 (batch
     // texture lane), then 0x00438730 `lea eax, [edi+3Ch]` -> call 0x0043A860
@@ -435,6 +452,19 @@ namespace moho
     runtime->mP2y = uvRect->z0;
     runtime->mP1x = uvRect->x1 - uvRect->x0;
     runtime->mP1y = uvRect->z1 - uvRect->z0;
+  }
+
+  /**
+   * Editor addition: see the declaration.
+   */
+  void CD3DPrimBatcher::EndTextRun()
+  {
+    if (!mLcdTextActive) {
+      return;
+    }
+    Flush();
+    mLcdTextActive = false;
+    D3D_GetDevice()->SelectTechnique("TAlphaBlendLinearSampleNoDepth");
   }
 
   /**
@@ -455,6 +485,7 @@ namespace moho
   void CD3DPrimBatcher::SetTexture(boost::shared_ptr<ID3DTextureSheet> sheet)
   {
     auto* const runtime = this;
+    EndTextRun();
 
     const boost::shared_ptr<CD3DDynamicTextureSheet> derivedSheet =
       boost::static_pointer_cast<CD3DDynamicTextureSheet>(sheet);
@@ -467,6 +498,7 @@ namespace moho
     // reaches through 0x0043A8B0; expressed here through the named recovery so
     // both emissions share one source body.
     ResetSharedBatchTextureHandle(runtime->mTexture);
+    runtime->mArgbAtlasInUse = nullptr;
     runtime->mDynamicTexSheet = derivedSheet;
 
     runtime->mP2x = 0.0f;
@@ -1082,8 +1114,9 @@ namespace moho
     if (runtime->mDynamicTexSheet) {
       shaderVarPrimBatcherTexture1.GetTexture(runtime->mDynamicTexSheet);
     } else {
-      (void)runtime->mTextureBatcher->GetCompositeTexture();
-      shaderVarPrimBatcherTexture1.GetTexture(runtime->mTextureBatcher->mDynTexSheet);
+      CD3DTextureBatcher* const atlas = runtime->mArgbAtlasInUse != nullptr ? runtime->mArgbAtlasInUse : runtime->mTextureBatcher;
+      (void)atlas->GetCompositeTexture();
+      shaderVarPrimBatcherTexture1.GetTexture(atlas->mDynTexSheet);
     }
 
     runtime->mCurVertexSheet = (runtime->mCurVertexSheet + 1) % 3;
@@ -1115,6 +1148,11 @@ namespace moho
     std::int32_t primitiveType = static_cast<std::int32_t>(runtime->mMode);
     CD3DDevice* const device = D3D_GetDevice();
     (void)device->DrawTriangleList(&vertexSheetView, &indexSheetView, &primitiveType);
+
+    // EDITOR: ed_render_stats
+    ++moho::editor::renderstats::gCur.batcherFlushes;
+    moho::editor::renderstats::gCur.batcherVertices += vertexCount;
+    moho::editor::renderstats::gCur.batcherIndices += primitiveCount;
 
     runtime->mVertices.clear();
     runtime->mPrimitives.clear();
@@ -1711,6 +1749,13 @@ namespace moho
     }
   }
 
+  bool UI_GetRenderViewSize(float& width, float& height) noexcept
+  {
+    width = gUiViewWidth;
+    height = gUiViewHeight;
+    return gUiViewWidth > 0.0f && gUiViewHeight > 0.0f;
+  }
+
   /**
    * Address: 0x0084D3E0 (FUN_0084D3E0)
    *
@@ -1720,6 +1765,9 @@ namespace moho
    */
   void CD3DPrimBatcher::SetToViewport(const int head, const CUIManager& manager)
   {
+    // EDITOR: forget the last head's size first, a head that returns early below must not be culled with it
+    gUiViewWidth = 0.0f;
+    gUiViewHeight = 0.0f;
     if (head < 0) {
       return;
     }
@@ -1743,6 +1791,8 @@ namespace moho
 
     const float widthF = static_cast<float>(width);
     const float heightF = static_cast<float>(height);
+    gUiViewWidth = widthF;
+    gUiViewHeight = heightF;
 
     VMatrix4 projection{};
     projection.r[0] = {2.0f / widthF, 0.0f, 0.0f, 0.0f};

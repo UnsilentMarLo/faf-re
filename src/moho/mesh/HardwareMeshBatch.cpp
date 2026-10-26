@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Mesh.h"
+#include "moho/editor/EdShadowCache.h"
 #include "gpg/core/utils/Global.h"
 #include "gpg/core/utils/Logging.h"
 
@@ -285,6 +286,14 @@ namespace moho
         if (base != kNoBase && boneCount > 0) {
           SkinPaletteEntry* const bones = &mTexels[2u * static_cast<std::size_t>(base)];
           FillInstanceBonePalettes(meshInstance, pose, skeleton, boneRemapIndices, boneCount, bones, bones + 1, 2u);
+          if (moho::editor::shadowcache::gAccumulateBones) {
+            // EDITOR: the shadow map cache signs the bones of the scene it is about to draw (Shadow.cpp ShadowSceneSignature). One hash per instance, added up: the order of the
+            // instances does not matter.
+            moho::editor::shadowcache::Hasher hash;
+            hash.AddPointer(&meshInstance);
+            hash.AddBytes(bones, static_cast<std::size_t>(boneCount) * 2u * sizeof(SkinPaletteEntry));
+            moho::editor::shadowcache::gBoneSum += hash.Value();
+          }
         }
         return base;
       }

@@ -121,6 +121,15 @@ namespace moho
      */
     [[nodiscard]] virtual std::uint8_t GetAlphaAt(std::uint32_t x, std::uint32_t y) const = 0;
 
+    /**
+     * Editor addition (not in the retail binary): gal texture format token of the dynamic sheet this texture is
+     * uploaded into. Default 12 (DXT5) as before; the editor text backend returns 2 (A8R8G8B8).
+     */
+    [[nodiscard]] virtual std::uint32_t GetSheetFormat() const
+    {
+      return 12u;
+    }
+
   protected:
     /**
      * Address: 0x004470F0 (FUN_004470F0)

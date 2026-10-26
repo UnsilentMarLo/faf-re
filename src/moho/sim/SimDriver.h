@@ -590,6 +590,9 @@ namespace moho
     friend struct CSimDriverLayoutAssertions;
 
   public:
+    /// Editor access (not part of the recovered binary): the simulation this driver steps.
+    [[nodiscard]] Sim* GetSimForEditor() const noexcept { return mSim.get(); }
+
     /**
      * Address: 0x0073B570 (FUN_0073B570)
      * Mangled: ??0CSimDriver@Moho@@QAE@@Z

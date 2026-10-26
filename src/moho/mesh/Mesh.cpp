@@ -30,7 +30,9 @@
 #include "moho/math/QuaternionMath.h"
 #include "moho/math/Vector4f.h"
 #include "moho/math/VMatrix4.h"
+#include "moho/editor/EdShadowCache.h"
 #include "moho/mesh/MeshBatch.h"
+#include "moho/mesh/MeshLodDepth.h"
 #include "moho/mesh/ShaderDictionary.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/Shadow.h"
@@ -4743,6 +4745,8 @@ namespace moho
       // (binary: `if (mMat.mStr3._Mysize)`).
       if (material.mDepthTechnique.size() != 0) {
         device->SelectTechnique(material.mDepthTechnique.c_str());
+        // EDITOR: which depth techniques this pass used, for the shadow map cache (a technique that moves with the clock must be drawn every frame, EdShadowCache.h)
+        moho::editor::shadowcache::gPassTimeMask |= moho::editor::shadowcache::ClassifyDepthTechnique(material.mDepthTechnique.c_str());
 
         // Depth pass binds only the albedo sampler.
         tv.albedoTexture.GetTexture(material.mAlbedoSheet);

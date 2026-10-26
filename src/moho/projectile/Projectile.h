@@ -332,22 +332,7 @@ namespace moho
     bool isChildProjectile
   );
 
-  template <>
-  class CScrLuaMetatableFactory<Projectile> final : public CScrLuaObjectFactory
-  {
-  public:
-    [[nodiscard]]
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x0067FFE0 (FUN_0067FFE0, Moho::CScrLuaMetatableFactory<Moho::Projectile>::Create)
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<Projectile>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<Projectile>) == 0x08,

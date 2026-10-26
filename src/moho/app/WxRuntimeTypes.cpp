@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <new>
 #include <string>
 
@@ -20,6 +21,7 @@
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/DeviceContext.hpp"
 #include "gpg/gal/RenderProfiler.h"
+#include "gpg/gal/Error.hpp"
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
 #include "moho/console/CConCommand.h"
 #include "moho/effects/rendering/SEfxCurve.h"
@@ -47,12 +49,16 @@
 #include "moho/render/SimpleRenderWorldView.h"
 #include "moho/render/SkyDome.h"
 #include "moho/render/VisionRenderer.h"
+#include "gpg/gal/DrawStatistics.h"
+#include "moho/editor/EdRenderStats.h"
 #include "moho/render/WRenViewport.h"
 #include "moho/render/camera/CameraImpl.h"
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/d3d/CD3DFont.h"
 #include "moho/render/d3d/CD3DPrimBatcher.h"
 #include "moho/render/d3d/CD3DTextureBatcher.h"
+#include "moho/editor/EdIcon.h"
+#include "moho/editor/EdPopout.h"
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/d3d/CD3DDepthStencil.h"
 #include "moho/render/d3d/CD3DRenderTarget.h"
@@ -1173,6 +1179,9 @@ namespace
     }
 
     frame.SetClientSize(width, height);
+    // EDITOR: this wx 2.4.2 frame can end up with a client area that differs from the size asked for; the back buffer and the
+    // viewport must follow the live client rect (see CScApp.cpp, same quirk at start-up).
+    frame.GetClientSize(&width, &height);
     if (moho::ren_Viewport != nullptr) {
       moho::ren_Viewport->SetSize(-1, -1, width, height, wxSIZE_USE_EXISTING);
     }
@@ -1734,7 +1743,17 @@ void moho::CBloomRenderer::DoBloom(const float amount)
   // the blur target. This seeds the blur target with the current back buffer.
   boost::shared_ptr<ID3DRenderTarget> writerLock;
   D3D_GetDevice()->GetWriterLock1(writerLock, static_cast<int>(mHead));
-  D3D_GetDevice()->SetViewRect(writerLock.get(), mRenderTargets[1].get(), nullptr, nullptr);
+  // EDITOR: the seeding blit can fail (D3DERR_INVALIDCALL: a bloom target that no longer matches the back buffer after a device
+  // reset or a resize). Nothing has been changed yet at this point, so the frame simply goes on without bloom.
+  try {
+    D3D_GetDevice()->SetViewRect(writerLock.get(), mRenderTargets[1].get(), nullptr, nullptr);
+  } catch (const gpg::gal::Error& error) {
+    static int sBloomBlitFailures = 0;
+    if (sBloomBlitFailures++ < 5) {
+      gpg::Warnf("bloom: seeding blit failed, frame goes on without bloom: %s(%d) %s", error.GetFile(), error.GetLine(), error.what());
+    }
+    return;
+  }
 
   // Save the current device viewport, then install a full-frame viewport
   // (0,0,width,height,0,1) for the post-process passes.
@@ -3465,6 +3484,24 @@ void moho::WRenViewport::D3DWindowOnDeviceExit(const bool fullShutdown)
   mDepthStencilLocks[1].reset();
 }
 
+namespace
+{
+  // EDITOR: the world view of the icon pass. SimpleRenderWorldView::GetCamera returns null (the strategic-map preview does not need a camera object),
+  // and WRenViewport::Render skips a view without one, so the pass hands it the viewport camera it borrowed.
+  class EdIconWorldView final : public moho::SimpleRenderWorldView
+  {
+  public:
+    explicit EdIconWorldView(moho::CameraImpl* const camera)
+      : moho::SimpleRenderWorldView(const_cast<moho::GeomCamera3*>(&camera->CameraGetView()))
+      , mCamera(camera)
+    {}
+    moho::CameraImpl* GetCamera() override { return mCamera; }
+
+  private:
+    moho::CameraImpl* mCamera;
+  };
+} // namespace
+
 /**
  * Address: 0x007F7B30 (FUN_007F7B30)
  * Mangled: ?D3DWindowOnDeviceRender@WRenViewport@Moho@@UAEXXZ
@@ -3484,11 +3521,22 @@ void moho::WRenViewport::D3DWindowOnDeviceRender()
   }
   const gpg::gal::RenderProfileScope profileFrame("Frame"); // FAF instrumentation (gpg/gal/RenderProfiler.h)
   gRenderLock = true;
+  // EDITOR: a frame that throws (a gal::Error from any pass) must not leave the lock set - every later paint would return at the
+  // check above and the window stays black for good while the rest of the app runs on. The guard releases it on every exit.
+  struct RenderLockGuard
+  {
+    ~RenderLockGuard() { gRenderLock = false; }
+  } renderLockGuard;
 
   ResetRenderUnitCountStat();
   (void)moho::D3D_GetDevice()->InitRenderEngineStats();
   // FAF instrumentation, not in the binary: refill the draw stats just zeroed
   // with the previous frame's submissions (CD3DDevice::PublishDrawStatistics).
+  {
+    // EDITOR: ed_render_stats - the backend's tally of the frame that has just ended, read before PublishDrawStatistics takes it
+    const gpg::gal::DrawStatistics& pending = gpg::gal::PendingDrawStatistics();
+    moho::editor::renderstats::NextFrame(pending.drawCalls, pending.primitives, pending.vertices);
+  }
   moho::D3D_GetDevice()->PublishDrawStatistics();
 
   for (SWorldViewInfo& worldView : mWorldViews) {
@@ -3498,6 +3546,109 @@ void moho::WRenViewport::D3DWindowOnDeviceRender()
   // ++sFrameCounter; sCurrentInterpolant = REN_GetSimDeltaSeconds(); - the
   // binary open-codes both stores here; the recovered helper is byte-identical.
   moho::MeshInstance::SetCurrentInterpolant();
+
+  // EDITOR: unit icon pass (docs/projects/MOD_UNIT_EDITOR_DESIGN.md, S5). On request (ed_icon_request) the scene is rendered twice through a throwaway
+  // camera into the top left of the window - terrain, sky, water, effects, UI and bloom off, once cleared to black and once to white - and each picture
+  // is saved as a BMP the Lua side reads back (ed_icon_result mattes them into one RGBA picture). It runs before the normal frame, which clears and
+  // redraws the whole window, so nothing of it reaches the screen. The viewport camera is not touched.
+  if (moho::edicon::Request iconRequest; moho::edicon::TakeRequest(iconRequest)) {
+    bool iconOk = false;
+    const char* iconMessage = "no map loaded";
+    moho::CD3DDevice* const iconDevice = moho::D3D_GetDevice();
+    moho::IWldTerrainRes* const iconTerrainRes = moho::REN_GetTerrainRes();
+    if (iconDevice != nullptr && iconTerrainRes != nullptr) {
+      moho::CameraImpl* iconCamera = nullptr;
+      bool iconCameraTouched = false;
+      Wm3::Vector2f iconSavedOrigin{};
+      Wm3::Vector2f iconSavedSize{};
+      float iconSavedHeading = 0.0f;
+      float iconSavedPitch = 0.0f;
+      float iconSavedZoom = 0.0f;
+      float iconSavedFov = 0.0f;
+      Wm3::Vec3f iconSavedOffset{};
+      bool* const iconFlags[] = {
+        &moho::ren_Ui, &moho::ren_Fx, &moho::ren_Terrain, &moho::ren_SkyDome, &moho::ren_Water, &moho::ren_Bloom, &moho::ren_Shadows,
+        &moho::ren_Select, &moho::ren_WorldBorder, &moho::ren_PlayableBoundary, &moho::ren_FogOfWar, &moho::fog_DistanceFog, &moho::ren_fog,
+        &moho::ren_Ranges, &moho::ren_Clutter, &moho::ed_EnableHook};
+      constexpr int kIconFlagCount = static_cast<int>(sizeof(iconFlags) / sizeof(iconFlags[0]));
+      bool iconSaved[kIconFlagCount];
+      for (int i = 0; i < kIconFlagCount; ++i) {
+        iconSaved[i] = *iconFlags[i];
+        *iconFlags[i] = ((iconRequest.keepMask >> i) & 1u) != 0u;
+      }
+      try {
+        const int size = std::min(iconRequest.size, std::min(iconDevice->GetHeadWidth(0), iconDevice->GetHeadHeight(0)));
+        // The viewport camera is borrowed: a camera created here would need the User Lua state for its script object (CreateCamera with
+        // no state crashes in CScrLuaObjectFactory), and the editor always has the world camera. Everything the pass changes is put back below.
+        iconCamera = moho::CAM_GetManager()->GetCamera("WorldCamera");
+        if (iconCamera == nullptr) {
+          throw std::runtime_error("no WorldCamera");
+        }
+        iconCamera->CameraGetViewport(iconSavedOrigin, iconSavedSize);
+        iconSavedHeading = iconCamera->mHeading;
+        iconSavedPitch = iconCamera->mFarPitch;
+        iconSavedZoom = iconCamera->mTargetZoom;
+        iconSavedOffset = iconCamera->mOffset;
+        iconSavedFov = iconCamera->mFarFov;
+        iconCameraTouched = true;
+        iconCamera->CameraSetViewport(Wm3::Vector2f(0.0f, 0.0f), Wm3::Vector2f(static_cast<float>(size), static_cast<float>(size)));
+        const Wm3::Vec3f focus{iconRequest.x, iconRequest.y, iconRequest.z};
+        iconCamera->mHeading = iconRequest.heading;
+        iconCamera->mFarPitch = iconRequest.pitch;
+        iconCamera->mTargetZoom = iconRequest.zoom;
+        iconCamera->mOffset = focus;
+        iconCamera->mFarFov = iconRequest.fovDeg * 0.017453292f;
+        iconCamera->UpdateCoords(0.0f, 0.0f);
+
+        EdIconWorldView iconView(iconCamera);
+        SWorldViewInfo iconEntry{};
+        iconEntry.mView = &iconView;
+        (void)AssignSharedTerrainFromRaw(&iconEntry.mTerrain, moho::IRenTerrain::Create());
+        if (iconEntry.mTerrain) {
+          (void)iconEntry.mTerrain->Create(iconTerrainRes);
+        }
+        msvc8::vector<SWorldViewInfo> iconViews{};
+        iconViews.push_back(iconEntry);
+
+        iconOk = true;
+        for (int pass = 0; pass < 2 && iconOk; ++pass) {
+          moho::edicon::gClearArgb = pass == 0 ? 0xFF000000u : 0xFFFFFFFFu;
+          moho::edicon::gActive = true;
+          Render(0, iconViews);
+          moho::edicon::gActive = false;
+
+          boost::shared_ptr<moho::ID3DRenderTarget> screenLock{};
+          iconDevice->GetWriterLock1(screenLock, 0);
+          iconDevice->SetViewRect(screenLock.get(), mPrimaryTargetLocks[0].get(), nullptr, nullptr);
+          boost::shared_ptr<moho::CD3DDynamicTextureSheet>& iconSheet = RenDumpFrameSheetLane();
+          iconDevice->GetResources()->Func10(iconSheet, mPrimaryTargetLocks[0].get(), iconSheet);
+          boost::shared_ptr<gpg::gal::Texture> iconTexture{};
+          iconSheet->GetTexture(iconTexture);
+          const msvc8::string iconPath = moho::edicon::TempPath(pass).c_str();
+          iconDevice->GetGalDevice()->SaveTexture(iconTexture, iconPath, 0, nullptr);
+        }
+        iconMessage = "";
+      } catch (const std::exception& error) {
+        iconOk = false;
+        iconMessage = "the render failed (see the log)";
+        gpg::Warnf("icon render: %s", error.what());
+      }
+      moho::edicon::gActive = false;
+      for (int i = 0; i < kIconFlagCount; ++i) {
+        *iconFlags[i] = iconSaved[i];
+      }
+      if (iconCameraTouched) {
+        iconCamera->CameraSetViewport(iconSavedOrigin, iconSavedSize);
+        iconCamera->mHeading = iconSavedHeading;
+        iconCamera->mFarPitch = iconSavedPitch;
+        iconCamera->mTargetZoom = iconSavedZoom;
+        iconCamera->mOffset = iconSavedOffset;
+        iconCamera->mFarFov = iconSavedFov;
+        iconCamera->UpdateCoords(0.0f, 0.0f);
+      }
+    }
+    moho::edicon::Complete(iconOk, iconMessage);
+  }
 
   for (int head = 0; head < mNumHeads; ++head) {
     if (moho::ren_OnlyFirstView && !mWorldViews.empty()) {
@@ -3511,6 +3662,9 @@ void moho::WRenViewport::D3DWindowOnDeviceRender()
       Render(head, mWorldViews);
     }
   }
+
+  // Editor: draw the pop-out panel windows (moho/editor/EdPopout.cpp) after the main frame's scene is closed.
+  moho::edpopout::RenderAll();
 
   ++moho::snd_index;
   gRenderLock = false;
@@ -3714,6 +3868,20 @@ namespace
     return disabled || sToggled;
   }
 
+  // EDITOR: the water passes (reflection mesh pass, water mask, refraction copy, surface) have something to show only on a map whose water is switched on. A map without water
+  // has its surface at -10000, under the terrain (HighFidelityWater::RenderWaterSurface). ren_WaterSkipDisabled 0 brings every pass back.
+  [[nodiscard]] bool WaterPassesWanted()
+  {
+    if (!moho::ren_WaterSkipDisabled) {
+      return true;
+    }
+    moho::IWldTerrainRes* const terrainRes = moho::REN_GetTerrainRes();
+    if (terrainRes == nullptr || terrainRes->mMap == nullptr) {
+      return true;
+    }
+    return terrainRes->mMap->mWaterEnabled != 0;
+  }
+
   [[nodiscard]] bool RenderAdditionsDisabled() noexcept
   {
     static const bool disabled = [] {
@@ -3742,6 +3910,7 @@ namespace
  */
 void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& worldViews)
 {
+  moho::editor::renderstats::ScopedMs renderTimer(moho::editor::renderstats::gCur.renderMs);   // EDITOR: ed_render_stats
   moho::CD3DDevice* const device = moho::D3D_GetDevice();
   if (device == nullptr) {
     return;
@@ -3799,7 +3968,8 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
 
   mThumbnailRenderer.ProcessPendingRequests();
 
-  device->SetRenderTarget2(mHead, true, 0, 1.0f, 0);
+  // EDITOR: the icon pass clears to black and to white (alpha matting); every other frame clears to 0 as in the binary.
+  device->SetRenderTarget2(mHead, true, moho::edicon::gActive ? static_cast<int>(moho::edicon::gClearArgb) : 0, 1.0f, 0);
 
   if (uiManager != nullptr) {
     // Batcher read straight out of the viewport at +0x215C, matching the
@@ -3991,6 +4161,20 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
         const gpg::gal::RenderProfileScope profileTerrain("Terrain");
         RenderCompositeTerrain(terrain);
       }
+    } else if (terrain != nullptr && moho::ren_Water) {
+      // CRASHFIX (editor): a map that hides its terrain (3D maps run `ren_terrain 0` in OnStart) still draws water below, and the water
+      // passes (DrawWaterLine / DrawWaterTerrain) read the terrain's camera, which only UpdateRenderContext binds. In the stock game the
+      // first frames render before OnStart, so the camera is bound already; the editor can render its first frame with the terrain
+      // already off, which sent `&mCamera->view` (null + 0x5C) into d3dx9 SetMatrix and killed the load. Bind the camera without the
+      // terrain passes.
+      terrain->UpdateRenderContext(
+        moho::REN_GetGameTick(),
+        moho::REN_GetSimDeltaSeconds(),
+        mCam,
+        reinterpret_cast<const std::int32_t*>(&mScreenPos),
+        false,
+        0
+      );
     }
 
     // Range-ring pass for the normal (non-cartographic) world view, between the
@@ -4042,7 +4226,12 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
       );
     }
 
-    {
+    const bool waterPasses = WaterPassesWanted();   // EDITOR: see WaterPassesWanted
+    if (!waterPasses) {
+      moho::editor::renderstats::gCur.waterSkipped = 1;
+      ++moho::editor::renderstats::gWaterSkippedFrames;
+    }
+    if (waterPasses) {
       const gpg::gal::RenderProfileScope profileReflections("Reflections");
       RenderReflections();
     }
@@ -4062,8 +4251,10 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
 
     if (terrain != nullptr) {
       const gpg::gal::RenderProfileScope profileWater("Water");
-      RenderWaterMask(terrain);
-      RenderCopyForRefraction(false);
+      if (waterPasses) {
+        RenderWaterMask(terrain);
+        RenderCopyForRefraction(false);
+      }
       // Fog density tracks the camera zoom - the binary dispatches
       // IRenderWorldView slot 8 (CameraGetZoom) straight into FogOn at
       // 0x007F94B8..0x007F94C8, it is not a constant.

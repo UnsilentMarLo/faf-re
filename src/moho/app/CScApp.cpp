@@ -22,6 +22,7 @@
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/DeviceContext.hpp"
 #include "gpg/gal/Error.hpp"
+#include "moho/editor/EdPopout.h"
 #include "moho/audio/AudioEngine.h"
 #include "moho/console/CConCommand.h"
 #include "moho/audio/IUserSoundManager.h"
@@ -1196,6 +1197,7 @@ void CScApp::Main()
  */
 void CScApp::Destroy()
 {
+  moho::edpopout::DestroyAll(); // editor: pop-out windows hold swap chains and UI root frames; they must go first
   if (!::SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, usingScreensaver, nullptr, 0)) {
     gpg::Warnf("unable to reset screensaver");
   }
@@ -1365,7 +1367,8 @@ bool CScApp::CreateDevice()
   moho::sDeviceLock = true;
   DeviceLockGuard lockGuard{};
 
-  msvc8::string title("Forged Alliance");
+  // editor: an editor session names its window from the start (the loading screen shows it); ed_app_set_title changes it later
+  msvc8::string title(moho::CFG_GetArgOption("/editor", 0, nullptr) ? "FAF Studio" : "Forged Alliance");
   msvc8::vector<msvc8::string> options;
   moho::IUserPrefs* const preferences = moho::USER_GetPreferences();
 
@@ -1613,6 +1616,11 @@ bool CScApp::CreateAppFrame(
           gpg::Warnf(
             "Unable to set requested size %i,%i. Results are undefined.", primarySize.x, primarySize.y
           );
+          // EDITOR: this wx 2.4.2 frame comes out taller than asked for on current Windows (client 1280x729 for 1280x720).
+          // Every later blit uses the live client rect, so give the device a back buffer of that size instead of
+          // letting a StretchRect read past the surface (D3DERR_INVALIDCALL, black window).
+          primaryHead.mWidth = static_cast<std::uint32_t>(appliedWidth);
+          primaryHead.mHeight = static_cast<std::uint32_t>(appliedHeight);
         }
       }
 

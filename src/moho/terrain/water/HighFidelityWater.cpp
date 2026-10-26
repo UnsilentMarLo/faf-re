@@ -1,3 +1,4 @@
+#include "moho/editor/EdRenderStats.h"
 #include "moho/terrain/water/HighFidelityWater.h"
 
 #include <algorithm>
@@ -290,6 +291,12 @@ namespace moho
     const boost::shared_ptr<ID3DRenderTarget>& reflectionTexture
   )
   {
+    // EDITOR: a map with its water switched off keeps the surface at kDisabledWaterElevation (-10000), below every terrain pixel: the draw is rejected by the depth test
+    // everywhere (but under the terrain skirt seen from outside the map). ren_WaterSkipDisabled 0 draws it as before.
+    if (moho::ren_WaterSkipDisabled && mTerrainRes != nullptr && mTerrainRes->mMap != nullptr && mTerrainRes->mMap->mWaterEnabled == 0) {
+      return true;
+    }
+
     CD3DDevice* const device = D3D_GetDevice();
     device->SelectFxFile("water2");
     device->SelectTechnique("TWater");

@@ -1520,6 +1520,10 @@ namespace moho
 
       if (ren_GenerateMesh && (dirty || decalsDirty)) {
         mTesselator->Rebuild(mCamera, terrainRes);
+        // the rebuild consumes the pending-changes request (the editor raises it after height edits; nothing else clears it)
+        if (decalsDirty) {
+          static_cast<CDecalManager*>(terrainRes->GetDecalManager())->ClearPendingChanges();
+        }
 
         auto& shaderVars = GetTerrainShaderVars();
         if (shaderVars.heightScale.Exists()) {
@@ -1754,4 +1758,14 @@ namespace moho
     }
     return object;
   }
+
+  // EDITOR: the water quad is built once at map load, at the water elevation of that moment (far below the map when the map has no water), so the
+  // editor rebuilds it after the water switch or an elevation changed.
+  void EdRefreshWaterSurfaceMedium(IWldTerrainRes* terrainResource)
+  {
+    if (sMediumFidelityWaterSurface != nullptr) {
+      (void)sMediumFidelityWaterSurface->InitVerts(terrainResource);
+    }
+  }
+
 } // namespace moho

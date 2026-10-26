@@ -61,10 +61,14 @@ namespace moho
   {
     msvc8::string mBlueprintPath; // +0x00
     VTransform mTransform;        // +0x1C
+    // EDITOR DIVERGENCE (prop-scale compat layer; retail record is 0x38 bytes and drops the three scale lanes of the
+    // .scmap prop record, CWldProps::Load/Save). Kept per prop so the editor reads, edits and writes them.
+    Wm3::Vec3f mScale{1.0f, 1.0f, 1.0f}; // +0x38
   };
   static_assert(offsetof(CWldPropEntry, mBlueprintPath) == 0x00, "CWldPropEntry::mBlueprintPath offset must be 0x00");
   static_assert(offsetof(CWldPropEntry, mTransform) == 0x1C, "CWldPropEntry::mTransform offset must be 0x1C");
-  static_assert(sizeof(CWldPropEntry) == 0x38, "CWldPropEntry size must be 0x38");
+  static_assert(offsetof(CWldPropEntry, mScale) == 0x38, "CWldPropEntry::mScale offset must be 0x38");
+  static_assert(sizeof(CWldPropEntry) == 0x44, "CWldPropEntry size must be 0x44 (0x38 retail + editor scale)");
 
   struct CWldProps
   {
@@ -93,7 +97,7 @@ namespace moho
      * The whole object is one vector head: the proxy at `+0x00` and
      * `{_Myfirst, _Mylast, _Myend}` at `+0x04`, `+0x08`, `+0x0C`. The growth
      * cap the resize at 0x008922F0 checks is 0x04924924, which is
-     * `0xFFFFFFFF / 0x38` for this element. 0x008916A0 tidies it and frees
+     * `0xFFFFFFFF / 0x38` for the retail element (0x44 in the editor build). 0x008916A0 tidies it and frees
      * the object: `delete props`.
      */
     msvc8::vector<CWldPropEntry> mEntries; // +0x00
@@ -1656,6 +1660,9 @@ namespace moho
      * or the destination stream cannot be opened.
      */
     [[nodiscard]] bool MapSave(gpg::StrArg mapName);
+
+    /// Editor addition: save to an explicit disk path (same container as `MapSave`).
+    [[nodiscard]] bool MapSaveToDiskPath(const char* diskPath);
 
     /**
      * Address: 0x00891250 (FUN_00891250, ?MapSetPreview@CWldMap@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@ABV?$Vector2@M@Wm3@@PBD@Z)

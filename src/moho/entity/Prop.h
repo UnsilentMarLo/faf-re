@@ -210,22 +210,7 @@ namespace moho
   static_assert(offsetof(Prop, mHandleIndex) == 0x284, "Prop::mHandleIndex offset must be 0x284");
   static_assert(sizeof(Prop) == 0x288, "Prop size must be 0x288");
 
-  template <>
-  class CScrLuaMetatableFactory<Prop> final : public CScrLuaObjectFactory
-  {
-  public:
-    [[nodiscard]]
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00680010 (FUN_00680010, Moho::CScrLuaMetatableFactory<Moho::Prop>::Create)
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<Prop>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(sizeof(CScrLuaMetatableFactory<Prop>) == 0x08, "CScrLuaMetatableFactory<Prop> size must be 0x08");
 

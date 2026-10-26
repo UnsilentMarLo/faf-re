@@ -243,27 +243,7 @@ namespace moho
    * VFTABLE: 0x00E36FD4
    * COL:  0x00E90B08
    */
-  template <>
-  class CScrLuaMetatableFactory<CEconomyEvent> final : public CScrLuaObjectFactory
-  {
-  public:
-    /**
-     * Address: 0x1001FDE0 (MohoEngine.dll constructor shape)
-     */
-    CScrLuaMetatableFactory();
-
-    [[nodiscard]]
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00775B80 (FUN_00775B80)
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CEconomyEvent>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   /**
    * VFTABLE: 0x00E36FA4

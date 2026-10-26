@@ -10,6 +10,9 @@
 #include <array>
 #include <bit>
 #include <cmath>
+
+#include "moho/editor/EditorDocument.h"
+#include "moho/editor/EdPerf.h"
 #include <cstdarg>
 #include <cstdio>
 #include <cstddef>
@@ -7219,7 +7222,21 @@ void Sim::Setup(LaunchInfoNew* const info)
     if (props != nullptr && !props->mEntries.empty()) {
       propCount = static_cast<int>(props->mEntries.size());
       for (const CWldPropEntry* entry = props->mEntries.begin(); entry != props->mEntries.end(); ++entry) {
-        (void)PROP_Create(this, entry->mTransform, entry->mBlueprintPath.c_str());
+        Prop* const prop = PROP_Create(this, entry->mTransform, entry->mBlueprintPath.c_str());
+        // EDITOR DIVERGENCE (prop-scale compat layer), same contract as the patched retail exe's MapPropScale
+        // (FA-Binary-Patches-mesh/section/MapPropScale.cpp): the record's scale multiplies the draw scale the
+        // blueprint gave the new prop (Display.UniformScale), per axis; 1,1,1, a lane that is not positive and a
+        // lane above 1000 leave the prop as it is.
+        const Wm3::Vec3f& scale = entry->mScale;
+        const bool scaleUsable = std::isfinite(scale.x) && std::isfinite(scale.y) && std::isfinite(scale.z) &&
+                                 scale.x > 0.0f && scale.y > 0.0f && scale.z > 0.0f && scale.x <= 1000.0f &&
+                                 scale.y <= 1000.0f && scale.z <= 1000.0f;
+        if (prop != nullptr && scaleUsable && (scale.x != 1.0f || scale.y != 1.0f || scale.z != 1.0f)) {
+          prop->mVarDat.mScale.x *= scale.x;
+          prop->mVarDat.mScale.y *= scale.y;
+          prop->mVarDat.mScale.z *= scale.z;
+          prop->ListLinkBefore(&mCoordEntities);
+        }
       }
     }
     gpg::Warnf(" NUM PROPS = %d", propCount);
@@ -10626,6 +10643,10 @@ void Sim::AdvanceBeat(const int amt)
   Logf("********** beat %u **********\n", mCurBeat);
   RulesUpdateLuaState(mRules, mLuaState);
 
+  // EDITOR: height edits the editor committed since the last beat reach the sim's field here, on the sim thread
+  // (docs/projects/MAP_EDITOR_DESIGN.md, commit path); a single atomic read when nothing is queued.
+  (void)editor::ApplyPendingHeightEdits(this);
+
   if (IsDebugWindowEnabled() && mLuaState && mLuaState->m_state) {
     lua_sethook(mLuaState->m_state, GetDebugLuaHook(), 4, 0);
   }
@@ -10756,7 +10777,12 @@ void Sim::AdvanceBeat(const int amt)
   }
 
   if (mLuaState && mLuaState->m_state && (mCurTick % 70u) == 0u) {
-    lua_setgcthreshold(mLuaState->m_state, 0);
+    // EDITOR: the forced full collection of the sim state (every blueprint lives in it: a pause of est. 100 ms on the Sim thread) runs when the heap grew, not every 7 s
+    // whatever happens (moho/editor/EdPerf.cpp, `ed_sim_gc_kb 0` = always, as before). Lua's own threshold (heap doubled) stays in force.
+    if (moho::editor::perf::SimGcDue(lua_getgccount(mLuaState->m_state), 7.0f)) {
+      lua_setgcthreshold(mLuaState->m_state, 0);
+      moho::editor::perf::SimGcDone(lua_getgccount(mLuaState->m_state));
+    }
   }
 
   // +0x08FC latch: set here in AdvanceBeat, cleared in Sim::Sync.
@@ -16725,7 +16751,8 @@ int moho::cfunc_GetNumRootFramesL(LuaPlus::LuaState* const state)
 
   CUIManager* const uiManager = static_cast<CUIManager*>(UI_GetManager());
   if (uiManager != nullptr && uiManager->HasFrames()) {
-    lua_pushnumber(rawState, static_cast<float>(uiManager->mFrames.Size()));
+    // editor: pop-out windows are not display heads (FAF's multi-head Lua keys off this count)
+    lua_pushnumber(rawState, static_cast<float>(uiManager->mNumDisplayHeads != 0u ? uiManager->mNumDisplayHeads : uiManager->mFrames.Size()));
     (void)lua_gettop(rawState);
   } else {
     LuaPlus::LuaState::Error(state, kUiLayerNotInitializedText);
@@ -23778,6 +23805,26 @@ moho::CScrLuaInitForm* moho::func_GetTimeForProfileUser_LuaFuncDef()
  * `GetDepositsAroundPoint` (`.exxt` def chain node 0x0128EA8C, function
  * slot 0x0128B884).
  */
+/**
+ * What it does:
+ * Publishes the user-lane (UI Lua state) binder for global `GetDepositsAroundPoint`.
+ * `/lua/ui/controls/worldview.lua` calls it on every mouse event; the shipped binary
+ * registers the same body for both lanes and resolves the resource view through the
+ * active world session when no Sim is attached to the Lua state.
+ */
+moho::CScrLuaInitForm* moho::func_GetDepositsAroundPointUser_LuaFuncDef()
+{
+  static CScrLuaBinder binder(
+    UserLuaInitSet(),
+    "GetDepositsAroundPoint",
+    &moho::cfunc_GetDepositsAroundPoint,
+    nullptr,
+    "<global>",
+    kGetDepositsAroundPointHelpText
+  );
+  return &binder;
+}
+
 moho::CScrLuaInitForm* moho::func_GetDepositsAroundPoint_LuaFuncDef()
 {
   static CScrLuaBinder binder(
@@ -27316,6 +27363,7 @@ namespace
       (void)::moho::func_GetTimeForProfileSim_LuaFuncDef();
       (void)::moho::func_GetMouseWorldPosSim_LuaFuncDef();
       (void)::moho::func_GetDepositsAroundPoint_LuaFuncDef();
+      (void)::moho::func_GetDepositsAroundPointUser_LuaFuncDef();
       (void)::moho::func_SetCommandSourceSim_LuaFuncDef();
       (void)::moho::func_SessionIsBeingRecorded_LuaFuncDef();
       (void)::moho::func_SessionIsMultiplayer_LuaFuncDef();

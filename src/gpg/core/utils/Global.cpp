@@ -2317,6 +2317,39 @@ bool gpg::ParseNum(const char* start, const char* end, int* dest) noexcept
     return true;
 }
 
+namespace {
+// EDITOR: kept out of gpg::SetThreadName because MSVC refuses __try in a function that needs unwinding (C2712): the static initialiser below does.
+void NameThreadForSystem(const unsigned int id, const char* const name)
+{
+    // EDITOR: also name the thread for the system (SetThreadDescription, Windows 10 1607 and later): Process Explorer, Process Hacker and profilers show the name, and so does
+    // ed_perf_threads. The original only raises the debugger exception below, and only under AQtime.
+    if (name != nullptr) {
+        using SetDescriptionFn = HRESULT(WINAPI*)(HANDLE, PCWSTR);
+        static const SetDescriptionFn setDescription = [] {
+            HMODULE const kernel = ::GetModuleHandleW(L"kernel32.dll");
+            return kernel != nullptr ? reinterpret_cast<SetDescriptionFn>(reinterpret_cast<void*>(::GetProcAddress(kernel, "SetThreadDescription"))) : nullptr;
+        }();
+        if (setDescription != nullptr) {
+            wchar_t wide[64];
+            std::size_t length = 0;
+            for (; length + 1 < std::size(wide) && name[length] != '\0'; ++length) {
+                const unsigned char c = static_cast<unsigned char>(name[length]);
+                wide[length] = c < 0x80 ? static_cast<wchar_t>(c) : L'?';
+            }
+            wide[length] = L'\0';
+            const bool current = id == 0xFFFFFFFFu;
+            HANDLE const thread = current ? ::GetCurrentThread() : ::OpenThread(THREAD_SET_LIMITED_INFORMATION, FALSE, id);
+            if (thread != nullptr) {
+                (void)setDescription(thread, wide);
+                if (!current) {
+                    (void)::CloseHandle(thread);
+                }
+            }
+        }
+    }
+}
+} // namespace
+
 /**
  * Address: 0x009071D0 (FUN_009071D0, gpg::SetThreadName)
  *
@@ -2327,4 +2360,5 @@ bool gpg::ParseNum(const char* start, const char* end, int* dest) noexcept
  */
 void gpg::SetThreadName([[maybe_unused]] const unsigned int id, [[maybe_unused]] const char* const name)
 {
+    NameThreadForSystem(id, name);   // EDITOR: the thread shows its name in the debugger (the stock AQtime exception stays out, as in the FAF hot patch)
 }

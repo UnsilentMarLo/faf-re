@@ -1,0 +1,509 @@
+// EDITOR: the ratings behind the slope view (EdOverlay.cpp, ed_overlay_slope), engine independent so they can be tested on their own
+// (moho/editor/tests/EdOverlaySlopeTest.cpp).
+//
+//   kind 0 "path": the rule a mobile footprint of `n` x `n` cells is checked with (STIMap::OccupancyCapsOfFootprintAt / OCCUPY_MobileCheck): the largest
+//          height difference between neighbouring samples inside the window (x in [cx, cx + n], z in [cz, cz + n]), in height words (128 per world unit).
+//   kind 1 "build": the rule a structure is checked with (OCCUPY_CheckAreaFlatness): highest minus lowest sample over the same window.
+//   kind 2 "ring": the rule of a structure whose blueprint has Physics.FlattenSkirt = true, which is nearly every building (OCCUPY_CheckEdgeFlatness, 0x00564F80).
+//          Only the 1-cell perimeter ring around the skirt rect is looked at (the skirt itself is not: it is levelled when the structure is built).
+//          For a skirt of `n` x `n` cells at cell (cx, cz) the engine's rect is x0 = cx, x1 = cx + n, z0 = cz, z1 = cz + n (inclusive sample indices, the same rect as
+//          kind 1: RUnitBlueprint::GetSkirtRect gives x0 = SkirtOffsetX + floor(centre - footprint / 2), x1 = x0 + SkirtSizeX, OCCUPY_Check truncates both to int) and the ring is
+//          the samples x0-1 .. x1+1 on the rows z0-1 and z1+1, then x0-1 and x1+1 on the rows z0 .. z1. minH / maxH are taken over the ring, the pivot is
+//          ceil(h(x1+1, z1)) (the sample the engine reads LAST: the right column's final row), and the rating is max(maxH - pivot, pivot - minH).
+//          Quantisation: heights are words (1/128 world unit) and the engine's float arithmetic on them is exact (word * 2^-7 is exact in a float, so are
+//          the differences and the ceil), hence the rating is exactly that deviation in words, no rounding: pivot_words = ceil(h / 128) * 128,
+//          rating = max(maxW - pivot_words, pivot_words - minW). The structure fits when MaxGroundVariation * 128 >= rating (the same test as the engine's).
+//
+// The ratings live in a cache of 64 x 64 cell tiles kept until the heights under a tile change (Invalidate) or the rule changes (SetKey): nothing is
+// rated twice, a brush stroke re-rates only the tiles it touched, and a tile is rated in O(cells) with sliding window maxima (not O(cells * window^2)).
+// Every tile also keeps its ratings reduced to blocks of 2, 4, ... 64 cells (the steepest cell of a block wins, so a thin cliff never disappears when the
+// view is wide), so drawing a view costs what is on screen and not what is in the area.
+//
+// Heights are given by a callback `int h(int x, int z)` (the height word of a sample; positions outside the field must answer with the edge sample).
+#pragma once
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <vector>
+
+namespace moho::editor::overlayslope
+{
+  constexpr int kTile = 64;      // cells per tile side
+  constexpr int kLevels = 7;     // block sizes 1, 2, 4 ... 64 cells
+  constexpr int kMaxWindow = 16;
+  constexpr int kWordsPerUnit = 128;   // height words per world unit (CHeightField: elevation = word / 128)
+
+  constexpr int kKindPath = 0;
+  constexpr int kKindBuild = 1;   // OCCUPY_CheckAreaFlatness
+  constexpr int kKindRing = 2;    // OCCUPY_CheckEdgeFlatness
+
+  /** The kind a Lua name stands for ("build" area rule, "ring" edge rule); anything else (including "path") is the mobile rule, as before kind 2 existed. */
+  [[nodiscard]] inline int KindFromName(const char* const name)
+  {
+    if (name != nullptr) {
+      if (std::strcmp(name, "build") == 0) {
+        return kKindBuild;
+      }
+      if (std::strcmp(name, "ring") == 0) {
+        return kKindRing;
+      }
+    }
+    return kKindPath;
+  }
+
+  /** ceil(word / 128) * 128: the engine's ceil() of an elevation, in words (exact: a word is a multiple of 2^-7 world units). */
+  [[nodiscard]] constexpr int CeilToUnit(const int word)
+  {
+    const int q = word >= 0 ? (word + kWordsPerUnit - 1) / kWordsPerUnit : -((-word) / kWordsPerUnit);
+    return q * kWordsPerUnit;
+  }
+
+  /** The ring rule's deviation (words) from the extremes over the ring and the last sample the engine read. */
+  [[nodiscard]] constexpr int RingDeviation(const int lo, const int hi, const int last)
+  {
+    const int pivot = CeilToUnit(last);
+    return std::max(hi - pivot, pivot - lo);
+  }
+
+  /** The rating of one cell computed straight from the rule (slow; the reference for the tests and the readout under the pointer). */
+  template <class Sampler>
+  [[nodiscard]] inline int CellRating(const int kind, const int n, const int cx, const int cz, Sampler&& h)
+  {
+    if (kind == 0) {
+      int maxDelta = 0;
+      for (int z = cz; z <= cz + n; ++z) {
+        for (int x = cx; x < cx + n; ++x) {
+          maxDelta = std::max(maxDelta, std::abs(h(x + 1, z) - h(x, z)));
+        }
+      }
+      for (int x = cx; x <= cx + n; ++x) {
+        for (int z = cz; z < cz + n; ++z) {
+          maxDelta = std::max(maxDelta, std::abs(h(x, z + 1) - h(x, z)));
+        }
+      }
+      return maxDelta;
+    }
+    if (kind == kKindRing) {
+      // a transliteration of OCCUPY_CheckEdgeFlatness: the rows above and below (walking x), then the columns left and right (walking z)
+      int lo = 1 << 30;
+      int hi = -(1 << 30);
+      int last = 0;
+      for (int x = cx - 1; x <= cx + n + 1; ++x) {
+        const int top = h(x, cz - 1);
+        last = h(x, cz + n + 1);
+        lo = std::min(lo, std::min(top, last));
+        hi = std::max(hi, std::max(top, last));
+      }
+      for (int z = cz; z <= cz + n; ++z) {
+        const int left = h(cx - 1, z);
+        last = h(cx + n + 1, z);
+        lo = std::min(lo, std::min(left, last));
+        hi = std::max(hi, std::max(left, last));
+      }
+      return RingDeviation(lo, hi, last);
+    }
+    int lo = 1 << 30;
+    int hi = -(1 << 30);
+    for (int z = cz; z <= cz + n; ++z) {
+      for (int x = cx; x <= cx + n; ++x) {
+        const int v = h(x, z);
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+      }
+    }
+    return hi - lo;
+  }
+
+  /**
+   * Sliding window extreme in O(count) (van Herk / Gil-Werman): out[i * outStride] = max (or min) of in[(i .. i + w - 1) * inStride] for the first
+   * `outCount` (at most count - w + 1) positions i. `scratch` is two arrays of `count` ints.
+   */
+  template <bool Max>
+  inline void SlidingExtreme(const int* const in, const int inStride, const int count, const int w, int* const out, const int outStride, int* const scratch,
+                             const int outCount)
+  {
+    if (w < 1 || count < w) {
+      return;
+    }
+    const int produced = std::min(outCount, count - w + 1);
+    const auto pick = [](const int a, const int b) { return Max ? std::max(a, b) : std::min(a, b); };
+    if (w == 1) {
+      for (int i = 0; i < produced; ++i) {
+        out[i * outStride] = in[i * inStride];
+      }
+      return;
+    }
+    int* const g = scratch;           // running extreme from the start of the block
+    int* const hh = scratch + count;  // running extreme back from the end of the block
+    for (int i = 0; i < count; ++i) {
+      const int v = in[i * inStride];
+      g[i] = (i % w == 0) ? v : pick(g[i - 1], v);
+    }
+    for (int i = count - 1; i >= 0; --i) {
+      const int v = in[i * inStride];
+      hh[i] = (i == count - 1 || (i + 1) % w == 0) ? v : pick(hh[i + 1], v);
+    }
+    for (int i = 0; i < produced; ++i) {
+      out[i * outStride] = pick(hh[i], g[i + w - 1]);
+    }
+  }
+
+  /**
+   * Kind 2 (ring) for the kTile x kTile cells whose first cell is (cx0, cz0). Needs the samples [cx0 - 1, cx0 + kTile + n + 1] x [cz0 - 1, cz0 + kTile + n + 1].
+   * Tile-local sample (u, v) = (x - (cx0 - 1), z - (cz0 - 1)); the cell (i, j) looks at: the rows v = j and v = j + n + 2 over u in [i, i + n + 2], the columns
+   * u = i and u = i + n + 2 over v in [j + 1, j + n + 1], and the pivot sample (u, v) = (i + n + 2, j + n + 1). The four extremes come from sliding windows
+   * along the rows (n + 3 wide) and along the columns (n + 1 wide), so the cost per cell does not grow with the skirt.
+   */
+  template <class Sampler>
+  inline void RateRingTile(const int n, const int cx0, const int cz0, Sampler&& h, std::uint16_t* const out)
+  {
+    const int sw = kTile + n + 2;
+    const std::size_t ssw = static_cast<std::size_t>(sw);
+    std::vector<int> H(ssw * ssw);
+    for (int v = 0; v < sw; ++v) {
+      for (int u = 0; u < sw; ++u) {
+        H[static_cast<std::size_t>(v) * ssw + u] = h(cx0 - 1 + u, cz0 - 1 + v);
+      }
+    }
+    std::vector<int> scratch(ssw * 2);
+    std::vector<int> rowHi(ssw * ssw), rowLo(ssw * ssw), colHi(ssw * ssw), colLo(ssw * ssw);
+    for (int v = 0; v < sw; ++v) {
+      SlidingExtreme<true>(&H[static_cast<std::size_t>(v) * ssw], 1, sw, n + 3, &rowHi[static_cast<std::size_t>(v) * ssw], 1, scratch.data(), kTile);
+      SlidingExtreme<false>(&H[static_cast<std::size_t>(v) * ssw], 1, sw, n + 3, &rowLo[static_cast<std::size_t>(v) * ssw], 1, scratch.data(), kTile);
+    }
+    for (int u = 0; u < sw; ++u) {
+      SlidingExtreme<true>(&H[u], sw, sw, n + 1, &colHi[u], sw, scratch.data(), kTile + 1);
+      SlidingExtreme<false>(&H[u], sw, sw, n + 1, &colLo[u], sw, scratch.data(), kTile + 1);
+    }
+    for (int j = 0; j < kTile; ++j) {
+      for (int i = 0; i < kTile; ++i) {
+        const std::size_t top = static_cast<std::size_t>(j) * ssw + i;
+        const std::size_t bottom = static_cast<std::size_t>(j + n + 2) * ssw + i;
+        const std::size_t left = static_cast<std::size_t>(j + 1) * ssw + i;
+        const std::size_t right = left + static_cast<std::size_t>(n + 2);
+        const int hi = std::max(std::max(rowHi[top], rowHi[bottom]), std::max(colHi[left], colHi[right]));
+        const int lo = std::min(std::min(rowLo[top], rowLo[bottom]), std::min(colLo[left], colLo[right]));
+        const int last = H[static_cast<std::size_t>(j + n + 1) * ssw + i + n + 2];
+        const int dev = RingDeviation(lo, hi, last);
+        out[static_cast<std::size_t>(j) * kTile + i] = static_cast<std::uint16_t>(std::min(65535, std::max(0, dev)));
+      }
+    }
+  }
+
+  /**
+   * The ratings of the kTile x kTile cells whose first cell is (cx0, cz0), written to `out` (row major, x fastest), with the separable sliding window passes:
+   * cost ~ cells * a few operations whatever the window. Needs the samples [cx0, cx0 + kTile + n] x [cz0, cz0 + kTile + n] (kind 2: one more on every side).
+   */
+  template <class Sampler>
+  inline void RateTile(const int kind, const int n, const int cx0, const int cz0, Sampler&& h, std::uint16_t* const out)
+  {
+    if (kind == kKindRing) {
+      RateRingTile(n, cx0, cz0, h, out);
+      return;
+    }
+    const int sw = kTile + n + 1;
+    std::vector<int> H(static_cast<std::size_t>(sw) * sw);
+    for (int j = 0; j < sw; ++j) {
+      for (int i = 0; i < sw; ++i) {
+        H[static_cast<std::size_t>(j) * sw + i] = h(cx0 + i, cz0 + j);
+      }
+    }
+    std::vector<int> scratch(static_cast<std::size_t>(sw) * 2);
+    std::vector<int> t1(static_cast<std::size_t>(sw) * sw), t2(static_cast<std::size_t>(sw) * sw);
+    std::vector<int> r1(static_cast<std::size_t>(kTile) * kTile), r2(static_cast<std::size_t>(kTile) * kTile);
+    const auto clampWord = [](const int v) { return static_cast<std::uint16_t>(std::min(65535, std::max(0, v))); };
+    if (kind == 0) {
+      // A[z][i] = max over x in [i, i + n - 1] of |h(x + 1, z) - h(x, z)|, then max over z in [j, j + n] (window n + 1)
+      for (int z = 0; z < sw; ++z) {
+        for (int x = 0; x + 1 < sw; ++x) {
+          t1[static_cast<std::size_t>(z) * sw + x] = std::abs(H[static_cast<std::size_t>(z) * sw + x + 1] - H[static_cast<std::size_t>(z) * sw + x]);
+        }
+        SlidingExtreme<true>(&t1[static_cast<std::size_t>(z) * sw], 1, sw - 1, n, &t2[static_cast<std::size_t>(z) * sw], 1, scratch.data(), kTile);
+      }
+      for (int i = 0; i < kTile; ++i) {
+        SlidingExtreme<true>(&t2[i], sw, sw, n + 1, &r1[i], kTile, scratch.data(), kTile);
+      }
+      // B[j][x] = max over z in [j, j + n - 1] of |h(x, z + 1) - h(x, z)|, then max over x in [i, i + n]
+      for (int z = 0; z + 1 < sw; ++z) {
+        for (int x = 0; x < sw; ++x) {
+          t1[static_cast<std::size_t>(z) * sw + x] = std::abs(H[static_cast<std::size_t>(z + 1) * sw + x] - H[static_cast<std::size_t>(z) * sw + x]);
+        }
+      }
+      for (int x = 0; x < sw; ++x) {
+        SlidingExtreme<true>(&t1[x], sw, sw - 1, n, &t2[x], sw, scratch.data(), kTile);
+      }
+      for (int j = 0; j < kTile; ++j) {
+        SlidingExtreme<true>(&t2[static_cast<std::size_t>(j) * sw], 1, sw, n + 1, &r2[static_cast<std::size_t>(j) * kTile], 1, scratch.data(), kTile);
+      }
+      for (std::size_t k = 0; k < r1.size(); ++k) {
+        out[k] = clampWord(std::max(r1[k], r2[k]));
+      }
+    } else {
+      // hi / lo over x in [i, i + n] per row, then over z in [j, j + n]
+      std::vector<int> lo2(static_cast<std::size_t>(sw) * sw);
+      for (int z = 0; z < sw; ++z) {
+        SlidingExtreme<true>(&H[static_cast<std::size_t>(z) * sw], 1, sw, n + 1, &t2[static_cast<std::size_t>(z) * sw], 1, scratch.data(), kTile);
+        SlidingExtreme<false>(&H[static_cast<std::size_t>(z) * sw], 1, sw, n + 1, &lo2[static_cast<std::size_t>(z) * sw], 1, scratch.data(), kTile);
+      }
+      for (int i = 0; i < kTile; ++i) {
+        SlidingExtreme<true>(&t2[i], sw, sw, n + 1, &r1[i], kTile, scratch.data(), kTile);
+        SlidingExtreme<false>(&lo2[i], sw, sw, n + 1, &r2[i], kTile, scratch.data(), kTile);
+      }
+      for (std::size_t k = 0; k < r1.size(); ++k) {
+        out[k] = clampWord(r1[k] - r2[k]);
+      }
+    }
+  }
+
+  /** Offset of block level `level` (cells per block 1 << level) in a tile's data: level 0 first (64 x 64), then 32 x 32 ... down to 1 x 1. */
+  [[nodiscard]] constexpr std::size_t LevelOffset(const int level)
+  {
+    std::size_t off = 0;
+    for (int l = 0; l < level; ++l) {
+      const std::size_t side = static_cast<std::size_t>(kTile >> l);
+      off += side * side;
+    }
+    return off;
+  }
+
+  constexpr std::size_t kTileWords = LevelOffset(kLevels);
+
+  /** Fills the levels above 0 of a tile's data with the maximum of the four blocks below. */
+  inline void BuildLevels(std::uint16_t* const data)
+  {
+    for (int l = 1; l < kLevels; ++l) {
+      const int side = kTile >> l;
+      const std::uint16_t* const src = data + LevelOffset(l - 1);
+      std::uint16_t* const dst = data + LevelOffset(l);
+      const int srcSide = side * 2;
+      for (int j = 0; j < side; ++j) {
+        for (int i = 0; i < side; ++i) {
+          const std::uint16_t* const p = src + static_cast<std::size_t>(j * 2) * srcSide + i * 2;
+          dst[static_cast<std::size_t>(j) * side + i] = std::max(std::max(p[0], p[1]), std::max(p[srcSide], p[srcSide + 1]));
+        }
+      }
+    }
+  }
+
+  struct Tile
+  {
+    std::vector<std::uint16_t> data;   // empty until rated; kTileWords words
+    bool dirty = true;                 // heights changed since it was rated (the old ratings stay drawn until it is rated again)
+    unsigned usedAt = 0;
+  };
+
+  /** The tiles of one map for one rule. */
+  class Store
+  {
+  public:
+    /** A new map size or an unusable store: forget everything. */
+    void Reset(const int width, const int height)
+    {
+      tilesX_ = (width + kTile - 1) / kTile;
+      tilesZ_ = (height + kTile - 1) / kTile;
+      width_ = width;
+      height_ = height;
+      tiles_.clear();
+      tiles_.resize(static_cast<std::size_t>(std::max(0, tilesX_)) * static_cast<std::size_t>(std::max(0, tilesZ_)));
+      built_ = 0;
+      kind_ = -1;
+      ++version_;
+    }
+
+    [[nodiscard]] int Width() const noexcept { return width_; }
+    [[nodiscard]] int Height() const noexcept { return height_; }
+    [[nodiscard]] int TilesX() const noexcept { return tilesX_; }
+    [[nodiscard]] int TilesZ() const noexcept { return tilesZ_; }
+    [[nodiscard]] int Kind() const noexcept { return kind_; }
+    [[nodiscard]] int Window() const noexcept { return window_; }
+    [[nodiscard]] std::size_t Built() const noexcept { return built_; }
+    /** Moves whenever a rating that Block() can answer with changes (a tile rated, dropped, another rule): a drawing built from the ratings is stale when it moved. */
+    [[nodiscard]] unsigned Version() const noexcept { return version_; }
+
+    /** Another rule or window: every rating is wrong, drop them. Returns true when something was dropped. */
+    bool SetKey(const int kind, const int window)
+    {
+      if (kind == kind_ && window == window_) {
+        return false;
+      }
+      for (auto& t : tiles_) {
+        t.reset();
+      }
+      built_ = 0;
+      kind_ = kind;
+      window_ = window;
+      ++version_;
+      return true;
+    }
+
+    /**
+     * The samples [x0, x1] x [z0, z1] changed: the cells that look at them (up to kMaxWindow + 1 cells before them) must be rated again. The ring rule also looks one
+     * sample behind its cell (cell c reads from c - 1), so the cell right after the changed samples is stale too.
+     */
+    void Invalidate(const int x0, const int z0, const int x1, const int z1)
+    {
+      if (tiles_.empty()) {
+        return;
+      }
+      const int after = (kind_ == kKindRing) ? 1 : 0;
+      const int tx0 = std::max(0, (x0 - kMaxWindow - 1) / kTile);   // (a negative quotient truncates towards zero: still tile 0 or less)
+      const int tz0 = std::max(0, (z0 - kMaxWindow - 1) / kTile);
+      const int tx1 = std::min(tilesX_ - 1, std::max(0, x1 + after) / kTile);
+      const int tz1 = std::min(tilesZ_ - 1, std::max(0, z1 + after) / kTile);
+      for (int tz = tz0; tz <= tz1; ++tz) {
+        for (int tx = tx0; tx <= tx1; ++tx) {
+          if (std::unique_ptr<Tile>& t = tiles_[static_cast<std::size_t>(tz) * tilesX_ + tx]; t) {
+            t->dirty = true;
+          }
+        }
+      }
+    }
+
+    void InvalidateAll()
+    {
+      for (auto& t : tiles_) {
+        if (t) {
+          t->dirty = true;
+        }
+      }
+    }
+
+    /** The tile, or null when it was never asked for. */
+    [[nodiscard]] Tile* Find(const int tx, const int tz) const
+    {
+      if (tx < 0 || tz < 0 || tx >= tilesX_ || tz >= tilesZ_) {
+        return nullptr;
+      }
+      return tiles_[static_cast<std::size_t>(tz) * tilesX_ + tx].get();
+    }
+
+    /** True when the tile has no ratings yet or its heights changed. */
+    [[nodiscard]] bool NeedsRating(const int tx, const int tz) const
+    {
+      const Tile* const t = Find(tx, tz);
+      return t == nullptr || t->data.empty() || t->dirty;
+    }
+
+    /** Rates one tile now. */
+    template <class Sampler>
+    void Rate(const int tx, const int tz, Sampler&& h, const unsigned frame)
+    {
+      if (tx < 0 || tz < 0 || tx >= tilesX_ || tz >= tilesZ_) {
+        return;
+      }
+      std::unique_ptr<Tile>& slot = tiles_[static_cast<std::size_t>(tz) * tilesX_ + tx];
+      if (!slot) {
+        slot = std::make_unique<Tile>();
+      }
+      Tile& t = *slot;
+      if (t.data.empty()) {
+        t.data.assign(kTileWords, 0);
+        ++built_;
+      }
+      RateTile(kind_, window_, tx * kTile, tz * kTile, h, t.data.data());
+      BuildLevels(t.data.data());
+      t.dirty = false;
+      t.usedAt = frame;
+      ++version_;
+    }
+
+    /** The rating (height words) of block (bx, bz) of `level` (the block covers cells bx << level ...); 0 where no tile is rated yet. */
+    [[nodiscard]] int Block(const int level, const int bx, const int bz) const
+    {
+      const int cx = bx << level;
+      const int cz = bz << level;
+      const Tile* const t = Find(cx / kTile, cz / kTile);
+      if (t == nullptr || t->data.empty()) {
+        return 0;
+      }
+      const int side = kTile >> level;
+      const int lx = (cx % kTile) >> level;
+      const int lz = (cz % kTile) >> level;
+      return t->data[LevelOffset(level) + static_cast<std::size_t>(lz) * side + lx];
+    }
+
+    /** Frees the ratings of tiles that were not used for `age` frames (keeps the memory of a map explored at length bounded). */
+    void Trim(const unsigned frame, const unsigned age)
+    {
+      for (auto& t : tiles_) {
+        if (t && frame - t->usedAt > age) {
+          t.reset();
+          ++version_;
+          if (built_ > 0) {
+            --built_;
+          }
+        }
+      }
+    }
+
+    void Touch(const int tx, const int tz, const unsigned frame)
+    {
+      if (Tile* const t = Find(tx, tz); t != nullptr) {
+        t->usedAt = frame;
+      }
+    }
+
+  private:
+    int width_ = 0, height_ = 0, tilesX_ = 0, tilesZ_ = 0;
+    int kind_ = -1, window_ = 0;
+    std::size_t built_ = 0;
+    unsigned version_ = 0;
+    std::vector<std::unique_ptr<Tile>> tiles_;
+  };
+
+  /** The block size for a view `cells` wide when at most `maxBlocks` blocks per side are wanted: the smallest power of two (as a level) that fits. */
+  [[nodiscard]] inline int LevelForView(const int cells, const int maxBlocks)
+  {
+    int level = 0;
+    while (level < kLevels - 1 && (cells + (1 << level) - 1) / (1 << level) > maxBlocks) {
+      ++level;
+    }
+    return level;
+  }
+
+  /** Blocks per side a view `cells` wide has at `level`. */
+  [[nodiscard]] inline int BlocksAt(const int cells, const int level)
+  {
+    return (cells + (1 << level) - 1) >> level;
+  }
+
+  /**
+   * The block size with hysteresis: the level of the last frame (`prev`, -1 for none) is kept until the view needs more than 1.25 x `maxBlocks` blocks per side
+   * (go coarser) or the next finer level would fit in 0.8 x `maxBlocks` (go finer). While the view is being zoomed, or its estimated size jitters by a few cells with
+   * the camera height, the level no longer flips back and forth at the threshold (each flip re-projects the whole view and changes how the blocks are cut).
+   * Colours are the same at every level (the steepest cell of a block wins, BuildLevels).
+   */
+  [[nodiscard]] inline int LevelWithHysteresis(const int cells, const int maxBlocks, const int prev)
+  {
+    if (prev < 0 || prev >= kLevels) {
+      return LevelForView(cells, maxBlocks);
+    }
+    int level = prev;
+    while (level < kLevels - 1 && BlocksAt(cells, level) * 4 > maxBlocks * 5) {
+      ++level;
+    }
+    while (level > 0 && BlocksAt(cells, level - 1) * 5 <= maxBlocks * 4) {
+      --level;
+    }
+    return level;
+  }
+
+  /**
+   * Colour step of a rating `value` against `limit` (both in the same unit): 0 = flat (not drawn), 1 .. kSteps = green to red up to the limit, kSteps + 1 = beyond
+   * the limit. Neighbouring blocks with the same step get the same colour, so a run of them is drawn as one quad.
+   */
+  constexpr int kSteps = 24;
+  [[nodiscard]] inline int ColorStep(const float value, const float limit)
+  {
+    const float t = value / limit;
+    if (t > 1.0f) {
+      return kSteps + 1;
+    }
+    const int step = static_cast<int>(t * static_cast<float>(kSteps));
+    return std::min(kSteps, std::max(0, step));
+  }
+} // namespace moho::editor::overlayslope

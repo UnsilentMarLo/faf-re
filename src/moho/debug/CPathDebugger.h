@@ -59,19 +59,7 @@ namespace moho
     ~CPathDebugger() override;
   };
 
-  template <>
-  class CScrLuaMetatableFactory<CPathDebugger> final : public CScrLuaObjectFactory
-  {
-  public:
-    [[nodiscard]]
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CPathDebugger>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CPathDebugger>) == 0x08,

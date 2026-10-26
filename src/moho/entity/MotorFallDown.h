@@ -117,22 +117,7 @@ namespace moho
   static_assert(offsetof(MotorFallDown, mBreakOnWhack) == 0x44, "MotorFallDown::mBreakOnWhack offset must be 0x44");
   static_assert(sizeof(MotorFallDown) == 0x48, "MotorFallDown size must be 0x48");
 
-  template <>
-  class CScrLuaMetatableFactory<MotorFallDown> final : public CScrLuaObjectFactory
-  {
-  public:
-    [[nodiscard]]
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00695B90 (FUN_00695B90, Moho::CScrLuaMetatableFactory<Moho::MotorFallDown>::Create)
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<MotorFallDown>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<MotorFallDown>) == 0x08,

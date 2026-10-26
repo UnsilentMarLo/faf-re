@@ -272,25 +272,7 @@ namespace moho
    * VFTABLE: 0x00E21750
    * COL: 0x00E7ADF4
    */
-  template <>
-  class CScrLuaMetatableFactory<CSlideManipulator> final : public CScrLuaObjectFactory
-  {
-  public:
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x00648420 (FUN_00648420, ?Create@?$CScrLuaMetatableFactory@VCSlideManipulator@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
-     *
-     * What it does:
-     * Builds the metatable object used for `CSlideManipulator` Lua userdata.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    CScrLuaMetatableFactory();
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CSlideManipulator>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CSlideManipulator>) == 0x8,

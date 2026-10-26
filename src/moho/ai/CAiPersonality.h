@@ -192,22 +192,7 @@ namespace moho
    * VFTABLE: 0x00E1CAB8
    * COL:  0x00E7298C
    */
-  template <>
-  class CScrLuaMetatableFactory<CAiPersonality> final : public CScrLuaObjectFactory
-  {
-  public:
-    [[nodiscard]]
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x005B9620 (FUN_005B9620, ?Create@?$CScrLuaMetatableFactory@VCAiPersonality@Moho@@@Moho@@MAE?AVLuaObject@LuaPlus@@PAVLuaState@4@@Z)
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<CAiPersonality>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(
     sizeof(CScrLuaMetatableFactory<CAiPersonality>) == 0x08,

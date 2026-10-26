@@ -2138,6 +2138,11 @@ int Cluster::cmp(const Cluster& other) const
     }
 
     const unsigned int nodeCount = self->mNodeCount;
+    // EDITOR: the blob starts with the node count, so when the counts differ the first byte already decides the order. Comparing `payloadBytes`
+    // of `self` against a smaller `rhs` read past the end of rhs's allocation (access violation under page heap, silent over-read otherwise).
+    if (nodeCount != static_cast<unsigned int>(rhs->mNodeCount)) {
+        return nodeCount < static_cast<unsigned int>(rhs->mNodeCount) ? -1 : 1;
+    }
     const std::size_t payloadBytes =
         (nodeCount * (nodeCount - 1u)) / 2u + 2u * nodeCount + 1u;
     const int diff = std::memcmp(&self->mNodeCount, &rhs->mNodeCount, payloadBytes);

@@ -117,6 +117,12 @@ namespace moho
     AddDeposit(type, &rect);
   }
 
+  void CSimResources::EditorClearDeposits()
+  {
+    boost::mutex::scoped_lock lock(lock_);
+    deposits_.clear();
+  }
+
   /**
    * Address: 0x00545FC0 (FUN_00545FC0, Moho::CSimResources::GetDeposits1)
    */

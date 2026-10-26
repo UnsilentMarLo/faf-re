@@ -1,4 +1,6 @@
 #include "moho/terrain/HighFidelityTerrain.h"
+#include "moho/editor/EdMeshTerrain.h"
+#include "gpg/core/utils/Logging.h"
 #include <cstdio>
 
 #include <algorithm>
@@ -643,6 +645,9 @@ namespace moho
     }
 
     mCamera = camera;
+    if (!minimapPass) {
+      edmesh::NoteCamera(*camera);   // editor: picking rays against the mesh terrain
+    }
     mViewportOriginX = viewportBlock[0];
     mViewportOriginY = viewportBlock[1];
     mViewportWidth = viewportBlock[2];
@@ -670,6 +675,10 @@ namespace moho
 
       if (ren_GenerateMesh && (dirty || decalsDirty)) {
         mTesselator->Rebuild(mCamera, terrainRes);
+        // the rebuild consumes the pending-changes request (the editor raises it after height edits; nothing else clears it)
+        if (decalsDirty) {
+          static_cast<CDecalManager*>(terrainRes->GetDecalManager())->ClearPendingChanges();
+        }
 
         if (shaderVarTerrainHeightScale.Exists()) {
           shaderVarTerrainHeightScale.SetFloat(mTesselator->GetHeightScale());
@@ -1313,7 +1322,17 @@ namespace moho
     (void)terrainRes->IsInEditMode();
 
     LoadShaderVars(terrainNormalTexture);
-    DrawTriangles();
+    // editor: a mesh terrain map (EdMeshTerrain) is drawn in place of (or over) the height field's surface
+    if (edmesh::MeshWanted()) {
+      if (edmesh::HeightFieldWanted()) {
+        DrawTriangles();
+      }
+      if (!edmesh::DrawSurface(*mCamera, shadowContext, waterProperties) && !edmesh::HeightFieldWanted()) {
+        DrawTriangles();
+      }
+    } else {
+      DrawTriangles();
+    }
 
     DrawDecalPass(gameTick, deltaSeconds, WldTerrainDecalType_GlowMask, "TDecalGlowMask");
     DrawDecalPass(gameTick, deltaSeconds, WldTerrainDecalType_Albedo, "TDecals");
@@ -1418,6 +1437,11 @@ namespace moho
     const boost::shared_ptr<ID3DRenderTarget> refractionTexture,
     const boost::shared_ptr<ID3DRenderTarget> reflectionTexture)
   {
+    // CRASHFIX (editor): no camera bound yet (see DrawWaterLine): nothing to draw the water with.
+    if (mCamera == nullptr || mTerrainResource == nullptr || sHighFidelityWaterSurface == nullptr) {
+      return;
+    }
+
     const float inverseRenderWidth = 1.0F / static_cast<float>(mViewportRenderWidth);
     const float inverseRenderHeight = 1.0F / static_cast<float>(mViewportRenderHeight);
 
@@ -1455,6 +1479,26 @@ namespace moho
    */
   void HighFidelityTerrain::DrawWaterLine(const std::int32_t /*gameTick*/, const float /*deltaSeconds*/)
   {
+    // CRASHFIX (editor): a terrain that was created before the session's map existed (AddWorldView ran with a null terrain
+    // resource) never gets a camera from UpdateRenderContext, which returns early without a resource; the water mask then
+    // read `mCamera->view` through a null pointer inside d3dx9 (SetMatrix). Skip the water line of such a terrain.
+    if (mCamera == nullptr || mTerrainResource == nullptr || sHighFidelityWaterSurface == nullptr) {
+      static int sDiagBudget = 0;
+      if (sDiagBudget < 8) {
+        ++sDiagBudget;
+        gpg::Warnf(
+          "[WATERDIAG] DrawWaterLine skipped: camera=%p terrainRes=%p water=%p this=%p ren_Terrain=%d res=%dx%d",
+          static_cast<const void*>(mCamera),
+          static_cast<const void*>(mTerrainResource),
+          static_cast<const void*>(sHighFidelityWaterSurface),
+          static_cast<const void*>(this),
+          static_cast<int>(ren_Terrain),
+          mViewportWidth,
+          mViewportHeight);
+      }
+      return;
+    }
+
     (void)sHighFidelityWaterSurface->RenderWaterLayerAlphaMask(mCamera);
     DrawShoreline(&mShoreline, mCamera);
   }
@@ -1492,6 +1536,16 @@ namespace moho
       shaderVars.heightScale.SetFloat(mTesselator->GetHeightScale());
     }
 
+    // editor: the mesh terrain is the shadow caster of a mesh map
+    if (edmesh::MeshWanted()) {
+      if (edmesh::HeightFieldWanted()) {
+        DrawTriangles();
+      }
+      if (!edmesh::DrawDepth(camera) && !edmesh::HeightFieldWanted()) {
+        DrawTriangles();
+      }
+      return;
+    }
     DrawTriangles();
   }
 
@@ -1506,6 +1560,10 @@ namespace moho
   void HighFidelityTerrain::DrawTerrainSkirt()
   {
     if (!ren_Terrain || !ren_Skirt) {
+      return;
+    }
+    // editor: no height field skirt around a mesh terrain
+    if (edmesh::MeshWanted() && !edmesh::HeightFieldWanted()) {
       return;
     }
 
@@ -1842,4 +1900,14 @@ namespace moho
     }
     return object;
   }
+
+  // EDITOR: the water quad is built once at map load, at the water elevation of that moment (far below the map when the map has no water), so the
+  // editor rebuilds it after the water switch or an elevation changed.
+  void EdRefreshWaterSurfaceHigh(IWldTerrainRes* terrainResource)
+  {
+    if (sHighFidelityWaterSurface != nullptr) {
+      (void)sHighFidelityWaterSurface->InitVerts(terrainResource);
+    }
+  }
+
 } // namespace moho

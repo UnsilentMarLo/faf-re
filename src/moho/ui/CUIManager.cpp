@@ -1,6 +1,8 @@
+#include "moho/editor/EdRenderStats.h"
 #include "moho/ui/CUIManager.h"
 
 #include <Windows.h>
+#include "moho/editor/EdPerf.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -21,6 +23,9 @@ namespace
    * dispatched. Released by `ReleaseRetiredFrames` on the next UI tick.
    */
   std::vector<boost::shared_ptr<moho::CMauiFrame>> gRetiredFrames;
+
+  /** Editor: key handlers of closed pop-out windows whose delete had to wait for the end of an event dispatch (same rule as the frames). */
+  std::vector<wxEvtHandler*> gRetiredHandlers;
 
   /**
    * Address: 0x0084E6F0 (FUN_0084E6F0, funcReleaseRange_WeakPtrFrame)
@@ -67,6 +72,11 @@ namespace
     // queued) and must not mutate the container being iterated.
     std::vector<boost::shared_ptr<moho::CMauiFrame>> retired;
     retired.swap(gRetiredFrames);
+    std::vector<wxEvtHandler*> retiredHandlers;
+    retiredHandlers.swap(gRetiredHandlers);
+    for (wxEvtHandler* const handler : retiredHandlers) {
+      delete handler;
+    }
   }
 
   /**
@@ -207,7 +217,80 @@ int moho::CUIManager::AddFrame(wxWindow* const inputWindow, wxWindow* const even
   const int head = static_cast<int>(mInputWindows.Size() - 1);
 
   inputWindow->PushEventHandler(new CUIKeyHandler());
+  ++mNumDisplayHeads;
   return head;
+}
+
+/**
+ * Editor addition: see the declaration.
+ */
+int moho::CUIManager::AddPopoutFrame(wxWindow* const window)
+{
+  if (window == nullptr) {
+    return -1;
+  }
+
+  // Reuse a slot freed by RemovePopoutFrame (never one of the display heads), else append.
+  std::size_t head = mInputWindows.Size();
+  for (std::size_t index = mNumDisplayHeads; index < mInputWindows.Size(); ++index) {
+    if (mInputWindows[index] == nullptr) {
+      head = index;
+      break;
+    }
+  }
+  if (head == mInputWindows.Size()) {
+    mInputWindows.PushBack(window);
+    mHostWindows.PushBack(window);
+  } else {
+    mInputWindows[head] = window;
+    mHostWindows[head] = window;
+  }
+
+  window->PushEventHandler(new CUIKeyHandler());
+
+  if (mLuaState != nullptr) {
+    while (mFrames.Size() <= head) {
+      mFrames.PushBack(boost::shared_ptr<CMauiFrame>()); // keep the frame array aligned with the window array
+    }
+    CreateRootFrameForHead(head);
+  }
+  return static_cast<int>(head);
+}
+
+/**
+ * Editor addition: see the declaration.
+ */
+void moho::CUIManager::RemovePopoutFrame(const int index)
+{
+  if (index < 0 || static_cast<std::size_t>(index) >= mInputWindows.Size() || mInputWindows[static_cast<std::size_t>(index)] == nullptr) {
+    return;
+  }
+
+  const std::size_t head = static_cast<std::size_t>(index);
+  wxWindow* const window = mInputWindows[head];
+  UI_ClearInputCapture();
+  UI_ClearCurrentDragger();
+
+  if (head < mFrames.Size() && mFrames[head]) {
+    (void)window->PopEventHandler(false); // the frame's event mapper (pushed last)
+    mFrames[head]->Destroy();
+    // CRASHFIX (editor): closing a pop-out from one of its own controls / keys runs here inside the event dispatch that still holds
+    // the frame: park the owner and the key handler until the next UI tick (see ReleaseFrameSharedPtrRange).
+    if (MAUI_EventDispatchInProgress()) {
+      gRetiredFrames.push_back(mFrames[head]);
+    }
+    mFrames[head] = boost::shared_ptr<CMauiFrame>();
+  }
+  if (wxEvtHandler* const keyHandler = window->PopEventHandler(false)) {  // the key handler pushed by AddPopoutFrame
+    if (MAUI_EventDispatchInProgress()) {
+      gRetiredHandlers.push_back(keyHandler);
+    } else {
+      delete keyHandler;
+    }
+  }
+
+  mInputWindows[head] = nullptr;
+  mHostWindows[head] = nullptr;
 }
 
 /**
@@ -250,12 +333,36 @@ bool moho::CUIManager::SetNewLuaState(LuaPlus::LuaState* const state)
   (void)globals.CreateTable("__EngineStats", 0, 0);
 
   for (std::size_t head = 0; head < mInputWindows.Size(); ++head) {
+    if (mInputWindows[head] == nullptr) {
+      mFrames.PushBack(boost::shared_ptr<CMauiFrame>()); // editor: a removed pop-out keeps its (empty) slot
+      continue;
+    }
+    CreateRootFrameForHead(head);
+  }
+
+  if (!MAUI_StartMainScript()) {
+    gpg::Die("CUIManager::Init - unable to start main UI script.");
+  }
+
+  return true;
+}
+
+/**
+ * Editor addition: the former body of the `SetNewLuaState` loop (Address: 0x0084CC50), shared with `AddPopoutFrame`.
+ */
+void moho::CUIManager::CreateRootFrameForHead(const std::size_t head)
+{
+  {
     boost::shared_ptr<CMauiFrame> frame = CMauiFrame::Create(mLuaState);
     if (!frame) {
       gpg::Die("CUIManager::Init - unable to create root frame for head %d.", static_cast<int>(head));
     }
 
-    mFrames.PushBack(frame);
+    if (head < mFrames.Size()) {
+      mFrames[head] = frame; // editor: a reused pop-out slot
+    } else {
+      mFrames.PushBack(frame);
+    }
 
     moho::CMauiFrame* const frameView = frame.get();
     frameView->mRenderPass = 8;
@@ -280,12 +387,6 @@ bool moho::CUIManager::SetNewLuaState(LuaPlus::LuaState* const state)
 
     frameView->mTargetHead = static_cast<std::int32_t>(head);
   }
-
-  if (!MAUI_StartMainScript()) {
-    gpg::Die("CUIManager::Init - unable to start main UI script.");
-  }
-
-  return true;
 }
 
 /**
@@ -357,7 +458,13 @@ void moho::CUIManager::UpdateFrameRate(const float deltaSeconds)
     if (mGCTime > 5.0f) {
       mGCTime -= 5.0f;
       if (mLuaState->m_state != nullptr) {
-        lua_setgcthreshold(mLuaState->m_state, 0);
+        // EDITOR: a forced full collection of the UI state stops the main thread for as long as its live heap is big (the editor's modules and catalogs: est. tens to
+        // hundreds of ms). It runs when the heap grew by ed_ui_gc_kb or after ed_gc_max_seconds, not every 5 s whatever happens (moho/editor/EdPerf.cpp; `ed_ui_gc_kb 0` =
+        // always, as before). Lua's own threshold (heap doubled) stays in force.
+        if (moho::editor::perf::UiGcDue(lua_getgccount(mLuaState->m_state), 5.0f)) {
+          lua_setgcthreshold(mLuaState->m_state, 0);
+          moho::editor::perf::UiGcDone(lua_getgccount(mLuaState->m_state));
+        }
       }
     }
   }
@@ -478,6 +585,7 @@ void moho::CUIManager::ValidateFrame(const int frameIdx)
  */
 void moho::CUIManager::RenderFrames(const int head, CD3DPrimBatcher* const primBatcher)
 {
+  moho::editor::renderstats::ScopedMs uiTimer(moho::editor::renderstats::gCur.uiMs);   // EDITOR: ed_render_stats
   primBatcher->SetToViewport(head, *this);
 
   CD3DDevice* const device = D3D_GetDevice();
@@ -490,6 +598,7 @@ void moho::CUIManager::RenderFrames(const int head, CD3DPrimBatcher* const primB
     mFrames[static_cast<std::size_t>(head)]->RenderChildControls(primBatcher, 1);
   }
 
+  primBatcher->EndTextRun(); // editor: leave the LCD text technique (flushes its queued quads)
   primBatcher->Flush();
 }
 
@@ -498,6 +607,7 @@ void moho::CUIManager::RenderFrames(const int head, CD3DPrimBatcher* const primB
  */
 void moho::CUIManager::DrawUI(const int head, CD3DPrimBatcher* const primBatcher)
 {
+  moho::editor::renderstats::ScopedMs uiTimer(moho::editor::renderstats::gCur.uiMs);   // EDITOR: ed_render_stats
   primBatcher->SetToViewport(head, *this);
 
   CD3DDevice* const device = D3D_GetDevice();
@@ -544,6 +654,9 @@ void moho::CUIManager::GetControlAtCursor(
   // them (DebugMouseOverControl does).
   const wxPoint mouse = wxGetMousePosition();
   for (std::size_t head = 0; head < mInputWindows.Size(); ++head) {
+    if (mInputWindows[head] == nullptr || head >= mFrames.Size() || !mFrames[head]) {
+      continue; // editor: removed pop-out slot
+    }
     int x = mouse.x;
     int y = mouse.y;
     mInputWindows[head]->ScreenToClient(&x, &y);
@@ -570,6 +683,9 @@ void moho::CUIManager::DumpControlsUnderMouse()
 {
   const wxPoint mouse = wxGetMousePosition();
   for (std::size_t head = 0; head < mInputWindows.Size(); ++head) {
+    if (mInputWindows[head] == nullptr) {
+      continue; // editor: removed pop-out slot
+    }
     int localX = mouse.x;
     int localY = mouse.y;
     mInputWindows[head]->ScreenToClient(&localX, &localY);

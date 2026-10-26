@@ -79,25 +79,7 @@ namespace moho
    * VFTABLE: 0x00E0BAE8
    * COL: 0x00E72A04
    */
-  template <>
-  class CScrLuaMetatableFactory<HSound> final : public CScrLuaObjectFactory
-  {
-  public:
-    static CScrLuaMetatableFactory& Instance();
-
-  protected:
-    /**
-     * Address: 0x004E1F20 (FUN_004E1F20, Moho::CScrLuaMetatableFactory<Moho::HSound>::Create)
-     *
-     * What it does:
-     * Builds the default metatable for `HSound` Lua userdata.
-     */
-    LuaPlus::LuaObject Create(LuaPlus::LuaState* state) override;
-
-  private:
-    CScrLuaMetatableFactory();
-    static CScrLuaMetatableFactory sInstance;
-  };
+  // CScrLuaMetatableFactory<HSound>: declared in moho/lua/CScrLuaObjectFactory.h (one definition for every TU)
 
   static_assert(sizeof(CScrLuaMetatableFactory<HSound>) == 0x8, "CScrLuaMetatableFactory<HSound> size must be 0x8");
 

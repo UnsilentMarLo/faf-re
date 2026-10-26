@@ -14,6 +14,7 @@
 #include "gpg/core/utils/Logging.h"
 #include "gpg/core/utils/Global.h"
 #include "moho/console/CConCommand.h"
+#include "moho/editor/EdTextBackend.h"
 #include "moho/render/d3d/CD3DPrimBatcher.h"
 #include "moho/render/textures/DXTCodec.h"
 
@@ -630,6 +631,24 @@ namespace moho
    */
   boost::SharedPtrRaw<CD3DFont> CD3DFont::Create(const std::int32_t pointSize, const gpg::StrArg faceName)
   {
+    return CreateScaled(pointSize, static_cast<float>(pointSize), faceName);
+  }
+
+  /**
+   * Editor addition: fractional sizes for `ed:` faces. The cache key of a fractional size is a negative integer
+   * (1/16 px units) so it cannot collide with a retail integer size.
+   */
+  boost::SharedPtrRaw<CD3DFont> CD3DFont::CreateF(const float pointSize, const gpg::StrArg faceName)
+  {
+    const std::int32_t whole = static_cast<std::int32_t>(pointSize);
+    if (!edtext::IsEdFace(faceName) || static_cast<float>(whole) == pointSize) {
+      return Create(whole, faceName);
+    }
+    return CreateScaled(-static_cast<std::int32_t>(std::lround(pointSize * 16.0f)), pointSize, faceName);
+  }
+
+  boost::SharedPtrRaw<CD3DFont> CD3DFont::CreateScaled(const std::int32_t pointSize, const float pixelSize, const gpg::StrArg faceName)
+  {
     RegisterFontCacheTeardown();
 
     const FontLookup lookup = MakeFontLookup(pointSize, faceName);
@@ -642,7 +661,11 @@ namespace moho
       return MakeFontHandle(existingFont);
     }
 
-    const HFONT createdWin32Font = CreateFontA(-pointSize, 0, 0, 0, 0, 0, 0, 0, 1u, 0, 0, 4u, 0, lookup.mFace.c_str());
+    // Editor: an `ed:` face goes through the DirectWrite backend; GDI still gets the plain family (it builds the
+    // base metrics and is the fallback when edtext.dll is missing).
+    const bool edFace = edtext::IsEdFace(lookup.mFace.c_str());
+    const std::string gdiFace = edFace ? edtext::FamilyOf(lookup.mFace.c_str()) : lookup.mFace;
+    const HFONT createdWin32Font = CreateFontA(-static_cast<int>(std::lround(pixelSize)), 0, 0, 0, 0, 0, 0, 0, 1u, 0, 0, 4u, 0, gdiFace.c_str());
     if (createdWin32Font == nullptr) {
       return {};
     }
@@ -651,6 +674,20 @@ namespace moho
     if (createdFont == nullptr) {
       DeleteObject(createdWin32Font);
       return {};
+    }
+    if (edFace) {
+      float ascent = 0.0f;
+      float descent = 0.0f;
+      float lineGap = 0.0f;
+      createdFont->mEdBackend = edtext::Attach(lookup.mFace.c_str(), pixelSize, ascent, descent, lineGap);
+      if (createdFont->mEdBackend != nullptr) {
+        // Integer metrics keep Lua `Text.Height` / layout pixel aligned.
+        createdFont->mAscent = std::round(ascent);
+        createdFont->mDescent = std::round(descent);
+        createdFont->mHeight = createdFont->mAscent + createdFont->mDescent;
+        createdFont->mInternalLeading = 0.0f;
+        createdFont->mExternalLeading = std::round(lineGap);
+      }
     }
 
     ++createdFont->mRefCount; // cache-owned reference
@@ -762,6 +799,10 @@ namespace moho
   CD3DFont::~CD3DFont()
   {
     // FUN_004272F0: the member-empty `operator=` release of the kerning vector.
+    if (mEdBackend != nullptr) {
+      edtext::Destroy(mEdBackend);
+      mEdBackend = nullptr;
+    }
     mKerningPairs = CD3DFont::KerningPairVector{};
     DestroyGlyphPageCache(mCharInfo);
 
@@ -790,6 +831,10 @@ namespace moho
    */
   const CD3DFont::SCharInfo& CD3DFont::GetCharInfo(const wchar_t chText)
   {
+    if (mEdBackend != nullptr) {
+      return edtext::GetCharInfo(mEdBackend, chText);
+    }
+
     constexpr int kGlyphScratchWidth = 128;
     constexpr int kGlyphScratchHeight = 128;
     constexpr std::uint32_t kDxtOpaqueColorBlock = 0x000000000000FFFFull;
@@ -1033,6 +1078,10 @@ namespace moho
     const float maxAdvance
   )
   {
+    if (mEdBackend != nullptr) {
+      return edtext::Render(mEdBackend, text, primBatcher, origin, xAxis, yAxis, color, maxAdvance);
+    }
+
     Vector3f cursor = origin;
     float totalAdvance = 0.0f;
 
@@ -1097,6 +1146,10 @@ namespace moho
    */
   float CD3DFont::GetAdvance(const gpg::StrArg text, const std::int32_t /*flags*/)
   {
+    if (mEdBackend != nullptr) {
+      return edtext::GetAdvance(mEdBackend, text);
+    }
+
     float advance = 0.0f;
     wchar_t codepoint = 0;
     const char* encoded = gpg::STR_DecodeUtf8Char(text, codepoint);
@@ -1115,6 +1168,10 @@ namespace moho
    */
   std::int32_t CD3DFont::GetNearestCharacterIndex(const gpg::StrArg text, const float targetAdvance)
   {
+    if (mEdBackend != nullptr) {
+      return edtext::GetNearestCharacterIndex(mEdBackend, text, targetAdvance);
+    }
+
     std::int32_t index = 0;
     float cumulativeAdvance = 0.0f;
 

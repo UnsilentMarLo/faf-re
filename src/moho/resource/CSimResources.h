@@ -73,6 +73,12 @@ namespace moho
     void AddDepositPoint(EDepositType type, Wm3::Vec3f* pos, Wm3::Vec2i* size) override;
 
     /**
+     * Editor addition (not in the shipped binary; non-virtual, so the layout is unchanged): drops every deposit. The editor
+     * mirrors the map document's resource markers into the editing sim before asking it whether a mex / hydro can be built.
+     */
+    void EditorClearDeposits();
+
+    /**
      * Address: 0x00545FC0 (FUN_00545FC0, Moho::CSimResources::GetDeposits1)
      */
     const msvc8::vector<ResourceDeposit>& GetDeposits() const override;

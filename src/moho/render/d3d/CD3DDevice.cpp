@@ -40,6 +40,7 @@
 #include "moho/render/d3d/D3DSingletonCleanup.h"
 #include "moho/render/SParticleBuffer.h"
 #include "moho/render/WRenViewport.h"
+#include "moho/editor/EdPerf.h"
 #include "moho/render/ID3DIndexSheet.h"
 #include "moho/render/ID3DDepthStencil.h"
 #include "moho/render/ID3DRenderTarget.h"
@@ -1694,7 +1695,13 @@ namespace moho
     try {
       gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
       (void)device->BeginScene();
-      device->Clear(true, true, true, 0xFF000000u, 1.0f, 0);
+      // EDITOR: the clear is expected to throw when no depth-stencil is bound (see above); the scene it opened must still be
+      // ended, or the device keeps an open scene and every following Present fails with D3DERR_INVALIDCALL (black window after
+      // a resize drag, where this runs once per paint).
+      try {
+        device->Clear(true, true, true, 0xFF000000u, 1.0f, 0);
+      } catch (const gpg::gal::Error&) {
+      }
       device->EndScene();
     } catch (const gpg::gal::Error&) {
     }
@@ -1749,18 +1756,28 @@ namespace moho
       }
 
       const auto presentStart = std::chrono::steady_clock::now();
+      const std::int64_t presentStartNs = moho::editor::perf::NowNs();   // EDITOR: ed_perf_loop timing (moho/editor/EdPerf.cpp)
       device->Present();
+      moho::editor::perf::NotePresent(presentStartNs);
       sPresentSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - presentStart).count();
       (void)AddToStatCounter(EnsureEngineIntStat(sEngineStatRenderPresentCount, "Render_PresentCount"), 1);
 
       if (mClearEnabled != 0) {
         Clear();
       } else {
+        const std::int64_t renderStartNs = moho::editor::perf::NowNs();
         mViewport->D3DWindowOnDeviceRender();
+        moho::editor::perf::NoteRender(renderStartNs);
       }
     } catch (const gpg::gal::Error& error) {
       gpg::Warnf("%s(%d) %s", error.GetFile(), error.GetLine(), error.what());
       mSceneStarted = 0;
+      // EDITOR: a scene left open by a failed frame makes every later Present fail; closing it (an error here just means none
+      // was open) lets the next frame recover.
+      try {
+        device->EndScene();
+      } catch (const gpg::gal::Error&) {
+      }
     }
   }
 
