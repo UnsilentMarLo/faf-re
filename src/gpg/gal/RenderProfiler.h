@@ -46,6 +46,11 @@ namespace gpg::gal
     void AddGpuPipelineStatistics(std::uint32_t region, std::uint64_t pixelInvocations, std::uint64_t primitives) noexcept;
     /** FAF_GPU_PROFILE_PIXELS=1: backends also count pixels and primitives per region (read once). */
     [[nodiscard]] static bool PixelStatisticsEnabled() noexcept;
+    /**
+     * FAF_GPU_PROFILE_PIXELS=<region name> (instead of 1): only that region measures pixels (backends that cannot
+     * nest the statistics query, Direct3D 12, need this or take the outermost regions); null for 1.
+     */
+    [[nodiscard]] static const char* PixelStatisticsRegion() noexcept;
     /** GPU time of one whole frame (first command to Present), possibly frames later. */
     void AddGpuFrameTime(double milliseconds) noexcept;
 

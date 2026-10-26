@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "moho/render/lights/LightFeeds.h"
 
 #include <cmath>
@@ -130,6 +131,39 @@ namespace moho::lights
           l.rgb[2],
           l.power
         );
+      }
+      {
+        // strength by kind: how many lights, their colour x intensity at the centre (mean / strongest) and radius, and the flux (sum of the
+        // brightest channel x radius squared), to see which kind dominates a scene
+        static const char* const kKindNames[] = {"flash", "glow", "beam", "trail", "mesh", "spot"};
+        unsigned count[6] = {};
+        double sumPeak[6] = {}, sumRadius[6] = {}, flux[6] = {};
+        float maxPeak[6] = {};
+        for (const Light& l : gFrameLights) {
+          const int k = static_cast<int>(l.kind);
+          if (k < 0 || k >= 6) {
+            continue;
+          }
+          const float peak = std::max(l.rgb[0], std::max(l.rgb[1], l.rgb[2]));
+          ++count[k];
+          sumPeak[k] += peak;
+          sumRadius[k] += l.radius;
+          flux[k] += static_cast<double>(peak) * l.radius * l.radius;
+          maxPeak[k] = std::max(maxPeak[k], peak);
+        }
+        for (int k = 0; k < 6; ++k) {
+          if (count[k] > 0) {
+            gpg::Logf(
+              "DynLights: kind %s n=%u peak mean %.3f max %.3f radius mean %.1f flux %.0f",
+              kKindNames[k],
+              count[k],
+              sumPeak[k] / count[k],
+              maxPeak[k],
+              sumRadius[k] / count[k],
+              flux[k]
+            );
+          }
+        }
       }
       const Stats& s = gCollector.GetStats();
       gpg::Logf(

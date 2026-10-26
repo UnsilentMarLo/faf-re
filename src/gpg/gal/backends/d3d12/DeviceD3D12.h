@@ -384,6 +384,7 @@ namespace gpg::gal
     {
       std::uint32_t region = 0U;
       std::uint32_t pair = 0U;
+      bool statistics = false; // pipeline statistics were taken for this region (FAF_GPU_PROFILE_PIXELS)
     };
     struct ProfileFrame
     {
@@ -400,6 +401,9 @@ namespace gpg::gal
     double mTimestampToMilliseconds = 0.0;
     ProfileFrame mProfileFrames[kProfileFrames];
     std::uint32_t mProfileFrame = 0U;
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> mStatisticsHeap;     // FAF_GPU_PROFILE_PIXELS: one per pair
+    Microsoft::WRL::ComPtr<ID3D12Resource> mStatisticsReadback;
+    bool mStatisticsOpen = false; // a statistics query is running: Direct3D 12 does not nest them
     std::vector<std::uint32_t> mOpenRegions; // indices into the current frame's regions
 
     // ---- diagnostics ---------------------------------------------------------

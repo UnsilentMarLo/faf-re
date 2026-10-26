@@ -288,6 +288,20 @@ namespace gpg::gal
       mTimestampToMilliseconds = 1000.0 / static_cast<double>(frequency);
       mGpuFeatures |= kGpuFeatureTimestamps;
     }
+
+    if ((mGpuFeatures & kGpuFeatureTimestamps) != 0U && RenderProfiler::PixelStatisticsEnabled()) {
+      D3D12_QUERY_HEAP_DESC statistics{};
+      statistics.Type = D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS;
+      statistics.Count = kProfileFrames * (kMaxTimedRegionsPerFrame + 1U);
+      readbackDesc.Width = static_cast<UINT64>(statistics.Count) * sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS);
+      if (FAILED(mDevice->CreateQueryHeap(&statistics, IID_PPV_ARGS(&mStatisticsHeap))) ||
+          FAILED(mDevice->CreateCommittedResource(
+            &readbackHeap, D3D12_HEAP_FLAG_NONE, &readbackDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&mStatisticsReadback)
+          ))) {
+        mStatisticsHeap.Reset();
+        mStatisticsReadback.Reset();
+      }
+    }
   }
 
   void DeviceD3D12::ReleaseGpuDrivenObjects() noexcept
@@ -300,6 +314,9 @@ namespace gpg::gal
     mGpuNullHeap.Reset();
     mTimestampHeap.Reset();
     mTimestampReadback.Reset();
+    mStatisticsHeap.Reset();
+    mStatisticsReadback.Reset();
+    mStatisticsOpen = false;
     for (ProfileFrame& frame : mProfileFrames) {
       frame = ProfileFrame{};
     }
@@ -699,8 +716,19 @@ namespace gpg::gal
     }
     const std::uint32_t pair = frame.usedPairs++;
     mList->EndQuery(mTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, base + 2U * pair);
+    bool statistics = false;
+    if (mStatisticsHeap != nullptr && !mStatisticsOpen) {
+      const char* const only = RenderProfiler::PixelStatisticsRegion();
+      const char* const name = RenderProfiler::Get().RegionName(region);
+      // Without a region name the outermost regions but the frame itself.
+      statistics = (only != nullptr) ? (name != nullptr && std::strcmp(only, name) == 0) : (pair > 1U);
+      if (statistics) {
+        mList->BeginQuery(mStatisticsHeap.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, mProfileFrame * (kMaxTimedRegionsPerFrame + 1U) + pair);
+        mStatisticsOpen = true;
+      }
+    }
     mOpenRegions.push_back(static_cast<std::uint32_t>(frame.regions.size()));
-    frame.regions.push_back(TimedRegion{region, pair});
+    frame.regions.push_back(TimedRegion{region, pair, statistics});
   }
 
   void DeviceD3D12::EndProfileRegion(const std::uint32_t region)
@@ -719,6 +747,15 @@ namespace gpg::gal
     if (timed != 0xFFFFFFFFU) {
       const UINT base = mProfileFrame * 2U * (kMaxTimedRegionsPerFrame + 1U);
       mList->EndQuery(mTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, base + 2U * frame.regions[timed].pair + 1U);
+      if (frame.regions[timed].statistics) {
+        const UINT slot = mProfileFrame * (kMaxTimedRegionsPerFrame + 1U) + frame.regions[timed].pair;
+        mList->EndQuery(mStatisticsHeap.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, slot);
+        mList->ResolveQueryData(
+          mStatisticsHeap.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, slot, 1U, mStatisticsReadback.Get(),
+          static_cast<UINT64>(slot) * sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS)
+        );
+        mStatisticsOpen = false;
+      }
     }
   }
 
@@ -769,6 +806,17 @@ namespace gpg::gal
         const UINT64 end = stamps[2U * timed.pair + 1U];
         if (end >= begin) {
           profiler.AddGpuTime(timed.region, static_cast<double>(end - begin) * mTimestampToMilliseconds);
+        }
+        if (timed.statistics && mStatisticsReadback != nullptr) {
+          const SIZE_T offset = (static_cast<SIZE_T>(index) * (kMaxTimedRegionsPerFrame + 1U) + timed.pair) * sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS);
+          const D3D12_RANGE statisticsRange{offset, offset + sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS)};
+          void* statisticsMapped = nullptr;
+          if (SUCCEEDED(mStatisticsReadback->Map(0U, &statisticsRange, &statisticsMapped))) {
+            const auto* const data = reinterpret_cast<const D3D12_QUERY_DATA_PIPELINE_STATISTICS*>(static_cast<const std::uint8_t*>(statisticsMapped) + offset);
+            profiler.AddGpuPipelineStatistics(timed.region, data->PSInvocations, data->CPrimitives);
+            const D3D12_RANGE none{0U, 0U};
+            mStatisticsReadback->Unmap(0U, &none);
+          }
         }
       }
       const D3D12_RANGE noWrite{0U, 0U};

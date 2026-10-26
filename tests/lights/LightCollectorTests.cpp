@@ -77,9 +77,9 @@ namespace
       CHECK(model::Admits(model::kUltra, power(size)) == true);
     }
 
-    // a nuke keeps its size: radius 520 (the cap), not 60 as in the first patch
-    CHECK(Near(model::FlashRadius(kNukeSize), 520.0f));
-    CHECK(Near(model::FlashIntensity(kNukeSize), 1.1f));
+    // a nuke keeps its size: radius 420 (the cap), not 60 as in the first patch
+    CHECK(Near(model::FlashRadius(kNukeSize), 420.0f));
+    CHECK(Near(model::FlashIntensity(kNukeSize), 1.4f));
     CHECK(model::WeakenFactor(520.0f) >= 0.55f);
     CHECK(model::WeakenFactor(2.0f) == 1.0f);
   }
@@ -289,7 +289,7 @@ namespace
     std::vector<Light> out;
     c.Update(10.0f, 16, out);
     CHECK(out.size() == 1);
-    CHECK(Near(out[0].radius, 520.0f));
+    CHECK(Near(out[0].radius, 420.0f));
     CHECK(out[0].power > model::kPowerHuge);
   }
 
@@ -320,7 +320,7 @@ namespace
     CHECK(c.GetStats().active == 10);
     CHECK(c.GetStats().culledByCap == 7);
     CHECK(out[0].power >= out[1].power && out[1].power >= out[2].power);
-    CHECK(Near(out[0].radius, 520.0f)); // the nuke
+    CHECK(Near(out[0].radius, 420.0f)); // the nuke
     CHECK(out[0].power > out[1].power);
 
     c.Update(5.0f, 0, out);

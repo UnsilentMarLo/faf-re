@@ -33,7 +33,7 @@ namespace moho::lights::model
     kClassCount = 4
   };
   constexpr float kPowerNormal = 6.0f;
-  constexpr float kPowerLarge = 500.0f;
+  constexpr float kPowerLarge = 400.0f;
   constexpr float kPowerHuge = 8000.0f;
 
   // Quality levels (Options > Video > Dynamic Lights, cvar ren_DynLights).
@@ -102,13 +102,16 @@ namespace moho::lights::model
   constexpr float kMaxSpriteSize = 1000.0f; // above this a particle is garbage, not a light
   constexpr float kMaxLifeTicks = 600.0f;   // a "light" that lives longer than a minute is not a flash
 
+  // The measured census (docs/DYNAMIC_LIGHTS.md, round 5): with radius 2.6 x size and 0.14 x size the common explosion flash (size ~35) was a
+  // radius of 90 at a tenth of the strength, too wide and too faint to light its neighbours. A flash reaches about its own size and a bit,
+  // and is as strong as a unit in a fight should be lit by a unit dying next to it; only the very large ones (nukes) are wide.
   constexpr float FlashRadius(const float size)
   {
-    return Clamp(2.6f * size, 2.0f, 520.0f);
+    return Clamp(1.4f * size, 3.0f, 420.0f);
   }
   constexpr float FlashIntensity(const float size)
   {
-    return Clamp(0.14f * size, 0.3f, 1.1f);
+    return Clamp(0.55f + 0.004f * size, 0.55f, 1.4f);
   }
 
   // ------------------------------------------------------------------------------------------------ glow sprites (fire, plasma, flares)
@@ -118,7 +121,7 @@ namespace moho::lights::model
   }
   constexpr float GlowEnergy(const float size) // per sprite, before the ramp brightness; sprites overlap, so one alone is faint
   {
-    return 0.06f * size + 0.04f;
+    return 0.09f * size + 0.06f;
   }
 
   // ------------------------------------------------------------------------------------------------ trails and beams

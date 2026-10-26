@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 #include <Windows.h>
 
@@ -124,11 +125,24 @@ namespace gpg::gal
   bool RenderProfiler::PixelStatisticsEnabled() noexcept
   {
     static const bool sEnabled = [] {
-      char text[8] = {};
+      char text[64] = {};
       std::size_t length = 0;
-      return ::getenv_s(&length, text, sizeof(text), "FAF_GPU_PROFILE_PIXELS") == 0 && length != 0U && text[0] == '1';
+      return ::getenv_s(&length, text, sizeof(text), "FAF_GPU_PROFILE_PIXELS") == 0 && length != 0U && text[0] != '0';
     }();
     return sEnabled;
+  }
+
+  const char* RenderProfiler::PixelStatisticsRegion() noexcept
+  {
+    static const std::string sRegion = [] {
+      char text[64] = {};
+      std::size_t length = 0;
+      if (::getenv_s(&length, text, sizeof(text), "FAF_GPU_PROFILE_PIXELS") != 0 || length == 0U || text[0] == '1') {
+        return std::string();
+      }
+      return std::string(text);
+    }();
+    return sRegion.empty() ? nullptr : sRegion.c_str();
   }
 
   void RenderProfiler::AddGpuFrameTime(const double milliseconds) noexcept
