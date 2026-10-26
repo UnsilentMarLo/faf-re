@@ -196,6 +196,13 @@ namespace moho
     sDeviceLock = true;
 
     if (args.size() == 2u) {
+      // FAF addition: the option's value reaches the device context here.
+      // The copy above still held the old setting, so toggling Vertical Sync
+      // in the options rebound the device without changing the present
+      // interval on any backend.
+      if (const msvc8::string* const valueToken = ConCommandArg(args, 1); valueToken != nullptr) {
+        deviceContext.mVSync = (std::atoi(valueToken->c_str()) == 1);
+      }
       device->Clear();
       (void)device->InitContext(&deviceContext);
     }

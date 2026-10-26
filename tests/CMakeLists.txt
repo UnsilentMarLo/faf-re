@@ -22,3 +22,13 @@ target_include_directories(faf_light_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(faf_light_tests PRIVATE cxx_std_20)
 
 add_test(NAME dynamic_lights COMMAND faf_light_tests)
+
+# Swap-chain decisions (src/gpg/gal/backends/dxgi/DxgiSwapChainPolicy.h): header-only, no device.
+#
+#   cmake --build --preset clang-x64-release --target faf_dxgi_tests
+add_executable(faf_dxgi_tests EXCLUDE_FROM_ALL dxgi/SwapChainPolicyTests.cpp)
+target_include_directories(faf_dxgi_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(faf_dxgi_tests PRIVATE cxx_std_20)
+target_link_libraries(faf_dxgi_tests PRIVATE dxgi)
+
+add_test(NAME dxgi_swap_chain_policy COMMAND faf_dxgi_tests)

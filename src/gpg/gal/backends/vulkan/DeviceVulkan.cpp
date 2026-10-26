@@ -688,10 +688,53 @@ namespace gpg::gal
     UploadBuffer(mZeroBuffer, 0U, zeros, sizeof(zeros));
   }
 
-  void DeviceVulkan::CreateSwapChain(SwapChain& swapChain, std::uint32_t width, std::uint32_t height)
+  VkPresentModeKHR DeviceVulkan::SelectPresentMode(const SwapChain& swapChain) const
+  {
+    // FIFO is the only mode every driver has: it is vsync. Without vsync the
+    // newest of mailbox / immediate the surface lists is used.
+    std::uint32_t count = 0U;
+    Vk().vkGetPhysicalDeviceSurfacePresentModesKHR(mPhysical, swapChain.surface, &count, nullptr);
+    std::vector<VkPresentModeKHR> modes(count);
+    Vk().vkGetPhysicalDeviceSurfacePresentModesKHR(mPhysical, swapChain.surface, &count, modes.data());
+    modes.resize(count);
+    VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;
+    if (!mDeviceContext.mVSync) {
+      for (const VkPresentModeKHR candidate : {VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR}) {
+        if (std::find(modes.begin(), modes.end(), candidate) != modes.end()) {
+          mode = candidate;
+          break;
+        }
+      }
+    }
+    return mode;
+  }
+
+  VkExtent2D DeviceVulkan::SurfaceExtent(const SwapChain& swapChain, const std::uint32_t width, const std::uint32_t height) const
+  {
+    VkSurfaceCapabilitiesKHR capabilities{};
+    if (Vk().vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mPhysical, swapChain.surface, &capabilities) != VK_SUCCESS) {
+      return VkExtent2D{width, height};
+    }
+    VkExtent2D extent{width, height};
+    if (capabilities.currentExtent.width != 0xFFFFFFFFU) {
+      extent = capabilities.currentExtent; // 0 x 0 while the window is minimised
+    } else {
+      extent.width = std::clamp(extent.width, capabilities.minImageExtent.width, std::max(capabilities.maxImageExtent.width, 1U));
+      extent.height = std::clamp(extent.height, capabilities.minImageExtent.height, std::max(capabilities.maxImageExtent.height, 1U));
+    }
+    return extent;
+  }
+
+  bool DeviceVulkan::CreateSwapChain(SwapChain& swapChain, std::uint32_t width, std::uint32_t height)
   {
     VkSurfaceCapabilitiesKHR capabilities{};
     CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mPhysical, swapChain.surface, &capabilities));
+    // A minimised window has an extent of 0 x 0, which no swap chain can have:
+    // keep what there is (if anything) until the window is back.
+    if (capabilities.currentExtent.width == 0U || capabilities.currentExtent.height == 0U) {
+      gpg::Logf("Vulkan: the window has no area (minimised); the swap chain is left as it is");
+      return false;
+    }
     std::uint32_t count = 0U;
     Vk().vkGetPhysicalDeviceSurfaceFormatsKHR(mPhysical, swapChain.surface, &count, nullptr);
     std::vector<VkSurfaceFormatKHR> formats(count);
@@ -705,18 +748,7 @@ namespace gpg::gal
     if (chosen.format != VK_FORMAT_B8G8R8A8_UNORM) {
       ThrowError("DeviceVulkan.cpp", __LINE__, "the window surface has no B8G8R8A8_UNORM format");
     }
-    Vk().vkGetPhysicalDeviceSurfacePresentModesKHR(mPhysical, swapChain.surface, &count, nullptr);
-    std::vector<VkPresentModeKHR> modes(count);
-    Vk().vkGetPhysicalDeviceSurfacePresentModesKHR(mPhysical, swapChain.surface, &count, modes.data());
-    VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;
-    if (!mDeviceContext.mVSync) {
-      for (const VkPresentModeKHR candidate : {VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR}) {
-        if (std::find(modes.begin(), modes.end(), candidate) != modes.end()) {
-          mode = candidate;
-          break;
-        }
-      }
-    }
+    const VkPresentModeKHR mode = SelectPresentMode(swapChain);
 
     VkExtent2D extent{width, height};
     if (capabilities.currentExtent.width != 0xFFFFFFFFU) {
@@ -745,7 +777,35 @@ namespace gpg::gal
     info.clipped = VK_TRUE;
     info.oldSwapchain = swapChain.swapchain;
     VkSwapchainKHR created = VK_NULL_HANDLE;
-    CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateSwapchainKHR(mDevice, &info, nullptr, &created));
+    VkResult createResult = Vk().vkCreateSwapchainKHR(mDevice, &info, nullptr, &created);
+    if (createResult != VK_SUCCESS) {
+      // The old swap chain (a retired one still holds the window on some
+      // drivers) or the surface itself is the usual cause: drop the old chain,
+      // make the surface again if it was lost, and try once more.
+      gpg::Warnf("Vulkan: creating the swap chain failed (%s); trying again without the old one", vulkan::ResultName(createResult));
+      Vk().vkDeviceWaitIdle(mDevice);
+      for (VkSemaphore semaphore : swapChain.renderFinished) {
+        Vk().vkDestroySemaphore(mDevice, semaphore, nullptr);
+      }
+      swapChain.renderFinished.clear();
+      if (swapChain.swapchain != VK_NULL_HANDLE) {
+        Vk().vkDestroySwapchainKHR(mDevice, swapChain.swapchain, nullptr);
+        swapChain.swapchain = VK_NULL_HANDLE;
+      }
+      swapChain.images.clear();
+      swapChain.hasImage = false;
+      if (createResult == VK_ERROR_SURFACE_LOST_KHR) {
+        Vk().vkDestroySurfaceKHR(mInstance, swapChain.surface, nullptr);
+        swapChain.surface = VK_NULL_HANDLE;
+        VkResult surfaceResult = VK_SUCCESS;
+        swapChain.surface = vulkan::CreateWindowSurface(mInstance, swapChain.window, surfaceResult);
+        CheckVk("DeviceVulkan.cpp", __LINE__, surfaceResult);
+        info.surface = swapChain.surface;
+      }
+      info.oldSwapchain = VK_NULL_HANDLE;
+      createResult = Vk().vkCreateSwapchainKHR(mDevice, &info, nullptr, &created);
+      CheckVk("DeviceVulkan.cpp", __LINE__, createResult);
+    }
     if (swapChain.swapchain != VK_NULL_HANDLE) {
       Vk().vkDestroySwapchainKHR(mDevice, swapChain.swapchain, nullptr);
     }
@@ -770,6 +830,7 @@ namespace gpg::gal
       "Vulkan: swap chain %ux%u, %u images, %s", extent.width, extent.height, count,
       (mode == VK_PRESENT_MODE_FIFO_KHR) ? "FIFO (vsync)" : (mode == VK_PRESENT_MODE_MAILBOX_KHR) ? "mailbox" : "immediate"
     );
+    return true;
   }
 
   void DeviceVulkan::DestroySwapChain(SwapChain& swapChain, const bool keepSurface) noexcept
@@ -802,7 +863,9 @@ namespace gpg::gal
         width = static_cast<std::uint32_t>(std::max<LONG>(client.right - client.left, 1));
         height = static_cast<std::uint32_t>(std::max<LONG>(client.bottom - client.top, 1));
       }
-      CreateSwapChain(mSwapChains[static_cast<std::size_t>(headIndex)], width, height);
+      if (!CreateSwapChain(mSwapChains[static_cast<std::size_t>(headIndex)], width, height)) {
+        ThrowError("DeviceVulkan.cpp", __LINE__, "no swap chain for a window without area (start the game with the window shown)");
+      }
     }
     VkSemaphoreCreateInfo semaphore{};
     semaphore.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -847,6 +910,12 @@ namespace gpg::gal
       gpg::Logf("Vulkan: head %u back buffer target %p (%ux%u)", static_cast<unsigned>(headIndex), target, swapChain.extent.width,
                 swapChain.extent.height);
     }
+    BindDefaultOutput();
+  }
+
+  void DeviceVulkan::BindDefaultOutput()
+  {
+    // What a Reset leaves bound, as D3D9's does: head 0 and a viewport over all of it.
     if (!mHeadOutputContexts.empty()) {
       ClearTarget(&mHeadOutputContexts.front());
       D3DVIEWPORT9 viewport{};
@@ -1164,10 +1233,32 @@ namespace gpg::gal
       if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
         swapChain.hasImage = true;
         swapChain.acquireWaitPending = true;
+      } else if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_SURFACE_LOST_KHR) {
+        // The window changed under the chain (a resize the engine has not
+        // reported yet, a lost surface): no image this frame, a Reset next.
+        RequestSwapChainRecovery("acquire", result);
       } else {
         gpg::Warnf("Vulkan: acquiring head %u's image failed (%s)", static_cast<unsigned>(index), vulkan::ResultName(result));
       }
     }
+  }
+
+  void DeviceVulkan::RequestSwapChainRecovery(const char* const what, const VkResult result)
+  {
+    // A few tries at most: a chain that is out of date again right after a
+    // Reset would loop forever.
+    if (mRecoverRequested) {
+      return;
+    }
+    if (++mConsecutiveRecoveries > 3U) {
+      static int logged = 0;
+      if (logged++ < 4) {
+        gpg::Warnf("Vulkan: %s of the swap chain: %s again; not rebuilding it any more", what, vulkan::ResultName(result));
+      }
+      return;
+    }
+    gpg::Warnf("Vulkan: %s of the swap chain: %s; it is rebuilt", what, vulkan::ResultName(result));
+    mRecoverRequested = true;
   }
 
   std::uint32_t DeviceVulkan::AcquiredImage(const std::uint32_t swapChain)
@@ -1991,7 +2082,8 @@ namespace gpg::gal
       return;
     }
     const std::lock_guard<std::recursive_mutex> lock(mMutex);
-    gpg::Logf("Vulkan: Reset requested");
+    const bool force = mRecoverRequested;
+    mRecoverRequested = false;
     if (context != nullptr && context != &mDeviceContext) {
       mDeviceContext.mVSync = context->mVSync;
       const int heads = std::min(context->GetHeadCount(), mDeviceContext.GetHeadCount());
@@ -2002,20 +2094,61 @@ namespace gpg::gal
         head.mHeight = requested.mHeight;
       }
     }
-    ReleaseRenderTargets();
-    Vk().vkDeviceWaitIdle(mDevice);
-    CollectCompleted();
-    for (std::size_t headIndex = 0U; headIndex < mSwapChains.size(); ++headIndex) {
-      Head& head = mDeviceContext.GetHead(static_cast<std::uint32_t>(headIndex));
-      std::uint32_t width = head.mWidth;
-      std::uint32_t height = head.mHeight;
+
+    // Which swap chains differ from what is asked for: another size, or
+    // another present mode (the vsync switch; Vulkan fixes the mode when the
+    // chain is made). Nothing differs for an option that does not concern the
+    // chain, and nothing is rebuilt then. A minimised window (extent 0) keeps
+    // its chain.
+    const auto resolveSize = [this](const std::size_t headIndex, std::uint32_t& width, std::uint32_t& height) {
+      const Head& head = mDeviceContext.GetHead(static_cast<std::uint32_t>(headIndex));
+      width = head.mWidth;
+      height = head.mHeight;
       if (width == 0U || height == 0U) {
         RECT client{};
         ::GetClientRect(static_cast<HWND>(head.mWindow), &client);
         width = static_cast<std::uint32_t>(std::max<LONG>(client.right - client.left, 1));
         height = static_cast<std::uint32_t>(std::max<LONG>(client.bottom - client.top, 1));
       }
-      CreateSwapChain(mSwapChains[headIndex], width, height);
+    };
+    std::vector<bool> rebuild(mSwapChains.size(), force);
+    bool anyChange = force;
+    for (std::size_t headIndex = 0U; headIndex < mSwapChains.size(); ++headIndex) {
+      std::uint32_t width = 0U;
+      std::uint32_t height = 0U;
+      resolveSize(headIndex, width, height);
+      const SwapChain& swapChain = mSwapChains[headIndex];
+      const VkExtent2D extent = SurfaceExtent(swapChain, width, height);
+      if (extent.width == 0U || extent.height == 0U) {
+        rebuild[headIndex] = false; // minimised
+        continue;
+      }
+      if (swapChain.swapchain == VK_NULL_HANDLE || extent.width != swapChain.extent.width || extent.height != swapChain.extent.height ||
+          SelectPresentMode(swapChain) != swapChain.presentMode) {
+        rebuild[headIndex] = true;
+      }
+      anyChange = anyChange || rebuild[headIndex];
+    }
+    if (!anyChange) {
+      gpg::Logf("Vulkan: Reset requested, swap chains unchanged: nothing to rebuild");
+      // The swap chain stays; the state a Reset hands back does not.
+      ResetState();
+      BindDefaultOutput();
+      return;
+    }
+    gpg::Logf("Vulkan: Reset requested%s", force ? " (swap chain recovery)" : "");
+
+    ReleaseRenderTargets();
+    Vk().vkDeviceWaitIdle(mDevice);
+    CollectCompleted();
+    for (std::size_t headIndex = 0U; headIndex < mSwapChains.size(); ++headIndex) {
+      if (!rebuild[headIndex]) {
+        continue;
+      }
+      std::uint32_t width = 0U;
+      std::uint32_t height = 0U;
+      resolveSize(headIndex, width, height);
+      static_cast<void>(CreateSwapChain(mSwapChains[headIndex], width, height));
     }
     // The acquire semaphores of the old images may be signalled: start the frame over.
     Submit(true, false);
@@ -2031,7 +2164,9 @@ namespace gpg::gal
 
   int DeviceVulkan::TestCooperativeLevel()
   {
-    return 0;
+    // 1 = "needs a Reset": CD3DDevice::Paint then rebinds the context, which
+    // builds the swap chains again (see RequestSwapChainRecovery).
+    return mRecoverRequested ? 1 : 0;
   }
 
   void DeviceVulkan::BeginScene() {}
@@ -2116,7 +2251,29 @@ namespace gpg::gal
       const VkResult result = Vk().vkQueuePresentKHR(mQueue, &present);
       if (result == VK_ERROR_DEVICE_LOST) {
         CheckVk("DeviceVulkan.cpp", __LINE__, result);
-      } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+      } else if (result == VK_SUCCESS) {
+        mConsecutiveRecoveries = 0U;
+      } else if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_SURFACE_LOST_KHR) {
+        RequestSwapChainRecovery("present", result);
+      } else if (result == VK_SUBOPTIMAL_KHR) {
+        // On Windows "suboptimal" means the window no longer has the chain's
+        // size; a chain of the right size that still says so is left alone.
+        std::uint32_t width = 0U;
+        std::uint32_t height = 0U;
+        RECT client{};
+        ::GetClientRect(static_cast<HWND>(swapChain.window), &client);
+        width = static_cast<std::uint32_t>(std::max<LONG>(client.right - client.left, 0));
+        height = static_cast<std::uint32_t>(std::max<LONG>(client.bottom - client.top, 0));
+        const VkExtent2D extent = SurfaceExtent(swapChain, width, height);
+        if (extent.width != 0U && extent.height != 0U &&
+            (extent.width != swapChain.extent.width || extent.height != swapChain.extent.height)) {
+          gpg::Logf(
+            "Vulkan: the window is %ux%u (client %ux%u), the swap chain %ux%u", extent.width, extent.height, width, height,
+            swapChain.extent.width, swapChain.extent.height
+          );
+          RequestSwapChainRecovery("present", result);
+        }
+      } else {
         static int logged = 0;
         if (logged++ < 8) {
           gpg::Warnf("Vulkan: present of head %u: %s", static_cast<unsigned>(index), vulkan::ResultName(result));

@@ -237,9 +237,16 @@ namespace gpg::gal
     void CreateLayouts();
     void CreateNullImages();
     void CreateSwapChains(const DeviceContext& context);
-    void CreateSwapChain(SwapChain& swapChain, std::uint32_t width, std::uint32_t height);
+    /** False when the window has no area (minimised): the swap chain is left as it is. */
+    bool CreateSwapChain(SwapChain& swapChain, std::uint32_t width, std::uint32_t height);
+    [[nodiscard]] VkPresentModeKHR SelectPresentMode(const SwapChain& swapChain) const;
+    /** The extent a swap chain made now would get; 0 x 0 for a minimised window. */
+    [[nodiscard]] VkExtent2D SurfaceExtent(const SwapChain& swapChain, std::uint32_t width, std::uint32_t height) const;
+    /** An out-of-date swap chain asks the engine for a Reset (TestCooperativeLevel answers 1). */
+    void RequestSwapChainRecovery(const char* what, VkResult result);
     void DestroySwapChain(SwapChain& swapChain, bool keepSurface) noexcept;
     void CreateRenderTargets();
+    void BindDefaultOutput();
     void ReleaseRenderTargets() noexcept;
     void CheckAvailableFormats(DeviceContext* context);
     void Shutdown() noexcept;
@@ -337,6 +344,8 @@ namespace gpg::gal
 
     // ---- heads ---------------------------------------------------------------
     std::vector<SwapChain> mSwapChains;
+    bool mRecoverRequested = false;
+    std::uint32_t mConsecutiveRecoveries = 0U;
     std::vector<OutputContext> mHeadOutputContexts;
     boost::shared_ptr<PipelineStateVulkan> mPipelineState;
     WindowsCursor mCursor;
