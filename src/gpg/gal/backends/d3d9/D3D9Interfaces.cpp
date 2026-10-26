@@ -56,6 +56,9 @@
 
 namespace gpg::gal
 {
+#ifdef FAF_STUDIO_EDITOR
+    void ED_NoteNvidiaAdapterInstalled(bool installed);
+#endif
 
     /**
      * Address: 0x008F3820 (FUN_008F3820)
@@ -2094,6 +2097,9 @@ namespace gpg::gal
                     }
                 }
             }
+#endif
+#ifdef FAF_STUDIO_EDITOR
+            ED_NoteNvidiaAdapterInstalled(editorNoAntiAliasing || adapterIdentifier.VendorId == kVendorIdNvidia);
 #endif
             if (editorNoAntiAliasing)
             {
@@ -6379,3 +6385,56 @@ long gpg::gal::DebugSaveTextureToFileA(const char* const filePath, const unsigne
         filePath, static_cast<D3DXIMAGE_FILEFORMAT>(fileFormat), static_cast<IDirect3DBaseTexture9*>(sourceTexture), nullptr
     ));
 }
+
+#ifdef FAF_STUDIO_EDITOR
+// EDITOR: helpers for the editor's device handling (moho/render/d3d/CD3DDevice.cpp ED_ApplyPendingDeviceContext, moho/editor/EdPerf.cpp ed_engine_info).
+namespace gpg::gal
+{
+  namespace
+  {
+    bool gEditorNvidiaInstalled = false;
+  }
+
+  void ED_NoteNvidiaAdapterInstalled(const bool installed)
+  {
+    gEditorNvidiaInstalled = installed;
+  }
+
+  /** True when any NVIDIA D3D9 adapter is installed (hybrid laptops included): swap chain anti-aliasing and runtime vertical sync changes are not offered there. */
+  bool ED_NvidiaAdapterInstalled()
+  {
+    return gEditorNvidiaInstalled;
+  }
+
+  /**
+   * Would a Reset with `context` change anything the device runs with now? Compares the new present parameters with those of the live swap chain (size, multisample
+   * type and quality, presentation interval, windowed). A Reset with identical parameters changes nothing; on the hybrid NVIDIA laptop one that came after the first
+   * presents never returned. true when unsure.
+   */
+  bool ED_D3D9ResetWouldChange(Device* device, const DeviceContext* context)
+  {
+    DeviceD3D9* const d3d9 = dynamic_cast<DeviceD3D9*>(device);
+    if (d3d9 == nullptr || context == nullptr || d3d9->mDevice == nullptr || context->GetHeadCount() != 1)
+    {
+      return true;
+    }
+    D3DPRESENT_PARAMETERS next{};
+    d3d9->GetDeviceParameters(&next, context);
+    IDirect3DSwapChain9* chain = nullptr;
+    if (FAILED(d3d9->mDevice->GetSwapChain(0U, &chain)) || chain == nullptr)
+    {
+      return true;
+    }
+    D3DPRESENT_PARAMETERS current{};
+    const HRESULT result = chain->GetPresentParameters(&current);
+    chain->Release();
+    if (FAILED(result))
+    {
+      return true;
+    }
+    return next.BackBufferWidth != current.BackBufferWidth || next.BackBufferHeight != current.BackBufferHeight || next.MultiSampleType != current.MultiSampleType ||
+           next.MultiSampleQuality != current.MultiSampleQuality || next.PresentationInterval != current.PresentationInterval || next.Windowed != current.Windowed ||
+           next.hDeviceWindow != current.hDeviceWindow;
+  }
+} // namespace gpg::gal
+#endif

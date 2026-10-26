@@ -368,6 +368,11 @@ namespace
   DrawStatisticsLog sDrawStatisticsLog;
 } // namespace
 
+namespace gpg::gal
+{
+  bool ED_D3D9ResetWouldChange(Device* device, const DeviceContext* context);
+}
+
 namespace moho
 {
   /** EDITOR: the context the next queued device change starts from: the pending one, else a copy of the device's active context. */
@@ -392,6 +397,12 @@ namespace moho
     }
     const std::unique_ptr<gpg::gal::DeviceContext> context = std::move(sPendingContext);
     if (!gpg::gal::Device::IsReady()) {
+      return;
+    }
+    // A Reset that would change nothing is not done: on the hybrid NVIDIA laptop one after the first presents never came back (a saved or default anti-aliasing mode the
+    // adapter does not offer, asked for again at every start, is exactly such a Reset).
+    if (!gpg::gal::ED_D3D9ResetWouldChange(gpg::gal::Device::GetInstance(), context.get())) {
+      gpg::Logf("EDITOR device: the requested change leaves the device parameters as they are; no Reset");
       return;
     }
     CD3DDevice* const device = D3D_GetDevice();

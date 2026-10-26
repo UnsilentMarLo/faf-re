@@ -36,6 +36,11 @@ namespace gpg::gal
   extern bool (*gPresentWaitSleep)();   // D3D9Interfaces.cpp
 }
 
+namespace gpg::gal
+{
+  bool ED_NvidiaAdapterInstalled();   // D3D9Interfaces.cpp
+}
+
 namespace moho::editor::perf
 {
   namespace
@@ -622,6 +627,7 @@ namespace moho::editor::perf
       SetNumber(L, "refreshHz", gSampled.refreshHz);
       SetNumber(L, "cap", gLastCap);
       SetBool(L, "followRefresh", gFollowRefresh);
+      SetBool(L, "nvidia", gpg::gal::ED_NvidiaAdapterInstalled());
       return 1;
     }
 
