@@ -20,6 +20,7 @@
 #include "gpg/gal/EffectVariable.hpp"
 #include "gpg/gal/TextureContext.h"
 #include "moho/console/CConCommand.h"
+#include "moho/particles/ParticleEffectPatch.h"
 #include "moho/render/lights/LightEffectPatch.h"
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/StartupHelpers.h"
@@ -497,13 +498,38 @@ namespace moho
         }
       }
 
+      // FAF addition: particle.fx gets the low-resolution twins of its large-particle techniques (ParticleEffectPatch.h) on the
+      // Direct3D 10 dialect backends; /noparticlelowres leaves it alone. If the patched effect does not build, the original does.
+      bool lowResParticles = false;
+      gpg::MemBuffer<char> unpatchedBuffer = mergedBuffer;
+      if (deviceContext != nullptr && gpg::gal::UsesD3D10EffectDialect(deviceContext->mDeviceType) && effectByteCount > 0U &&
+          std::string(effectBaseName.c_str()) == "particle" && !CFG_GetArgOption("/noparticlelowres", 0U, nullptr)) {
+        std::string text(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);
+        const ParticleEffectPatchResult patch = PatchParticleEffect(text);
+        if (patch.patched) {
+          mergedBuffer = gpg::AllocMemBuffer(compatByteCount + text.size());
+          if (compatByteCount > 0U) {
+            std::copy_n(compatStateBuffer.GetPtr(0U, 0U), compatByteCount, mergedBuffer.GetPtr(0U, 0U));
+          }
+          std::copy_n(text.data(), text.size(), mergedBuffer.GetPtr(compatByteCount, 0U));
+          lowResParticles = true;
+          gpg::Logf("ParticleLowRes: %s patched, %d low-resolution techniques", effectBaseName.c_str(), patch.techniques);
+        } else {
+          gpg::Warnf("ParticleLowRes: %s not patched: %s", effectBaseName.c_str(), patch.error.c_str());
+        }
+      }
+      if (std::string(effectBaseName.c_str()) == "particle") {
+        SetParticleEffectPatched(lowResParticles);
+      }
+
       // Builds the effect, from its compiled copy in the cache when that is at
       // least as new as the source. FAF: `boneTexture` compiles the variant
       // with FAF_BONE_TEXTURE defined (see WantsBoneTextureVariant); it turns
       // into different shaders, so it is cached under a name of its own.
       const auto createEffect = [&](const bool boneTexture) {
         const msvc8::string cachePath =
-          cacheDirectory + "/" + mName + (dynLights ? ".dynlights" : "") + (boneTexture ? ".bonetex." : ".") + engineVersion;
+          cacheDirectory + "/" + mName + (dynLights ? ".dynlights" : "") + (lowResParticles ? ".lowres" : "") +
+          (boneTexture ? ".bonetex." : ".") + engineVersion;
         SDiskFileInfo cacheInfo{};
         bool useCachePayload = false;
         if (waitHandleSet->GetFileInfo(cachePath.c_str(), &cacheInfo, false)) {
@@ -531,7 +557,20 @@ namespace moho
         }
       }
       if (!mEffect) {
-        createEffect(false);
+        if (lowResParticles) {
+          try {
+            createEffect(false);
+          } catch (const std::exception& exception) {
+            gpg::Warnf("%s: %s; building it without the low-resolution particle techniques", effectFilePath, exception.what());
+            mEffect.reset();
+            lowResParticles = false;
+            SetParticleEffectPatched(false);
+            mergedBuffer = unpatchedBuffer;
+            createEffect(false);
+          }
+        } else {
+          createEffect(false);
+        }
       }
 
       mTechniques.clear();

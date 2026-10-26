@@ -646,6 +646,8 @@ set(FAF_ENGINE_SOURCES
   moho/effects/rendering/CEffectImplSerializer.cpp
   moho/particles/CParticleTextureCountedPtr.cpp
   moho/particles/SWorldBeam.cpp
+  moho/particles/ParticleEffectPatch.cpp
+  moho/particles/ParticleLowRes.cpp
   moho/render/EmitterTypeTypeInfo.cpp
   moho/effects/rendering/IEffect.cpp
   moho/effects/rendering/CEfxEmitterTypeInfo.cpp

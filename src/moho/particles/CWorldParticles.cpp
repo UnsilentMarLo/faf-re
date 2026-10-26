@@ -1,4 +1,5 @@
 #include "moho/particles/CWorldParticles.h"
+#include "moho/particles/ParticleLowRes.h"
 
 #include <optional>
 
@@ -11,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "gpg/core/utils/Global.h"
 #include "gpg/core/utils/BoostWrappers.h"
@@ -1296,19 +1298,71 @@ namespace moho
     const float waterSurface = efx_ParticleWaterSurface;
 
     std::optional<gpg::gal::RenderProfileScope> profileStep(std::in_place, "EffParticles"); // FAF instrumentation
-    for (const auto& [bucketKey, bucket] : mParticleBuckets) {
+    // Engine addition (ParticleLowRes.h): the large quads of a run of buckets (same sort scalar, same blend class) go into a
+    // lower-resolution target, composited onto the scene before the small ones are drawn at full resolution.
+    const bool lowResolution = suppressTLight == 0 && camera != nullptr && moho::particlelowres::Begin(*camera);
+    std::vector<moho::SParticleRenderBucket*> lowResolutionRun;
+    const auto bucketEnd = mParticleBuckets.end();
+    for (auto bucketIt = mParticleBuckets.begin(); bucketIt != bucketEnd;) {
+      const moho::SParticleBucketKey& bucketKey = bucketIt->first;
+      moho::SParticleRenderBucket* const bucket = bucketIt->second;
       if (renderAboveSurface) {
-        if (bucketKey.sortScalar >= waterSurface && bucket != nullptr) {
-          (void)moho::RenderParticleBucket(*bucket, static_cast<float>(tick), suppressTLight != 0);
+        if (bucketKey.sortScalar < waterSurface || bucket == nullptr) {
+          ++bucketIt;
+          continue;
         }
       } else {
         if (bucketKey.sortScalar > waterSurface) {
           break;
         }
-        if (bucket != nullptr) {
-          (void)moho::RenderParticleBucket(*bucket, static_cast<float>(tick), suppressTLight != 0);
+        if (bucket == nullptr) {
+          ++bucketIt;
+          continue;
         }
       }
+
+      if (lowResolution && moho::ParticleLowResEligible(*bucket)) {
+        const float runSortScalar = bucketKey.sortScalar;
+        const int runClass = moho::ParticleLowResClass(*bucket);
+        lowResolutionRun.clear();
+        for (; bucketIt != bucketEnd; ++bucketIt) {
+          moho::SParticleRenderBucket* const member = bucketIt->second;
+          if (bucketIt->first.sortScalar != runSortScalar || member == nullptr || !moho::ParticleLowResEligible(*member) ||
+              moho::ParticleLowResClass(*member) != runClass) {
+            break;
+          }
+          if (moho::PrepareParticleBucket(*member, static_cast<float>(tick))) {
+            lowResolutionRun.push_back(member);
+          }
+        }
+        bool anyLarge = false;
+        for (moho::SParticleRenderBucket* const member : lowResolutionRun) {
+          anyLarge = anyLarge || moho::particlelowres::MayHaveLargeQuads(*member);
+        }
+        if (!anyLarge) {
+          // No quad of the run can be large from here: the buckets draw as they always did.
+          for (moho::SParticleRenderBucket* const member : lowResolutionRun) {
+            moho::DrawParticleBucket(*member, false);
+          }
+        } else {
+          moho::particlelowres::BeginAccumulate();
+          for (moho::SParticleRenderBucket* const member : lowResolutionRun) {
+            moho::DrawParticleBucket(*member, true);
+          }
+          moho::particlelowres::Composite(runClass != 0);
+          for (moho::SParticleRenderBucket* const member : lowResolutionRun) {
+            moho::DrawParticleBucket(*member, false);
+          }
+          moho::particlelowres::EndRun();
+        }
+        continue;
+      }
+
+      (void)moho::RenderParticleBucket(*bucket, static_cast<float>(tick), suppressTLight != 0);
+      ++bucketIt;
+    }
+    if (lowResolution) {
+      moho::particlelowres::End();
     }
 
     profileStep.reset();

@@ -1,6 +1,7 @@
 #include "moho/particles/ParticleRenderBuckets.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -370,6 +371,38 @@ namespace moho
     return &bucket;
   }
 
+  namespace
+  {
+    /**
+     * Engine addition (the low-resolution particle path): where the particles of one pooled buffer can be, and how large their quads
+     * can get, so that a run of buckets without a quad that could be large skips the low-resolution passes (ParticleLowRes.h).
+     * The box covers each particle's start position plus what it can travel in its life (velocity and acceleration; drag only
+     * shortens it); the size is the larger of its begin and end half size.
+     */
+    struct ParticleBufferBounds
+    {
+      float lo[3] = {1.0e30f, 1.0e30f, 1.0e30f};
+      float hi[3] = {-1.0e30f, -1.0e30f, -1.0e30f};
+      float maxHalfSize = 0.0f;
+    };
+
+    std::unordered_map<const ParticleBuffer*, ParticleBufferBounds> sParticleBounds;
+
+    void GrowParticleBounds(ParticleBufferBounds& bounds, const SWorldParticle& particle)
+    {
+      const float life = std::max(particle.mLifetime, 0.0f);
+      const float speed = std::sqrt(particle.mDir.x * particle.mDir.x + particle.mDir.y * particle.mDir.y + particle.mDir.z * particle.mDir.z);
+      const float accel = std::sqrt(particle.mAccel.x * particle.mAccel.x + particle.mAccel.y * particle.mAccel.y + particle.mAccel.z * particle.mAccel.z);
+      const float reach = (speed * life + 0.5f * accel * life * life) * 1.25f + 1.0f;
+      const float center[3] = {particle.mPos.x, particle.mPos.y, particle.mPos.z};
+      for (int axis = 0; axis < 3; ++axis) {
+        bounds.lo[axis] = std::min(bounds.lo[axis], center[axis] - reach);
+        bounds.hi[axis] = std::max(bounds.hi[axis], center[axis] + reach);
+      }
+      bounds.maxHalfSize = std::max(bounds.maxHalfSize, std::max(std::fabs(particle.mBeginSize), std::fabs(particle.mEndSize)));
+    }
+  } // namespace
+
   [[nodiscard]] bool ParticleBatchActive();
   void MirrorUploadedParticles(ParticleBuffer& particleBuffer, std::uint32_t first, std::uint32_t count);
   void ForgetMirroredParticles(const ParticleBuffer& particleBuffer);
@@ -431,8 +464,10 @@ namespace moho
       return;
     }
 
+    ParticleBufferBounds& bufferBounds = sParticleBounds[particleBuffer];
     for (std::size_t index = 0U; index < maxUploadCount; ++index) {
       SWorldParticle& particle = pendingParticles[index];
+      GrowParticleBounds(bufferBounds, particle);
       particle.mInterop += frameDelta;
       (void)AppendInterval(workItem, particle.mInterop, particle.mLifetime);
 
@@ -899,6 +934,7 @@ namespace moho
    */
   void ForgetMirroredParticles(const ParticleBuffer& particleBuffer)
   {
+    sParticleBounds.erase(&particleBuffer); // the low-resolution path's bounds go with the buffer's contents
     if (!sParticleMirror.mSlotOf.empty() || !sParticleMirror.mMirrored.empty()) {
       sParticleMirror.Release(particleBuffer);
     }
@@ -949,11 +985,7 @@ namespace moho
    */
   bool RenderParticleBucket(SParticleRenderBucket& bucket, const float frameValue, const bool onlyTLight)
   {
-    PruneExpiredParticleBucketWorkItems(bucket, frameValue);
-    (void)EnsureAndFillParticleBucketWorkItems(bucket, frameValue);
-
-    const std::size_t activeWorkItemCount = bucket.activeWorkItems.size();
-    if (activeWorkItemCount == 0U) {
+    if (!PrepareParticleBucket(bucket, frameValue)) {
       return false;
     }
 
@@ -961,10 +993,56 @@ namespace moho
       return false;
     }
 
-    bucket.SelectTechnique();
+    DrawParticleBucket(bucket, false);
+    return true;
+  }
+
+  bool PrepareParticleBucket(SParticleRenderBucket& bucket, const float frameValue)
+  {
+    PruneExpiredParticleBucketWorkItems(bucket, frameValue);
+    (void)EnsureAndFillParticleBucketWorkItems(bucket, frameValue);
+    return !bucket.activeWorkItems.empty();
+  }
+
+  bool ParticleBucketMayHaveLargeQuads(
+    const SParticleRenderBucket& bucket, const float (&cameraPosition)[3], const float pixelScaleX, const float pixelScaleY, const float areaThreshold
+  )
+  {
+    for (const SParticleRenderWorkItem* const workItem : bucket.activeWorkItems) {
+      if (workItem == nullptr || workItem->mParticleBuffer == nullptr) {
+        continue;
+      }
+      const auto found = sParticleBounds.find(static_cast<const ParticleBuffer*>(workItem->mParticleBuffer));
+      if (found == sParticleBounds.end()) {
+        return true; // nothing known: it may
+      }
+      const ParticleBufferBounds& bounds = found->second;
+      float distanceSquared = 0.0f;
+      float radiusSquared = 0.0f;
+      for (int axis = 0; axis < 3; ++axis) {
+        const float center = 0.5f * (bounds.lo[axis] + bounds.hi[axis]);
+        const float half = 0.5f * (bounds.hi[axis] - bounds.lo[axis]);
+        distanceSquared += (center - cameraPosition[axis]) * (center - cameraPosition[axis]);
+        radiusSquared += half * half;
+      }
+      // Nearest the camera any of the particles can be; the view depth is at least half the distance for anything in view.
+      const float nearest = std::max(std::sqrt(distanceSquared) - std::sqrt(radiusSquared), 0.0f);
+      const float depth = std::max(0.5f * nearest, 0.25f);
+      const float area = 4.0f * bounds.maxHalfSize * bounds.maxHalfSize * pixelScaleX * pixelScaleY / (depth * depth);
+      if (area >= areaThreshold) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void DrawParticleBucket(SParticleRenderBucket& bucket, const bool lowResolution)
+  {
+    const std::size_t activeWorkItemCount = bucket.activeWorkItems.size();
+    bucket.SelectTechnique(lowResolution);
 
     if (ParticleBatchActive() && RenderParticleBucketBatched(bucket)) {
-      return true;
+      return;
     }
 
     for (std::size_t index = activeWorkItemCount; index > 0U; --index) {
@@ -981,8 +1059,6 @@ namespace moho
         particleBuffer->Render(static_cast<int>(renderCount), static_cast<int>(startIndex));
       }
     }
-
-    return true;
   }
 
   /**

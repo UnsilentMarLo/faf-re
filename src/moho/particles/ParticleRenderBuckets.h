@@ -82,7 +82,7 @@ namespace moho
      * Reads `[this+0]`, `[this+4]`, `[this+0xC]`, `[this+0x14]` and
      * `[this+0x30]` -- this object, not a copy of its prefix.
      */
-    void SelectTechnique() const;
+    void SelectTechnique(bool lowResolution = false) const;
 
     bool dragEnabled = false;                                  // +0x00  SWorldParticle::mDragEnabled
     std::uint8_t statePadding01_03[0x03]{};                    // +0x01
@@ -227,6 +227,27 @@ namespace moho
    * reverse order when the current bucket is allowed to draw.
    */
   bool RenderParticleBucket(SParticleRenderBucket& bucket, float frameValue, bool onlyTLight);
+
+  /**
+   * Engine addition (the low-resolution particle path, ParticleLowRes.h): the first half of `RenderParticleBucket` - drops expired
+   * work items and uploads the pending particles. True when the bucket has something to draw.
+   */
+  bool PrepareParticleBucket(SParticleRenderBucket& bucket, float frameValue);
+
+  /**
+   * Engine addition: the second half - selects the technique (its `_LR` twin when `lowResolution`) and draws the prepared bucket.
+   * Called twice per bucket by a low-resolution run, with the vertex shader keeping one size class each time.
+   */
+  void DrawParticleBucket(SParticleRenderBucket& bucket, bool lowResolution);
+
+  /**
+   * Engine addition: whether any quad of the prepared bucket could cover `areaThreshold` pixels^2 or more at the camera
+   * (`pixelScaleX/Y`: projection scale times half the viewport size). Conservative: false means none can, from the particles'
+   * recorded start boxes, sizes and lifetimes.
+   */
+  bool ParticleBucketMayHaveLargeQuads(
+    const SParticleRenderBucket& bucket, const float (&cameraPosition)[3], float pixelScaleX, float pixelScaleY, float areaThreshold
+  );
 
   /**
    * Address: 0x00493DA0 (FUN_00493DA0, sub_493DA0)
