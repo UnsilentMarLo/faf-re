@@ -12,9 +12,10 @@ add_test(NAME net_robustness COMMAND faf_net_tests)
 # Dynamic light pool (src/moho/render/lights): pure C++, compiled on its own, no engine objects.
 #
 #   cmake --build --preset clang-x64-release --target faf_light_tests
-add_executable(faf_light_tests EXCLUDE_FROM_ALL lights/LightCollectorTests.cpp lights/LightGridTests.cpp
+add_executable(faf_light_tests EXCLUDE_FROM_ALL lights/LightCollectorTests.cpp lights/LightGridTests.cpp lights/LightEffectPatchTests.cpp
                ${CMAKE_SOURCE_DIR}/src/moho/render/lights/LightCollector.cpp
-               ${CMAKE_SOURCE_DIR}/src/moho/render/lights/LightGrid.cpp)
+               ${CMAKE_SOURCE_DIR}/src/moho/render/lights/LightGrid.cpp
+               ${CMAKE_SOURCE_DIR}/src/moho/render/lights/LightEffectPatch.cpp)
 target_include_directories(faf_light_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(faf_light_tests PRIVATE cxx_std_20)
 

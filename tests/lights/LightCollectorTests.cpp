@@ -406,7 +406,8 @@ namespace
   }
 } // namespace
 
-int RunGridTests(int& checks); // LightGridTests.cpp
+int RunGridTests(int& checks);  // LightGridTests.cpp
+int RunPatchTests(int& checks); // LightEffectPatchTests.cpp
 
 int main()
 {
@@ -427,6 +428,7 @@ int main()
   TestUpdateWithBadClock();
   TestClear();
   gFailures += RunGridTests(gChecks);
+  gFailures += RunPatchTests(gChecks);
 
   std::printf("%d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;

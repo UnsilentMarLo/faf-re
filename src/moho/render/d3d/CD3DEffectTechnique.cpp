@@ -6,6 +6,7 @@
 #include <new>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -19,6 +20,7 @@
 #include "gpg/gal/EffectVariable.hpp"
 #include "gpg/gal/TextureContext.h"
 #include "moho/console/CConCommand.h"
+#include "moho/render/lights/LightEffectPatch.h"
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/render/d3d/CD3DDevice.h"
@@ -469,13 +471,39 @@ namespace moho
         std::copy_n(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount, mergedBuffer.GetPtr(compatByteCount, 0U));
       }
 
+      // FAF addition: the dynamic lights (docs/DYNAMIC_LIGHTS.md) are patched into mesh.fx and terrain.fx as the text is read, on the
+      // Direct3D 10 dialect backends and with /dynlights on the command line. A source the patch does not recognise compiles
+      // unchanged, without lights.
+      bool dynLights = false;
+      if (deviceContext != nullptr && gpg::gal::UsesD3D10EffectDialect(deviceContext->mDeviceType) && effectByteCount > 0U &&
+          CFG_GetArgOption("/dynlights", 0U, nullptr)) {
+        const lights::PatchedEffect which = lights::EffectForName(std::string(effectBaseName.c_str()));
+        if (which != lights::PatchedEffect::None) {
+          std::string text(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);
+          const int flood = CFG_GetArgOption("/dynlightsflood2", 0U, nullptr) ? 2 : (CFG_GetArgOption("/dynlightsflood", 0U, nullptr) ? 1 : 0);
+          const lights::EffectPatchResult patch =
+            which == lights::PatchedEffect::Mesh ? lights::PatchMeshEffect(text, flood) : lights::PatchTerrainEffect(text, flood);
+          if (patch.patched) {
+            mergedBuffer = gpg::AllocMemBuffer(compatByteCount + text.size());
+            if (compatByteCount > 0U) {
+              std::copy_n(compatStateBuffer.GetPtr(0U, 0U), compatByteCount, mergedBuffer.GetPtr(0U, 0U));
+            }
+            std::copy_n(text.data(), text.size(), mergedBuffer.GetPtr(compatByteCount, 0U));
+            dynLights = true;
+            gpg::Logf("DynLights: %s patched, %d techniques have the light pass", effectBaseName.c_str(), patch.techniques);
+          } else {
+            gpg::Warnf("DynLights: %s not patched: %s", effectBaseName.c_str(), patch.error.c_str());
+          }
+        }
+      }
+
       // Builds the effect, from its compiled copy in the cache when that is at
       // least as new as the source. FAF: `boneTexture` compiles the variant
       // with FAF_BONE_TEXTURE defined (see WantsBoneTextureVariant); it turns
       // into different shaders, so it is cached under a name of its own.
       const auto createEffect = [&](const bool boneTexture) {
         const msvc8::string cachePath =
-          cacheDirectory + "/" + mName + (boneTexture ? ".bonetex." : ".") + engineVersion;
+          cacheDirectory + "/" + mName + (dynLights ? ".dynlights" : "") + (boneTexture ? ".bonetex." : ".") + engineVersion;
         SDiskFileInfo cacheInfo{};
         bool useCachePayload = false;
         if (waitHandleSet->GetFileInfo(cachePath.c_str(), &cacheInfo, false)) {

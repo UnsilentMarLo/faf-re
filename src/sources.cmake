@@ -217,6 +217,7 @@ set(FAF_ENGINE_SOURCES
   moho/particles/CWorldParticles.cpp
   moho/render/lights/LightCollector.cpp
   moho/render/lights/LightGrid.cpp
+  moho/render/lights/LightEffectPatch.cpp
   moho/render/lights/LightBinding.cpp
   moho/render/lights/LightDebugView.cpp
   moho/render/lights/LightFeeds.cpp

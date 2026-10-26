@@ -26,6 +26,7 @@ namespace moho::lights
       ShaderVar params{};
       ShaderVar gridSize{};
       ShaderVar dataSize{};
+      ShaderVar camera{};
 
       explicit EffectVars(const char* effectFile)
       {
@@ -34,6 +35,7 @@ namespace moho::lights
         RegisterShaderVar("dynLightParams", &params, effectFile);
         RegisterShaderVar("dynLightGridSize", &gridSize, effectFile);
         RegisterShaderVar("dynLightDataSize", &dataSize, effectFile);
+        RegisterShaderVar("dynLightCamera", &camera, effectFile);
       }
     };
 
@@ -179,7 +181,8 @@ namespace moho::lights
 
       // Textures are bound when they are new or when an effect (re)appeared; a ShaderVar whose effect is not loaded yet reports
       // Exists() == false, so keep trying to bind until one effect has them.
-      const bool bindTextures = s.texturesFresh || s.stats.boundVariables == 0;
+      // Every frame: an effect that was rebuilt (a device reset, a reload) has lost what was set on its variables.
+      const bool bindTextures = true;
       const std::uint32_t existing = Bind(s.mesh, image, s.dataTexture, s.gridTexture, bindTextures) +
                                      Bind(s.terrain, image, s.dataTexture, s.gridTexture, bindTextures);
       s.stats.boundVariables = existing;
@@ -190,6 +193,13 @@ namespace moho::lights
       ++s.stats.failures;
       gpg::Logf("DynLights: light texture upload failed: %s", e.what());
     }
+  }
+
+  void SetCameraPosition(const float x, const float y, const float z)
+  {
+    const float position[4] = {x, y, z, 0.0f};
+    State& s = GetState();
+    (void)SetVec(s.mesh.camera, position); // only the mesh effect declares it
   }
 
   void ReleaseBinding()

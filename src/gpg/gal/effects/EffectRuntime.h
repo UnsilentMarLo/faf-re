@@ -207,6 +207,7 @@ namespace gpg::gal
     effects::PassBinder& mBinder;
     msvc8::string mName;
     bool mBegun = false;
+    int mDynLightPasses = -1; // annotation `dynLightPasses`, read on first use (see gpg/gal/DynLightPass.h)
   };
 
   class ProgramEffectVariable final : public EffectVariable

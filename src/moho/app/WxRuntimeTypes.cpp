@@ -3990,6 +3990,7 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
 
       // Dynamic lights: evaluate the pool for this frame before anything is lit (docs/DYNAMIC_LIGHTS.md).
       moho::lights::BeginFrame(moho::REN_GetGameTick(), moho::REN_GetSimDeltaSeconds());
+      moho::lights::SetView(*mCam);
 
       FogOn(worldView->mView->CameraGetZoom());
       {

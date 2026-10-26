@@ -20,6 +20,9 @@ namespace moho::lights
   // Uploads `image` (skipped while it is empty and was empty) and binds the textures and parameters.
   void UpdateBinding(const LightGridImage& image);
 
+  // World position of the camera of the view that is about to draw; the mesh pixel shaders rebuild their world position from it.
+  void SetCameraPosition(float x, float y, float z);
+
   // Drops the textures (default-pool resources) ahead of a device reset or shutdown; the next UpdateBinding recreates them.
   void ReleaseBinding();
 

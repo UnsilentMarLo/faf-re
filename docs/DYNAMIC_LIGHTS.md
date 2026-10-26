@@ -1,6 +1,6 @@
 # Dynamic lights
 
-Branch `dynamic-lights`. Status: **stages 1 and 2 done: light pool, TLight feed, light textures and their binding exist; nothing draws the lights yet** (snapshot 26/10/2026).
+Branch `dynamic-lights`. Status: **stages 1-3 done: light pool, TLight feed, light textures, shader patch and pass control; lights are visible on D3D12 (a first, weak calibration)** (snapshot 26/10/2026).
 
 Dynamic lighting for explosions, muzzle flashes, beams, trails, projectiles and glowing units, built into the engine's renderer instead of patched into the shipped exe. It replaces the binary patch [FA-DynamicLights](https://github.com/UnsilentMarLo/FA-DynamicLights) (v0.1.0) on the Direct3D 11, 12 and Vulkan backends. Direct3D 9 keeps using the patch. The lights are **render only**: they read effect data and never touch the simulation, so replay parity is unaffected.
 
@@ -67,7 +67,7 @@ Off / Low / Medium / High / Ultra with the patch's importance classes (power = i
 | 0 | Branch, toolchain, x64 Release build | **done 26/10/2026** (`main_x64.exe` links) |
 | 1 | `LightModel.h` and `LightCollector` with the `TLight` feed only, a host test (no GPU) for classes, pool, selection | **done 26/10/2026**: `faf_light_tests` passes (4240 checks); `ren_DynLights` (0-4, default 0) and `ren_DynLightsLog N` |
 | 2 | `LightBinding` + the two textures, filled and bound on D3D12; a debug cvar draws the grid; check `Float4` `Lock`/`Unlock` on D3D11/D3D12/Vulkan (never exercised by `BonePaletteTexture`) | **built 26/10/2026**: CPU image tested (37078 checks); both textures create on D3D12 without error; flashes, upload and the debug view not yet seen in game (see below) |
-| 3 | Translator step: inject `DynLight` into `mesh.fx` and `terrain.fx` lit techniques | explosions light units and ground on D3D12 |
+| 3 | Source patch: inject `DynLight` into `mesh.fx` and `terrain.fx` lit techniques (done at effect load, not in the translator, see below) | **done 26/10/2026**: both effects patch (19 + 33 techniques), the light shaders compile on D3D12, a test flash tints units and ground; strength not calibrated |
 | 4 | Option, cvar, `docs/SWITCHES.md` entries, `data/fafengine` hook | the option works after a restart |
 | 5 | Remaining feeds: glow sprites, beams (capsules), trails, projectile and unit meshes, profiles for mods | parity with the patch's feeds |
 | 6 | Improvements beyond the patch: terrain height-map occlusion, glow written into the alpha mask for bloom, flicker-free envelopes without ghost lights | lights stop at ridges |
@@ -101,3 +101,20 @@ Off / Low / Medium / High / Ultra with the patch's importance classes (power = i
 - Both textures are created (`light data texture 1024x1`, `light grid texture 64x32`) with no error.
 - **Open:** every run with `/d3d12 /windowed 1280 720` hits a D3D12 error at session start, with the lights **off** as well (so it is not this code): the debug layer reports `CopyTextureRegion: the destination region extends past ... SrcBox width 1280, height 721`, the command list then stays closed and the log fills with `DeviceD3D12.cpp(2424) HRESULT 0x80004005`. It looks like an off-by-one between the window's client height and the back buffer for that `/windowed` size; try another size or the profile's window mode before judging stage 2 in game.
 - Not yet seen in game: flashes in the pool (`stored > 0`), a texture upload with lights, the debug view.
+
+## Stage 3 as built
+
+- **Where:** the patch runs on the effect text in `CD3DEffect::InitEffectFromFile` (`LightEffectPatch.{h,cpp}`), not inside the translator as first planned: it is backend-neutral text work on the game's own source, so one hook serves D3D11, D3D12 and Vulkan, and the generator it ports (`make_lab_shaders.py`) was written against that text. Only on the Direct3D 10 dialect backends and only with `/dynlights` on the command line; a source it does not recognise compiles unchanged (the log says why). The patched effect has its own cache name.
+- **mesh.fx:** the view distance is stored in an unused interpolator by the vertex shaders of the lit techniques (`depth.y`, `texcoord0.z`), `WreckagePS` stops reading `depth.y`, and 19 single-pass techniques get `pass PDynLight` (additive, same vertex shader, the pixel shaders `DynLightsPS` / `DynLightsVertexNormalPS`). The world position is `dynLightCamera - viewDir * distance`; `LightBinding::SetCameraPosition` sets `dynLightCamera` per view.
+- **terrain.fx:** 33 composite techniques get a last pass (dest * (1 + light)); `CalculateLighting` adds the lights to the sun term, so decals and splats are lit too.
+- **Pass control:** the techniques carry `int dynLightPasses = 1;`; `ProgramEffectTechnique::BeginTechnique` (D3D12, Vulkan) drops that pass from the count while `gpg::gal::gDynLightPassActive` is false (no light this frame, or quality Off). D3D11 draws it always (an empty grid then adds nothing).
+- **Host test:** `FAF_STOCK_FX_DIR=<folder with FAF's mesh.fx and terrain.fx>` (extract them from `gamedata/effects.nx2`) enables the stock-file checks (19 and 33 techniques, balanced braces, refused when changed or already patched).
+- **Diagnostics:** `/dynlightsflood` paints the light passes magenta (shows they run: they do, on terrain and meshes); `/dynlightsflood2` paints the world position as a 20-unit checker (shows the terrain pass gets world coordinates). `ren_DynLightsTest N` drops a test flash (size 18, 6 units above the ground) in the middle of the view every N ticks. `FAF_GAL_DUMP_DIR` + `FAF_GAL_DUMP_SECONDS` write the back buffer as BMP for comparison.
+
+### Verification (D3D12, RX 7900 XTX, 1600x900 windowed, `/dynlights`, adaptive_acid_lakes)
+
+- Light passes run on terrain and meshes (magenta flood); lights off (`ren_DynLights=0`) restores the unpatched brightness (control frame).
+- With the test flash the ground around the commander brightens by about 15-23 % with a warm tint (ratio to the lights-off frame: R 1.15-1.23, G 1.10-1.16, B 1.04). The grid and data textures read back correctly in the shader.
+- Weak on purpose for now: the soft limit, the wrapped diffuse and the weakening factor of the patch's model are kept as they are; calibration against the patch is stage 5/6 work.
+- **Window size trap:** `/windowed 1280 720` makes the D3D12 back-buffer copy fail by one row (the lights are not involved); use another size.
+- **Not done:** D3D11 and Vulkan runs; the debug grid view (`ren_DynLightsView`) drew nothing in the zoomed-in test (its in-front test is unverified); real explosions on the screen (only the synthetic flash was seen).

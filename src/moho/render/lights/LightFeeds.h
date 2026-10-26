@@ -9,6 +9,7 @@
 namespace moho
 {
   struct SParticleBuffer;
+  struct GeomCamera3;
 }
 
 // Engine side of the dynamic lights: reads the engine's effect records into the light pool (LightCollector) and evaluates the pool once
@@ -30,6 +31,12 @@ namespace moho::lights
 
   // Called once per rendered world view before the terrain is composited, with the clock the particle shaders use (tick + frame alpha).
   void BeginFrame(int tick, float frameAlpha);
+
+  // Called after BeginFrame for each world view that is about to draw: tells the shaders where the camera is, and feeds the test light.
+  void SetView(GeomCamera3& camera);
+
+  // Console variable ren_DynLightsTest N: every N ticks a flash (size 12, 2 seconds) appears on the ground in the middle of the view.
+  extern int ren_DynLightsTest;
 
   // The lights of the last BeginFrame, strongest first.
   const std::vector<Light>& FrameLights();

@@ -4,9 +4,11 @@
 #include <string_view>
 
 #include "gpg/core/utils/Logging.h"
+#include "gpg/gal/DynLightPass.h"
 #include "moho/console/CConCommand.h"
 #include "moho/particles/SParticleBuffer.h"
 #include "moho/particles/SWorldParticle.h"
+#include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/lights/LightBinding.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
@@ -15,12 +17,20 @@ namespace moho::lights
 {
   int ren_DynLights = model::kOff;
   static int ren_DynLightsLog = 0;
+  int ren_DynLightsTest = 0;
 
   static TConVar<int> gTConVar_ren_DynLights(
     "ren_DynLights",
     "Dynamic lights from explosion flashes, glows, beams and trails: 0 off (the default), 1 only the biggest, 2 large, 3 most, 4 all. "
     "Render only; the simulation never sees them. Work in progress: nothing draws them yet (see docs/DYNAMIC_LIGHTS.md).",
     &ren_DynLights
+  );
+
+  static TConVar<int> gTConVar_ren_DynLightsTest(
+    "ren_DynLightsTest",
+    "Test light for the dynamic lights: every N ticks a flash (size 12, 2 seconds) appears on the ground in the middle of the view; "
+    "0 (the default) adds none. Needs ren_DynLights.",
+    &ren_DynLightsTest
   );
 
   static TConVar<int> gTConVar_ren_DynLightsLog(
@@ -39,6 +49,7 @@ namespace moho::lights
     std::vector<Light> gFrameLights;
     LightGridImage gFrameImage;
     int gLogCounter = 0;
+    int gLastTick = -1; // tick of the last BeginFrame
 
     void SyncQuality()
     {
@@ -115,8 +126,10 @@ namespace moho::lights
 
   void BeginFrame(const int tick, const float frameAlpha)
   {
+    gLastTick = tick;
     SyncQuality();
     if (gCollector.Quality() == model::kOff) {
+      gpg::gal::gDynLightPassActive.store(false, std::memory_order_relaxed);
       if (!gFrameLights.empty() || gFrameImage.lightCount != 0) {
         gFrameLights.clear();
         gFrameImage.lightCount = 0; // the binding clears the textures once
@@ -138,6 +151,7 @@ namespace moho::lights
       BuildLightGrid(gFrameLights, GridLayout::ForMap(mapX, mapZ), gFrameImage);
       UpdateBinding(gFrameImage);
     }
+    gpg::gal::gDynLightPassActive.store(gFrameImage.lightCount > 0, std::memory_order_relaxed);
 
     if (ren_DynLightsLog > 0 && ++gLogCounter >= ren_DynLightsLog) {
       gLogCounter = 0;
@@ -162,6 +176,51 @@ namespace moho::lights
         GetBindingStats().failures,
         GetBindingStats().boundVariables
       );
+    }
+  }
+
+  void SetView(GeomCamera3& camera)
+  {
+    if (gCollector.Quality() == model::kOff) {
+      return;
+    }
+    const Wm3::Vec3f& eye = camera.tranform.pos_;
+    SetCameraPosition(eye.x, eye.y, eye.z);
+
+    // test light: the point where the ray through the middle of the view meets the ground
+    static int sLastTestTick = -1;
+    if (ren_DynLightsTest > 0 && gLastTick >= 0 && gLastTick != sLastTestTick && (gLastTick % ren_DynLightsTest) == 0) {
+      sLastTestTick = gLastTick;
+      CWldSession* const session = WLD_GetActiveSession();
+      const STIMap* const map = session != nullptr ? session->GetSTIMap() : nullptr;
+      const CHeightField* const field = map != nullptr ? map->GetHeightField() : nullptr;
+      if (field != nullptr) {
+        const float w = camera.viewport.r[3].z;
+        const float h = camera.viewport.r[3].w;
+        const GeomLine3 ray = camera.Unproject(Wm3::Vector2f(w * 0.5f, h * 0.5f));
+        for (float t = 1.0f; t < 6000.0f; t += 3.0f) {
+          const float x = ray.pos.x + ray.dir.x * t;
+          const float y = ray.pos.y + ray.dir.y * t;
+          const float z = ray.pos.z + ray.dir.z * t;
+          const float ground = field->GetElevation(x, z);
+          if (y <= ground) {
+            Emission e;
+            e.kind = Kind::Flash;
+            e.pos[0] = x;
+            e.pos[1] = ground + 6.0f;
+            e.pos[2] = z;
+            e.birth = static_cast<float>(gLastTick);
+            e.life = 20.0f;
+            e.size0 = 18.0f;
+            e.size1 = 18.0f;
+            e.rgb[0] = 1.0f;
+            e.rgb[1] = 0.6f;
+            e.rgb[2] = 0.25f;
+            (void)gCollector.Add(e);
+            break;
+          }
+        }
+      }
     }
   }
 
