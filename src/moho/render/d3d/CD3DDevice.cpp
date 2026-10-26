@@ -461,8 +461,14 @@ namespace moho
       // false = rebind, not shutdown: keep the batchers, only Reset the mesh
       // renderer. Everything else the viewport holds is released either way,
       // which is what lets `Reset`'s `IDirect3DDevice9::Reset` succeed.
+      gpg::Logf("EDITOR device reset: releasing the viewport's resources");
       if (mViewport != nullptr) {
         mViewport->D3DWindowOnDeviceExit(false);
+      }
+      if (headCount > 0) {
+        const gpg::gal::Head& head0 = context->GetHead(0);
+        gpg::Logf("EDITOR device reset: begin, %ux%u, anti-aliasing mode %u (type %u, quality %u), vsync %d", head0.mWidth, head0.mHeight,
+                  (head0.antialiasingHigh << 5u) | head0.antialiasingLow, head0.antialiasingHigh, head0.antialiasingLow, context->mVSync ? 1 : 0);
       }
 
       const moho::SD3DDeviceEvent deviceExitEvent{1u, false, {0u, 0u, 0u}};
@@ -475,11 +481,13 @@ namespace moho
       }
 
       resetT1 = ResetClock::now();
+      gpg::Logf("EDITOR device reset: resources released, calling IDirect3DDevice9::Reset");
       if (device != nullptr) {
         const ResetWatch watch;   // a Reset the driver never returns from is reported after 15 s (all thread stacks: where it waits)
         device->Reset(context);
       }
       resetT2 = ResetClock::now();
+      gpg::Logf("EDITOR device reset: IDirect3DDevice9::Reset returned after %.1f ms, recreating resources", elapsedMs(resetT1, resetT2));
 
       for (std::size_t headIndex = 0U; headIndex < lockHeadCount; ++headIndex) {
         if (device == nullptr) {
