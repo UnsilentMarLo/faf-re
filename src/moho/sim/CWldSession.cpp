@@ -86,6 +86,7 @@
 #include "moho/sim/SDesyncInfo.h"
 #include "moho/misc/TimeBar.h"
 #include "moho/particles/CWorldParticles.h"
+#include "moho/render/lights/LightFeeds.h"
 #include "moho/render/RCamManager.h"
 #include "moho/render/WRenViewport.h"
 #include "moho/terrain/splat/CWldSplat.h"
@@ -8575,7 +8576,9 @@ namespace moho
       sWorldParticles.AdvancementBeat();
     }
     if (beat.mParticleBuffer) {
-      sWorldParticles.AddParticles(*static_cast<const SParticleBuffer*>(beat.mParticleBuffer.get()));
+      const SParticleBuffer& particleBuffer = *static_cast<const SParticleBuffer*>(beat.mParticleBuffer.get());
+      sWorldParticles.AddParticles(particleBuffer);
+      lights::FeedParticleBuffer(particleBuffer, beat.mCurTick); // dynamic lights (docs/DYNAMIC_LIGHTS.md), render only
     }
 
     auto* const decalManager = static_cast<CDecalManager*>(terrainRes->GetDecalManager());

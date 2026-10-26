@@ -1,6 +1,6 @@
 # Dynamic lights
 
-Branch `dynamic-lights`. Status: **design, nothing implemented yet** (snapshot 26/10/2026).
+Branch `dynamic-lights`. Status: **stage 1 done: the light pool and the TLight feed exist, nothing draws the lights yet** (snapshot 26/10/2026).
 
 Dynamic lighting for explosions, muzzle flashes, beams, trails, projectiles and glowing units, built into the engine's renderer instead of patched into the shipped exe. It replaces the binary patch [FA-DynamicLights](https://github.com/UnsilentMarLo/FA-DynamicLights) (v0.1.0) on the Direct3D 11, 12 and Vulkan backends. Direct3D 9 keeps using the patch. The lights are **render only**: they read effect data and never touch the simulation, so replay parity is unaffected.
 
@@ -65,7 +65,7 @@ Off / Low / Medium / High / Ultra with the patch's importance classes (power = i
 | # | What | Done when |
 |---|---|---|
 | 0 | Branch, toolchain, x64 Release build | **done 26/10/2026** (`main_x64.exe` links) |
-| 1 | `LightModel.h` and `LightCollector` with the `TLight` feed only, a host test (no GPU) for classes, pool, selection | tests pass |
+| 1 | `LightModel.h` and `LightCollector` with the `TLight` feed only, a host test (no GPU) for classes, pool, selection | **done 26/10/2026**: `faf_light_tests` passes (4240 checks); `ren_DynLights` (0-4, default 0) and `ren_DynLightsLog N` |
 | 2 | `LightBinding` + the two textures, filled and bound on D3D12; a debug cvar draws the grid; check `Float4` `Lock`/`Unlock` on D3D11/D3D12/Vulkan (never exercised by `BonePaletteTexture`) | the grid shows in a screenshot |
 | 3 | Translator step: inject `DynLight` into `mesh.fx` and `terrain.fx` lit techniques | explosions light units and ground on D3D12 |
 | 4 | Option, cvar, `docs/SWITCHES.md` entries, `data/fafengine` hook | the option works after a restart |
@@ -80,3 +80,12 @@ Off / Low / Medium / High / Ultra with the patch's importance classes (power = i
 - **Float4 dynamic textures on D3D11/12/Vulkan.** Implemented in the backends but never exercised by a real consumer.
 - **Wrapping rule for pixel shaders.** The pixel input structs differ per technique; the translator step must find world position and normal per technique, or the shaders must be wrapped by name from a table.
 - **Time of the first frame after a shader change.** The shader cache is hashed per source, so lit techniques recompile once per change.
+
+## Stage 1 as built
+
+- `src/moho/render/lights/LightModel.h`: importance classes, quality gate and the flash / glow / trail / weaken formulas of the patch, as `constexpr` functions in `moho::lights::model`. No engine includes.
+- `LightCollector.{h,cpp}`: `Add(Emission)` validates and gates by quality, `Update(nowTick, maxLights, out)` prunes, applies the fade-in/out envelope (0.08 s / 0.30 s, scaled by `SetSecondsPerTick`), moves the light with the particle shader's rule (`pos + dir*t + 0.5*accel*t^2`), follows the size ramp, and returns the strongest `maxLights` (ties by birth, then arrival). A light's importance class is fixed at `Add` from its peak size, so it does not change while it fades. Pool of 4096. No engine includes.
+- `LightFeeds.{h,cpp}`: `FeedParticleBuffer` is called from `CWldSession` right after `sWorldParticles.AddParticles` and picks the `"TLight"` particles (birth = beat tick + fractional `mInterop`); `BeginFrame(tick, alpha)` is called from `WRenViewport::Render` before the terrain composite. Colour is the patch's warm default (1.0, 0.84, 0.63) until the ramp texture can be read on the CPU (stage 5).
+- Tests: `cmake --build --preset clang-x64-release --target faf_light_tests`, then `build/clang-x64-release/tests/faf_light_tests.exe`; also `ctest` (`dynamic_lights`).
+- Trying it: start the game with the console command `ren_DynLights 4` and `ren_DynLightsLog 60`; the log shows `DynLights: ... lights=N` once per 60 frames. Nothing is drawn yet. Not yet run in game.
+

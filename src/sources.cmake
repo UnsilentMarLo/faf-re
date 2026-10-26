@@ -215,6 +215,8 @@ set(FAF_ENGINE_SOURCES
   moho/misc/CombinedMilitaryExtractor.cpp
   moho/misc/CountermeasureExtractor.cpp
   moho/particles/CWorldParticles.cpp
+  moho/render/lights/LightCollector.cpp
+  moho/render/lights/LightFeeds.cpp
   moho/app/WinApp.cpp
   gpg/core/diagnostics/CrashHooks.cpp
   gpg/core/diagnostics/CrashReport.cpp

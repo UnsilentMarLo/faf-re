@@ -26,6 +26,7 @@
 #include "moho/mesh/Mesh.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/particles/CWorldParticles.h"
+#include "moho/render/lights/LightFeeds.h"
 #include "moho/mesh/MeshThumbnailRenderer.h"
 #include "moho/render/BoundaryRenderer.h"
 #include "moho/render/BoxRenderer.h"
@@ -3985,6 +3986,9 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
         mShadowRenderer.RenderFrameShadows(
           terrain, *mCam, worldView->mView->CameraGetTargetZoom());
       }
+
+      // Dynamic lights: evaluate the pool for this frame before anything is lit (docs/DYNAMIC_LIGHTS.md).
+      moho::lights::BeginFrame(moho::REN_GetGameTick(), moho::REN_GetSimDeltaSeconds());
 
       FogOn(worldView->mView->CameraGetZoom());
       {
