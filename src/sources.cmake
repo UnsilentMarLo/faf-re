@@ -226,6 +226,7 @@ set(FAF_ENGINE_SOURCES
   moho/render/lights/LightMeshEmission.cpp
   moho/render/lights/SimLights.cpp
   moho/render/lights/LightFeeds.cpp
+  moho/render/RenderFeatures.cpp
   moho/render/lights/LightFeedSources.cpp
   moho/render/lights/LightCensus.cpp
   moho/render/lights/LightMeshFeed.cpp

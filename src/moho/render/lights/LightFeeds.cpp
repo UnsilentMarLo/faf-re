@@ -1,5 +1,6 @@
 #include <algorithm>
 #include "moho/render/lights/LightFeeds.h"
+#include "moho/render/RenderFeatures.h"
 
 #include <cmath>
 #include <string_view>
@@ -24,7 +25,7 @@ namespace moho::lights
   static TConVar<int> gTConVar_ren_DynLights(
     "ren_DynLights",
     "Dynamic lights from explosion flashes, glows, beams, trails and Lua lights: 0 off (the default), 1 only the biggest, 2 large, 3 most, 4 all. "
-    "Render only; the simulation never sees them. Needs /dynlights on the command line (docs/DYNAMIC_LIGHTS.md).",
+    "Render only; the simulation never sees them. Normally set by the Dynamic Lights option (Options, Video; the effects are patched at start-up when it is not Off) or /dynlights on the command line (docs/DYNAMIC_LIGHTS.md).",
     &ren_DynLights
   );
 
@@ -43,6 +44,35 @@ namespace moho::lights
 
   namespace
   {
+    // The Options > Video entry of the lights (render features registry): Off / Low .. Ultra are ren_DynLights 0..4. The effects are patched
+    // when they load, so going from Off to a level needs a restart; the levels in between apply live. The effect patch and the light pass run
+    // on the Direct3D 11, 12 and Vulkan backends (the Direct3D 10 effect dialect); Direct3D 9 has the first patch's lights in the executable
+    // patch (its vs_1_1 / ps_2_0 techniques cannot host a ps_3_0 light loop), Direct3D 10 does not start.
+    const bool gRegisteredFeature = [] {
+      using render::Api;
+      render::Feature feature;
+      feature.key = "dynlights_quality";
+      feature.title = "Dynamic Lights";
+      feature.tip = "Explosions, fire, plasma, beams, trails and glowing buildings light the ground and the units around them. Render only, never affects the game. "
+                    "Turning it on or off takes effect after a restart; the levels in between apply at once.";
+      feature.console = "ren_DynLights";
+      feature.states = {{"Off", "off"}, {"Low (big explosions)", "low"}, {"Medium", "medium"}, {"High", "high"}, {"Ultra (everything)", "ultra"}};
+      feature.defaultLevel = 0;
+      feature.needsRestart = true;
+      feature.apis[static_cast<int>(Api::D3D9)].reason = "Direct3D 9 draws with the shipped shaders, which cannot host the light pass; the executable patch has lights for it";
+      feature.apis[static_cast<int>(Api::D3D10)].reason = "the Direct3D 10 renderer does not start";
+      feature.apis[static_cast<int>(Api::D3D11)].supported = true;
+      feature.apis[static_cast<int>(Api::D3D12)].supported = true;
+      feature.apis[static_cast<int>(Api::Vulkan)].supported = true;
+      feature.apply = [](const int level) {
+        if (level > 0) {
+          ren_DynLights = level;
+        }
+      };
+      render::RegisterFeature(feature);
+      return true;
+    }();
+
     LightCollector gCollector;
     std::vector<Light> gFrameLights;
     LightGridImage gFrameImage;
@@ -242,5 +272,20 @@ namespace moho::lights
   const LightGridImage& FrameImage()
   {
     return gFrameImage;
+  }
+} // namespace moho::lights
+
+namespace moho::lights
+{
+  bool LightsWanted(const gpg::gal::DeviceApi api)
+  {
+    // Cached: effects load one after the other and the level cannot change before a restart.
+    static int cachedFor = -1;
+    static bool wanted = false;
+    if (cachedFor != static_cast<int>(api)) {
+      cachedFor = static_cast<int>(api);
+      wanted = render::FeatureLevel("dynlights_quality", render::ApiFromDevice(api)) > 0;
+    }
+    return wanted;
   }
 } // namespace moho::lights
