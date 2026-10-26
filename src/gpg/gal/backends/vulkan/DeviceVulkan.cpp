@@ -268,6 +268,8 @@ namespace gpg::gal
     if (mDevice != VK_NULL_HANDLE) {
       Vk().vkDeviceWaitIdle(mDevice);
     }
+    mAaProgram.reset();
+    mAaCopy.reset();
     ReleaseGpuDrivenObjects();
     outputContext_ = OutputContext();
     mHeadOutputContexts.clear();

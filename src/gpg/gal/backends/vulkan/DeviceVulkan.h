@@ -138,6 +138,8 @@ namespace gpg::gal
     bool CopyVertexBufferRegion(
       VertexBuffer& destination, std::uint32_t destinationOffset, VertexBuffer& source, std::uint32_t sourceOffset, std::uint32_t byteCount
     ) override;
+    /** Post-process anti-aliasing through one GPU program (PostProcessAAVulkan.cpp). */
+    bool ApplyPostProcessAA(std::uint32_t head, std::uint32_t mode) override;
     /** Destroys a GPU program's modules and pipelines once the GPU is done with them. */
     void RetireProgram(GpuProgramVulkan& program);
 
@@ -370,6 +372,12 @@ namespace gpg::gal
 
     // ---- GPU-driven programs -------------------------------------------------
     std::uint32_t mGpuFeatures = 0U;
+    // Post-process anti-aliasing: the program and a copy of the back buffer it reads.
+    boost::shared_ptr<GpuProgram> mAaProgram;
+    boost::shared_ptr<Texture> mAaCopy;
+    std::uint32_t mAaCopyWidth = 0U;
+    std::uint32_t mAaCopyHeight = 0U;
+    bool mAaFailed = false;
     VkDescriptorSetLayout mGpuSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout mGpuPipelineLayout = VK_NULL_HANDLE;
     VkSampler mGpuSamplers[3]{}; // by GpuSampler

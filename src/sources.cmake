@@ -67,6 +67,7 @@ set(FAF_ENGINE_SOURCES
   gpg/gal/backends/vulkan/ResourcesVulkan.cpp
   gpg/gal/backends/vulkan/DeviceVulkan.cpp
   gpg/gal/backends/vulkan/GpuDrivenVulkan.cpp
+  gpg/gal/backends/vulkan/PostProcessAAVulkan.cpp
   gpg/gal/backends/dxgi/DxgiFactory.cpp
   gpg/gal/backends/dxgi/DxgiSwapChain.cpp
   ${FAF_DEPENDENCIES_DIR}/FX11/d3dxGlobal.cpp

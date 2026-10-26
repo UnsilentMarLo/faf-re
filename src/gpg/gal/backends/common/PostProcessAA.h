@@ -41,7 +41,10 @@ AaVertex AaVS(uint id : SV_VertexID)
     o.uv = p;
     return o;
 }
-Texture2D faf_source : register(t0);
+#ifndef AA_TEXTURE_REG
+#define AA_TEXTURE_REG t0
+#endif
+Texture2D faf_source : register(AA_TEXTURE_REG);
 SamplerState faf_linear : register(s0);
 
 float AaLuma(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
@@ -58,7 +61,8 @@ float4 FxaaPS(AaVertex v) : SV_Target0
     uint width, height;
     faf_source.GetDimensions(width, height);
     float2 rcpFrame = 1.0 / float2(width, height);
-    float2 pos = v.uv;
+    // From the pixel position, not the interpolated uv: Vulkan draws the full-screen triangle through a viewport the engine shifts by half a pixel.
+    float2 pos = v.position.xy * rcpFrame;
 
     float4 centre = faf_source.SampleLevel(faf_linear, pos, 0);
 #ifdef FAF_AA_SPLIT
@@ -183,14 +187,17 @@ float4 FxaaPS(AaVertex v) : SV_Target0
    * holds the before and after of a scene; FAF_AA_SPLIT=2 draws the amplified difference the filter makes (4x), which shows
    * which pixels it touches.
    */
-  [[nodiscard]] inline std::string PostProcessAASource()
+  [[nodiscard]] inline std::string PostProcessAASource(const char* const textureRegister = nullptr)
   {
     const char* const split = std::getenv("FAF_AA_SPLIT");
     std::string source;
+    if (textureRegister != nullptr) {
+      source = std::string("#define AA_TEXTURE_REG ") + textureRegister + "\n";
+    }
     if (split != nullptr && split[0] == '1') {
-      source = "#define FAF_AA_SPLIT 1\n";
+      source += "#define FAF_AA_SPLIT 1\n";
     } else if (split != nullptr && split[0] == '2') {
-      source = "#define FAF_AA_DIFF 1\n";
+      source += "#define FAF_AA_DIFF 1\n";
     }
     source += kPostProcessAAFxaaSource;
     return source;
