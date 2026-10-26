@@ -1902,6 +1902,25 @@ namespace gpg::gal
             outParameters->BackBufferCount = 1U;
             outParameters->MultiSampleType = static_cast<D3DMULTISAMPLE_TYPE>(head.antialiasingHigh);
             outParameters->MultiSampleQuality = head.antialiasingLow;
+            // EDITOR: only a mode this adapter offered (HeadSampleOption list, built from CheckDeviceMultiSampleType) is asked for. Anything else (a stale or damaged saved
+            // value, the other bit layout) becomes "no anti-aliasing": an invalid request made the Reset of a hybrid NVIDIA laptop hang for good.
+            if ((head.antialiasingHigh != 0U || head.antialiasingLow != 0U) && head.mStrs.begin() != head.mStrs.end())   // (the list is filled once the device exists)
+            {
+                bool offered = false;
+                for (const HeadSampleOption* option = head.mStrs.begin(); option != head.mStrs.end(); ++option)
+                {
+                    if (option->sampleType == head.antialiasingHigh && option->sampleQuality == head.antialiasingLow)
+                    {
+                        offered = true;
+                        break;
+                    }
+                }
+                if (!offered)
+                {
+                    outParameters->MultiSampleType = D3DMULTISAMPLE_NONE;
+                    outParameters->MultiSampleQuality = 0U;
+                }
+            }
             outParameters->SwapEffect = D3DSWAPEFFECT_DISCARD;
             outParameters->hDeviceWindow =
                 (headIndex == 0U && head.mWindowed) ? reinterpret_cast<HWND>(head.mHandle) : reinterpret_cast<HWND>(head.mWindow);

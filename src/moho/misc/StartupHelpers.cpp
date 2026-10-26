@@ -3212,8 +3212,12 @@ int moho::cfunc_GetAntiAliasingOptionsL(LuaPlus::LuaState* const state)
     if (begin != nullptr && end != nullptr) {
       std::int32_t tableIndex = 2;
       for (const gpg::gal::HeadSampleOption* it = begin; it != end; ++it) {
+        // EDITOR: type in the high lanes, quality in the low five bits: (type << 5) | quality. The recovered body had them the other way round, but everything that reads
+        // the value back splits it as high = packed >> 5 = type, low = packed & 31 = quality (CScApp::ApplyPackedAntiAliasing, CD3DDevice::SetAntiAliasingSamples,
+        // GetHeadParameters: MultiSampleType = high), and the FAF client stores 256 for 8x in Game.prefs. With the swapped packing every option the list offered
+        // asked D3D9 for MultiSampleType NONE with a quality level: an invalid Reset (AMD: D3DERR_INVALIDCALL; the NVIDIA hybrid laptop: a Reset that never returned).
         const std::uint32_t packedMode =
-          static_cast<std::uint32_t>(it->sampleType) | (static_cast<std::uint32_t>(it->sampleQuality) << 5u);
+          (static_cast<std::uint32_t>(it->sampleType) << 5u) | static_cast<std::uint32_t>(it->sampleQuality);
         optionsTable.SetInteger(tableIndex++, static_cast<std::int32_t>(packedMode));
       }
     }

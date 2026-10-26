@@ -3240,7 +3240,9 @@ void moho::CON_d3d_AntiAliasingSamplesSeedFromFirstToken(const msvc8::vector<msv
     return;
   }
 
-  const msvc8::string* const sampleToken = ConCommandArg(args, 0u);
+  // EDITOR: the value is token 1 (token 0 is the command's own name, as in CD3DEffect::CON_d3d_AntiAliasingSamples): token 0 made every
+  // `SC_AntiAliasingSamples <n>` (the game's options and the editor's Anti-aliasing setting) ask for 0 samples.
+  const msvc8::string* const sampleToken = ConCommandArg(args, 1u);
   if (sampleToken == nullptr) {
     return;
   }

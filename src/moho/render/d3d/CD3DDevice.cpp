@@ -4,6 +4,7 @@
 #include <d3d9.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <bit>
 #include <cstddef>
@@ -11,7 +12,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
+#include <thread>
 
+#include "gpg/core/diagnostics/CrashReport.h"
 #include "gpg/core/utils/BoostWrappers.h"
 #include "gpg/core/utils/Global.h"
 #include "gpg/core/utils/Logging.h"
@@ -221,6 +224,40 @@ namespace
   // Seconds spent inside the backend's Present since the last stats line
   // (FAF instrumentation, see DrawStatisticsLog).
   double sPresentSeconds = 0.0;
+
+  // EDITOR: hang watch of IDirect3DDevice9::Reset. A hybrid laptop driver can wait in Reset forever (seen after an invalid anti-aliasing request); the process looks frozen and
+  // the user has to kill it. A watchdog thread writes the crash report (all thread stacks, log) once when one Reset takes longer than 15 s, then lets the process be.
+  std::atomic<std::int64_t> sResetBeginTick{0};   // GetTickCount64 of the running Reset, 0 = none
+  void ResetWatchdogMain()
+  {
+    bool reported = false;
+    for (;;) {
+      ::Sleep(2000);
+      const std::int64_t begin = sResetBeginTick.load();
+      if (begin == 0) {
+        reported = false;
+      } else if (!reported && static_cast<std::int64_t>(::GetTickCount64()) - begin > 15000) {
+        reported = true;
+        gpg::Warnf("EDITOR device: IDirect3DDevice9::Reset has not returned for 15 s; writing the crash report with every thread's stack");
+        gpg::diag::CrashReportContext context;
+        context.reason = "IDirect3DDevice9::Reset has not returned for 15 seconds (device reset hang)";
+        (void)gpg::diag::WriteCrashReport(context);
+      }
+    }
+  }
+  struct ResetWatch
+  {
+    ResetWatch()
+    {
+      static const bool started = [] {
+        std::thread(ResetWatchdogMain).detach();
+        return true;
+      }();
+      (void)started;
+      sResetBeginTick.store(static_cast<std::int64_t>(::GetTickCount64()));
+    }
+    ~ResetWatch() { sResetBeginTick.store(0); }
+  };
 
   // EDITOR: device loss and reset bookkeeping (CD3DDevice::Paint / InitContext).
   bool sDeviceNeedsRetry = false;   // a Reset failed: Paint polls the device and tries again
@@ -439,6 +476,7 @@ namespace moho
 
       resetT1 = ResetClock::now();
       if (device != nullptr) {
+        const ResetWatch watch;   // a Reset the driver never returns from is reported after 15 s (all thread stacks: where it waits)
         device->Reset(context);
       }
       resetT2 = ResetClock::now();
@@ -1774,7 +1812,8 @@ namespace moho
         sLastTry = now;
         gpg::gal::Device* const lostDevice = gpg::gal::Device::GetInstance();
         try {
-          if (lostDevice->TestCooperativeLevel() == 1) {
+          // 1 = needs a reset; 0 = the device is fine but our own Reset failed half way (invalid parameters): redo it with the context the device still holds
+          if (lostDevice->TestCooperativeLevel() != 2) {
             (void)InitContext(lostDevice->GetDeviceContext());
           }
         } catch (const gpg::gal::Error&) {
