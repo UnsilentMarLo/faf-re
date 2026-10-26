@@ -24,6 +24,7 @@
 #include "moho/particles/ParticleEffectPatch.h"
 #include "moho/particles/ParticleRenderBuckets.h"
 #include "moho/render/CRenFrame.h"
+#include "moho/render/RenderFeatures.h"
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/d3d/ShaderVar.h"
@@ -48,6 +49,30 @@ namespace moho
       "The side, in pixels at full resolution, of a square particle quad from which ren_ParticleLowRes draws it at the lower resolution.",
       &ren_ParticleLowResSize
     );
+
+    // The Options > Video entry (render features registry): Full / Half / Quarter resolution are ren_ParticleLowRes 0, 1, 2. Live, no restart: the
+    // particle effect is patched whenever it loads on the Direct3D 10 effect dialect, the console variable only decides whether the passes run.
+    const bool gRegisteredFeature = [] {
+      using render::Api;
+      render::Feature feature;
+      feature.key = "particle_quality";
+      feature.title = "Large Particle Quality";
+      feature.tip = "Big explosions (nukes, experimentals, smoke and fire clouds) are drawn from the same particles, but the biggest ones into a smaller "
+                    "image that is blended onto the scene, which is much cheaper for the graphics card. Half resolution looks like full; Quarter resolution is "
+                    "for slower cards. Render only, never affects the game.";
+      feature.console = "ren_ParticleLowRes";
+      feature.states = {{"Full resolution", "full"}, {"Half resolution", "half"}, {"Quarter resolution", "quarter"}};
+      feature.defaultLevel = 0;
+      feature.apis[static_cast<int>(Api::D3D9)].reason =
+        "Direct3D 9 draws with the shipped effects (no patched particle shaders) and a smaller target would not pay for itself there";
+      feature.apis[static_cast<int>(Api::D3D10)].reason = "the Direct3D 10 renderer does not start";
+      feature.apis[static_cast<int>(Api::D3D11)].supported = true;
+      feature.apis[static_cast<int>(Api::D3D12)].supported = true;
+      feature.apis[static_cast<int>(Api::Vulkan)].reason = "not implemented yet: the Vulkan backend cannot sample the scene depth in an effect";
+      feature.apply = [](const int level) { ren_ParticleLowRes = level; };
+      render::RegisterFeature(feature);
+      return true;
+    }();
 
     [[nodiscard]] bool EnvironmentValue(const char* const name, double& value)
     {
