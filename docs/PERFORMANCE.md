@@ -55,6 +55,21 @@ The sim checksum covers every bit of game state, so a speed-up is only kept if i
 - **Running Lua callbacks in parallel**: only 2â€“7 % of them are independent. The rest allocate, use the random stream or call into the engine.
 - **Reusing a unit's old pose object, or keeping unchanged blip lists**: in real games the conditions almost never hold.
 
+## GPU time of big explosions (particles)
+
+*Measured 26/10/2026, RX 7900 XTX, D3D12, 1600x900 windowed, `adaptive_acid_lakes` seed 7, the staged battle of `tests/lights/ingame/dynlights_census.lua` (camera zoom 28, lights off), `FAF_GPU_PROFILE=600`.*
+
+In the heaviest 600-frame blocks the `EffParticles` pass (inside `Effects`) takes **1.4–1.7 ms GPU per frame** (averaged over all blocks 0.43 ms) of a 2.2–2.6 ms frame, from only 90–100 draws and about **1,500 quads**. It is fill rate, not draw cost or shader cost, and the game's own overdraw rather than the D3D12 translation:
+
+- **Pixels**: `FAF_GPU_PROFILE_PIXELS=EffParticles` (new on D3D12; `1` = outermost regions; D3D11 already had it for every region) counts 130–220 million pixel-shader invocations per frame in those blocks. That is 90–150 screens of overdraw at 1600x900, about 120,000 pixels (350x350) per quad. Direct3D 11 shows the same counts on the same scene (up to 200 Mpix), so both backends rasterise the same work. The rate is 90–140 Gpix/s in the peak blocks, about 60–70 Gpix/s averaged over every block above 20 Mpix.
+- **Not the shaders or textures**: `particle.fx` has no depth reads and no soft particles; its pixel shaders are `ps_2_0` (one or two samples and a ramp). Running the pass with a solid-colour pixel shader (`FAF_GAL_SOLID_PS=1`) costs the same (1.10 ms against 1.08 ms per frame in the blocks above 20 Mpix), so what is left is blend and ROP bandwidth.
+- **Not the translation**: the draws are the same instanced quads, the state is the effect's (`Depth_Enable_Less_Write_None`, blend per technique), the target is the same BGRA8 back buffer on both APIs (one shared format table), and the particle draws only bind their own textures and buffers (no copies or render-target switches in the pass).
+- **Scales with the pixels** (extrapolated, not measured): at 2560x1440 the same blocks would cost about 2.5x, at 3840x2160 5.8x (about 4 and 10 ms), which is what a "100 % GPU" report at the nuke looks like on a larger screen or a frame limiter that leaves the GPU no idle time.
+
+What would cut it is fewer pixels, not a different D3D12 path: drawing the large soft particles (quads of more than some 100,000 pixels) into a half-resolution target and compositing them, or capping a particle's screen size. Both change the picture, so neither is done.
+
+D3D11's GPU timestamps are not usable for this comparison: a region shows 14 ms for 12 draws, more than the frame's wall time (cause not investigated). D3D12's agree with the frame time.
+
 ## Next
 
 1. Pose and animation on sim workers (about 14 % of sim time).

@@ -272,6 +272,8 @@ namespace gpg::gal
     [[nodiscard]] ID3D12PipelineState* GpuPipelineFor(GpuProgramD3D12& program);
     /** Closes the frame's timestamps (before Present) and collects finished frames. */
     void EndProfileFrame();
+    /** Ends the running pipeline-statistics query (FAF_GPU_PROFILE_PIXELS); a query cannot span two command lists. */
+    void EndStatisticsQuery();
     void CollectProfileFrames();
 
     void BlitTexture(
@@ -403,6 +405,7 @@ namespace gpg::gal
     std::uint32_t mProfileFrame = 0U;
     Microsoft::WRL::ComPtr<ID3D12QueryHeap> mStatisticsHeap;     // FAF_GPU_PROFILE_PIXELS: one per pair
     Microsoft::WRL::ComPtr<ID3D12Resource> mStatisticsReadback;
+    std::uint32_t mStatisticsSlot = 0U;
     bool mStatisticsOpen = false; // a statistics query is running: Direct3D 12 does not nest them
     std::vector<std::uint32_t> mOpenRegions; // indices into the current frame's regions
 

@@ -723,12 +723,26 @@ namespace gpg::gal
       // Without a region name the outermost regions but the frame itself.
       statistics = (only != nullptr) ? (name != nullptr && std::strcmp(only, name) == 0) : (pair > 1U);
       if (statistics) {
-        mList->BeginQuery(mStatisticsHeap.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, mProfileFrame * (kMaxTimedRegionsPerFrame + 1U) + pair);
+        mStatisticsSlot = mProfileFrame * (kMaxTimedRegionsPerFrame + 1U) + pair;
+        mList->BeginQuery(mStatisticsHeap.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, mStatisticsSlot);
         mStatisticsOpen = true;
       }
     }
     mOpenRegions.push_back(static_cast<std::uint32_t>(frame.regions.size()));
     frame.regions.push_back(TimedRegion{region, pair, statistics});
+  }
+
+  void DeviceD3D12::EndStatisticsQuery()
+  {
+    if (!mStatisticsOpen) {
+      return;
+    }
+    mStatisticsOpen = false;
+    mList->EndQuery(mStatisticsHeap.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, mStatisticsSlot);
+    mList->ResolveQueryData(
+      mStatisticsHeap.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, mStatisticsSlot, 1U, mStatisticsReadback.Get(),
+      static_cast<UINT64>(mStatisticsSlot) * sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS)
+    );
   }
 
   void DeviceD3D12::EndProfileRegion(const std::uint32_t region)
@@ -748,13 +762,7 @@ namespace gpg::gal
       const UINT base = mProfileFrame * 2U * (kMaxTimedRegionsPerFrame + 1U);
       mList->EndQuery(mTimestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, base + 2U * frame.regions[timed].pair + 1U);
       if (frame.regions[timed].statistics) {
-        const UINT slot = mProfileFrame * (kMaxTimedRegionsPerFrame + 1U) + frame.regions[timed].pair;
-        mList->EndQuery(mStatisticsHeap.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, slot);
-        mList->ResolveQueryData(
-          mStatisticsHeap.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, slot, 1U, mStatisticsReadback.Get(),
-          static_cast<UINT64>(slot) * sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS)
-        );
-        mStatisticsOpen = false;
+        EndStatisticsQuery();
       }
     }
   }

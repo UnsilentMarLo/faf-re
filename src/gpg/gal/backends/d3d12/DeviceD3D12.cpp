@@ -1084,6 +1084,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
   void DeviceD3D12::Submit(const bool wait)
   {
     FlushBarriers();
+    EndStatisticsQuery();
     CheckDeviceHresult(__LINE__, mList->Close(), "command list close");
     ID3D12CommandList* const lists[1] = {mList.Get()};
     mQueue->ExecuteCommandLists(1U, lists);
@@ -2416,6 +2417,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     LogDebugMessages();
     LogMemoryIfDue();
 
+    EndStatisticsQuery();
     EndProfileFrame();
     for (OutputContext& output : mHeadOutputContexts) {
       Transition(static_cast<RenderTargetD3D12*>(output.surface.get())->Current().resource, D3D12_RESOURCE_STATE_PRESENT);
