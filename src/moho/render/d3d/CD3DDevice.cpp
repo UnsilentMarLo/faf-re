@@ -1,3 +1,4 @@
+#include "moho/render/d3d/EdDeviceDeferred.h"
 #include "CD3DDevice.h"
 
 #include <Windows.h>
@@ -259,6 +260,9 @@ namespace
     ~ResetWatch() { sResetBeginTick.store(0); }
   };
 
+  // EDITOR: a device context change asked for from UI code (anti-aliasing, vertical sync) waits here until the main loop applies it between two frames.
+  std::unique_ptr<gpg::gal::DeviceContext> sPendingContext;
+
   // EDITOR: device loss and reset bookkeeping (CD3DDevice::Paint / InitContext).
   bool sDeviceNeedsRetry = false;   // a Reset failed: Paint polls the device and tries again
   bool sDeviceWasLost = false;
@@ -366,6 +370,35 @@ namespace
 
 namespace moho
 {
+  /** EDITOR: the context the next queued device change starts from: the pending one, else a copy of the device's active context. */
+  gpg::gal::DeviceContext* ED_PendingDeviceContext()
+  {
+    if (!sPendingContext) {
+      gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
+      gpg::gal::DeviceContext* const active = device != nullptr ? device->GetDeviceContext() : nullptr;
+      if (active == nullptr) {
+        return nullptr;
+      }
+      sPendingContext.reset(new gpg::gal::DeviceContext(*active));
+    }
+    return sPendingContext.get();
+  }
+
+  /** EDITOR: called at the top of every frame (CScApp::Main), outside any window message dispatch: applies a queued device change. */
+  void ED_ApplyPendingDeviceContext()
+  {
+    if (!sPendingContext) {
+      return;
+    }
+    const std::unique_ptr<gpg::gal::DeviceContext> context = std::move(sPendingContext);
+    if (!gpg::gal::Device::IsReady()) {
+      return;
+    }
+    CD3DDevice* const device = D3D_GetDevice();
+    device->Clear();
+    (void)device->InitContext(context.get());
+  }
+
   /**
    * Address: 0x0042DBE0 (FUN_0042DBE0, the scalar deleting destructor)
    * Address: 0x00430DF0 (FUN_00430DF0, the non-deleting body this definition
@@ -1347,25 +1380,19 @@ namespace moho
    */
   void CD3DDevice::SetAntiAliasingSamples(const int sampleCount)
   {
-    gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
-    if (device == nullptr) {
+    // EDITOR: the mode is queued; the main loop resets the device at the top of the next frame (ED_ApplyPendingDeviceContext). Called from a click in the editor's
+    // Settings pop-out the Reset ran inside that window's message dispatch, and on a hybrid NVIDIA laptop it never came back.
+    gpg::gal::DeviceContext* const context = ED_PendingDeviceContext();
+    if (context == nullptr) {
       return;
     }
 
-    gpg::gal::DeviceContext* const activeContext = device->GetDeviceContext();
-    if (activeContext == nullptr) {
-      return;
-    }
-
-    gpg::gal::DeviceContext context = *activeContext;
-    const int headCount = context.GetHeadCount();
+    const int headCount = context->GetHeadCount();
     for (int headIndex = 0; headIndex < headCount; ++headIndex) {
-      gpg::gal::Head& head = context.GetHead(static_cast<std::uint32_t>(headIndex));
+      gpg::gal::Head& head = context->GetHead(static_cast<std::uint32_t>(headIndex));
       head.antialiasingHigh = static_cast<std::uint32_t>(sampleCount >> 5);
       head.antialiasingLow = static_cast<std::uint32_t>(sampleCount & 0x1F);
     }
-
-    (void)InitContext(&context);
   }
 
   /**

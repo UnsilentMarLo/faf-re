@@ -1,3 +1,4 @@
+#include "moho/render/d3d/EdDeviceDeferred.h"
 #include "WxRuntimeTypes.h"
 
 #include <Windows.h>
@@ -1219,8 +1220,13 @@ namespace
     if (sameSize && d3dDevice->mInitialized != 0) {
       return;
     }
-    d3dDevice->Clear();
-    d3dDevice->InitContext(&context);
+    // EDITOR: the new back buffer size is queued and the main loop resets the device at the top of the next frame, not inside this WM_SIZE dispatch (see
+    // CD3DDevice::SetAntiAliasingSamples). The viewport and the frame already follow the new size; one frame is stretched until then.
+    if (gpg::gal::DeviceContext* const pending = moho::ED_PendingDeviceContext(); pending != nullptr && pending->GetHeadCount() > 0) {
+      gpg::gal::Head& pendingHead = pending->GetHead(0);
+      pendingHead.mWidth = width;
+      pendingHead.mHeight = height;
+    }
   }
 
   /**

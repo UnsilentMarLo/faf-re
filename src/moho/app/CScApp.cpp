@@ -1,3 +1,4 @@
+#include "moho/render/d3d/EdDeviceDeferred.h"
 #include "CScApp.h"
 
 #include <Windows.h>
@@ -1078,6 +1079,7 @@ bool CScApp::Init()
  */
 void CScApp::Main()
 {
+  moho::ED_ApplyPendingDeviceContext();   // EDITOR: a device change queued by a click (anti-aliasing, vertical sync) happens here, outside any window message
   moho::CTimeBarSection appFrameSection("AppFrame");
   PublishAllocatorHeapStats();
   UpdateAddressSpaceMonitor();
