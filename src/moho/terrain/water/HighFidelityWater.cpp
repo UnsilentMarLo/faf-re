@@ -16,6 +16,7 @@
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/terrain/water/CWaterShaderProperties.h"
+#include "moho/terrain/water/WaterQuality.h"
 #include "moho/terrain/water/WaterShaderVars.h"
 
 namespace
@@ -314,6 +315,7 @@ namespace moho
     GetWater2RefractionMapShaderVar().SetRenderTargetTexture(refractionTexture);
     GetWater2ReflectionMapShaderVar().SetRenderTargetTexture(reflectionTexture);
     GetWater2TimeShaderVar().SetFloat(static_cast<float>(tick) + tickLerp);
+    water::BindShaderParams(); // FAF: the filter tap counts of the patched effect (docs/WATER_QUALITY.md)
 
     const WaterShaderNumericState& shaderState = shaderProperties->mNumericState;
     if (mCachedFresnelBias != shaderState.mFresnelBias || mCachedFresnelPower != shaderState.mFresnelPower ||

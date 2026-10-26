@@ -72,6 +72,7 @@
 #include "moho/sim/CDebugCanvas.h"
 #include "moho/sim/CWldMap.h"
 #include "moho/terrain/splat/CWldSplat.h"
+#include "moho/terrain/water/WaterQuality.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/SimDriver.h"
 #include "moho/sim/STIMap.h"
@@ -3465,6 +3466,7 @@ void moho::WRenViewport::D3DWindowOnDeviceExit(const bool fullShutdown)
   mSecondaryTargetLocks[1].reset();
   mDepthStencilLocks[0].reset();
   mDepthStencilLocks[1].reset();
+  moho::water::ReleaseReflectionTargets(); // FAF: the Water Quality reflection targets are device resources too
 }
 
 /**
@@ -4657,11 +4659,15 @@ void moho::WRenViewport::RenderWater(TerrainCommon* const terrain)
   // refraction from mPrimaryTargetLocks[head], reflection from
   // mSecondaryTargetLocks[head].
   const std::int32_t head = mHead;
+  // FAF: with a Water Quality level that resizes the reflection target the water samples that target instead (docs/WATER_QUALITY.md).
+  const moho::water::ReflectionTarget scaledReflection = moho::water::AcquireReflectionTarget(
+    head, device->GetHeadWidth(static_cast<unsigned int>(head)), device->GetHeadHeight(static_cast<unsigned int>(head))
+  );
   terrain->DrawWaterTerrain(
     moho::REN_GetGameTick(),
     moho::REN_GetSimDeltaSeconds(),
     mPrimaryTargetLocks[head],
-    mSecondaryTargetLocks[head]
+    scaledReflection.color ? scaledReflection.color : mSecondaryTargetLocks[head]
   );
 }
 
@@ -4681,9 +4687,15 @@ void moho::WRenViewport::RenderReflections()
   moho::CD3DDevice* const colorDevice = moho::D3D_GetDevice();
   moho::CD3DDevice* const targetDevice = moho::D3D_GetDevice();
   const std::size_t reflectionIndex = static_cast<std::size_t>(mHead);
+  // FAF: the Water Quality level may give the reflection pass a target of its own, smaller or larger than the screen (docs/WATER_QUALITY.md).
+  const moho::water::ReflectionTarget scaledReflection = moho::water::AcquireReflectionTarget(
+    mHead, targetDevice->GetHeadWidth(static_cast<unsigned int>(mHead)), targetDevice->GetHeadHeight(static_cast<unsigned int>(mHead))
+  );
   targetDevice->SetRenderTarget1(
-    mSecondaryTargetLocks[reflectionIndex].get(),
-    mDepthStencilLocks[reflectionIndex].get(),
+    scaledReflection.color ? static_cast<moho::ID3DRenderTarget*>(scaledReflection.color.get())
+                           : static_cast<moho::ID3DRenderTarget*>(mSecondaryTargetLocks[reflectionIndex].get()),
+    scaledReflection.depth ? static_cast<moho::ID3DDepthStencil*>(scaledReflection.depth.get())
+                           : static_cast<moho::ID3DDepthStencil*>(mDepthStencilLocks[reflectionIndex].get()),
     true,
     0,
     1.0f,
@@ -4715,7 +4727,16 @@ void moho::WRenViewport::RenderReflections()
   if (!moho::ren_Reflection || sReflectionDisabled) {
     return;
   }
-  SetViewportToLocalScreen();
+  if (scaledReflection.color) {
+    // the local screen rectangle in the pixels of the resized target
+    Wm3::Vector2i scaledPos{static_cast<int>(static_cast<float>(mScreenPos.x) * scaledReflection.scale),
+                            static_cast<int>(static_cast<float>(mScreenPos.y) * scaledReflection.scale)};
+    Wm3::Vector2i scaledSize{std::max(1, std::min(static_cast<int>(static_cast<float>(mScreenSize.x) * scaledReflection.scale), scaledReflection.width - scaledPos.x)),
+                             std::max(1, std::min(static_cast<int>(static_cast<float>(mScreenSize.y) * scaledReflection.scale), scaledReflection.height - scaledPos.y))};
+    targetDevice->SetViewport(&scaledPos, &scaledSize, 0.0f, 1.0f);
+  } else {
+    SetViewportToLocalScreen();
+  }
   colorDevice->SetColorWriteState(true, true);
 
   moho::MeshRenderer* const renderer = moho::MeshRenderer::GetInstance();

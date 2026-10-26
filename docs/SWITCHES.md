@@ -42,6 +42,7 @@ Every performance change has a switch that brings back the original path, and bo
 | `res_CacheFileLookups` | 1 | `/con` | live | Remembers where the mounted file system found each file (cleared on disk-watch events, mount changes and the engine's own deletes and moves; "not found" kept only for archive-only lookups) |
 | `user_Workers` | −1 (auto: min(CPUs − 2, 6)) | `/con` | live | User-side worker threads; 0 runs everything on the main thread |
 | `ren_ParallelCull` | 1 | `/con` | live | Mesh and decal view queries and fog-of-war circles collected on user workers |
+| `ren_WaterQuality` | -1 (the Water Quality option, Medium) | `/con` | live | Water reflection / refraction quality: 0 shipped, 1 half-size reflection target, 2 filtered lookups and soft shoreline, 3 1.5x target and 8 taps ([WATER_QUALITY.md](WATER_QUALITY.md)) |
 | `ui_ParallelIcons` | 1 | `/con` | live | Strategic icons classified on user workers and drawn in bulk |
 | `wld_ParallelSync` | 1 | `/con` | live | Beat sync apply: pose and data copies on user workers |
 | `wld_FrameClock` | 1 | `/con` | live | Replays and single player: game clock from the mean frame time (0: the original median, 2: each frame's own time) |

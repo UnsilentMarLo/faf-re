@@ -25,6 +25,8 @@
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/render/d3d/CD3DDevice.h"
+#include "moho/terrain/water/WaterEffectPatch.h"
+#include "moho/terrain/water/WaterQuality.h"
 #include "moho/render/ID3DTextureSheet.h"
 
 namespace moho
@@ -498,13 +500,35 @@ namespace moho
         }
       }
 
+      // FAF addition: water2.fx gets the filtered reflection / refraction lookups (docs/WATER_QUALITY.md) on the Direct3D 10 dialect
+      // backends. The filter is off until the Water Quality level asks for it, so the patched effect looks like the shipped one at level 0.
+      // A source the patch does not recognise, or a patched source the backend compiler rejects, falls back to the unpatched effect.
+      bool waterFilter = false;
+      const gpg::MemBuffer<char> unpatchedBuffer = mergedBuffer;
+      if (deviceContext != nullptr && effectByteCount > 0U && std::string_view(effectBaseName.c_str()) == "water2" &&
+          water::EffectPatchWanted(deviceContext->mDeviceType)) {
+        std::string text(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);
+        const water::EffectPatchResult patch = water::PatchWaterEffect(text);
+        if (patch.patched) {
+          mergedBuffer = gpg::AllocMemBuffer(compatByteCount + text.size());
+          if (compatByteCount > 0U) {
+            std::copy_n(compatStateBuffer.GetPtr(0U, 0U), compatByteCount, mergedBuffer.GetPtr(0U, 0U));
+          }
+          std::copy_n(text.data(), text.size(), mergedBuffer.GetPtr(compatByteCount, 0U));
+          waterFilter = true;
+          gpg::Logf("Water: %s patched with the filtered reflection and refraction lookups", effectBaseName.c_str());
+        } else {
+          gpg::Warnf("Water: %s not patched: %s", effectBaseName.c_str(), patch.error.c_str());
+        }
+      }
+
       // Builds the effect, from its compiled copy in the cache when that is at
       // least as new as the source. FAF: `boneTexture` compiles the variant
       // with FAF_BONE_TEXTURE defined (see WantsBoneTextureVariant); it turns
       // into different shaders, so it is cached under a name of its own.
       const auto createEffect = [&](const bool boneTexture) {
         const msvc8::string cachePath =
-          cacheDirectory + "/" + mName + (dynLights ? ".dynlights" : "") + (boneTexture ? ".bonetex." : ".") + engineVersion;
+          cacheDirectory + "/" + mName + (dynLights ? ".dynlights" : "") + (waterFilter ? ".waterq1" : "") + (boneTexture ? ".bonetex." : ".") + engineVersion;
         SDiskFileInfo cacheInfo{};
         bool useCachePayload = false;
         if (waitHandleSet->GetFileInfo(cachePath.c_str(), &cacheInfo, false)) {
@@ -532,7 +556,19 @@ namespace moho
         }
       }
       if (!mEffect) {
-        createEffect(false);
+        if (waterFilter) {
+          try {
+            createEffect(false);
+          } catch (const std::exception& exception) {
+            gpg::Warnf("%s: %s; building it without the water filter", effectFilePath, exception.what());
+            mEffect.reset();
+            waterFilter = false;
+            mergedBuffer = unpatchedBuffer;
+            createEffect(false);
+          }
+        } else {
+          createEffect(false);
+        }
       }
 
       mTechniques.clear();

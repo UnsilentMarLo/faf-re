@@ -22,3 +22,14 @@ target_include_directories(faf_light_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(faf_light_tests PRIVATE cxx_std_20)
 
 add_test(NAME dynamic_lights COMMAND faf_light_tests)
+
+# Water effect source patch (src/moho/terrain/water/WaterEffectPatch): pure C++, compiled on its own. FAF_STOCK_FX_DIR (the folder with FAF's
+# stock water2.fx) switches on the checks against the real shader.
+#
+#   cmake --build --preset clang-x64-release --target faf_water_tests
+add_executable(faf_water_tests EXCLUDE_FROM_ALL water/WaterEffectPatchTests.cpp
+               ${CMAKE_SOURCE_DIR}/src/moho/terrain/water/WaterEffectPatch.cpp)
+target_include_directories(faf_water_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(faf_water_tests PRIVATE cxx_std_20)
+
+add_test(NAME water_effect_patch COMMAND faf_water_tests)

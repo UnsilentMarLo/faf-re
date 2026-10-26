@@ -283,6 +283,8 @@ set(FAF_ENGINE_SOURCES
   moho/terrain/water/LowFidelityWater.cpp
   moho/terrain/water/WaterFactory.cpp
   moho/terrain/water/WaterShaderVars.cpp
+  moho/terrain/water/WaterQuality.cpp
+  moho/terrain/water/WaterEffectPatch.cpp
   moho/terrain/water/WaveSystem.cpp
   moho/terrain/water/Shoreline.cpp
   moho/ui/CUIWorldView.cpp
