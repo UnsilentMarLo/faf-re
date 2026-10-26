@@ -10,6 +10,7 @@
 
 #include "BufferD3D11.h"
 #include "D3D11Common.h"
+#include "RenderTargetD3D11.h"
 #include "TextureD3D11.h"
 
 #include "gpg/core/utils/Logging.h"
@@ -185,9 +186,15 @@ namespace gpg::gal
           : nullptr;
       }
       for (std::uint32_t index = 0U; index < kGpuMaxTextures; ++index) {
-        views[kFirstTextureRegister + index] = bindings.textures[index] != nullptr
-          ? static_cast<TextureD3D11*>(bindings.textures[index])->GetShaderResourceView()
-          : nullptr;
+        ID3D11ShaderResourceView* view = nullptr;
+        if (bindings.depthTextures[index] != nullptr) {
+          view = static_cast<DepthStencilTargetD3D11*>(bindings.depthTextures[index])->GetShaderResourceView();
+        } else if (bindings.renderTextures[index] != nullptr) {
+          view = static_cast<RenderTargetD3D11*>(bindings.renderTextures[index])->GetShaderResourceView();
+        } else if (bindings.textures[index] != nullptr) {
+          view = static_cast<TextureD3D11*>(bindings.textures[index])->GetShaderResourceView();
+        }
+        views[kFirstTextureRegister + index] = view;
       }
     }
   } // namespace

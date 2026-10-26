@@ -683,7 +683,8 @@ namespace gpg::gal
       OutputContext& output = mHeadOutputContexts[headIndex];
       output.surface.reset(new RenderTargetD3D11(backBuffer.Get(), renderTargetView.Get(), shaderResourceView.Get()));
       gpg::Logf("D3D11: head %u back buffer target %p (%ux%u)", static_cast<unsigned>(headIndex), output.surface.get(), desc.Width, desc.Height);
-      const DepthStencilTargetContext depthContext(desc.Width, desc.Height, 3U, false);
+      // Sampled, so the ambient occlusion pass (and later passes) can read the scene depth.
+      const DepthStencilTargetContext depthContext(desc.Width, desc.Height, 3U, true);
       output.depthStencil = CreateDepthStencilTarget(&depthContext);
     }
 

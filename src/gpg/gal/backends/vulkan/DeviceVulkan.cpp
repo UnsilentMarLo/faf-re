@@ -844,7 +844,8 @@ namespace gpg::gal
       OutputContext& output = mHeadOutputContexts[headIndex];
       auto* const target = new RenderTargetVulkan(std::move(buffers), DXGI_FORMAT_B8G8R8A8_UNORM, static_cast<int>(headIndex));
       output.surface.reset(target);
-      const DepthStencilTargetContext depthContext(swapChain.extent.width, swapChain.extent.height, 3U, false);
+      // Sampled, so the ambient occlusion pass (and later passes) can read the scene depth.
+      const DepthStencilTargetContext depthContext(swapChain.extent.width, swapChain.extent.height, 3U, true);
       output.depthStencil = CreateDepthStencilTarget(&depthContext);
       gpg::Logf("Vulkan: head %u back buffer target %p (%ux%u)", static_cast<unsigned>(headIndex), target, swapChain.extent.width,
                 swapChain.extent.height);
@@ -1782,7 +1783,13 @@ namespace gpg::gal
     view.subresourceRange = {AspectOf(format), 0U, 1U, 0U, 1U};
     VkImageView imageView = VK_NULL_HANDLE;
     CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateImageView(mDevice, &view, nullptr, &imageView));
-    return boost::shared_ptr<DepthStencilTarget>(new DepthStencilTargetVulkan(*context, image, imageView));
+    VkImageView sampledView = VK_NULL_HANDLE;
+    if (context->field0x10_) {
+      // Sampling reads the depth aspect alone (a combined depth-stencil view cannot be sampled).
+      view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+      CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateImageView(mDevice, &view, nullptr, &sampledView));
+    }
+    return boost::shared_ptr<DepthStencilTarget>(new DepthStencilTargetVulkan(*context, image, imageView, sampledView));
   }
 
   boost::shared_ptr<VertexFormat> DeviceVulkan::CreateVertexFormat(const std::uint32_t formatCode)

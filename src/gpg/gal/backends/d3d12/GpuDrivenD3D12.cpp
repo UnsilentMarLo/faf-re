@@ -559,6 +559,15 @@ namespace gpg::gal
           view = buffer->ShaderView();
           Transition(buffer->Resource(), bufferRead);
         }
+      } else if (auto* const depth = static_cast<DepthStencilTargetD3D12*>(bindings.depthTextures[slot - kGpuMaxReadBuffers])) {
+        if (depth->ShaderView().ptr != 0U) {
+          view = depth->ShaderView();
+          Transition(depth->Resource(), kTextureRead);
+        }
+      } else if (auto* const target = static_cast<RenderTargetD3D12*>(bindings.renderTextures[slot - kGpuMaxReadBuffers])) {
+        RenderTargetD3D12::Buffer& buffer = target->Current();
+        view = buffer.shaderResourceView;
+        Transition(buffer.resource, kTextureRead);
       } else if (auto* const texture = static_cast<TextureD3D12*>(bindings.textures[slot - kGpuMaxReadBuffers])) {
         view = texture->View();
         Transition(texture->Resource(), kTextureRead);
