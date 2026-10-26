@@ -10,12 +10,16 @@
 #include <TlHelp32.h>
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <chrono>
 #include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
 
+#include "gpg/core/diagnostics/CrashReport.h"
+#include "gpg/core/utils/Logging.h"
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/DeviceContext.hpp"
 #include "lua/LuaPrimitives.h"
@@ -365,9 +369,48 @@ namespace moho::editor::perf
     return false;
   }
 
+  namespace
+  {
+    // ---- frozen window watchdog ------------------------------------------------------------------------------------------------------------------
+    // A thread that finds the main loop silent for 12 s writes the crash report once (all thread stacks, the Lua state, the recent log): a freeze that has to be killed
+    // leaves the evidence where it stood (binaf_crash_<time>.txt; Help > Save diagnostics bundles it). Nothing is stopped; a hang that ends reports nothing more.
+    std::atomic<std::int64_t> gBeatNs{0};
+
+    void FreezeWatchdogMain()
+    {
+      bool reported = false;
+      for (;;) {
+        ::Sleep(1000);
+        const std::int64_t beat = gBeatNs.load();
+        if (beat == 0) {
+          continue;
+        }
+        const double silentSeconds = static_cast<double>(NowNs() - beat) / 1e9;
+        if (silentSeconds < 12.0) {
+          reported = false;
+        } else if (!reported) {
+          reported = true;
+          gpg::Warnf("EDITOR: the main loop has been silent for %.0f s; writing the crash report with every thread's stack", silentSeconds);
+          gpg::diag::CrashReportContext context;
+          context.reason = "the main loop has not run for 12 seconds (frozen window)";
+          (void)gpg::diag::WriteCrashReport(context);
+        }
+      }
+    }
+  } // namespace
+
   void FrameBegin() noexcept
   {
     const std::int64_t now = NowNs();
+    gBeatNs.store(now);
+    static const bool watchdogStarted = [] {
+      try {
+        std::thread(FreezeWatchdogMain).detach();
+      } catch (...) {
+      }
+      return true;
+    }();
+    (void)watchdogStarted;
     if (gAcc.startNs == 0) {
       gAcc.startNs = now;
     }
