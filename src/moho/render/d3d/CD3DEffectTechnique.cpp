@@ -21,6 +21,7 @@
 #include "gpg/gal/TextureContext.h"
 #include "moho/console/CConCommand.h"
 #include "moho/render/lights/LightEffectPatch.h"
+#include "moho/render/lights/LightFeeds.h"
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/render/d3d/CD3DDevice.h"
@@ -476,7 +477,7 @@ namespace moho
       // unchanged, without lights.
       bool dynLights = false;
       if (deviceContext != nullptr && gpg::gal::UsesD3D10EffectDialect(deviceContext->mDeviceType) && effectByteCount > 0U &&
-          CFG_GetArgOption("/dynlights", 0U, nullptr)) {
+          (CFG_GetArgOption("/dynlights", 0U, nullptr) || lights::LightsWanted(deviceContext->mDeviceType))) {
         const lights::PatchedEffect which = lights::EffectForName(std::string(effectBaseName.c_str()));
         if (which != lights::PatchedEffect::None) {
           std::string text(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);

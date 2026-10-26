@@ -160,3 +160,20 @@ Both are optional; without them the game falls back to Direct3D 9.
 | `FAF_EFFECT_DUMP_DIR` | Writes each effect's original source, translated source and generated HLSL (local files only) |
 | `FAF_SHADER_PRECOMPILE=1` | Compiles every entry point when an effect loads |
 | `FAF_DRAW_STATS_LOG=N` | Logs the average frame time over N frames |
+
+## Render features (settings per graphics API)
+
+Rule: every visual feature the engine adds on top of the shipped renderer works on every render API according to what that API can do, and has a setting in Options, Video that exists only where the running API supports it. A feature is registered once in `src/moho/render/RenderFeatures.{h,cpp}` (`render::RegisterFeature`) with its title, tip, console variable, levels (states), default, whether it needs a restart, and for each API (D3D9, D3D10, D3D11, D3D12, Vulkan) whether it is supported, why not, the highest level and the default on that API. Nothing else is needed for the setting:
+
+- `data/fafengine/lua/options/optionslogic.lua` (a hook appended to the game's `/lua/options/optionslogic.lua`) builds one Video entry per supported feature when the options data is asked for after the device exists (the options module can load earlier, while the Graphics API option is read, so the entries are synced once per API), after the Graphics API entry. The entry's setter runs the feature's console variable with the level; the profile stores the key of the state.
+- The Lua global `GetRenderFeatures()` returns `{ api, features = { { key, title, tip, console, default, restart, states } }, unsupported = { { key, title, reason } } }` for the running API (`api == ''` before the device exists).
+- The engine asks `render::FeatureLevel(key, api)` for the level the player chose (it reads the profile option, else the API's default) and gets `render::ApplyStartupSettings()` called once after the device is created: a feature's `apply` callback receives the level.
+- Changing the Graphics API takes a restart; the list is built for the new API after it.
+
+Registered features:
+
+| Feature (option key) | D3D9 | D3D10 | D3D11 | D3D12 | Vulkan |
+|---|---|---|---|---|---|
+| Dynamic Lights (`dynlights_quality`, Off / Low / Medium / High / Ultra; off to on needs a restart) | no: the shipped vs_1_1 / ps_2_0 techniques cannot host the ps_3_0 light pass (the executable patch has lights for it) | no: does not start | yes (verified 2026-10-26) | yes | yes (verified 2026-10-26) |
+
+Verified by running the staged battle (`tests/lights/ingame/dynlights_census.lua`) on each API with only the profile option set (no command-line switch): effects patched, lights drawn on D3D11, D3D12 and Vulkan, no entry and a log line on D3D9.

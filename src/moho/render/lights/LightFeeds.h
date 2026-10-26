@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gpg/gal/DeviceContext.hpp"
+
 #include <cstddef>
 #include <vector>
 
@@ -25,6 +27,10 @@ namespace moho::lights
 
   // The one pool of the render thread.
   LightCollector& Collector();
+
+  // Whether the effects are patched with the light pass on this API: the Dynamic Lights option is not Off (render features registry), or
+  // /dynlights is on the command line.
+  bool LightsWanted(gpg::gal::DeviceApi api);
 
   // Applies the console variable to the pool (a lower level drops the lights it no longer admits).
   void SyncQuality();
