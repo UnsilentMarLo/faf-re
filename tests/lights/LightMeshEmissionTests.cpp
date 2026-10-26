@@ -139,6 +139,34 @@ namespace
     MCHECK(Near(AnalyseMeshGlow(albedo, &spec, "AeonNavy").area, 1.0f));
   }
 
+  void TestEffectMeshes()
+  {
+    // the fireball of a strategic missile: the whole mesh burns, in the colour of its albedo, and its light may reach far
+    const Rgba8Image fire = Solid(2, 2, 255, 40, 0, 255);
+    const MeshGlow nuke = AnalyseMeshGlow(fire, nullptr, "NukeUEF");
+    MCHECK(nuke.valid && nuke.effect && nuke.nuke);
+    MCHECK(Near(nuke.area, 1.0f));
+    MCHECK(Near(nuke.hue[0], 1.0f) && nuke.hue[1] < 0.2f && nuke.hue[2] < 0.05f);
+    MCHECK(AnalyseMeshGlow(fire, nullptr, "NukeEMP").nuke);
+    MCHECK(AnalyseMeshGlow(fire, nullptr, "NukeQuantum").nuke);
+    MCHECK(Near(MeshLightIntensity(nuke), kMaxNukeMeshIntensity));
+    MCHECK(MeshLightIntensity(nuke) > kMaxMeshIntensity);
+    MCHECK(Near(MeshLightRadius(60.0f, kMaxEffectLightRadius), 91.0f));
+    MCHECK(Near(MeshLightRadius(200.0f, kMaxEffectLightRadius), kMaxEffectLightRadius));
+    // the flash of a hit on a shield is a light; the shield bubble itself is not
+    const MeshGlow impact = AnalyseMeshGlow(Solid(2, 2, 80, 160, 255, 255), nullptr, "ShieldImpact");
+    MCHECK(impact.valid && impact.effect && !impact.nuke && Near(impact.area, 0.5f));
+    MCHECK(AnalyseMeshGlow(Solid(2, 2, 80, 160, 255, 255), nullptr, "CybranShieldImpact").effect);
+    MCHECK(AnalyseMeshGlow(Solid(2, 2, 80, 160, 255, 255), nullptr, "ShieldUEF").area == 0.0f);
+    MCHECK(AnalyseMeshGlow(Solid(2, 2, 80, 160, 255, 255), nullptr, "ShieldFill").area == 0.0f);
+    // a unit being built: a faint glow in the faction's colour
+    const MeshGlow aeonBuild = AnalyseMeshGlow(Solid(2, 2, 90, 90, 90, 255), nullptr, "AeonBuildPuddle");
+    MCHECK(aeonBuild.effect && Near(aeonBuild.area, 0.25f) && aeonBuild.hue[1] > aeonBuild.hue[0] && aeonBuild.hue[1] > aeonBuild.hue[2]);
+    MCHECK(AnalyseMeshGlow(Solid(2, 2, 90, 90, 90, 255), nullptr, "CybranBuildOverlay").hue[0] > 0.9f);
+    MCHECK(AnalyseMeshGlow(Solid(2, 2, 90, 90, 90, 255), nullptr, "UEFBuildCube").hue[2] > 0.9f);
+    MCHECK(AnalyseMeshGlow(Solid(2, 2, 90, 90, 90, 255), nullptr, "SeraphimBuild").hue[2] > 0.9f);
+  }
+
   void TestSizesAndRefusals()
   {
     // the two maps may have different sizes
@@ -186,6 +214,7 @@ int RunMeshTests(int& checks)
   TestCybran();
   TestSeraphim();
   TestLegacyAndNames();
+  TestEffectMeshes();
   TestSizesAndRefusals();
   TestIntensityAndRadius();
   checks += gMeshChecks;

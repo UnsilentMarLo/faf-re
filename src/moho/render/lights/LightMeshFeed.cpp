@@ -189,8 +189,8 @@ namespace moho::lights
         e.rgb[0] = rgb[0];
         e.rgb[1] = rgb[1];
         e.rgb[2] = rgb[2];
-        e.radius = MeshLightRadius(radius);
-        e.intensity = glowCopy.intensity * std::max(0.0f, 1.0f - instance->dissolve);
+        e.radius = MeshLightRadius(radius, glowCopy.glow.effect ? kMaxEffectLightRadius : kMaxUnitLightRadius);
+        e.intensity = glowCopy.intensity * std::min(1.0f, std::max(0.0f, instance->dissolve)); // MeshInstance::dissolve is 1 for a solid mesh, 0 for one that has dissolved away
         const std::uint64_t key = kKeyMesh | (reinterpret_cast<std::uintptr_t>(instance) & 0xFFFFFFFFFFull);
         if (collector.Track(key, e, nowTick, kHoldTicks)) {
           ++emitted;

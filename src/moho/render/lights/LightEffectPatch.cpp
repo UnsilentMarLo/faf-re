@@ -42,7 +42,7 @@ sampler2D dynLightGridSampler = sampler_state
     AddressV  = CLAMP;
 };
 float4 dynLightParams;     // gridOriginX, gridOriginZ, 1 / cellSize, lightCount
-float4 dynLightGridSize;   // cellsX, cellsZ, 1 / (4 cellsX), 1 / cellsZ
+float4 dynLightGridSize;   // cellsX, cellsZ, 1 / (2 cellsX), 1 / cellsZ
 float4 dynLightDataSize;   // 1 / dataWidth, 1 / dataRows, dataWidth, dataRows
 
 float4 DynLightTexel(float k)
@@ -52,7 +52,7 @@ float4 DynLightTexel(float k)
     return tex2Dlod(dynLightDataSampler, float4((col + 0.5) * dynLightDataSize.x, (row + 0.5) * dynLightDataSize.y, 0, 0));
 }
 
-// The up to 16 entries (light index + 1, 0 = none) of the grid cell that holds the world position; all 0 outside the map.
+// The up to 8 entries (light index + 1, 0 = none) of the grid cell that holds the world position; all 0 outside the map.
 void DynLightCell(float3 worldPos, out float4 e0, out float4 e1, out float4 e2, out float4 e3)
 {
     e0 = float4(0, 0, 0, 0);
@@ -63,11 +63,9 @@ void DynLightCell(float3 worldPos, out float4 e0, out float4 e1, out float4 e2, 
     if (cell.x >= 0 && cell.y >= 0 && cell.x < dynLightGridSize.x && cell.y < dynLightGridSize.y && dynLightParams.w > 0.5)
     {
         float v = (cell.y + 0.5) * dynLightGridSize.w;
-        float u = cell.x * 4.0 + 0.5;
+        float u = cell.x * 2.0 + 0.5;
         e0 = tex2Dlod(dynLightGridSampler, float4(u * dynLightGridSize.z, v, 0, 0));
         e1 = tex2Dlod(dynLightGridSampler, float4((u + 1.0) * dynLightGridSize.z, v, 0, 0));
-        e2 = tex2Dlod(dynLightGridSampler, float4((u + 2.0) * dynLightGridSize.z, v, 0, 0));
-        e3 = tex2Dlod(dynLightGridSampler, float4((u + 3.0) * dynLightGridSize.z, v, 0, 0));
     }
 }
 

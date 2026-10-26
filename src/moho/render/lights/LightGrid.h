@@ -14,7 +14,7 @@
 //                  B = (r, g, b, kind)            colour x intensity, linear; kind = Kind as a float
 //                  C = (x, y, z, cone)            Beam / Trail: the other end of the capsule; Spot: the direction (unit) and the cosine of the
 //                                                 outer half angle; every other light: = pos
-//   Light grid   RGBA32F, 4 * cellsX texels wide, cellsZ rows. Cell (cx, cz) owns texels (4cx .. 4cx+3, cz): up to 16 entries,
+//   Light grid   RGBA32F, 2 * cellsX texels wide, cellsZ rows. Cell (cx, cz) owns texels (2cx .. 2cx+1, cz): up to 8 entries,
 //                each "light index + 1" (0 = empty), strongest light first, filled left to right. Exact in a float up to 2^24.
 //
 // The grid covers the whole map in the XZ plane, so it does not depend on any camera: every view (main, reflections, split screen) reads
@@ -26,7 +26,7 @@ namespace moho::lights
   constexpr std::uint32_t kDataWidth = 1024;       // texels
   constexpr std::uint32_t kTexelsPerLight = 3;
   constexpr std::uint32_t kMaxGridCells = 128;     // per side
-  constexpr std::uint32_t kLightsPerCell = 16;     // the lights one pixel can add up; the strongest ones of a cell
+  constexpr std::uint32_t kLightsPerCell = 8;      // the lights one pixel can add up; the strongest ones of a cell (16 cost 1.2 ms more in a dense base: every pixel loops over them)
   constexpr std::uint32_t kCellTexels = kLightsPerCell / 4;
   constexpr float kMinCellSize = 8.0f;             // world units: a cell is a few times the size of a typical light, so a pixel loops over few lights that do not reach it
   constexpr std::size_t kMaxGridLights = 4096;     // the data texture holds this many (12288 texels = 12 rows); the first patch had 16 / 28

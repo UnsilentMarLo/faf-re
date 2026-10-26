@@ -15,6 +15,9 @@ namespace moho::lights
       Cybran,
       Seraphim,
       Glow,   // meshes made to glow as a whole: projectile and effect meshes (TMeshGlow, NormalMappedGlow ...)
+      Nuke,   // the fireball meshes of strategic missile detonations (NukeUEF, NukeEMP, NukeQuantum): procedural fire, the whole mesh is the light
+      ShieldImpact, // the flash of a hit on a shield (ShieldImpact, CybranShieldImpact)
+      Build,  // a unit being built draws with the faction's build shader (AeonBuild, UEFBuildCube, CybranBuildOverlay ...): a glowing scan, in the colour of the faction
       Legacy
     };
 
@@ -23,6 +26,16 @@ namespace moho::lights
       std::string s(shader);
       for (char& c : s) {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      }
+      // effect meshes that are light by themselves, before the shield rule below takes every name with "shield" in it
+      if (s.rfind("nuke", 0) == 0) {
+        return Rule::Nuke;
+      }
+      if (s.find("shieldimpact") != std::string::npos) {
+        return Rule::ShieldImpact;
+      }
+      if (s.find("build") != std::string::npos) {
+        return Rule::Build;
       }
       // the shield bubble of a unit draws with the unit's own textures (AeonPhaseShield ...): the bubble is not the unit
       if (s.find("shield") != std::string::npos) {
@@ -117,6 +130,15 @@ namespace moho::lights
         case Rule::Glow:
           emission = std::max(a[0], std::max(a[1], a[2])); // the whole surface glows, as bright as its albedo
           break;
+        case Rule::Nuke:
+          emission = 1.0f; // procedural fire: every texel of the mesh burns, in the colour of its albedo
+          break;
+        case Rule::ShieldImpact:
+          emission = 0.5f;
+          break;
+        case Rule::Build:
+          emission = 0.25f; // the scan effect over the unit, a quarter of a full glow
+          break;
         case Rule::Legacy:
           break; // props, wreckage, shields, the map border: their specular.b is not a glow (wreckage noise, a shield pattern), no light
         }
@@ -148,6 +170,23 @@ namespace moho::lights
         }
       }
     }
+    if (rule == Rule::Build) {
+      // the build shaders draw the unit's own albedo under the scan: the colour of the glow is the faction's build colour
+      std::string name(shader);
+      for (char& c : name) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      }
+      const float aeon[3] = {0.45f, 1.0f, 0.35f};
+      const float uef[3] = {0.45f, 0.75f, 1.0f};
+      const float cybran[3] = {1.0f, 0.5f, 0.2f};
+      const float seraphim[3] = {0.75f, 0.55f, 1.0f};
+      const float* colour = name.rfind("aeon", 0) == 0 ? aeon : (name.rfind("cybran", 0) == 0 ? cybran : (name.rfind("seraphim", 0) == 0 ? seraphim : uef));
+      for (int c = 0; c < 3; ++c) {
+        out.hue[c] = colour[c];
+      }
+    }
+    out.effect = rule == Rule::Nuke || rule == Rule::ShieldImpact || rule == Rule::Build;
+    out.nuke = rule == Rule::Nuke;
     out.valid = true;
     return out;
   }
@@ -160,14 +199,15 @@ namespace moho::lights
     }
     // A unit whose whole surface glows at full strength (area 1) gets the largest light; a few glowing windows (area 0.02) a faint one.
     // The square root keeps small glows visible without letting a big glowing body white out its surroundings.
-    return std::min(kMaxMeshIntensity, kMaxMeshIntensity * std::sqrt(std::min(1.0f, glow.area)));
+    const float cap = glow.nuke ? kMaxNukeMeshIntensity : kMaxMeshIntensity;
+    return std::min(cap, cap * std::sqrt(std::min(1.0f, glow.area)));
   }
 
-  float MeshLightRadius(const float sphereRadius)
+  float MeshLightRadius(const float sphereRadius, const float maxRadius)
   {
     if (!std::isfinite(sphereRadius) || sphereRadius <= 0.0f) {
       return 2.0f;
     }
-    return std::min(60.0f, std::max(2.0f, 1.5f * sphereRadius + 1.0f));
+    return std::min(maxRadius, std::max(2.0f, 1.5f * sphereRadius + 1.0f));
   }
 } // namespace moho::lights
