@@ -11,7 +11,7 @@
 //   Texture dynLightData      RGBA32F, see LightGrid.h
 //   Texture dynLightGrid      RGBA32F
 //   float4  dynLightParams    (gridOriginX, gridOriginZ, 1 / cellSize, lightCount)
-//   float4  dynLightGridSize  (cellsX, cellsZ, 1 / (2 cellsX), 1 / cellsZ)         texel size of the grid texture, x per cell pair
+//   float4  dynLightGridSize  (cellsX, cellsZ, 1 / (4 cellsX), 1 / cellsZ)         texel size of the grid texture, x per cell of 4 texels
 //   float4  dynLightDataSize  (1 / kDataWidth, 1 / rows, kDataWidth, rows)
 //
 // Render thread only.

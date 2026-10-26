@@ -4,6 +4,7 @@
 #include "gpg/core/utils/Global.h"
 #include "moho/sim/CSimConCommand.h"
 #include "moho/sim/CSimConVarBase.h"
+#include "moho/render/lights/SimLights.h"
 #include "SimDriver.h"
 
 #include <algorithm>
@@ -7380,6 +7381,7 @@ Sim* Sim::Create(const boost::SharedPtrRaw<LaunchInfoBase>& launchInfo)
  */
 Sim::~Sim()
 {
+  lights::SimLightsOnSimDestroyed(this);
   // Stop the three task stages (disk-watcher + two sim task stages).
   mDiskWatcherTaskStage.Teardown();
   mTaskStageA.Teardown();
@@ -10690,6 +10692,7 @@ void Sim::AdvanceBeat(const int amt)
     }
 
     TickEffectManager(mEffectManager);
+    lights::SimLightsTick(this); // dynamic lights (visual only), docs/DYNAMIC_LIGHTS.md
     UpdateFormationDb(mFormationDB);
 
     ForEachAllArmyUnit(this, [](Unit* unit) {

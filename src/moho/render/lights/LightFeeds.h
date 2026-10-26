@@ -26,8 +26,14 @@ namespace moho::lights
   // The one pool of the render thread.
   LightCollector& Collector();
 
+  // Applies the console variable to the pool (a lower level drops the lights it no longer admits).
+  void SyncQuality();
+
   // Called when the user sync of a beat adds its particle buffer to the world particles (CWldSession); `beatTick` is the tick of that beat.
   void FeedParticleBuffer(const SParticleBuffer& batch, int beatTick);
+
+  // Called once per rendered frame after MeshRenderer::Batch: the glowing unit and projectile meshes on screen become lights (nowTick = tick + frame alpha).
+  void FeedMeshes(float nowTick);
 
   // Called once per rendered world view before the terrain is composited, with the clock the particle shaders use (tick + frame alpha).
   void BeginFrame(int tick, float frameAlpha);
@@ -44,5 +50,5 @@ namespace moho::lights
   // The texture images built from them (empty while no map is loaded); what LightBinding uploads and the debug view draws.
   const LightGridImage& FrameImage();
 
-  constexpr std::size_t kMaxFrameLights = 256;
+  constexpr std::size_t kMaxFrameLights = 4096; // = kMaxGridLights: the lights of a frame are limited by the data texture, not by shader registers
 } // namespace moho::lights

@@ -1,6 +1,6 @@
 # Dynamic lights
 
-Branch `dynamic-lights`. Status: **stages 1-3 done: light pool, TLight feed, light textures, shader patch and pass control; lights are visible on D3D12 (a first, weak calibration)** (snapshot 26/10/2026).
+Branch `dynamic-lights`. Status: **stages 1-5 built: light pool, textures, shader patch, colour from effect textures, beam / trail / glow / mesh / Lua feeds; lights are visible on D3D12 (see "Round 4" at the end for what is measured and what is not)** (snapshot 26/10/2026).
 
 Dynamic lighting for explosions, muzzle flashes, beams, trails, projectiles and glowing units, built into the engine's renderer instead of patched into the shipped exe. It replaces the binary patch [FA-DynamicLights](https://github.com/UnsilentMarLo/FA-DynamicLights) (v0.1.0) on the Direct3D 11, 12 and Vulkan backends. Direct3D 9 keeps using the patch. The lights are **render only**: they read effect data and never touch the simulation, so replay parity is unaffected.
 
@@ -118,3 +118,67 @@ Off / Low / Medium / High / Ultra with the patch's importance classes (power = i
 - Weak on purpose for now: the soft limit, the wrapped diffuse and the weakening factor of the patch's model are kept as they are; calibration against the patch is stage 5/6 work.
 - **Window size trap:** `/windowed 1280 720` makes the D3D12 back-buffer copy fail by one row (the lights are not involved); use another size.
 - **Not done:** D3D11 and Vulkan runs; the debug grid view (`ren_DynLightsView`) drew nothing in the zoomed-in test (its in-front test is unverified); real explosions on the screen (only the synthetic flash was seen).
+
+## Round 4: sources, colour, Lua lights, limits (26/10/2026)
+
+### Limits (the first patch had 16 lights on units and 28 on the ground)
+
+| | now | where |
+|---|---|---|
+| lights per frame | 4096 (data texture 1024 x 12 RGBA32F, 3 texels a light) | `kMaxGridLights`, `LightGrid.h` |
+| lights in the pool | 16384 | `LightCollector::kPoolCapacity` |
+| lights one pixel adds up | 16 (the strongest 16 of its 16-unit grid cell) | `kLightsPerCell`; the grid texture is 4 texels per cell |
+| kinds | Flash, Glow, Beam, Trail, Mesh, **Spot** | `Kind` |
+
+Beams and trails are capsules (a segment with a radius) and are entered in every cell the segment reaches; a spotlight is a point with a direction and a cone (texel C holds the direction and the cosine of the outer half angle). Host test: 4096 lights in the data texture and the grid, 10000 lights in the pool, 40 lights in one frame in game.
+
+### Where the colour comes from
+
+The engine keeps no pixels of its textures, so `LightTexture.cpp` reads the DDS file itself (DXT1/3/5 and uncompressed 16/24/32 bit, the first mip that fits 256 x 256; `LightTextureCache.cpp` finds the file the way `InitEffectFromFile` does and caches the result per path). A light particle, a glow sprite, a trail or a beam takes the **hue of its texture** (the brightness-weighted mean colour of the texels, brightest channel = 1) times the **ramp texture at the particle age** (four points over the life, alpha included, so a ramp that fades also fades the light). Checked against an independent Pillow decode of `glow_03.dds` and five ramps (`ramp_blue_01`: (0.71 0.71 1.0) at a third of the life, (0.27 0.28 0.91) at two thirds; `ramp_flare_01` white; `ramp_disintegrator_01` black: no light).
+
+| source | feed | colour | strength |
+|---|---|---|---|
+| `CreateLightParticle` flash | `FeedParticleBuffer` | texture hue x ramp curve | `FlashRadius/Intensity(size)` (the first patch's model) |
+| additive / premodulated sprites (fire, plasma) | same, merged per 4-unit cell, tracked | texture hue x ramp | `GlowRadius/Energy(size)`, sprites of a cell add as energy; only textures with a glowing texel (alpha x luminance >= 0.3) |
+| poly trails | same, tracked per head cell | texture hue x ramp head | `TrailRadius/Intensity(width)` |
+| beams | same, tracked per start/end/texture | texture hue x mean vertex colour | `TrailRadius/Intensity(width)` |
+| unit meshes | `FeedMeshes` after `MeshRenderer::Batch`, tracked per instance | glow colour of the albedo, army colour where the army colour glows | glow area of the albedo / specular maps by the pixel shader rule of the faction (`LightMeshEmission.h`) |
+| Lua lights | `SWorldLight` lane of the sim particle buffer | what the script gave | what the script gave |
+
+Not done: **Glow decals** (type `Glow`, the decal draws only into the glow alpha channel, it has no colour); emissive **projectile meshes** go through the same mesh feed but only if their shader is one of the unit shaders (the laser bolt meshes are not); **ramp rows** other than the first for the mesh-less effects (`rampSelection` is used as the row for particles, 0 for trails).
+
+### Lua lights (`data/fafengine/lua/dynlights/light.lua`)
+
+```lua
+local Light = import('/fafengine/lua/dynlights/light.lua')
+local lamp = Light.Create(unit, 'Turret', 1.0, 0.8, 0.5, 30, 1.0)   -- entity (nil: world position), bone (name, number, nil), r, g, b, radius, intensity
+lamp:SetOffset(0, 1.5, 0); lamp:SetColour(r, g, b); lamp:SetRadius(50); lamp:SetIntensity(1.5)
+lamp:SetSpot(0, -0.1, 1, 35)        -- spotlight along a bone-space direction, 35 degrees half angle
+lamp:SetPosition(x, y, z)           -- a light without an entity
+lamp:Destroy()
+Light.Headlight(unit)               -- a warm 32 degree spotlight at the front
+```
+
+Engine side: the Lua globals `CreateLight`, `SetLight`, `SetLightOffset`, `SetLightPosition`, `SetLightSpot`, `DestroyLight` (in `EffectLuaStartupRegistrations.cpp`) call the registry `SimLights.cpp`; every sim tick (after the effects) it writes one `SWorldLight` record per live light into `SParticleBuffer::mLights` (the buffer grew from 0x30 to 0x40 bytes, a lane the shipped binary does not have); the renderer tracks the lights by handle (`LightCollector::Track`: fades in once, follows, fades out 3 ticks after the last record). **Determinism:** nothing reads the lights back, they are not in the checksum, and the functions always return a handle whatever the quality level or camera, so scripts take the same branches on every client. A light ends with its entity. Lights are **not saved** with a game. Note `CreateUnitHPR` takes (pitch, yaw, roll) in that order, whatever its name says.
+
+### In-game tests (`tests/lights/ingame/`)
+
+`dynlights_test.lua` (phases: static colours and an intensity ladder, light particles with five ramps, two beams, a bone light and a headlight on the commander, 40 lights at once) and `dynlights_test_units.lua` (five units with different emission rules, a tank with a headlight). Copy one as `<exe folder>/fafengine/lua/test/dynlights_test.lua`; the hook in `data/fafengine/lua/simInit.lua` runs it after the session began (on a normal install the file is absent and nothing happens). Launch with `/dynlights /d3d12 /windowed 1600 900 /map ... /con "ren_DynLights=4;ren_DynLightsLog=120"` and `FAF_GAL_DUMP_DIR` / `FAF_GAL_DUMP_SECONDS=3` for frames. `analyze.py` and `probe.py` compare a frame with quiet frames of the same scene: L = on / quiet - 1 per channel is the light the shader added, independent of the ground colour.
+
+### Measured (D3D12, RX 7900 XTX, 1600 x 900)
+
+- Static lights, radius 7, 4 units above the ground: red, green and blue give disk-mean L (0.268 0.020 0.029), (0.008 0.242 0.013) and (0.003 0.004 0.256): pure hues. A light of intensity 1 at that height should add 0.34 at its centre by the shader formula (`c / (1 + c)`, `c = colour x intensity x a x (0.35 + 0.65 a)`, `a = 1 - (h / r)^2`) and about 0.27 averaged over the central 4 units: measured 0.27.
+- White ladder 0.25 / 0.5 / 1.0: mean L 0.10 / 0.19 / 0.235 (expected 0.09 / 0.165 / 0.27).
+- 40 lights at once: smooth coloured patches over the whole view.
+- Lua bone light on the commander (blue (0.3 0.6 1.0), radius 14): disk mean L (0.27 0.38 0.61), hue (0.44 0.63 1.0) with other lights present; it follows the commander and ends with `Destroy`.
+- Headlight on a tank (warm (1.0 0.93 0.75), cone 32, radius 40): on the axis mean L (0.34 0.33 0.32) at 10 units, falling with distance; to the side (0.14-0.2); the hue on the axis is the light's (1.0 0.97 0.93). Other lights in the scene (a Seraphim power plant next to the tank) lit the area behind it, so the cone is not cleanly separated.
+- Unit emission read from the textures: UEF T3 power plant glow area 0.056, hue (1.0 0.70 0.32) (the orange reactor), Aeon T3 power plant area 0.023, 80 % army colour, Seraphim T3 power area 0.189, Aeon Harbinger area 0.011, Cybran PD and the UEF tank no glow (their specular blue channel is empty), wreckage and props none. Five mesh lights per frame in the scene. The ground light of the units was **not** measured separately (the units stand in the frame, the quiet frames show the ground without them, and the units themselves differ).
+- Not measured: the strength of beam lights, the light particles with pale ramps (their ramp alpha is 0.1-0.3, the lights are weak by design), emissive projectiles.
+
+### Traps found
+
+- `DISK_MemoryMapFile` maps a *resolved* name: resolve the virtual path with `FWaitHandleSet::FindFile` first, or every read returns 0 bytes.
+- The shader divides by the data texture's real height (12 rows), not by the rows in use.
+- `MeshBatchKey::mLod` is all bits set for an instance too far for every LOD, and some LODs carry a `lodBlueprintCopy` that is not a blueprint (shields, engine-made LODs): both are guarded, the names are read under structured exception handling.
+- An imported Moho Lua module is its own global table: define `function Create` at module level, not a `local` table returned at the end.
+- `/windowed 1280 720` makes the D3D12 back-buffer copy fail by a row (existing, not the lights).

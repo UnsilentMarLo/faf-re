@@ -42,7 +42,7 @@ sampler2D dynLightGridSampler = sampler_state
     AddressV  = CLAMP;
 };
 float4 dynLightParams;     // gridOriginX, gridOriginZ, 1 / cellSize, lightCount
-float4 dynLightGridSize;   // cellsX, cellsZ, 1 / (2 cellsX), 1 / cellsZ
+float4 dynLightGridSize;   // cellsX, cellsZ, 1 / (4 cellsX), 1 / cellsZ
 float4 dynLightDataSize;   // 1 / dataWidth, 1 / dataRows, dataWidth, dataRows
 
 float4 DynLightTexel(float k)
@@ -52,34 +52,46 @@ float4 DynLightTexel(float k)
     return tex2Dlod(dynLightDataSampler, float4((col + 0.5) * dynLightDataSize.x, (row + 0.5) * dynLightDataSize.y, 0, 0));
 }
 
-// The up to 8 entries (light index + 1, 0 = none) of the grid cell that holds the world position; all 0 outside the map.
-void DynLightCell(float3 worldPos, out float4 e0, out float4 e1)
+// The up to 16 entries (light index + 1, 0 = none) of the grid cell that holds the world position; all 0 outside the map.
+void DynLightCell(float3 worldPos, out float4 e0, out float4 e1, out float4 e2, out float4 e3)
 {
     e0 = float4(0, 0, 0, 0);
     e1 = float4(0, 0, 0, 0);
+    e2 = float4(0, 0, 0, 0);
+    e3 = float4(0, 0, 0, 0);
     float2 cell = floor((worldPos.xz - dynLightParams.xy) * dynLightParams.z);
     if (cell.x >= 0 && cell.y >= 0 && cell.x < dynLightGridSize.x && cell.y < dynLightGridSize.y && dynLightParams.w > 0.5)
     {
         float v = (cell.y + 0.5) * dynLightGridSize.w;
-        e0 = tex2Dlod(dynLightGridSampler, float4((cell.x * 2.0 + 0.5) * dynLightGridSize.z, v, 0, 0));
-        e1 = tex2Dlod(dynLightGridSampler, float4((cell.x * 2.0 + 1.5) * dynLightGridSize.z, v, 0, 0));
+        float u = cell.x * 4.0 + 0.5;
+        e0 = tex2Dlod(dynLightGridSampler, float4(u * dynLightGridSize.z, v, 0, 0));
+        e1 = tex2Dlod(dynLightGridSampler, float4((u + 1.0) * dynLightGridSize.z, v, 0, 0));
+        e2 = tex2Dlod(dynLightGridSampler, float4((u + 2.0) * dynLightGridSize.z, v, 0, 0));
+        e3 = tex2Dlod(dynLightGridSampler, float4((u + 3.0) * dynLightGridSize.z, v, 0, 0));
     }
 }
 
-// One light as the pixel sees it: closest point of the light's segment (a point light has a zero-length one), windowed falloff.
-// Returns the attenuation; `toLight` is the vector from the pixel to that point, `colour` the light's colour x intensity.
+// One light as the pixel sees it: closest point of the light's segment (a point light has a zero-length one; a spotlight is a point
+// light with a cone), windowed falloff. Returns the attenuation; `toLight` is the vector from the pixel to that point, `colour` the
+// light's colour x intensity.
 float DynLightAt(float entry, float3 worldPos, out float3 toLight, out float3 colour)
 {
     float k = (entry - 1.0) * 3.0;
     float4 a = DynLightTexel(k);
     float4 b = DynLightTexel(k + 1.0);
     float4 c = DynLightTexel(k + 2.0);
-    float3 seg = c.xyz - a.xyz;
+    bool spot = b.a > 4.5;
+    float3 seg = spot ? float3(0, 0, 0) : c.xyz - a.xyz;
     float t = saturate(dot(worldPos - a.xyz, seg) / max(dot(seg, seg), 0.0001));
     toLight = a.xyz + seg * t - worldPos;
     float r = max(a.w, 0.001);
     float atten = saturate(1 - dot(toLight, toLight) / (r * r));
     atten *= 0.35 + 0.65 * atten;   // softer tail than atten^2: a light just above the ground must still reach the ground around it
+    if (spot)
+    {
+        float cd = dot(-normalize(toLight), c.xyz);
+        atten *= saturate((cd - c.w) / max((1.0 - c.w) * 0.5, 0.0001));
+    }
     colour = b.rgb;
     return atten;
 }
@@ -90,13 +102,13 @@ float4 dynLightCamera;   // world position of the camera (set per view)
 
 float3 DynLightsBRDF(float3 worldPos, float3 n, float3 v, float3 albedo, float metallic, float roughness)
 {
-    float4 e0, e1;
-    DynLightCell(worldPos, e0, e1);
-    float entries[8] = { e0.x, e0.y, e0.z, e0.w, e1.x, e1.y, e1.z, e1.w };
+    float4 e0, e1, e2, e3;
+    DynLightCell(worldPos, e0, e1, e2, e3);
+    float entries[16] = { e0.x, e0.y, e0.z, e0.w, e1.x, e1.y, e1.z, e1.w, e2.x, e2.y, e2.z, e2.w, e3.x, e3.y, e3.z, e3.w };
     float nDotV = abs(dot(n, v)) + 0.001;
     float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
     float3 total = float3(0, 0, 0);
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < 16; i++)
     {
         if (entries[i] > 0.5)
         {
@@ -145,11 +157,11 @@ float4 DynLightsVertexNormalPS(VERTEXNORMAL_VERTEX vertex) : COLOR0
     constexpr const char* kTerrainLightFunction = R"HLSL(
 float3 DynLightTerrain(float3 worldPos, float3 normal)
 {
-    float4 e0, e1;
-    DynLightCell(worldPos, e0, e1);
-    float entries[8] = { e0.x, e0.y, e0.z, e0.w, e1.x, e1.y, e1.z, e1.w };
+    float4 e0, e1, e2, e3;
+    DynLightCell(worldPos, e0, e1, e2, e3);
+    float entries[16] = { e0.x, e0.y, e0.z, e0.w, e1.x, e1.y, e1.z, e1.w, e2.x, e2.y, e2.z, e2.w, e3.x, e3.y, e3.z, e3.w };
     float3 total = float3(0, 0, 0);
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < 16; i++)
     {
         if (entries[i] > 0.5)
         {
@@ -682,12 +694,8 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
           code.replace(
             at,
             ret.size(),
-            flood == 2 ? "    float4 de0, de1;\n    DynLightCell(inV.mTexWT.xzy, de0, de1);\n    float4 dl0 = DynLightTexel(0.0);\n"
-                         // red: the grid cell lists a light (a blob around each light when the grid is read right, everywhere when
-                         // the texture is a stand-in); green: the first light's x position reads back from the data texture;
-                         // blue: the second grid texel of the cell is non-zero (should be off)
-                         "    float2 cc = saturate(floor((inV.mTexWT.xz - dynLightParams.xy) * dynLightParams.z) / dynLightGridSize.xy);\n"
-                         "    return float4(frac(inV.mTexWT.x / 20.0), frac(inV.mTexWT.y / 20.0), 0, 0);   // /dynlightsflood2: world position as a 20-unit checker"
+            flood == 2 ? // the world position as a 20-unit checker: shows the pass gets world coordinates
+                         "    return float4(frac(inV.mTexWT.x / 20.0), frac(inV.mTexWT.y / 20.0), 0, 0);   // /dynlightsflood2"
                        : "    return float4(1, 0, 1, 0);   // /dynlightsflood"
           );
         }

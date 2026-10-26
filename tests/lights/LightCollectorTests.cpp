@@ -393,6 +393,143 @@ namespace
     CHECK(out.size() == 1);
   }
 
+  void TestExplicitStrength()
+  {
+    LightCollector c;
+    c.SetQuality(model::kUltra);
+    Emission e;
+    e.kind = Kind::Spot;
+    e.pos[0] = 10.0f;
+    e.end[0] = 1.0f;
+    e.cone = 0.9f;
+    e.birth = 0.0f;
+    e.life = 50.0f;
+    e.radius = 40.0f;
+    e.intensity = 0.5f;
+    e.rgb[0] = 1.0f;
+    e.rgb[1] = 0.0f;
+    e.rgb[2] = 0.0f;
+    CHECK(c.Add(e)); // no size needed: the author's own radius and intensity
+    std::vector<Light> out;
+    c.Update(10.0f, 16, out);
+    CHECK(out.size() == 1);
+    CHECK(Near(out[0].radius, 40.0f));
+    CHECK(Near(out[0].rgb[0], 0.5f * model::WeakenFactor(40.0f)));
+    CHECK(out[0].rgb[1] == 0.0f && out[0].kind == Kind::Spot && Near(out[0].cone, 0.9f) && Near(out[0].end[0], 1.0f));
+
+    // absurd explicit values are refused
+    Emission bad = e;
+    bad.radius = 1.0e9f;
+    CHECK(!c.Add(bad));
+    bad = e;
+    bad.intensity = -1.0f;
+    CHECK(!c.Add(bad));
+    bad = e;
+    bad.intensity = std::numeric_limits<float>::quiet_NaN();
+    CHECK(!c.Add(bad));
+  }
+
+  void TestCapsuleMotion()
+  {
+    LightCollector c;
+    c.SetQuality(model::kUltra);
+    Emission e;
+    e.kind = Kind::Beam;
+    e.pos[0] = 0.0f;
+    e.end[0] = 100.0f;
+    e.dir[0] = 2.0f; // the whole beam slides
+    e.birth = 0.0f;
+    e.life = 20.0f;
+    e.size0 = e.size1 = 1.0f;
+    CHECK(c.Add(e));
+    std::vector<Light> out;
+    c.Update(5.0f, 16, out);
+    CHECK(out.size() == 1);
+    CHECK(Near(out[0].pos[0], 10.0f) && Near(out[0].end[0], 110.0f));
+  }
+
+  void TestTrackedLights()
+  {
+    LightCollector c;
+    c.SetQuality(model::kUltra);
+    c.SetSecondsPerTick(0.1f); // fade-in 0.8 ticks, fade-out 3
+    Emission e;
+    e.kind = Kind::Glow;
+    e.radius = 20.0f;
+    e.intensity = 1.0f;
+    e.pos[0] = 5.0f;
+    std::vector<Light> out;
+
+    CHECK(c.Track(7, e, 100.0f, 2.0f));
+    CHECK(c.Stored() == 1 && c.GetStats().tracked == 1);
+    c.Update(100.0f, 16, out);
+    CHECK(out.empty()); // faded in from nothing
+
+    // refreshed every tick: stays, follows the owner, fades in only once
+    for (int tick = 101; tick <= 130; ++tick) {
+      e.pos[0] = 5.0f + static_cast<float>(tick - 100);
+      CHECK(c.Track(7, e, static_cast<float>(tick), 2.0f));
+      CHECK(c.Stored() == 1); // the same light, not a new one per tick
+    }
+    c.Update(130.0f, 16, out);
+    CHECK(out.size() == 1);
+    CHECK(Near(out[0].pos[0], 35.0f));
+    CHECK(Near(out[0].rgb[0], model::WeakenFactor(20.0f))); // full strength, colour (1,1,1)
+
+    // a second owner is a second light; changing colour and radius of the first updates it
+    CHECK(c.Track(8, e, 130.0f, 2.0f));
+    CHECK(c.Stored() == 2);
+    e.radius = 30.0f;
+    e.rgb[1] = 0.0f;
+    CHECK(c.Track(7, e, 131.0f, 2.0f));
+    c.Update(131.0f, 16, out);
+    CHECK(out.size() >= 1);
+    bool saw = false;
+    for (const Light& l : out) {
+      saw = saw || (Near(l.radius, 30.0f) && l.rgb[1] == 0.0f);
+    }
+    CHECK(saw);
+
+    // the owners stop refreshing: the lights live `hold` ticks, then fade out and are pruned
+    c.Update(133.5f, 16, out);
+    c.Update(135.0f, 16, out);
+    c.Update(140.0f, 16, out);
+    CHECK(c.Stored() == 0);
+
+    // Untrack ends a light at once (the fade-out still runs)
+    CHECK(c.Track(9, e, 200.0f, 50.0f));
+    c.Update(210.0f, 16, out);
+    CHECK(out.size() == 1);
+    c.Untrack(9, 210.0f);
+    c.Update(211.5f, 16, out);
+    CHECK(out.size() == 1 && out[0].rgb[0] < model::WeakenFactor(30.0f));
+    c.Update(215.0f, 16, out);
+    CHECK(out.empty() && c.Stored() == 0);
+    c.Untrack(9, 216.0f); // already gone: ignored
+    c.Untrack(12345, 216.0f);
+
+    // refused: key 0, bad hold, bad clock
+    CHECK(!c.Track(0, e, 1.0f, 2.0f));
+    CHECK(!c.Track(5, e, 1.0f, 0.0f));
+    CHECK(!c.Track(5, e, std::numeric_limits<float>::quiet_NaN(), 2.0f));
+  }
+
+  void TestManyLightsInPool()
+  {
+    // 10000 lights are held and ranked; the pool is not what limits them
+    LightCollector c;
+    c.SetQuality(model::kUltra);
+    for (int i = 0; i < 10000; ++i) {
+      Emission e = Flash(kT2Size, 0.0f, 50.0f);
+      e.pos[0] = static_cast<float>(i);
+      CHECK(c.Add(e));
+    }
+    std::vector<Light> out;
+    c.Update(10.0f, 4096, out);
+    CHECK(out.size() == 4096);
+    CHECK(c.GetStats().active == 10000 && c.GetStats().culledByCap == 10000 - 4096);
+  }
+
   void TestClear()
   {
     LightCollector c;
@@ -408,6 +545,8 @@ namespace
 
 int RunGridTests(int& checks);  // LightGridTests.cpp
 int RunPatchTests(int& checks); // LightEffectPatchTests.cpp
+int RunTextureTests(int& checks); // LightTextureTests.cpp
+int RunMeshTests(int& checks);    // LightMeshEmissionTests.cpp
 
 int main()
 {
@@ -426,9 +565,15 @@ int main()
   TestTiesAreStable();
   TestPoolLimit();
   TestUpdateWithBadClock();
+  TestExplicitStrength();
+  TestCapsuleMotion();
+  TestTrackedLights();
+  TestManyLightsInPool();
   TestClear();
   gFailures += RunGridTests(gChecks);
   gFailures += RunPatchTests(gChecks);
+  gFailures += RunTextureTests(gChecks);
+  gFailures += RunMeshTests(gChecks);
 
   std::printf("%d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;

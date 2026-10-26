@@ -114,10 +114,11 @@ namespace moho::lights
                        const boost::shared_ptr<gpg::gal::Texture>& gridTexture, const bool bindTextures)
     {
       const GridLayout& l = image.layout;
-      const float rows = static_cast<float>(image.DataRows());
+      // the texture always has the rows of the largest light count: that is the height the shader divides by, not the rows in use
+      const float rows = static_cast<float>(image.DataRows(static_cast<std::uint32_t>(kMaxGridLights)));
       const float params[4] = {l.originX, l.originZ, 1.0f / l.cellSize, static_cast<float>(image.lightCount)};
       const float gridSize[4] = {
-        static_cast<float>(l.cellsX), static_cast<float>(l.cellsZ), 1.0f / (2.0f * static_cast<float>(l.cellsX)),
+        static_cast<float>(l.cellsX), static_cast<float>(l.cellsZ), 1.0f / (static_cast<float>(kCellTexels) * static_cast<float>(l.cellsX)),
         1.0f / static_cast<float>(l.cellsZ)
       };
       const float dataSize[4] = {1.0f / static_cast<float>(kDataWidth), 1.0f / rows, static_cast<float>(kDataWidth), rows};

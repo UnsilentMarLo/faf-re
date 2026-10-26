@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include "moho/render/lights/LightModel.h"
@@ -19,10 +20,11 @@ namespace moho::lights
   enum class Kind : std::uint8_t
   {
     Flash = 0, // CreateLightParticle ("TLight" particle)
-    Glow,      // additive glow sprite (later stage)
-    Beam,      // later stage
-    Trail,     // later stage
-    Mesh,      // projectile or unit mesh (later stage)
+    Glow,      // additive glow sprite
+    Beam,      // a beam: a capsule from pos to end
+    Trail,     // a poly trail: a capsule from pos to end
+    Mesh,      // projectile or unit mesh
+    Spot,      // a spotlight (headlight): at pos, towards `end` read as a unit direction, with the cone's cosine in `cone`
     Count
   };
 
@@ -33,11 +35,20 @@ namespace moho::lights
     float pos[3] = {0.0f, 0.0f, 0.0f};
     float dir[3] = {0.0f, 0.0f, 0.0f};
     float accel[3] = {0.0f, 0.0f, 0.0f};
+    float end[3] = {0.0f, 0.0f, 0.0f}; // Beam / Trail: the other end point (moves with pos); Spot: the direction the light points
+    float cone = 0.0f;                 // Spot: cosine of the outer half angle
     float birth = 0.0f; // tick (with fraction)
     float life = 0.0f;  // ticks
-    float size0 = 0.0f; // sprite size at birth and at the end of life, world units
+    float size0 = 0.0f; // sprite size at birth and at the end of life, world units (the size the model turns into radius and intensity)
     float size1 = 0.0f;
     float rgb[3] = {1.0f, 1.0f, 1.0f}; // 0..1
+    // Colour over the life, when the effect has a ramp texture: four points at 0, 1/3, 2/3 and 1 of the life, each already multiplied by the
+    // ramp alpha (so it carries the brightness too). Used instead of `rgb` when `hasCurve`.
+    float curve[4][3] = {{1.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}};
+    bool hasCurve = false;
+    // Explicit strength, for lights whose author states it (a Lua light, a measured beam): when radius > 0 the model is not asked.
+    float radius = 0.0f;
+    float intensity = 0.0f;
   };
 
   // One light for this frame.
@@ -48,6 +59,8 @@ namespace moho::lights
     float rgb[3]; // colour x intensity, linear
     Kind kind;
     float power; // intensity x radius^2 at this moment (the ranking key)
+    float end[3]; // capsule end (Beam / Trail), spot direction (Spot), else = pos
+    float cone;   // Spot: cosine of the outer half angle
   };
 
   struct Stats
@@ -60,12 +73,14 @@ namespace moho::lights
     std::uint32_t expired = 0;  // pruned after their fade-out
     std::uint32_t active = 0;   // lights evaluated by the last Update (before the cap)
     std::uint32_t culledByCap = 0; // lights of the last Update that did not fit the cap
+    std::uint32_t tracked = 0;  // tracked lights alive
   };
 
   class LightCollector
   {
   public:
-    static constexpr std::size_t kPoolCapacity = 4096;
+    // Lights the pool holds at once. The first patch had 16 on units and 28 on the ground; the pool no longer is the limit.
+    static constexpr std::size_t kPoolCapacity = 16384;
 
     // Quality: model::kOff..model::kUltra. Lowering it also drops stored lights the new level no longer admits.
     void SetQuality(int quality);
@@ -76,6 +91,13 @@ namespace moho::lights
 
     // Offers one emission. Returns true when it was stored.
     bool Add(const Emission& emission);
+
+    // A tracked light: one that lives as long as its owner keeps refreshing it (a Lua light on a bone, a headlight, a beam that is re-sent
+    // every tick). `key` is the owner's identity; a second Track with the same key moves and recolours the light instead of adding one. The
+    // light fades in once, stays at full strength while it is refreshed, and fades out `holdTicks` after the last refresh. Untrack ends it at
+    // once (it still fades out). Returns false when the emission is refused (invalid, gated, pool full).
+    bool Track(std::uint64_t key, const Emission& emission, float nowTick, float holdTicks);
+    void Untrack(std::uint64_t key, float nowTick);
 
     // Evaluates the stored lights at `nowTick`, prunes the expired ones, and fills `out` with at most `maxLights`, strongest first
     // (ties broken by birth time then by order of arrival, so the result does not depend on the sort implementation).
@@ -90,19 +112,23 @@ namespace moho::lights
     struct Entry
     {
       Emission e;
-      float peakPower; // importance, from the peak size: fixed for the entry's life
+      float peakPower; // importance, from the peak strength: fixed for the entry's life
       std::uint32_t serial;
+      std::uint64_t key; // 0 = not tracked
     };
 
     [[nodiscard]] float FadeInTicks() const;
     [[nodiscard]] float FadeOutTicks() const;
     void PruneExpired(float nowTick);
+    bool Validate(const Emission& emission);
+    void RebuildIndex();
 
     std::vector<Entry> pool_;
+    std::unordered_map<std::uint64_t, std::size_t> trackedIndex_; // key -> index in pool_, rebuilt when the pool is compacted
     Stats stats_;
     int quality_ = model::kOff;
     float secondsPerTick_ = 0.1f;
-    std::uint32_t nextSerial_ = 0;
+    std::uint32_t nextSerial_ = 1;
     float lastNow_ = 0.0f;
   };
 } // namespace moho::lights

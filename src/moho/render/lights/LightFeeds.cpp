@@ -21,8 +21,8 @@ namespace moho::lights
 
   static TConVar<int> gTConVar_ren_DynLights(
     "ren_DynLights",
-    "Dynamic lights from explosion flashes, glows, beams and trails: 0 off (the default), 1 only the biggest, 2 large, 3 most, 4 all. "
-    "Render only; the simulation never sees them. Work in progress: nothing draws them yet (see docs/DYNAMIC_LIGHTS.md).",
+    "Dynamic lights from explosion flashes, glows, beams, trails and Lua lights: 0 off (the default), 1 only the biggest, 2 large, 3 most, 4 all. "
+    "Render only; the simulation never sees them. Needs /dynlights on the command line (docs/DYNAMIC_LIGHTS.md).",
     &ren_DynLights
   );
 
@@ -41,32 +41,12 @@ namespace moho::lights
 
   namespace
   {
-    // Colour of a CreateLightParticle flash until the ramp texture can be read on the CPU (stage 5): the warm white the patch used for a
-    // light without a ramp (255, 215, 160).
-    constexpr float kDefaultFlashRgb[3] = {1.0f, 0.843f, 0.627f};
-
     LightCollector gCollector;
     std::vector<Light> gFrameLights;
     LightGridImage gFrameImage;
     int gLogCounter = 0;
     int gLastTick = -1; // tick of the last BeginFrame
 
-    void SyncQuality()
-    {
-      if (gCollector.Quality() != ren_DynLights) {
-        gCollector.SetQuality(ren_DynLights);
-      }
-    }
-
-    // Sub-tick emission offset of a particle: the fractional part of mInterop (emission cursor minus tick), as the particle shader uses it.
-    float BirthFraction(const float interop)
-    {
-      if (!std::isfinite(interop) || std::fabs(interop) >= 1.0e7f) {
-        return 0.0f;
-      }
-      const float frac = interop - std::floor(interop);
-      return frac < 0.0f ? 0.0f : (frac > 1.0f ? 1.0f : frac);
-    }
     // Width and depth of the active map in world units; false when there is no map (front end, loading).
     bool ActiveMapSize(float& sizeX, float& sizeZ)
     {
@@ -90,42 +70,19 @@ namespace moho::lights
     return gCollector;
   }
 
-  void FeedParticleBuffer(const SParticleBuffer& batch, const int beatTick)
+  void SyncQuality()
   {
-    SyncQuality();
-    if (gCollector.Quality() == model::kOff) {
-      return;
-    }
-
-    for (const SWorldParticle& particle : batch.mParticles) {
-      if (particle.mTypeTag.view() != std::string_view("TLight")) {
-        continue;
-      }
-
-      Emission e;
-      e.kind = Kind::Flash;
-      e.pos[0] = particle.mPos.x;
-      e.pos[1] = particle.mPos.y;
-      e.pos[2] = particle.mPos.z;
-      e.dir[0] = particle.mDir.x;
-      e.dir[1] = particle.mDir.y;
-      e.dir[2] = particle.mDir.z;
-      e.accel[0] = particle.mAccel.x;
-      e.accel[1] = particle.mAccel.y;
-      e.accel[2] = particle.mAccel.z;
-      e.birth = static_cast<float>(beatTick) + BirthFraction(particle.mInterop);
-      e.life = particle.mLifetime;
-      e.size0 = particle.mBeginSize;
-      e.size1 = particle.mEndSize;
-      e.rgb[0] = kDefaultFlashRgb[0];
-      e.rgb[1] = kDefaultFlashRgb[1];
-      e.rgb[2] = kDefaultFlashRgb[2];
-      (void)gCollector.Add(e);
+    if (gCollector.Quality() != ren_DynLights) {
+      gCollector.SetQuality(ren_DynLights);
     }
   }
 
   void BeginFrame(const int tick, const float frameAlpha)
   {
+    // A clock that jumped back is a new game: the lights of the old one must not wake up when the new one reaches their birth tick.
+    if (gLastTick >= 0 && tick + 20 < gLastTick) {
+      gCollector.Clear();
+    }
     gLastTick = tick;
     SyncQuality();
     if (gCollector.Quality() == model::kOff) {
@@ -155,6 +112,22 @@ namespace moho::lights
 
     if (ren_DynLightsLog > 0 && ++gLogCounter >= ren_DynLightsLog) {
       gLogCounter = 0;
+      for (std::size_t i = 0; i < gFrameLights.size() && i < 4; ++i) {
+        const Light& l = gFrameLights[i];
+        gpg::Logf(
+          "DynLights:   light %u kind=%d pos=(%.1f %.1f %.1f) radius=%.1f rgb=(%.3f %.3f %.3f) power=%.2f",
+          static_cast<unsigned>(i),
+          static_cast<int>(l.kind),
+          l.pos[0],
+          l.pos[1],
+          l.pos[2],
+          l.radius,
+          l.rgb[0],
+          l.rgb[1],
+          l.rgb[2],
+          l.power
+        );
+      }
       const Stats& s = gCollector.GetStats();
       gpg::Logf(
         "DynLights: quality=%d stored=%u offered=%u gated=%u invalid=%u full=%u expired=%u | pool=%u active=%u lights=%u cut=%u | "

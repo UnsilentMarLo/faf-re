@@ -220,7 +220,13 @@ set(FAF_ENGINE_SOURCES
   moho/render/lights/LightEffectPatch.cpp
   moho/render/lights/LightBinding.cpp
   moho/render/lights/LightDebugView.cpp
+  moho/render/lights/LightTexture.cpp
+  moho/render/lights/LightTextureCache.cpp
+  moho/render/lights/LightMeshEmission.cpp
+  moho/render/lights/SimLights.cpp
   moho/render/lights/LightFeeds.cpp
+  moho/render/lights/LightFeedSources.cpp
+  moho/render/lights/LightMeshFeed.cpp
   moho/app/WinApp.cpp
   gpg/core/diagnostics/CrashHooks.cpp
   gpg/core/diagnostics/CrashReport.cpp

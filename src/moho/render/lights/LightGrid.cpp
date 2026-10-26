@@ -30,7 +30,7 @@ namespace moho::lights
     if (cx >= layout.cellsX || cz >= layout.cellsZ || grid.empty()) {
       return 0;
     }
-    const std::size_t base = (static_cast<std::size_t>(cz) * GridWidth() + 2u * cx) * 4u;
+    const std::size_t base = (static_cast<std::size_t>(cz) * GridWidth() + kCellTexels * cx) * 4u;
     std::uint32_t n = 0;
     for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {
       if (grid[base + i] != 0.0f) {
@@ -48,7 +48,7 @@ namespace moho::lights
         grid.empty()) {
       return 0;
     }
-    const std::size_t base = (static_cast<std::size_t>(fz) * GridWidth() + 2u * static_cast<std::size_t>(fx)) * 4u;
+    const std::size_t base = (static_cast<std::size_t>(fz) * GridWidth() + kCellTexels * static_cast<std::size_t>(fx)) * 4u;
     std::uint32_t n = 0;
     for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {
       const float entry = grid[base + i];
@@ -100,16 +100,26 @@ namespace moho::lights
       a[5] = l.rgb[1];
       a[6] = l.rgb[2];
       a[7] = static_cast<float>(l.kind);
-      a[8] = l.pos[0]; // capsule end: point lights only for now (beams and trails arrive with their feeds)
-      a[9] = l.pos[1];
-      a[10] = l.pos[2];
-      a[11] = 0.0f;
+      const bool capsule = l.kind == Kind::Beam || l.kind == Kind::Trail;
+      const bool spot = l.kind == Kind::Spot;
+      a[8] = capsule || spot ? l.end[0] : l.pos[0];
+      a[9] = capsule || spot ? l.end[1] : l.pos[1];
+      a[10] = capsule || spot ? l.end[2] : l.pos[2];
+      a[11] = spot ? l.cone : 0.0f;
 
-      // Cells whose rectangle the light's footprint reaches.
-      const float minX = l.pos[0] - l.radius - layout.originX;
-      const float maxX = l.pos[0] + l.radius - layout.originX;
-      const float minZ = l.pos[2] - l.radius - layout.originZ;
-      const float maxZ = l.pos[2] + l.radius - layout.originZ;
+      // Cells whose rectangle the light's footprint reaches: a circle, or for a capsule the circle swept along the segment.
+      const bool finiteEnd = !capsule || (std::isfinite(l.end[0]) && std::isfinite(l.end[1]) && std::isfinite(l.end[2]));
+      if (!finiteEnd) {
+        ++image.skipped;
+        --image.lightCount;
+        continue;
+      }
+      const float ex = capsule ? l.end[0] : l.pos[0];
+      const float ez = capsule ? l.end[2] : l.pos[2];
+      const float minX = std::min(l.pos[0], ex) - l.radius - layout.originX;
+      const float maxX = std::max(l.pos[0], ex) + l.radius - layout.originX;
+      const float minZ = std::min(l.pos[2], ez) - l.radius - layout.originZ;
+      const float maxZ = std::max(l.pos[2], ez) + l.radius - layout.originZ;
       if (maxX < 0.0f || maxZ < 0.0f || minX >= spanX || minZ >= spanZ) {
         ++image.outsideMap;
         continue;
@@ -124,15 +134,32 @@ namespace moho::lights
       );
 
       const float r2 = l.radius * l.radius;
+      const float segX = ex - l.pos[0];
+      const float segZ = ez - l.pos[2];
+      const float segLen2 = segX * segX + segZ * segZ;
+      const float halfDiag = 0.7072f * layout.cellSize;
       for (std::uint32_t cz = cz0; cz <= cz1; ++cz) {
         // distance along z from the light to this cell's rectangle
         const float cellMinZ = layout.originZ + static_cast<float>(cz) * layout.cellSize;
         const float dz = std::max(std::max(cellMinZ - l.pos[2], l.pos[2] - (cellMinZ + layout.cellSize)), 0.0f);
         for (std::uint32_t cx = cx0; cx <= cx1; ++cx) {
           const float cellMinX = layout.originX + static_cast<float>(cx) * layout.cellSize;
-          const float dx = std::max(std::max(cellMinX - l.pos[0], l.pos[0] - (cellMinX + layout.cellSize)), 0.0f);
-          if (dx * dx + dz * dz > r2) {
-            continue; // the corner of the square box the circle does not reach
+          if (!capsule) {
+            const float dx = std::max(std::max(cellMinX - l.pos[0], l.pos[0] - (cellMinX + layout.cellSize)), 0.0f);
+            if (dx * dx + dz * dz > r2) {
+              continue; // the corner of the square box the circle does not reach
+            }
+          } else {
+            // the cell's centre against the segment, with the cell's half diagonal as margin (conservative)
+            const float px = cellMinX + 0.5f * layout.cellSize - l.pos[0];
+            const float pz = cellMinZ + 0.5f * layout.cellSize - l.pos[2];
+            const float t = segLen2 > 1.0e-6f ? std::min(1.0f, std::max(0.0f, (px * segX + pz * segZ) / segLen2)) : 0.0f;
+            const float qx = px - segX * t;
+            const float qz = pz - segZ * t;
+            const float reach = l.radius + halfDiag;
+            if (qx * qx + qz * qz > reach * reach) {
+              continue;
+            }
           }
           const std::size_t cell = static_cast<std::size_t>(cz) * layout.cellsX + cx;
           const std::uint8_t slot = filled[cell];
@@ -144,8 +171,8 @@ namespace moho::lights
             ++image.cellsLit;
           }
           filled[cell] = static_cast<std::uint8_t>(slot + 1);
-          // entries 0..3 are the first texel, 4..7 the second
-          image.grid[(static_cast<std::size_t>(cz) * image.GridWidth() + 2u * cx) * 4u + slot] = static_cast<float>(index + 1u);
+          // entries 0..3 are the first texel, 4..7 the second, and so on
+          image.grid[(static_cast<std::size_t>(cz) * image.GridWidth() + kCellTexels * cx) * 4u + slot] = static_cast<float>(index + 1u);
         }
       }
     }

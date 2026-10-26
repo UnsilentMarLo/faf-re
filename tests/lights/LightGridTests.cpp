@@ -122,19 +122,19 @@ namespace
   {
     const GridLayout layout = GridLayout::ForMap(256.0f, 256.0f);
     std::vector<Light> lights;
-    for (int i = 0; i < 12; ++i) {
+    for (std::uint32_t i = 0; i < kLightsPerCell + 4; ++i) {
       lights.push_back(MakeLight(128.0f, 0.0f, 128.0f, 10.0f, 100.0f - static_cast<float>(i)));
     }
     LightGridImage image;
     BuildLightGrid(lights, layout, image);
 
     std::uint32_t idx[kLightsPerCell];
-    GCHECK(image.CellLights(128.0f, 128.0f, idx) == 8);
-    for (std::uint32_t i = 0; i < 8; ++i) {
-      GCHECK(idx[i] == i); // the first 8 in ranking order (strongest first)
+    GCHECK(image.CellLights(128.0f, 128.0f, idx) == kLightsPerCell);
+    for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {
+      GCHECK(idx[i] == i); // the first 16 in ranking order (strongest first)
     }
     GCHECK(image.overflow > 0);
-    GCHECK(image.lightCount == 12); // all lights are in the data texture, only the cell lists are limited
+    GCHECK(image.lightCount == kLightsPerCell + 4); // all lights are in the data texture, only the cell lists are limited
   }
 
   void TestHugeLightAndEdges()
@@ -225,6 +225,77 @@ namespace
     GCHECK(image.CellLights(100.0f, 100.0f, idx) == 0);
   }
 
+  void TestManyLights()
+  {
+    // the first patch carried 16 lights on units and 28 on the ground; all 4096 are in the data texture now
+    const GridLayout layout = GridLayout::ForMap(1024.0f, 1024.0f);
+    std::vector<Light> lights;
+    for (std::size_t i = 0; i < kMaxGridLights; ++i) {
+      lights.push_back(MakeLight(8.0f + static_cast<float>((i * 13) % 1000), 1.0f, 8.0f + static_cast<float>((i * 29) % 1000), 12.0f,
+                                 5000.0f - static_cast<float>(i)));
+    }
+    LightGridImage image;
+    BuildLightGrid(lights, layout, image);
+    GCHECK(image.lightCount == kMaxGridLights);
+    GCHECK(image.DataRows() == 12);
+    // the last light's texels are where the shader looks for them
+    const std::size_t last = (kMaxGridLights - 1) * kTexelsPerLight;
+    const std::size_t row = last / kDataWidth;
+    const std::size_t col = last % kDataWidth;
+    const float* a = &image.data[(row * kDataWidth + col) * 4];
+    GCHECK(a[0] == lights.back().pos[0] && a[2] == lights.back().pos[2] && a[3] == 12.0f);
+    std::uint32_t idx[kLightsPerCell];
+    const std::uint32_t n = image.CellLights(lights.back().pos[0], lights.back().pos[2], idx);
+    GCHECK(n >= 1 && n <= kLightsPerCell);
+  }
+
+  void TestCapsuleAndSpot()
+  {
+    const GridLayout layout = GridLayout::ForMap(1024.0f, 1024.0f); // cells of 16
+    // a beam along x from 100 to 300 at z = 500, radius 10
+    Light beam = MakeLight(100.0f, 3.0f, 500.0f, 10.0f);
+    beam.kind = Kind::Beam;
+    beam.end[0] = 300.0f;
+    beam.end[1] = 3.0f;
+    beam.end[2] = 500.0f;
+    std::vector<Light> lights{beam};
+    LightGridImage image;
+    BuildLightGrid(lights, layout, image);
+    std::uint32_t idx[kLightsPerCell];
+    GCHECK(image.CellLights(100.0f, 500.0f, idx) == 1);
+    GCHECK(image.CellLights(200.0f, 500.0f, idx) == 1); // the middle of the segment
+    GCHECK(image.CellLights(299.0f, 505.0f, idx) == 1); // the far end
+    GCHECK(image.CellLights(200.0f, 540.0f, idx) == 0); // 40 beside the beam, radius 10
+    GCHECK(image.CellLights(400.0f, 500.0f, idx) == 0); // beyond the end
+    const float* c = &image.data[2 * 4];
+    GCHECK(c[0] == 300.0f && c[2] == 500.0f && c[3] == 0.0f); // the capsule end is in texel C
+    GCHECK(image.cellsLit > 12);
+
+    // a spotlight: direction and cone in texel C
+    Light spot = MakeLight(600.0f, 4.0f, 600.0f, 30.0f);
+    spot.kind = Kind::Spot;
+    spot.end[0] = 1.0f;
+    spot.end[1] = 0.0f;
+    spot.end[2] = 0.0f;
+    spot.cone = 0.8f;
+    lights.assign(1, spot);
+    BuildLightGrid(lights, layout, image);
+    const float* d = &image.data[2 * 4];
+    GCHECK(d[0] == 1.0f && d[1] == 0.0f && d[2] == 0.0f && d[3] == 0.8f);
+    const float* b = &image.data[1 * 4];
+    GCHECK(b[3] == static_cast<float>(Kind::Spot));
+    GCHECK(image.CellLights(600.0f, 600.0f, idx) == 1);
+
+    // a beam with a broken end point is skipped and leaves no hole in the indices
+    Light bad = beam;
+    bad.end[0] = std::numeric_limits<float>::quiet_NaN();
+    lights.assign(2, MakeLight(100.0f, 0.0f, 100.0f, 10.0f));
+    lights[0] = bad;
+    BuildLightGrid(lights, layout, image);
+    GCHECK(image.skipped == 1 && image.lightCount == 1);
+    GCHECK(image.CellLights(100.0f, 100.0f, idx) == 1 && idx[0] == 0);
+  }
+
   void TestEntriesAreExactIntegers()
   {
     // "index + 1" entries stay exact floats at the largest index we use
@@ -254,6 +325,8 @@ int RunGridTests(int& checks)
   TestInvalidLights();
   TestCapAndEmpty();
   TestEntriesAreExactIntegers();
+  TestManyLights();
+  TestCapsuleAndSpot();
   checks += gGridChecks;
   return gGridFailures;
 }

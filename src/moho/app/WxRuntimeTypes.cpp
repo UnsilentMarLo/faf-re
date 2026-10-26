@@ -4047,6 +4047,7 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
         mCam->viewport.r[1]
       );
     }
+    moho::lights::FeedMeshes(static_cast<float>(moho::REN_GetGameTick()) + moho::REN_GetSimDeltaSeconds());
 
     {
       const gpg::gal::RenderProfileScope profileReflections("Reflections");
