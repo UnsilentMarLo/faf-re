@@ -17641,6 +17641,12 @@ namespace moho
 
     std::size_t index = 0;
     for (wxWindow* const inputWindow : g_UIManager->mInputWindows) {
+      // EDITOR: a closed pop-out leaves a null slot in the window list (CUIManager::RemovePopoutFrame); the original loop dereferenced it: a crash in the
+      // first FlushEvents after a pop-out was closed (the loading dialog's stop at the next map open).
+      if (inputWindow == nullptr) {
+        ++index;
+        continue;
+      }
       suspended[index].push_back(inputWindow->PopEventHandler(false));
       suspended[index].push_back(inputWindow->PopEventHandler(false));
       ++index;
@@ -17652,6 +17658,10 @@ namespace moho
 
     index = 0;
     for (wxWindow* const inputWindow : g_UIManager->mInputWindows) {
+      if (inputWindow == nullptr) {
+        ++index;
+        continue;
+      }
       inputWindow->PushEventHandler(suspended[index][1]);
       inputWindow->PushEventHandler(suspended[index][0]);
       ++index;
