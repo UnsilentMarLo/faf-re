@@ -1904,7 +1904,8 @@ namespace gpg::gal
             outParameters->MultiSampleQuality = head.antialiasingLow;
             // EDITOR: only a mode this adapter offered (HeadSampleOption list, built from CheckDeviceMultiSampleType) is asked for. Anything else (a stale or damaged saved
             // value, the other bit layout) becomes "no anti-aliasing": an invalid request made the Reset of a hybrid NVIDIA laptop hang for good.
-            if ((head.antialiasingHigh != 0U || head.antialiasingLow != 0U) && head.mStrs.begin() != head.mStrs.end())   // (the list is filled once the device exists)
+            // (In the editor an empty list means "no mode offered", so nothing is asked for, also at device creation, before the list is filled.)
+            if (head.antialiasingHigh != 0U || head.antialiasingLow != 0U)
             {
                 bool offered = false;
                 for (const HeadSampleOption* option = head.mStrs.begin(); option != head.mStrs.end(); ++option)
@@ -2080,6 +2081,14 @@ namespace gpg::gal
                     head.mStrs.push_back(option);
                 }
             }
+#ifdef FAF_STUDIO_EDITOR
+            // EDITOR: no swap chain anti-aliasing on NVIDIA adapters. A hybrid NVIDIA + Intel laptop (RTX 4060 Laptop) froze for good, with the main thread waiting inside nvd3dumx.dll,
+            // as soon as the 8x mode (8 samples) was active; every Reset and Present of the editor's D3D9 device follows. The option list stays empty (the editor offers "Off"
+            // only) and GetHeadParameters then never asks for a mode. FAFSTUDIO_NVIDIA_AA=1 brings the list back for testing a card on its own.
+            else if (std::getenv("FAFSTUDIO_NVIDIA_AA") == nullptr || std::getenv("FAFSTUDIO_NVIDIA_AA")[0] != '1')
+            {
+            }
+#endif
             else
             {
                 struct SampleCandidate final
