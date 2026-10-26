@@ -12,7 +12,8 @@
 //   AeonCZAR   as Aeon
 //   Insect     sqrt(max(specular.b - 0.04, 0))                                          -
 //   Seraphim   saturate(specular.b - 0.1) + albedo.a * teamColour + saturate(albedo.rgb - 0.4) * 1.5   the albedo.a share is the team colour
-//   others     no glow: props, wreckage (its specular.b is noise), shields, the map border
+//   *Glow*     emission = max(albedo.rgb): a projectile or effect mesh that glows as a whole
+//   others     no glow: props, wreckage (its specular.b is noise), shield bubbles, the map border
 //
 // (the channels: specular.r metal, .g roughness, .b glow, .a team mask; for the Seraphim the team mask is the albedo alpha). The glow colour
 // of a texel is its albedo, except where the team colour is the source. Pure functions on decoded images (LightTexture.h), no engine headers.
@@ -32,6 +33,7 @@ namespace moho::lights
 
   // The strength of the light a glow of this size makes: how much light the unit puts on its surroundings, 0..kMaxMeshIntensity.
   constexpr float kMaxMeshIntensity = 0.8f;
+  constexpr float kMinMeshGlowArea = 0.002f;
   float MeshLightIntensity(const MeshGlow& glow);
 
   // Its radius, from the radius of the unit's bounding sphere: the glow reaches about one and a half body sizes, never less than 2 units.

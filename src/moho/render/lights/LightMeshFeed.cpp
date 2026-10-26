@@ -8,6 +8,7 @@
 #include "gpg/core/utils/Logging.h"
 #include "moho/mesh/Mesh.h"
 #include "moho/mesh/MeshBatchKey.h"
+#include "moho/render/lights/LightCensus.h"
 #include "moho/render/lights/LightFeeds.h"
 #include "moho/render/lights/LightMeshEmission.h"
 #include "moho/render/lights/LightTextureCache.h"
@@ -127,6 +128,24 @@ namespace moho::lights
         continue;
       }
       const LodGlow glowCopy = GlowOf(*blueprintLod);
+      if (CensusEnabled()) {
+        char albedo[260] = {};
+        char specular[260] = {};
+        char shader[64] = {};
+        if (ReadNames(*blueprintLod, albedo, specular, shader)) {
+          TextureColour c;
+          c.valid = true;
+          c.peak = glowCopy.glow.area;
+          c.hue[0] = glowCopy.glow.hue[0];
+          c.hue[1] = glowCopy.glow.hue[1];
+          c.hue[2] = glowCopy.glow.hue[2];
+          c.brightness = glowCopy.glow.teamShare;
+          const std::string key = std::string("shader=") + shader + " albedo=" + albedo + " spec=" + specular;
+          for (std::size_t i = 0; i < bucket.second.size(); ++i) {
+            CensusNote("mesh", key, glowCopy.intensity > 0.0f ? "ok:glowing unit" : "no:no glow (area 0)", 0.0f, &c);
+          }
+        }
+      }
       if (glowCopy.intensity <= 0.0f) {
         continue;
       }
@@ -160,6 +179,7 @@ namespace moho::lights
             c /= top;
           }
         }
+        ReduceWhite(rgb, 0.5f); // a glow is coloured at its edge and white-hot in its core: the light has the colour
 
         Emission e;
         e.kind = Kind::Mesh;

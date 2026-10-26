@@ -266,6 +266,40 @@ namespace
     TCHECK(Near(d.alpha, 1.0f / 16.0f, 0.01f) && d.hue[0] > 0.99f);
   }
 
+  void TestReduceWhite()
+  {
+    // white stays white, a pure colour stays, a pale colour gets its colour back with the brightest channel kept
+    float white[3] = {0.8f, 0.8f, 0.8f};
+    ReduceWhite(white, 0.75f);
+    TCHECK(Near(white[0], 0.8f) && Near(white[1], 0.8f) && Near(white[2], 0.8f));
+    float red[3] = {1.0f, 0.0f, 0.0f};
+    ReduceWhite(red, 1.0f);
+    TCHECK(Near(red[0], 1.0f) && Near(red[1], 0.0f) && Near(red[2], 0.0f));
+    float pale[3] = {1.0f, 0.8f, 0.6f};
+    ReduceWhite(pale, 1.0f);
+    TCHECK(Near(pale[0], 1.0f) && Near(pale[1], 0.5f) && Near(pale[2], 0.0f)); // (0.4, 0.2, 0) scaled to max 1
+    float half[3] = {1.0f, 0.8f, 0.6f};
+    ReduceWhite(half, 0.5f);
+    TCHECK(Near(half[0], 1.0f) && half[1] > 0.6f && half[1] < 0.8f && half[2] < 0.6f); // between the pale colour and the pure one
+    float none[3] = {0.0f, 0.0f, 0.0f};
+    ReduceWhite(none, 0.75f);
+    TCHECK(Near(none[0], 1.0f) && Near(none[1], 1.0f) && Near(none[2], 1.0f)); // nothing: white, not NaN
+    float zero[3] = {1.0f, 0.5f, 0.25f};
+    ReduceWhite(zero, 0.0f);
+    TCHECK(Near(zero[1], 0.5f) && Near(zero[2], 0.25f));
+
+    // the average colour of a texture with a white core and an orange halo: the tint is orange, the hue (brightness weighted) is paler
+    Rgba8Image img;
+    img.width = 2;
+    img.height = 2;
+    img.rgba = {255, 255, 255, 255, 255, 140, 40, 255, 255, 140, 40, 255, 255, 140, 40, 255};
+    const TextureColour c = Summarise(img);
+    TCHECK(c.valid);
+    TCHECK(c.tint[0] > c.tint[1] && c.tint[1] > c.tint[2]);
+    TCHECK(c.tint[2] < c.average[2] / c.average[0]); // less blue than the plain average
+    TCHECK(Near(c.average[0], 1.0f));
+  }
+
   void TestRamp()
   {
     // a ramp 4 wide, 2 rows: row 0 goes black -> white, row 1 is constant red; alpha 255 -> 0 on row 0
@@ -308,6 +342,7 @@ int RunTextureTests(int& checks)
   TestMipChoice();
   TestRefusals();
   TestSummary();
+  TestReduceWhite();
   TestRamp();
   checks += gTexChecks;
   return gTexFailures;

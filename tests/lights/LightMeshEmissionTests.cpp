@@ -125,6 +125,11 @@ namespace
     MCHECK(AnalyseMeshGlow(albedo, &spec, "Wreckage").area == 0.0f);
     MCHECK(AnalyseMeshGlow(albedo, &spec, "PhaseShield").area == 0.0f);
     MCHECK(AnalyseMeshGlow(albedo, &spec, "MapImager").area == 0.0f);
+    MCHECK(AnalyseMeshGlow(albedo, &spec, "AeonPhaseShield").area == 0.0f); // the bubble of a shield is not the unit
+    // a mesh that glows as a whole: its albedo is the emission
+    MCHECK(Near(AnalyseMeshGlow(Solid(2, 2, 255, 100, 0, 255), nullptr, "TMeshGlow").area, 1.0f));
+    MCHECK(Near(AnalyseMeshGlow(Solid(2, 2, 255, 100, 0, 255), nullptr, "NormalMappedGlow").hue[1], 100.0f / 255.0f));
+    MCHECK(Near(AnalyseMeshGlow(Solid(2, 2, 51, 25, 0, 255), nullptr, "TMeshGlow").area, 0.2f));
     MCHECK(AnalyseMeshGlow(albedo, &spec, "").area == 0.0f);
     MCHECK(AnalyseMeshGlow(albedo, &spec, "NormalMapped").valid);
     // the unit shaders, whatever the case of the name
@@ -162,6 +167,10 @@ namespace
     a.area = 5.0f;
     const float hard = MeshLightIntensity(a);
     MCHECK(faint > 0.0f && faint < medium && medium < hard);
+    a.area = 0.001f;
+    MCHECK(MeshLightIntensity(a) == 0.0f); // below the minimum glow area
+    a.area = 0.002f;
+    MCHECK(MeshLightIntensity(a) > 0.0f);
     MCHECK(Near(hard, kMaxMeshIntensity, 1.0e-4f)); // never above the cap
 
     MCHECK(Near(MeshLightRadius(0.0f), 2.0f) && Near(MeshLightRadius(-1.0f), 2.0f) && Near(MeshLightRadius(std::nanf("")), 2.0f));

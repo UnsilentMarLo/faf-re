@@ -9,6 +9,7 @@ namespace moho::lights
   {
     constexpr float kMaxExplicitRadius = 5000.0f;
     constexpr float kMaxExplicitIntensity = 100.0f;
+    constexpr float kMaxStepUnits = 40.0f; // a tracked light that moves further than this between two refreshes jumped
 
     bool Finite3(const float (&v)[3])
     {
@@ -215,6 +216,29 @@ namespace moho::lights
       for (float& c : e.rgb) {
         c = model::Clamp(std::isfinite(c) ? c : 0.0f, 0.0f, 1.0f);
       }
+      // velocity: the owner's, else from the move since the last refresh (a jump too large for a tick is a teleport, not a speed)
+      const float dt = nowTick - entry.sampleTick;
+      if (e.hasVel) {
+        for (int k = 0; k < 3; ++k) {
+          entry.vel[k] = e.vel[k];
+          entry.endVel[k] = e.endVel[k];
+        }
+      } else if (dt > 0.05f && dt <= 6.0f) {
+        const bool capsule = e.kind == Kind::Beam || e.kind == Kind::Trail;
+        float step2 = 0.0f;
+        float v[3], w[3];
+        for (int k = 0; k < 3; ++k) {
+          v[k] = (e.pos[k] - entry.e.pos[k]) / dt;
+          w[k] = capsule ? (e.end[k] - entry.e.end[k]) / dt : 0.0f;
+          step2 = std::max(step2, v[k] * v[k] + w[k] * w[k]);
+        }
+        const bool teleport = step2 * dt * dt > kMaxStepUnits * kMaxStepUnits;
+        for (int k = 0; k < 3; ++k) {
+          entry.vel[k] = teleport ? 0.0f : v[k];
+          entry.endVel[k] = teleport ? 0.0f : w[k];
+        }
+      } // else: same tick again, or a long gap: keep the old velocity
+      entry.sampleTick = nowTick;
       entry.e = e;
       entry.peakPower = std::max(entry.peakPower, PeakPower(e)); // the class never drops while the light lives
       return true;
@@ -244,6 +268,13 @@ namespace moho::lights
     }
     entry.serial = nextSerial_++;
     entry.key = key;
+    entry.sampleTick = nowTick;
+    if (e.hasVel) {
+      for (int k = 0; k < 3; ++k) {
+        entry.vel[k] = e.vel[k];
+        entry.endVel[k] = e.endVel[k];
+      }
+    }
     pool_.push_back(entry);
     trackedIndex_[key] = pool_.size() - 1;
     ++stats_.tracked;
@@ -309,7 +340,7 @@ namespace moho::lights
       float radius = 0.0f;
       float baseIntensity = 0.0f;
       Strength(e, size, radius, baseIntensity);
-      const float intensity = baseIntensity * model::WeakenFactor(radius) * env;
+      const float intensity = baseIntensity * e.gain * model::WeakenFactor(radius) * env;
 
       // The colour now: constant, or along the ramp curve.
       float rgbNow[3] = {e.rgb[0], e.rgb[1], e.rgb[2]};
@@ -328,24 +359,45 @@ namespace moho::lights
         continue;
       }
 
-      // The particle shader's motion rule, t in ticks (never before birth).
-      const float t = age < 0.0f ? 0.0f : age;
       Ranked r{};
-      r.light.pos[0] = e.pos[0] + e.dir[0] * t + 0.5f * e.accel[0] * t * t;
-      r.light.pos[1] = e.pos[1] + e.dir[1] * t + 0.5f * e.accel[1] * t * t;
-      r.light.pos[2] = e.pos[2] + e.dir[2] * t + 0.5f * e.accel[2] * t * t;
-      if (e.kind == Kind::Beam || e.kind == Kind::Trail) {
-        r.light.end[0] = e.end[0] + (r.light.pos[0] - e.pos[0]);
-        r.light.end[1] = e.end[1] + (r.light.pos[1] - e.pos[1]);
-        r.light.end[2] = e.end[2] + (r.light.pos[2] - e.pos[2]);
-      } else if (e.kind == Kind::Spot) {
-        r.light.end[0] = e.end[0];
-        r.light.end[1] = e.end[1];
-        r.light.end[2] = e.end[2];
+      if (entry.key != 0) {
+        // tracked: carried on along the velocity of the last refreshes, so a light refreshed once per tick still moves every frame
+        const float carry = model::Clamp(nowTick - entry.sampleTick, 0.0f, kMaxCarryTicks);
+        for (int k = 0; k < 3; ++k) {
+          r.light.pos[k] = e.pos[k] + entry.vel[k] * carry;
+        }
+        if (e.kind == Kind::Beam || e.kind == Kind::Trail) {
+          for (int k = 0; k < 3; ++k) {
+            r.light.end[k] = e.end[k] + entry.endVel[k] * carry;
+          }
+        } else if (e.kind == Kind::Spot) {
+          for (int k = 0; k < 3; ++k) {
+            r.light.end[k] = e.end[k];
+          }
+        } else {
+          for (int k = 0; k < 3; ++k) {
+            r.light.end[k] = r.light.pos[k];
+          }
+        }
       } else {
-        r.light.end[0] = r.light.pos[0];
-        r.light.end[1] = r.light.pos[1];
-        r.light.end[2] = r.light.pos[2];
+        // The particle shader's motion rule, t in ticks (never before birth).
+        const float t = age < 0.0f ? 0.0f : age;
+        r.light.pos[0] = e.pos[0] + e.dir[0] * t + 0.5f * e.accel[0] * t * t;
+        r.light.pos[1] = e.pos[1] + e.dir[1] * t + 0.5f * e.accel[1] * t * t;
+        r.light.pos[2] = e.pos[2] + e.dir[2] * t + 0.5f * e.accel[2] * t * t;
+        if (e.kind == Kind::Beam || e.kind == Kind::Trail) {
+          r.light.end[0] = e.end[0] + (r.light.pos[0] - e.pos[0]);
+          r.light.end[1] = e.end[1] + (r.light.pos[1] - e.pos[1]);
+          r.light.end[2] = e.end[2] + (r.light.pos[2] - e.pos[2]);
+        } else if (e.kind == Kind::Spot) {
+          r.light.end[0] = e.end[0];
+          r.light.end[1] = e.end[1];
+          r.light.end[2] = e.end[2];
+        } else {
+          r.light.end[0] = r.light.pos[0];
+          r.light.end[1] = r.light.pos[1];
+          r.light.end[2] = r.light.pos[2];
+        }
       }
       r.light.cone = e.cone;
       r.light.radius = radius;
@@ -374,9 +426,19 @@ namespace moho::lights
     const std::size_t take = std::min(maxLights, ranked.size());
     stats_.culledByCap = static_cast<std::uint32_t>(ranked.size() - take);
     out.reserve(take);
-    for (std::size_t i = 0; i < take; ++i) {
+    int bigKept = 0;
+    std::size_t culled = ranked.size() - take;
+    for (std::size_t i = 0; i < ranked.size() && out.size() < take; ++i) {
+      if (ranked[i].light.radius > model::kBigLightRadius) {
+        if (bigKept >= model::kMaxBigLights) {
+          ++culled;
+          continue;
+        }
+        ++bigKept;
+      }
       out.push_back(ranked[i].light);
     }
+    stats_.culledByCap = static_cast<std::uint32_t>(culled);
   }
 
   void LightCollector::Clear()

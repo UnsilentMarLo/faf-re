@@ -10,6 +10,7 @@
 #include "moho/particles/SWorldParticle.h"
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/lights/LightBinding.h"
+#include "moho/render/lights/LightCensus.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
 
@@ -101,6 +102,7 @@ namespace moho::lights
       return;
     }
 
+    FeedBeamsForFrame(tick, frameAlpha);
     gCollector.Update(static_cast<float>(tick) + frameAlpha, kMaxFrameLights, gFrameLights);
 
     float mapX = 0.0f, mapZ = 0.0f;
@@ -109,6 +111,7 @@ namespace moho::lights
       UpdateBinding(gFrameImage);
     }
     gpg::gal::gDynLightPassActive.store(gFrameImage.lightCount > 0, std::memory_order_relaxed);
+    CensusFrame();
 
     if (ren_DynLightsLog > 0 && ++gLogCounter >= ren_DynLightsLog) {
       gLogCounter = 0;

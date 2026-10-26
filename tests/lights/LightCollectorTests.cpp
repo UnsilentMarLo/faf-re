@@ -514,6 +514,76 @@ namespace
     CHECK(!c.Track(5, e, std::numeric_limits<float>::quiet_NaN(), 2.0f));
   }
 
+  void TestTrackedMotionAtFrameRate()
+  {
+    // a light refreshed once per tick is drawn every frame: between two refreshes it moves on at the velocity of the last two
+    LightCollector c;
+    c.SetQuality(model::kUltra);
+    Emission e;
+    e.kind = Kind::Glow;
+    e.radius = 20.0f;
+    e.intensity = 1.0f;
+    std::vector<Light> out;
+    e.pos[0] = 0.0f;
+    CHECK(c.Track(1, e, 10.0f, 50.0f));
+    e.pos[0] = 2.0f;
+    CHECK(c.Track(1, e, 11.0f, 50.0f)); // 2 units per tick
+    c.Update(11.0f, 16, out);
+    CHECK(out.size() == 1 && Near(out[0].pos[0], 2.0f));
+    c.Update(11.5f, 16, out);
+    CHECK(out.size() == 1 && Near(out[0].pos[0], 3.0f)); // half a tick on
+    c.Update(11.25f, 16, out);
+    CHECK(out.size() == 1 && Near(out[0].pos[0], 2.5f));
+    c.Update(20.0f, 16, out);
+    CHECK(out.size() == 1 && Near(out[0].pos[0], 2.0f + 2.0f * LightCollector::kMaxCarryTicks)); // carried at most kMaxCarryTicks
+
+    // a jump (a beam that retargets) is a teleport, not a speed
+    e.pos[0] = 500.0f;
+    CHECK(c.Track(1, e, 12.0f, 50.0f));
+    c.Update(12.5f, 16, out);
+    CHECK(out.size() == 1 && Near(out[0].pos[0], 500.0f));
+
+    // the owner may state the velocity: a beam knows its last transform
+    Emission b;
+    b.kind = Kind::Beam;
+    b.radius = 5.0f;
+    b.intensity = 1.0f;
+    b.pos[0] = 0.0f;
+    b.end[0] = 10.0f;
+    b.hasVel = true;
+    b.vel[0] = 1.0f;
+    b.endVel[0] = 4.0f;
+    CHECK(c.Track(2, b, 30.0f, 5.0f));
+    c.Update(30.5f, 16, out);
+    bool saw = false;
+    for (const Light& l : out) {
+      saw = saw || (l.kind == Kind::Beam && Near(l.pos[0], 0.5f) && Near(l.end[0], 12.0f));
+    }
+    CHECK(saw);
+  }
+
+  void TestGain()
+  {
+    LightCollector c;
+    c.SetQuality(model::kUltra);
+    Emission e;
+    e.kind = Kind::Glow;
+    e.birth = 0.0f;
+    e.life = 50.0f;
+    e.size0 = e.size1 = 2.0f;
+    e.rgb[0] = e.rgb[1] = e.rgb[2] = 1.0f;
+    std::vector<Light> out;
+    CHECK(c.Add(e));
+    c.Update(20.0f, 16, out);
+    CHECK(out.size() == 1);
+    const float one = out[0].rgb[0];
+    e.gain = 2.0f;
+    c.Clear();
+    CHECK(c.Add(e));
+    c.Update(20.0f, 16, out);
+    CHECK(out.size() == 1 && Near(out[0].rgb[0], 2.0f * one));
+  }
+
   void TestManyLightsInPool()
   {
     // 10000 lights are held and ranked; the pool is not what limits them
@@ -568,6 +638,8 @@ int main()
   TestExplicitStrength();
   TestCapsuleMotion();
   TestTrackedLights();
+  TestTrackedMotionAtFrameRate();
+  TestGain();
   TestManyLightsInPool();
   TestClear();
   gFailures += RunGridTests(gChecks);

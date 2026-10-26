@@ -35,6 +35,10 @@ namespace moho::lights
   // Called once per rendered frame after MeshRenderer::Batch: the glowing unit and projectile meshes on screen become lights (nowTick = tick + frame alpha).
   void FeedMeshes(float nowTick);
 
+  // The beams of the last beats, with their endpoints worked out for this frame (the beam renderer's own interpolation, so the light sits
+  // where the beam is drawn). Called by BeginFrame.
+  void FeedBeamsForFrame(int tick, float frameAlpha);
+
   // Called once per rendered world view before the terrain is composited, with the clock the particle shaders use (tick + frame alpha).
   void BeginFrame(int tick, float frameAlpha);
 

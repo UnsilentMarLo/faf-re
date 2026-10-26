@@ -29,7 +29,14 @@ namespace moho::lights
     float brightness = 0.0f;           // mean of alpha x luminance over the whole texture, 0..1: how much of the quad glows
     float peak = 0.0f;                 // the brightest alpha x luminance, 0..1
     float alpha = 0.0f;                // mean alpha, 0..1
+    float average[3] = {1.0f, 1.0f, 1.0f}; // alpha-weighted mean colour of all texels (not luminance-weighted: the halo counts as much as the core)
+    float tint[3] = {1.0f, 1.0f, 1.0f};   // `average` with the white taken out (ReduceWhite), brightest channel = 1: the colour the light has
   };
+
+  // Takes the white out of a colour: subtracts `amount` x the smallest channel from every channel and scales the result so the largest channel
+  // keeps its old value. A glow texture is white-hot in the middle and coloured at the edge; its mean colour is pale, the light should have
+  // the colour of the edge. amount 0 returns the colour unchanged, 1 removes all the white. White stays white.
+  void ReduceWhite(float (&rgb)[3], float amount);
 
   TextureColour Summarise(const Rgba8Image& image);
 

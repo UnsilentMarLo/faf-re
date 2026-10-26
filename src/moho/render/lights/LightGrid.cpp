@@ -95,7 +95,7 @@ namespace moho::lights
       a[0] = l.pos[0];
       a[1] = l.pos[1];
       a[2] = l.pos[2];
-      a[3] = l.radius;
+      a[3] = l.kind == Kind::Spot ? -l.radius : l.radius; // a spotlight has a negative radius: the shader tells it from a capsule by that
       a[4] = l.rgb[0];
       a[5] = l.rgb[1];
       a[6] = l.rgb[2];

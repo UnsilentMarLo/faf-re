@@ -121,7 +121,7 @@ namespace
     PCHECK(Braces(text) == Braces(original));
     PCHECK(Count(text, "pass PDynLight") == static_cast<std::size_t>(r.techniques));
     PCHECK(Count(text, "int dynLightPasses = 1;") == static_cast<std::size_t>(r.techniques));
-    PCHECK(Count(text, "light += DynLightTerrain(worldTerrain.xzy, inNormal);") == 1);
+    PCHECK(Count(text, "light += DynLightTerrainFew(worldTerrain.xzy, inNormal);") == 1);
     PCHECK(Count(text, "float3 DynLightTerrain(") == 1);
     // the declarations come before their first use
     PCHECK(text.find("float3 DynLightTerrain(") < text.find("light += DynLightTerrain("));

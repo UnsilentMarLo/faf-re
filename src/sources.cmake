@@ -226,6 +226,7 @@ set(FAF_ENGINE_SOURCES
   moho/render/lights/SimLights.cpp
   moho/render/lights/LightFeeds.cpp
   moho/render/lights/LightFeedSources.cpp
+  moho/render/lights/LightCensus.cpp
   moho/render/lights/LightMeshFeed.cpp
   moho/app/WinApp.cpp
   gpg/core/diagnostics/CrashHooks.cpp

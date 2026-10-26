@@ -8,6 +8,7 @@ namespace moho::lights
 {
   namespace
   {
+    constexpr float kTintWhiteReduction = 0.75f; // how much of the white of a texture average is taken out for the light colour
     constexpr std::uint32_t kDdsMagic = 0x20534444u; // "DDS "
     constexpr std::uint32_t kFourccDxt1 = 0x31545844u;
     constexpr std::uint32_t kFourccDxt3 = 0x33545844u;
@@ -241,6 +242,8 @@ namespace moho::lights
     double sumAlpha = 0.0;
     double sumWeighted[3] = {0.0, 0.0, 0.0};
     double sumWeight = 0.0;
+    double sumPlain[3] = {0.0, 0.0, 0.0};
+    double sumPlainWeight = 0.0;
     float peak = 0.0f;
     for (std::size_t i = 0; i < count; ++i) {
       const float r = image.rgba[i * 4 + 0] / 255.0f;
@@ -253,6 +256,10 @@ namespace moho::lights
       sumAlpha += a;
       peak = std::max(peak, glow);
       // the hue is carried by the bright texels: weight by the glow
+      sumPlain[0] += a * r;
+      sumPlain[1] += a * g;
+      sumPlain[2] += a * b;
+      sumPlainWeight += a;
       sumWeighted[0] += glow * r;
       sumWeighted[1] += glow * g;
       sumWeighted[2] += glow * b;
@@ -275,8 +282,40 @@ namespace moho::lights
     } else {
       out.hue[0] = out.hue[1] = out.hue[2] = 1.0f;
     }
+    if (sumPlainWeight > 1.0e-6) {
+      for (int c = 0; c < 3; ++c) {
+        out.average[c] = static_cast<float>(sumPlain[c] / sumPlainWeight);
+      }
+    } else {
+      out.average[0] = out.average[1] = out.average[2] = 1.0f;
+    }
+    for (int c = 0; c < 3; ++c) {
+      out.tint[c] = out.average[c];
+    }
+    ReduceWhite(out.tint, kTintWhiteReduction);
     out.valid = true;
     return out;
+  }
+
+  void ReduceWhite(float (&rgb)[3], const float amount)
+  {
+    float lo = std::min(rgb[0], std::min(rgb[1], rgb[2]));
+    float hi = std::max(rgb[0], std::max(rgb[1], rgb[2]));
+    if (!(hi > 1.0e-6f)) {
+      rgb[0] = rgb[1] = rgb[2] = 1.0f;
+      return;
+    }
+    const float k = amount < 0.0f ? 0.0f : (amount > 1.0f ? 1.0f : amount);
+    float reduced[3] = {rgb[0] - k * lo, rgb[1] - k * lo, rgb[2] - k * lo};
+    const float top = std::max(reduced[0], std::max(reduced[1], reduced[2]));
+    if (!(top > 1.0e-6f)) {
+      return; // nothing left but white: it stays
+    }
+    const float scale = hi / top; // the brightest channel keeps its value
+    for (int c = 0; c < 3; ++c) {
+      rgb[c] = reduced[c] * scale;
+    }
+    (void)lo;
   }
 
   void SampleRamp(const Rgba8Image& ramp, const float u, const float v, float (&rgba)[4])

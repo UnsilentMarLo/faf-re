@@ -42,18 +42,18 @@ namespace
 
   void TestLayout()
   {
-    // 1024 x 1024 map (a 20 km map): 64 cells of 16
+    // 1024 x 1024 map (a 20 km map): 128 cells of 8
     GridLayout a = GridLayout::ForMap(1024.0f, 1024.0f);
-    GCHECK(a.cellsX == 64 && a.cellsZ == 64 && a.cellSize == 16.0f);
-    // 4096 map (81 km): 64 cells of 64
+    GCHECK(a.cellsX == 128 && a.cellsZ == 128 && a.cellSize == 8.0f);
+    // 4096 map (81 km): 128 cells of 32
     GridLayout b = GridLayout::ForMap(4096.0f, 4096.0f);
-    GCHECK(b.cellsX == 64 && b.cellsZ == 64 && b.cellSize == 64.0f);
-    // 256 map (5 km): the cell does not go below 16, so 16 cells
+    GCHECK(b.cellsX == 128 && b.cellsZ == 128 && b.cellSize == 32.0f);
+    // 256 map (5 km): the cell does not go below 8, so 32 cells
     GridLayout c = GridLayout::ForMap(256.0f, 256.0f);
-    GCHECK(c.cellsX == 16 && c.cellsZ == 16 && c.cellSize == 16.0f);
+    GCHECK(c.cellsX == 32 && c.cellsZ == 32 && c.cellSize == 8.0f);
     // non-square: the longer side sets the cell size
     GridLayout d = GridLayout::ForMap(1024.0f, 512.0f);
-    GCHECK(d.cellsX == 64 && d.cellsZ == 32 && d.cellSize == 16.0f);
+    GCHECK(d.cellsX == 128 && d.cellsZ == 64 && d.cellSize == 8.0f);
     // everything is covered
     GCHECK(static_cast<float>(b.cellsX) * b.cellSize >= 4096.0f);
     GCHECK(static_cast<float>(d.cellsZ) * d.cellSize >= 512.0f);
@@ -113,9 +113,9 @@ namespace
     GCHECK(image.cellsLit > 4);
 
     // CellCount agrees with CellLights
-    GCHECK(image.CellCount(6, 6) == 1); // cell [96,112) x [96,112) holds (100,100)
-    GCHECK(image.CellCount(63, 63) == 0);
-    GCHECK(image.CellCount(64, 0) == 0); // out of range
+    GCHECK(image.CellCount(12, 12) == 1); // cell [96,104) x [96,104) holds (100,100)
+    GCHECK(image.CellCount(127, 127) == 0);
+    GCHECK(image.CellCount(128, 0) == 0); // out of range
   }
 
   void TestOrderAndOverflow()
@@ -163,7 +163,7 @@ namespace
     GCHECK(image.outsideMap == 1 && image.cellsLit == 0);
     lights.assign(1, MakeLight(512.0f, 0.0f, 512.0f, 1.0e30f)); // absurd radius: every cell, no overflow of the loops
     BuildLightGrid(lights, layout, image);
-    GCHECK(image.cellsLit == 64u * 64u);
+    GCHECK(image.cellsLit == 128u * 128u);
 
     // outside the map the lookup is empty
     GCHECK(image.CellLights(-1.0f, 10.0f, idx) == 0);

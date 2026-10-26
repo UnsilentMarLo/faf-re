@@ -116,9 +116,9 @@ namespace moho::lights::model
   {
     return Clamp(2.4f * size, 3.0f, 14.0f);
   }
-  constexpr float GlowEnergy(const float size) // per sprite, before the ramp brightness
+  constexpr float GlowEnergy(const float size) // per sprite, before the ramp brightness; sprites overlap, so one alone is faint
   {
-    return 0.11f * size + 0.07f;
+    return 0.06f * size + 0.04f;
   }
 
   // ------------------------------------------------------------------------------------------------ trails and beams
@@ -130,6 +130,16 @@ namespace moho::lights::model
   constexpr float TrailIntensity(const float size)
   {
     return Clamp(0.28f + 0.15f * size, 0.28f, 0.55f);
+  }
+
+  // A beam is a long bright line (laser, ion blast, a unit's build or reclaim ray): wider than a trail's thread, brighter than a trail.
+  constexpr float BeamRadius(const float width)
+  {
+    return Clamp(3.5f + 8.0f * width, 3.5f, 12.0f);
+  }
+  constexpr float BeamIntensity(const float width) // before the beam's own colour brightness and alpha
+  {
+    return Clamp(0.6f + 0.6f * width, 0.6f, 1.0f);
   }
 
   // ------------------------------------------------------------------------------------------------ level of detail
@@ -148,5 +158,8 @@ namespace moho::lights::model
   // A light fades in over kFadeInSeconds after its birth and out over kFadeOutSeconds after its life ends, so it never pops.
   constexpr float kFadeInSeconds = 0.08f;
   constexpr float kFadeOutSeconds = 0.30f;
+  // Big lights (a nuke flash covers the screen) cost a pixel evaluation everywhere: only the strongest few are kept.
+  constexpr float kBigLightRadius = 80.0f;
+  constexpr int kMaxBigLights = 8;
   constexpr float kMinVisible = 0.015f; // colour x intensity below this adds nothing visible: the light is dropped
 } // namespace moho::lights::model

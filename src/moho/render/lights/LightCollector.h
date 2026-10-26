@@ -49,6 +49,13 @@ namespace moho::lights
     // Explicit strength, for lights whose author states it (a Lua light, a measured beam): when radius > 0 the model is not asked.
     float radius = 0.0f;
     float intensity = 0.0f;
+    // Multiplies the intensity the model gives (energy of several merged sprites, brightness of the texture). 1 = as modelled.
+    float gain = 1.0f;
+    // Velocity in world units per tick, for a tracked light whose owner knows it (a beam: current minus last transform). When `hasVel` is
+    // false Track() derives it from the last two refreshes. `endVel` is the same for the other end of a capsule.
+    float vel[3] = {0.0f, 0.0f, 0.0f};
+    float endVel[3] = {0.0f, 0.0f, 0.0f};
+    bool hasVel = false;
   };
 
   // One light for this frame.
@@ -82,6 +89,9 @@ namespace moho::lights
     // Lights the pool holds at once. The first patch had 16 on units and 28 on the ground; the pool no longer is the limit.
     static constexpr std::size_t kPoolCapacity = 16384;
 
+    // How far past its last refresh a tracked light is carried along its velocity, in ticks.
+    static constexpr float kMaxCarryTicks = 2.0f;
+
     // Quality: model::kOff..model::kUltra. Lowering it also drops stored lights the new level no longer admits.
     void SetQuality(int quality);
     [[nodiscard]] int Quality() const { return quality_; }
@@ -111,6 +121,11 @@ namespace moho::lights
   private:
     struct Entry
     {
+      // A tracked light is sent once per sim tick but drawn every frame: between two refreshes it is carried on by the velocity of the last
+      // two samples (dead reckoning, at most kMaxCarryTicks), so it moves smoothly instead of stepping with the tick.
+      float sampleTick = 0.0f; // tick of the last refresh
+      float vel[3] = {0.0f, 0.0f, 0.0f};
+      float endVel[3] = {0.0f, 0.0f, 0.0f};
       Emission e;
       float peakPower; // importance, from the peak strength: fixed for the entry's life
       std::uint32_t serial;

@@ -78,13 +78,12 @@ float DynLightAt(float entry, float3 worldPos, out float3 toLight, out float3 co
 {
     float k = (entry - 1.0) * 3.0;
     float4 a = DynLightTexel(k);
-    float4 b = DynLightTexel(k + 1.0);
     float4 c = DynLightTexel(k + 2.0);
-    bool spot = b.a > 4.5;
+    bool spot = a.w < 0.0;   // a spotlight is stored with a negative radius
+    float r = max(abs(a.w), 0.001);
     float3 seg = spot ? float3(0, 0, 0) : c.xyz - a.xyz;
     float t = saturate(dot(worldPos - a.xyz, seg) / max(dot(seg, seg), 0.0001));
     toLight = a.xyz + seg * t - worldPos;
-    float r = max(a.w, 0.001);
     float atten = saturate(1 - dot(toLight, toLight) / (r * r));
     atten *= 0.35 + 0.65 * atten;   // softer tail than atten^2: a light just above the ground must still reach the ground around it
     if (spot)
@@ -92,7 +91,11 @@ float DynLightAt(float entry, float3 worldPos, out float3 toLight, out float3 co
         float cd = dot(-normalize(toLight), c.xyz);
         atten *= saturate((cd - c.w) / max((1.0 - c.w) * 0.5, 0.0001));
     }
-    colour = b.rgb;
+    colour = float3(0, 0, 0);
+    if (atten > 0.002)
+    {
+        colour = DynLightTexel(k + 1.0).rgb;   // fetched only by the lights that reach this pixel
+    }
     return atten;
 }
 )HLSL";
@@ -100,31 +103,53 @@ float DynLightAt(float entry, float3 worldPos, out float3 toLight, out float3 co
     constexpr const char* kMeshLightCode = R"HLSL(
 float4 dynLightCamera;   // world position of the camera (set per view)
 
+void DynLightsBRDFOne(float entry, float3 worldPos, float3 n, float3 v, float nDotV, float3 F0, float3 albedo, float metallic, float roughness, inout float3 total)
+{
+    float3 d;
+    float3 lightColour;
+    float atten = DynLightAt(entry, worldPos, d, lightColour);
+    if (atten > 0.002)   // the cell is bigger than the light: most entries do not reach this pixel, and the BRDF is the expensive part
+    {
+        float3 l = normalize(d);
+        float3 h = normalize(v + l);
+        float nDotL = max(dot(n, l), 0.0);
+        float3 F = FresnelSchlick(max(dot(h, v), 0.0), F0);
+        float NDF = NormalDistribution(n, h, roughness);
+        float G = GeometrySmith(n, nDotV, l, roughness);
+        float3 reflected = PI * NDF * G * F / (4.0 * nDotV * nDotL + 0.0001);
+        float3 refracted = (float3(1, 1, 1) - F) * (1.0 - metallic) * albedo;
+        float wrapL = saturate((dot(n, l) + 0.35) / 1.35);   // wrapped diffuse: lights next to a surface still light it
+        total += (refracted * wrapL + reflected * nDotL) * lightColour * atten;
+    }
+}
+
+void DynLightsBRDFQuad(float4 e, float3 worldPos, float3 n, float3 v, float nDotV, float3 F0, float3 albedo, float metallic, float roughness, inout float3 total)
+{
+    if (e.x > 0.5) { DynLightsBRDFOne(e.x, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total); }
+    if (e.y > 0.5) { DynLightsBRDFOne(e.y, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total); }
+    if (e.z > 0.5) { DynLightsBRDFOne(e.z, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total); }
+    if (e.w > 0.5) { DynLightsBRDFOne(e.w, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total); }
+}
+
 float3 DynLightsBRDF(float3 worldPos, float3 n, float3 v, float3 albedo, float metallic, float roughness)
 {
     float4 e0, e1, e2, e3;
     DynLightCell(worldPos, e0, e1, e2, e3);
-    float entries[16] = { e0.x, e0.y, e0.z, e0.w, e1.x, e1.y, e1.z, e1.w, e2.x, e2.y, e2.z, e2.w, e3.x, e3.y, e3.z, e3.w };
     float nDotV = abs(dot(n, v)) + 0.001;
     float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
     float3 total = float3(0, 0, 0);
-    for (int i = 0; i < 16; i++)
+    // the entries of a cell are packed at the front, strongest first: a quad is looked at only when the one before it was full
+    DynLightsBRDFQuad(e0, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total);
+    if (e0.w > 0.5)
     {
-        if (entries[i] > 0.5)
+        DynLightsBRDFQuad(e1, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total);
+        if (e1.w > 0.5)
         {
-            float3 d;
-            float3 lightColour;
-            float atten = DynLightAt(entries[i], worldPos, d, lightColour);
-            float3 l = normalize(d);
-            float3 h = normalize(v + l);
-            float nDotL = max(dot(n, l), 0.0);
-            float3 F = FresnelSchlick(max(dot(h, v), 0.0), F0);
-            float NDF = NormalDistribution(n, h, roughness);
-            float G = GeometrySmith(n, nDotV, l, roughness);
-            float3 reflected = PI * NDF * G * F / (4.0 * nDotV * nDotL + 0.0001);
-            float3 refracted = (float3(1, 1, 1) - F) * (1.0 - metallic) * albedo;
-            float wrapL = saturate((dot(n, l) + 0.35) / 1.35);   // wrapped diffuse: lights next to a surface still light it
-            total += (refracted * wrapL + reflected * nDotL) * lightColour * atten;
+            DynLightsBRDFQuad(e2, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total);
+            if (e2.w > 0.5)
+            {
+                DynLightsBRDFQuad(e3, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total);
+            }
         }
     }
     return total / (1.0 + 0.5 * total);   // soft limit: many overlapping lights must not white out the unit
@@ -155,21 +180,58 @@ float4 DynLightsVertexNormalPS(VERTEXNORMAL_VERTEX vertex) : COLOR0
 
     // Terrain: the light term at a world position with a normal, shared by the composite light pass and CalculateLighting.
     constexpr const char* kTerrainLightFunction = R"HLSL(
+void DynLightTerrainOne(float entry, float3 worldPos, float3 normal, inout float3 total)
+{
+    float3 d;
+    float3 lightColour;
+    float atten = DynLightAt(entry, worldPos, d, lightColour);
+    if (atten > 0.002)
+    {
+        total += lightColour * (atten * saturate((dot(normal, normalize(d)) + 0.5) / 1.5));   // wrapped: a light just above the ground lights it
+    }
+}
+
+void DynLightTerrainQuad(float4 e, float3 worldPos, float3 normal, inout float3 total)
+{
+    if (e.x > 0.5) { DynLightTerrainOne(e.x, worldPos, normal, total); }
+    if (e.y > 0.5) { DynLightTerrainOne(e.y, worldPos, normal, total); }
+    if (e.z > 0.5) { DynLightTerrainOne(e.z, worldPos, normal, total); }
+    if (e.w > 0.5) { DynLightTerrainOne(e.w, worldPos, normal, total); }
+}
+
+// All the lights of the cell (the composite light pass).
 float3 DynLightTerrain(float3 worldPos, float3 normal)
 {
     float4 e0, e1, e2, e3;
     DynLightCell(worldPos, e0, e1, e2, e3);
-    float entries[16] = { e0.x, e0.y, e0.z, e0.w, e1.x, e1.y, e1.z, e1.w, e2.x, e2.y, e2.z, e2.w, e3.x, e3.y, e3.z, e3.w };
     float3 total = float3(0, 0, 0);
-    for (int i = 0; i < 16; i++)
+    DynLightTerrainQuad(e0, worldPos, normal, total);
+    if (e0.w > 0.5)
     {
-        if (entries[i] > 0.5)
+        DynLightTerrainQuad(e1, worldPos, normal, total);
+        if (e1.w > 0.5)
         {
-            float3 d;
-            float3 lightColour;
-            float atten = DynLightAt(entries[i], worldPos, d, lightColour);
-            total += lightColour * (atten * saturate((dot(normal, normalize(d)) + 0.5) / 1.5));   // wrapped: a light just above the ground lights it
+            DynLightTerrainQuad(e2, worldPos, normal, total);
+            if (e2.w > 0.5)
+            {
+                DynLightTerrainQuad(e3, worldPos, normal, total);
+            }
         }
+    }
+    return total;
+}
+
+// The eight strongest lights of the cell: every decal and splat layer lights itself through CalculateLighting, so this one runs several
+// times per pixel where the composite pass runs once.
+float3 DynLightTerrainFew(float3 worldPos, float3 normal)
+{
+    float4 e0, e1, e2, e3;
+    DynLightCell(worldPos, e0, e1, e2, e3);
+    float3 total = float3(0, 0, 0);
+    DynLightTerrainQuad(e0, worldPos, normal, total);
+    if (e0.w > 0.5)
+    {
+        DynLightTerrainQuad(e1, worldPos, normal, total);
     }
     return total;
 }
@@ -676,7 +738,7 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
     }
     {
       const size_t p = s.find(sunTerm);
-      s.insert(p + sunTerm.size(), "    light += DynLightTerrain(worldTerrain.xzy, inNormal);   // FAF dynamic lights\n");
+      s.insert(p + sunTerm.size(), "    light += DynLightTerrainFew(worldTerrain.xzy, inNormal);   // FAF dynamic lights\n");
     }
     {
       const size_t p = s.find(anchor);

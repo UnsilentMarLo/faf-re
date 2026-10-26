@@ -14,6 +14,7 @@ namespace moho::lights
       Aeon,
       Cybran,
       Seraphim,
+      Glow,   // meshes made to glow as a whole: projectile and effect meshes (TMeshGlow, NormalMappedGlow ...)
       Legacy
     };
 
@@ -22,6 +23,14 @@ namespace moho::lights
       std::string s(shader);
       for (char& c : s) {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      }
+      // the shield bubble of a unit draws with the unit's own textures (AeonPhaseShield ...): the bubble is not the unit
+      if (s.find("shield") != std::string::npos) {
+        return Rule::Legacy;
+      }
+      // a mesh whose shader says it glows
+      if (s.find("glow") != std::string::npos) {
+        return Rule::Glow;
       }
       // the shader names of the unit techniques (mesh.fx: Unit, Insect, Aeon, AeonCZAR, Seraphim, and the navy and other variants)
       if (s.rfind("aeon", 0) == 0) {
@@ -105,6 +114,9 @@ namespace moho::lights
           emission += bright * 1.5f;
           break;
         }
+        case Rule::Glow:
+          emission = std::max(a[0], std::max(a[1], a[2])); // the whole surface glows, as bright as its albedo
+          break;
         case Rule::Legacy:
           break; // props, wreckage, shields, the map border: their specular.b is not a glow (wreckage noise, a shield pattern), no light
         }
@@ -142,7 +154,8 @@ namespace moho::lights
 
   float MeshLightIntensity(const MeshGlow& glow)
   {
-    if (!glow.valid || !(glow.area > 0.0f)) {
+    // Below this the glow is a few texels (a lamp on a building seen from afar): the light would be too faint to see and costs a light.
+    if (!glow.valid || glow.area < kMinMeshGlowArea) {
       return 0.0f;
     }
     // A unit whose whole surface glows at full strength (area 1) gets the largest light; a few glowing windows (area 0.02) a faint one.
