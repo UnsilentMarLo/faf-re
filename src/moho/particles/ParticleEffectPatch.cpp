@@ -142,17 +142,14 @@ float4 LRCompositePS(LR_QUAD_OUT inData) : COLOR
 	float e01 = abs(LRViewZ(tex2D(LRDepthSampler, uv + dv).x) - z);
 	float e11 = abs(LRViewZ(tex2D(LRDepthSampler, uv + du + dv).x) - z);
 
-	float4 result = lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
-	if (max(max(e00, e10), max(e01, e11)) > 0.03 * z)
-	{
-		// A depth edge: take the one low-resolution texel whose depth is closest to this pixel's.
-		float best = e00;
-		result = c00;
-		if (e10 < best) { best = e10; result = c10; }
-		if (e01 < best) { best = e01; result = c01; }
-		if (e11 < best) { best = e11; result = c11; }
-	}
-	return result;
+	// Bilinear weights, each divided by how far that texel's depth is from this pixel's: on a smooth surface (all within about 1.5 %) this
+	// is the bilinear upsample, at a depth edge it leans on the texels that are on this pixel's side of it, without a hard switch.
+	float s = 0.015 * z;
+	float w00 = (1 - f.x) * (1 - f.y) / (1 + (e00 / s) * (e00 / s));
+	float w10 = f.x * (1 - f.y) / (1 + (e10 / s) * (e10 / s));
+	float w01 = (1 - f.x) * f.y / (1 + (e01 / s) * (e01 / s));
+	float w11 = f.x * f.y / (1 + (e11 / s) * (e11 / s));
+	return (c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11) / max(w00 + w10 + w01 + w11, 0.000001);
 }
 
 technique LRDownsample2

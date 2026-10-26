@@ -175,5 +175,8 @@ Registered features:
 | Feature (option key) | D3D9 | D3D10 | D3D11 | D3D12 | Vulkan |
 |---|---|---|---|---|---|
 | Dynamic Lights (`dynlights_quality`, Off / Low / Medium / High / Ultra; off to on needs a restart) | no: the shipped vs_1_1 / ps_2_0 techniques cannot host the ps_3_0 light pass (the executable patch has lights for it) | no: does not start | yes (verified 2026-10-26) | yes | yes (verified 2026-10-26) |
+| Large Particle Quality (`particle_quality`, Full / Half / Quarter resolution, default Half; live) | no: the shipped effects are not patched and a smaller target would not pay for itself | no: does not start | yes (verified 2026-10-26) | yes (verified 2026-10-26) | yes (verified 2026-10-26) |
 
 Verified by running the staged battle (`tests/lights/ingame/dynlights_census.lua`) on each API with only the profile option set (no command-line switch): effects patched, lights drawn on D3D11, D3D12 and Vulkan, no entry and a log line on D3D9.
+
+Large Particle Quality (`src/moho/particles/ParticleLowRes.cpp`, docs/PERFORMANCE.md "Large particles in a lower-resolution target") was verified by paused A/B screenshots of a nuke on D3D11, D3D12 and Vulkan; it needs the patched `particle.fx` and the effect variable `SetDepthStencil` (a sampled depth in an effect) and `Device::CopyDepthStencil` of the backend.

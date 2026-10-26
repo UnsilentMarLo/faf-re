@@ -247,6 +247,7 @@ namespace gpg::gal
     std::uint64_t tableFrame = ~0ULL;
     std::uint64_t textureVersion = 0;
     const RenderTarget* tableSurface = nullptr;
+    const DepthStencilTarget* tableDepth = nullptr;
     VkDescriptorSet table = VK_NULL_HANDLE;
     std::shared_ptr<const std::vector<effects::TextureBinding>> tableBindings;
   };
@@ -1268,6 +1269,29 @@ namespace gpg::gal
     return true;
   }
 
+  bool DeviceVulkan::CopyDepthStencil(DepthStencilTarget& destination, DepthStencilTarget& source)
+  {
+    auto& to = static_cast<DepthStencilTargetVulkan&>(destination);
+    auto& from = static_cast<DepthStencilTargetVulkan&>(source);
+    vulkan::TrackedImage& target = to.Image();
+    vulkan::TrackedImage& origin = from.Image();
+    if (&to == &from || target.image == VK_NULL_HANDLE || origin.image == VK_NULL_HANDLE || target.format != origin.format ||
+        target.width != origin.width || target.height != origin.height) {
+      return false;
+    }
+    const std::lock_guard<std::recursive_mutex> lock(mMutex);
+    // Copies are not allowed inside dynamic rendering; the barriers of Transition order it after the draws that wrote the depth.
+    EndRendering();
+    Transition(origin, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    TransitionForTransferWrite(target);
+    VkImageCopy region{};
+    region.srcSubresource = {AspectOf(origin.format), 0U, 0U, 1U};
+    region.dstSubresource = {AspectOf(target.format), 0U, 0U, 1U};
+    region.extent = {origin.width, origin.height, 1U};
+    Vk().vkCmdCopyImage(mCommands, origin.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &region);
+    return true;
+  }
+
   void DeviceVulkan::TransitionForTransferWrite(vulkan::TrackedImage& image)
   {
     // Already TRANSFER_DST - an upload or copy wrote it earlier and nothing
@@ -1762,7 +1786,8 @@ namespace gpg::gal
     info.arrayLayers = 1U;
     info.samples = VK_SAMPLE_COUNT_1_BIT;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | (context->field0x10_ ? VK_IMAGE_USAGE_SAMPLED_BIT : 0U);
+    info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+      (context->field0x10_ ? VK_IMAGE_USAGE_SAMPLED_BIT : 0U);
     CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateImage(mDevice, &info, nullptr, &image.image));
     VkMemoryRequirements requirements{};
     Vk().vkGetImageMemoryRequirements(mDevice, image.image, &requirements);
@@ -1780,7 +1805,13 @@ namespace gpg::gal
     view.subresourceRange = {AspectOf(format), 0U, 1U, 0U, 1U};
     VkImageView imageView = VK_NULL_HANDLE;
     CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateImageView(mDevice, &view, nullptr, &imageView));
-    return boost::shared_ptr<DepthStencilTarget>(new DepthStencilTargetVulkan(*context, image, imageView));
+    VkImageView sampledView = VK_NULL_HANDLE;
+    if (context->field0x10_) {
+      VkImageViewCreateInfo depthOnly = view;
+      depthOnly.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0U, 1U, 0U, 1U};
+      CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateImageView(mDevice, &depthOnly, nullptr, &sampledView));
+    }
+    return boost::shared_ptr<DepthStencilTarget>(new DepthStencilTargetVulkan(*context, image, imageView, sampledView));
   }
 
   boost::shared_ptr<VertexFormat> DeviceVulkan::CreateVertexFormat(const std::uint32_t formatCode)
@@ -2520,7 +2551,7 @@ namespace gpg::gal
 
     // Textures and samplers in set 0, rebuilt when a binding changed or the frame moved on.
     if (state.table == VK_NULL_HANDLE || state.tableFrame != mFrameCount || state.textureVersion != parameters.TextureVersion() ||
-        state.tableSurface != outputContext_.surface.get()) {
+        state.tableSurface != outputContext_.surface.get() || state.tableDepth != outputContext_.depthStencil.get()) {
       const auto& slots = program.Modern().textures;
       const auto& slotParameters = program.TextureSlotParameters();
       auto bindings = std::make_shared<std::vector<effects::TextureBinding>>();
@@ -2549,6 +2580,14 @@ namespace gpg::gal
             binding = effects::TextureBinding{}; // a pass sampling its own target reads zero (D3D10/11)
           } else {
             view = static_cast<RenderTargetVulkan*>(binding.renderTarget.get())->Current().view;
+          }
+        } else if (binding.depthStencil != nullptr && slot.dimension == effects::TextureDimension::Texture2D) {
+          // A sampled depth target (the particle low-resolution passes); never the one bound as the depth output.
+          const VkImageView depthView = static_cast<DepthStencilTargetVulkan*>(binding.depthStencil.get())->SampledView();
+          if (depthView != VK_NULL_HANDLE && binding.depthStencil.get() != outputContext_.depthStencil.get()) {
+            view = depthView;
+          } else {
+            binding = effects::TextureBinding{};
           }
         } else {
           binding = effects::TextureBinding{};
@@ -2583,6 +2622,7 @@ namespace gpg::gal
       state.tableFrame = mFrameCount;
       state.textureVersion = parameters.TextureVersion();
       state.tableSurface = outputContext_.surface.get();
+      state.tableDepth = outputContext_.depthStencil.get();
     }
     bound.textures = state.table;
     bound.sampled = state.tableBindings;
@@ -2602,6 +2642,11 @@ namespace gpg::gal
         Transition(static_cast<TextureVulkan*>(binding.texture.get())->Image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
       } else if (binding.renderTarget != nullptr) {
         Transition(static_cast<RenderTargetVulkan*>(binding.renderTarget.get())->Current().image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+      } else if (binding.depthStencil != nullptr) {
+        auto* const depth = static_cast<DepthStencilTargetVulkan*>(binding.depthStencil.get());
+        if (depth->SampledView() != VK_NULL_HANDLE && binding.depthStencil.get() != outputContext_.depthStencil.get()) {
+          Transition(depth->Image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
       }
     }
   }

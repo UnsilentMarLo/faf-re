@@ -33,7 +33,7 @@
 
 namespace moho
 {
-  int ren_ParticleLowRes = 0;
+  int ren_ParticleLowRes = 1;
   float ren_ParticleLowResSize = 320.0f;
   float ren_ParticleLowResMinMpix = 30.0f;
 
@@ -43,7 +43,7 @@ namespace moho
       "ren_ParticleLowRes",
       "Draw the large soft particles (explosions, smoke, fire: quads of ren_ParticleLowResSize pixels and more) into a lower-resolution "
       "target and composite it onto the scene, which cuts the blend and fill cost of big explosions. 0 off, 1 half resolution, 2 quarter "
-      "resolution. Direct3D 11 and 12 only. The environment variable FAF_PARTICLE_LOWRES overrides it.",
+      "resolution. The default is 1; Options, Video has the same setting. Direct3D 11, 12 and Vulkan only. The environment variable FAF_PARTICLE_LOWRES overrides it.",
       &ren_ParticleLowRes
     );
 
@@ -65,13 +65,13 @@ namespace moho
                     "for slower cards. Render only, never affects the game.";
       feature.console = "ren_ParticleLowRes";
       feature.states = {{"Full resolution", "full"}, {"Half resolution", "half"}, {"Quarter resolution", "quarter"}};
-      feature.defaultLevel = 0;
+      feature.defaultLevel = 1;
       feature.apis[static_cast<int>(Api::D3D9)].reason =
         "Direct3D 9 draws with the shipped effects (no patched particle shaders) and a smaller target would not pay for itself there";
       feature.apis[static_cast<int>(Api::D3D10)].reason = "the Direct3D 10 renderer does not start";
       feature.apis[static_cast<int>(Api::D3D11)].supported = true;
       feature.apis[static_cast<int>(Api::D3D12)].supported = true;
-      feature.apis[static_cast<int>(Api::Vulkan)].reason = "not implemented yet: the Vulkan backend cannot sample the scene depth in an effect";
+      feature.apis[static_cast<int>(Api::Vulkan)].supported = true;
       feature.apply = [](const int level) { ren_ParticleLowRes = level; };
       render::RegisterFeature(feature);
       return true;
@@ -402,7 +402,8 @@ namespace moho
       return false;
     }
     const gpg::gal::DeviceApi api = context->mDeviceType;
-    return (api == gpg::gal::DeviceApi::Direct3D11 || api == gpg::gal::DeviceApi::Direct3D12) && ParticleEffectPatched();
+    return (api == gpg::gal::DeviceApi::Direct3D11 || api == gpg::gal::DeviceApi::Direct3D12 || api == gpg::gal::DeviceApi::Vulkan) &&
+           ParticleEffectPatched();
   }
 
   bool ParticleLowResEligible(const SParticleRenderBucket& bucket) noexcept

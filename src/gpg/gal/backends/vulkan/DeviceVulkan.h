@@ -138,6 +138,7 @@ namespace gpg::gal
     bool CopyVertexBufferRegion(
       VertexBuffer& destination, std::uint32_t destinationOffset, VertexBuffer& source, std::uint32_t sourceOffset, std::uint32_t byteCount
     ) override;
+    bool CopyDepthStencil(DepthStencilTarget& destination, DepthStencilTarget& source) override;
     /** Destroys a GPU program's modules and pipelines once the GPU is done with them. */
     void RetireProgram(GpuProgramVulkan& program);
 

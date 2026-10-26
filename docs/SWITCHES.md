@@ -57,6 +57,10 @@ Every performance change has a switch that brings back the original path, and bo
 | `ren_GpuProjectileIcons` | −1 (auto) | `/con` | live | Projectile icons drawn by the GPU |
 | `ren_GpuShapes` | −1 (auto) | `/con` | live | FAF's `UI_DrawLine`/`UI_DrawRect`/`UI_DrawCircle` world shapes drawn by the GPU, one instanced draw per run of same-kind shapes (0: the prim batcher, as FA-Binary-Patches draws them) |
 | `ren_ParticleBatch` | −1 (auto) | `/con` | live | Each particle bucket drawn as one instanced draw |
+| `ren_ParticleLowRes` | 1 (Half) | `/con`, Options > Video | live | Particle quads of `ren_ParticleLowResSize` pixels and more drawn into a half (1) or quarter (2) resolution target and composited; 0 draws them at full resolution. Direct3D 11, 12 and Vulkan |
+| `ren_ParticleLowResSize` | 320 | `/con` | live | Side in pixels, at full resolution, of a square particle quad that counts as large |
+| `ren_ParticleLowResMinMpix` | 30 | `/con` | live | Millions of pixels of large quads (overdraw included) a run of particle buckets must be estimated to cover before it takes the low-resolution path |
+| `/noparticlelowres` | off | command line | start | Does not patch `particle.fx` for the low-resolution particles |
 | `ren_CacheFogFootprint` | 1 | `/con` | live | The fog pass keeps each camera's terrain footprint until the camera or terrain changes |
 | `ui_IconRecords` | 1 | `/con` | live | Strategic icons classified from per-unit records refreshed only after a sync beat or a view-list rebuild |
 | `cam_FreeClampFocus` | 0 | `/con` | live | With `cam_Free` on, 1 snaps the camera focus onto the terrain under the view ray again, as before FAF FA-Binary-Patches #170 (the free camera jumped behind hills) |
