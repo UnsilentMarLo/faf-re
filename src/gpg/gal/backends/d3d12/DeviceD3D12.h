@@ -241,7 +241,8 @@ namespace gpg::gal
     [[nodiscard]] bool PrepareDraw(std::uint32_t topologyToken);
     void BindTargets();
     [[nodiscard]] D3D12_GPU_DESCRIPTOR_HANDLE AllocateTable(std::uint32_t count, D3D12_CPU_DESCRIPTOR_HANDLE& cpu);
-    [[nodiscard]] D3D12_GPU_DESCRIPTOR_HANDLE SamplerTable(const std::vector<effects::SamplerDesc>& samplers);
+    [[nodiscard]] D3D12_GPU_DESCRIPTOR_HANDLE SamplerTable(const std::vector<effects::SamplerDesc>& samplers, std::uint64_t anisotropicMask = 0);
+    void UpdateAnisotropicSamplers(effects::EffectProgram& program, ProgramState& state);
     void TransitionSampled(const std::vector<effects::TextureBinding>& bindings);
     void ResetState();
     void Trace(const char* format, ...);
@@ -343,6 +344,11 @@ namespace gpg::gal
     std::unordered_map<std::string, Microsoft::WRL::ComPtr<ID3D12PipelineState>> mPipelines;
     d3d12::PipelineCache mPipelineCache; // engine addition: mPipelines' entries kept on disk across sessions
     std::map<std::string, D3D12_GPU_DESCRIPTOR_HANDLE> mSamplerTables; // by content
+    // Forced anisotropic filtering: the tables with forced samplers live at the back of the sampler heap (the heap holds 2048 descriptors, 32 tables)
+    // and are dropped whole when the heap is full, which bumps the generation so programs rebuild theirs.
+    std::map<std::string, D3D12_GPU_DESCRIPTOR_HANDLE> mForcedSamplerTables;
+    unsigned mForcedSamplerGeneration = 1U;
+    void ResetForcedSamplerTables();
     std::uint64_t mArenaEpoch = 0; // bumped when a frame's view arena is emptied mid-frame
     BlendState mCurrent;      // what passes leave behind (D3D9's persistent render states)
     BoundPass mPass;

@@ -49,6 +49,12 @@ namespace gpg::gal
     [[nodiscard]] ID3D11Texture2D* GetTexture2D() const;
     [[nodiscard]] ID3D11Resource* GetResource() const noexcept { return mResource.Get(); }
     [[nodiscard]] DXGI_FORMAT GetFormat() const noexcept { return mDesc.Format; }
+    /** A picture meant to be looked at in the world: a 2D texture with a mip chain that is neither a cube nor a render target (forced anisotropy). */
+    [[nodiscard]] bool IsWorldTexture() const noexcept
+    {
+      return mTexture2D != nullptr && mDesc.MipLevels > 1U && (mDesc.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE) == 0U &&
+        (mDesc.BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL)) == 0U;
+    }
 
     /**
      * The GPU copy changed behind the CPU one (a copy into this texture):

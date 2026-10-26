@@ -6,11 +6,17 @@
 #include <cstdlib>
 #include <windows.h>
 #include "gpg/core/utils/Logging.h"
+#include "gpg/gal/ForcedAnisotropy.h"
 
 namespace gpg::gal
 {
   namespace
   {
+    // FAF addition: forced anisotropic filtering (ForcedAnisotropy.h). Samplers whose linear min/mag filters were turned anisotropic
+    // (the effect's own MAXANISOTROPY is then overridden too).
+    bool gAnisotropicSampler[16]{};
+    constexpr DWORD kSampMagFilter = 5, kSampMinFilter = 6, kSampMaxAnisotropy = 10, kTexfLinear = 2, kTexfAnisotropic = 3;
+
     // IID_ID3DXEffectStateManager, {79AAB587-6DBC-4FA7-82DE-37FA1781C5CE}
     // (d3dx9effect.h). The binary compares against its own copy at 0x00D7EEBC.
     constexpr GUID kIIDEffectStateManager = {
@@ -126,13 +132,45 @@ namespace gpg::gal
     const DWORD sampler, const D3DSAMPLERSTATETYPE type, const DWORD value
   )
   {
-    const bool changed = sampler >= 16 || samplerStateCache_[sampler].Update(type, value);
+    DWORD applied = value;
+    if (sampler < 16)
+    {
+      // FAF addition: forced anisotropic filtering. Linear min and mag filters become anisotropic (the cache keeps what the device holds,
+      // so a change of level or an effect asking for LINEAR again is seen as a change).
+      const int forced = ForcedAnisotropy();
+      if ((static_cast<DWORD>(type) == kSampMinFilter || static_cast<DWORD>(type) == kSampMagFilter) && forced > 1 && value == kTexfLinear)
+      {
+        applied = kTexfAnisotropic;
+        if (static_cast<DWORD>(type) == kSampMinFilter)
+        {
+          gAnisotropicSampler[sampler] = true;
+        }
+      }
+      else if (static_cast<DWORD>(type) == kSampMinFilter)
+      {
+        gAnisotropicSampler[sampler] = false;
+      }
+      if (gAnisotropicSampler[sampler] && forced > 1)
+      {
+        const DWORD level = static_cast<DWORD>(forced);
+        if (static_cast<DWORD>(type) == kSampMaxAnisotropy)
+        {
+          applied = level;
+        }
+        else if (static_cast<DWORD>(type) == kSampMinFilter && samplerStateCache_[sampler].Update(static_cast<_D3DSAMPLERSTATETYPE>(kSampMaxAnisotropy), level))
+        {
+          device_->SetSamplerState(sampler, static_cast<_D3DSAMPLERSTATETYPE>(kSampMaxAnisotropy), level);
+        }
+      }
+    }
+
+    const bool changed = sampler >= 16 || samplerStateCache_[sampler].Update(type, applied);
     if (!changed)
     {
       return S_OK;
     }
 
-    return device_->SetSamplerState(sampler, type, value);
+    return device_->SetSamplerState(sampler, type, applied);
   }
 
   /**

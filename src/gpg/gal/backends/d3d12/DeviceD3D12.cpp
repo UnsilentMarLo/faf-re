@@ -26,6 +26,7 @@
 #include "gpg/gal/EffectContext.hpp"
 #include "gpg/gal/EffectMacro.hpp"
 #include "gpg/gal/Error.hpp"
+#include "gpg/gal/ForcedAnisotropy.h"
 #include "gpg/gal/Head.hpp"
 #include "gpg/gal/IndexBufferContext.hpp"
 #include "gpg/gal/PlacedResources.h"
@@ -329,6 +330,11 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
   struct DeviceD3D12::ProgramState
   {
     D3D12_GPU_DESCRIPTOR_HANDLE samplers{};
+    // Forced anisotropic filtering (ForcedAnisotropy.h): the sampler table is built for the samplers whose bound texture is a world texture.
+    std::vector<std::int32_t> samplerParameters; // per sampler: the texture parameter it reads
+    std::uint64_t samplerMask = 0;               // samplers (bit = slot) the table forces anisotropic
+    unsigned samplerGeneration = 0;              // mForcedSamplerGeneration the table handle is valid for
+    unsigned samplerEpoch = 0;                   // ForcedAnisotropyEpoch() the table was built for
     std::int32_t viewportParameter = -1;
     float lastViewport[4]{-1.0f, -1.0f, -1.0f, -1.0f};
 
@@ -1519,14 +1525,22 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     return gpu;
   }
 
-  D3D12_GPU_DESCRIPTOR_HANDLE DeviceD3D12::SamplerTable(const std::vector<effects::SamplerDesc>& samplers)
+  D3D12_GPU_DESCRIPTOR_HANDLE DeviceD3D12::SamplerTable(const std::vector<effects::SamplerDesc>& samplers, const std::uint64_t anisotropicMask)
   {
     std::vector<D3D12_SAMPLER_DESC> descs(effects::kMaxSamplerSlots);
+    const int forcedAnisotropy = (anisotropicMask != 0U) ? ForcedAnisotropy() : 1;
     for (std::uint32_t index = 0U; index < effects::kMaxSamplerSlots; ++index) {
       D3D12_SAMPLER_DESC& desc = descs[index];
       effects::SamplerDesc source;
       if (index < samplers.size()) {
         source = samplers[index];
+        // Forced anisotropic filtering (ForcedAnisotropy.h): only the samplers the caller found to read a world texture.
+        if (((anisotropicMask >> index) & 1U) != 0U && ForceAnisotropicSampler(source, forcedAnisotropy)) {
+          static const bool log = std::getenv("FAF_ANISO_LOG") != nullptr;
+          if (log) {
+            gpg::Logf("Aniso: forced %dx on sampler %s (texture %s)", forcedAnisotropy, source.name.c_str(), source.texture.c_str());
+          }
+        }
       }
       desc.Filter = static_cast<D3D12_FILTER>(source.filter);
       desc.AddressU = static_cast<D3D12_TEXTURE_ADDRESS_MODE>(source.addressU);
@@ -1542,22 +1556,62 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       desc.MaxLOD = source.maxLod;
     }
     const std::string key(reinterpret_cast<const char*>(descs.data()), descs.size() * sizeof(D3D12_SAMPLER_DESC));
-    const auto found = mSamplerTables.find(key);
-    if (found != mSamplerTables.end()) {
+    // A table with a forced sampler is a different table from the authored one: it goes to the recyclable end of the heap.
+    bool forcedTable = false;
+    if (anisotropicMask != 0U) {
+      std::vector<D3D12_SAMPLER_DESC> authored(effects::kMaxSamplerSlots);
+      for (std::uint32_t index = 0U; index < effects::kMaxSamplerSlots; ++index) {
+        effects::SamplerDesc source;
+        if (index < samplers.size()) {
+          source = samplers[index];
+        }
+        authored[index].Filter = static_cast<D3D12_FILTER>(source.filter);
+        authored[index].MaxAnisotropy = std::clamp<UINT>(source.maxAnisotropy, 1U, 16U);
+        forcedTable = forcedTable || authored[index].Filter != descs[index].Filter || authored[index].MaxAnisotropy != descs[index].MaxAnisotropy;
+      }
+    }
+    auto& tables = forcedTable ? mForcedSamplerTables : mSamplerTables;
+    const auto found = tables.find(key);
+    if (found != tables.end()) {
       return found->second;
     }
     D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
-    if (!mSamplerHeap.Allocate(effects::kMaxSamplerSlots, cpu, gpu)) {
-      ThrowError("DeviceD3D12.cpp", __LINE__, "sampler heap exhausted");
+    const auto allocate = [&] {
+      return forcedTable ? mSamplerHeap.AllocateFromEnd(effects::kMaxSamplerSlots, cpu, gpu) : mSamplerHeap.Allocate(effects::kMaxSamplerSlots, cpu, gpu);
+    };
+    if (!allocate()) {
+      if (mSamplerHeap.EndUsed() == 0U) {
+        if (forcedTable) {
+          return SamplerTable(samplers); // no room even for one: leave the sampler as authored
+        }
+        ThrowError("DeviceD3D12.cpp", __LINE__, "sampler heap exhausted");
+      }
+      ResetForcedSamplerTables();
+      if (!allocate()) {
+        if (forcedTable) {
+          return SamplerTable(samplers);
+        }
+        ThrowError("DeviceD3D12.cpp", __LINE__, "sampler heap exhausted");
+      }
     }
     for (std::uint32_t index = 0U; index < effects::kMaxSamplerSlots; ++index) {
       D3D12_CPU_DESCRIPTOR_HANDLE handle = cpu;
       handle.ptr += static_cast<SIZE_T>(index) * mSamplerHeap.Increment();
       mDevice->CreateSampler(&descs[index], handle);
     }
-    mSamplerTables.emplace(key, gpu);
+    tables.emplace(key, gpu);
     return gpu;
+  }
+
+  // The GPU may still read the forced tables of earlier submissions: wait for it, then empty the back of the heap. Programs notice the new
+  // generation and rebuild their tables.
+  void DeviceD3D12::ResetForcedSamplerTables()
+  {
+    Submit(true);
+    mSamplerHeap.ResetEnd();
+    mForcedSamplerTables.clear();
+    ++mForcedSamplerGeneration;
   }
 
   // ---------------------------------------------------------------------------
@@ -2678,10 +2732,45 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     if (slot == nullptr) {
       auto state = std::make_shared<ProgramState>();
       state->samplers = SamplerTable(program.Description().samplers);
+      state->samplerEpoch = ForcedAnisotropyEpoch();
+      for (const effects::SamplerDesc& sampler : program.Description().samplers) {
+        state->samplerParameters.push_back(program.FindParameter(sampler.texture));
+      }
       state->viewportParameter = program.FindParameter("faf_ViewportSize");
       slot = state;
     }
     return *static_cast<ProgramState*>(slot.get());
+  }
+
+  // Forced anisotropic filtering: the samplers of `program` that read a world texture now (a 2D texture with a mip chain; not a render target,
+  // a cube or a volume), as a bit mask by sampler slot. Rebuilds the program's sampler table when that set or the level changed.
+  void DeviceD3D12::UpdateAnisotropicSamplers(effects::EffectProgram& program, ProgramState& state)
+  {
+    std::uint64_t mask = 0U;
+    if (ForcedAnisotropy() > 1) {
+      const effects::ParameterStore& parameters = program.Parameters();
+      for (std::size_t index = 0U; index < state.samplerParameters.size() && index < effects::kMaxSamplerSlots; ++index) {
+        const std::int32_t parameter = state.samplerParameters[index];
+        if (parameter < 0) {
+          continue;
+        }
+        const effects::TextureBinding& binding = parameters.Binding(static_cast<std::uint32_t>(parameter));
+        if (binding.texture == nullptr || binding.renderTarget != nullptr) {
+          continue;
+        }
+        auto* const texture = static_cast<TextureD3D12*>(binding.texture.get());
+        ID3D12Resource* const resource = texture->Resource().resource.Get();
+        if (!texture->IsCube() && !texture->IsVolume() && resource != nullptr && resource->GetDesc().MipLevels > 1U) {
+          mask |= std::uint64_t{1} << index;
+        }
+      }
+    }
+    if (mask != state.samplerMask || state.samplerEpoch != ForcedAnisotropyEpoch() || state.samplerGeneration != mForcedSamplerGeneration) {
+      state.samplerMask = mask;
+      state.samplerEpoch = ForcedAnisotropyEpoch();
+      state.samplers = SamplerTable(program.Description().samplers, mask);
+      state.samplerGeneration = mForcedSamplerGeneration; // after the call: it may have emptied the back of the heap
+    }
   }
 
   void DeviceD3D12::BindPass(effects::EffectProgram& program, const std::uint32_t technique, const std::uint32_t pass)
@@ -2823,11 +2912,15 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       state.tableEpoch = mArenaEpoch;
       state.textureVersion = parameters.TextureVersion();
       state.tableSurface = outputContext_.surface.get();
+      UpdateAnisotropicSamplers(program, state);
     }
     bound.textures = state.table;
     bound.tableFrame = state.tableFrame;
     bound.tableEpoch = state.tableEpoch;
     bound.sampled = state.tableBindings;
+    if (state.samplerGeneration != mForcedSamplerGeneration) {
+      UpdateAnisotropicSamplers(program, state); // the back of the sampler heap was emptied since this program's table was made
+    }
     bound.samplers = state.samplers;
     bound.techniqueIndex = technique;
     bound.passIndex = pass;

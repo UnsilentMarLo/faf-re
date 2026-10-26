@@ -276,7 +276,7 @@ namespace gpg::gal::d3d12
 
   bool DescriptorArena::Allocate(const std::uint32_t count, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, D3D12_GPU_DESCRIPTOR_HANDLE& gpu)
   {
-    if (mUsed + count > mCapacity) {
+    if (mUsed + mEndUsed + count > mCapacity) {
       return false;
     }
     cpu = mHeap->GetCPUDescriptorHandleForHeapStart();
@@ -284,6 +284,20 @@ namespace gpg::gal::d3d12
     gpu = mHeap->GetGPUDescriptorHandleForHeapStart();
     gpu.ptr += static_cast<UINT64>(mUsed) * mIncrement;
     mUsed += count;
+    return true;
+  }
+
+  bool DescriptorArena::AllocateFromEnd(const std::uint32_t count, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, D3D12_GPU_DESCRIPTOR_HANDLE& gpu)
+  {
+    if (mUsed + mEndUsed + count > mCapacity) {
+      return false;
+    }
+    mEndUsed += count;
+    const std::uint32_t first = mCapacity - mEndUsed;
+    cpu = mHeap->GetCPUDescriptorHandleForHeapStart();
+    cpu.ptr += static_cast<SIZE_T>(first) * mIncrement;
+    gpu = mHeap->GetGPUDescriptorHandleForHeapStart();
+    gpu.ptr += static_cast<UINT64>(first) * mIncrement;
     return true;
   }
 

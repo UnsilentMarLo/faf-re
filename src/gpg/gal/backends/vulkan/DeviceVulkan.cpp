@@ -23,6 +23,7 @@
 #include "gpg/gal/DrawStatistics.h"
 #include "gpg/gal/EffectContext.hpp"
 #include "gpg/gal/EffectMacro.hpp"
+#include "gpg/gal/ForcedAnisotropy.h"
 #include "gpg/gal/Head.hpp"
 #include "gpg/gal/IndexBufferContext.hpp"
 #include "gpg/gal/RenderTargetContext.hpp"
@@ -235,6 +236,10 @@ namespace gpg::gal
   struct DeviceVulkan::ProgramState
   {
     std::vector<VkSampler> samplers;
+    // Forced anisotropic filtering (ForcedAnisotropy.h): the samplers are built for the samplers whose bound texture is a world texture.
+    std::vector<std::int32_t> samplerParameters; // per sampler: the texture parameter it reads
+    std::uint64_t samplerMask = 0;               // samplers (bit = slot) forced anisotropic
+    unsigned samplerEpoch = 0;                   // ForcedAnisotropyEpoch() the samplers were built for
     std::int32_t viewportParameter = -1;
     float lastViewport[4]{-1.0f, -1.0f, -1.0f, -1.0f};
 
@@ -2314,8 +2319,13 @@ namespace gpg::gal
   // ---------------------------------------------------------------------------
   // Passes and draws
 
-  VkSampler DeviceVulkan::SamplerFor(const effects::SamplerDesc& desc)
+  VkSampler DeviceVulkan::SamplerFor(const effects::SamplerDesc& authored, const bool worldTexture)
   {
+    // Forced anisotropic filtering (ForcedAnisotropy.h): `worldTexture` = the caller found the sampler to read a world texture.
+    effects::SamplerDesc desc = authored;
+    if (worldTexture && mAnisotropy) {
+      static_cast<void>(ForceAnisotropicSampler(desc, ForcedAnisotropy()));
+    }
     KeyWriter key;
     key.Add(desc.filter);
     key.Add(desc.addressU);
@@ -2365,11 +2375,46 @@ namespace gpg::gal
       auto state = std::make_shared<ProgramState>();
       for (const effects::SamplerDesc& sampler : program.Description().samplers) {
         state->samplers.push_back(SamplerFor(sampler));
+        state->samplerParameters.push_back(program.FindParameter(sampler.texture));
       }
+      state->samplerEpoch = ForcedAnisotropyEpoch();
       state->viewportParameter = program.FindParameter("faf_ViewportSize");
       slot = state;
     }
     return *static_cast<ProgramState*>(slot.get());
+  }
+
+  // Forced anisotropic filtering: the samplers of `program` that read a world texture now (a 2D texture with a mip chain; not a render target,
+  // a cube or a volume), as a bit mask by sampler slot. Rebuilds the program's samplers when that set or the level changed.
+  void DeviceVulkan::UpdateAnisotropicSamplers(effects::EffectProgram& program, ProgramState& state)
+  {
+    std::uint64_t mask = 0U;
+    if (mAnisotropy && ForcedAnisotropy() > 1) {
+      const effects::ParameterStore& parameters = program.Parameters();
+      for (std::size_t index = 0U; index < state.samplerParameters.size() && index < 64U; ++index) {
+        const std::int32_t parameter = state.samplerParameters[index];
+        if (parameter < 0) {
+          continue;
+        }
+        const effects::TextureBinding& binding = parameters.Binding(static_cast<std::uint32_t>(parameter));
+        if (binding.texture == nullptr || binding.renderTarget != nullptr) {
+          continue;
+        }
+        auto* const texture = static_cast<TextureVulkan*>(binding.texture.get());
+        if (!texture->IsCube() && !texture->IsVolume() && texture->Image().mipLevels > 1U) {
+          mask |= std::uint64_t{1} << index;
+        }
+      }
+    }
+    if (mask != state.samplerMask || state.samplerEpoch != ForcedAnisotropyEpoch()) {
+      state.samplerMask = mask;
+      state.samplerEpoch = ForcedAnisotropyEpoch();
+      state.samplers.clear();
+      const auto& descriptions = program.Description().samplers;
+      for (std::size_t index = 0U; index < descriptions.size(); ++index) {
+        state.samplers.push_back(SamplerFor(descriptions[index], index < 64U && ((mask >> index) & 1U) != 0U));
+      }
+    }
   }
 
   VkDescriptorSet DeviceVulkan::AllocateSet(const VkDescriptorSetLayout layout)
@@ -2524,6 +2569,7 @@ namespace gpg::gal
       const auto& slots = program.Modern().textures;
       const auto& slotParameters = program.TextureSlotParameters();
       auto bindings = std::make_shared<std::vector<effects::TextureBinding>>();
+      UpdateAnisotropicSamplers(program, state);
       const VkDescriptorSet set = AllocateSet(mTextureLayout);
       std::vector<VkDescriptorImageInfo> images(slots.size());
       std::vector<VkDescriptorImageInfo> samplers(state.samplers.size());

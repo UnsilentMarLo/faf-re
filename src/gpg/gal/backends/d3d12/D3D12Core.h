@@ -115,7 +115,12 @@ namespace gpg::gal::d3d12
 
     /** False when `count` more do not fit. */
     [[nodiscard]] bool Allocate(std::uint32_t count, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, D3D12_GPU_DESCRIPTOR_HANDLE& gpu);
-    void Reset() noexcept { mUsed = 0U; }
+    void Reset() noexcept { mUsed = 0U; mEndUsed = 0U; }
+
+    /** From the back of the heap (the front and the back meet): a region that `ResetEnd` can empty without touching the front. */
+    [[nodiscard]] bool AllocateFromEnd(std::uint32_t count, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, D3D12_GPU_DESCRIPTOR_HANDLE& gpu);
+    void ResetEnd() noexcept { mEndUsed = 0U; }
+    [[nodiscard]] std::uint32_t EndUsed() const noexcept { return mEndUsed; }
 
     [[nodiscard]] ID3D12DescriptorHeap* Heap() const noexcept { return mHeap.Get(); }
     [[nodiscard]] std::uint32_t Increment() const noexcept { return mIncrement; }
@@ -124,6 +129,7 @@ namespace gpg::gal::d3d12
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mHeap;
     std::uint32_t mCapacity = 0;
     std::uint32_t mUsed = 0;
+    std::uint32_t mEndUsed = 0;
     std::uint32_t mIncrement = 0;
   };
 
