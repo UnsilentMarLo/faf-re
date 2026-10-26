@@ -1303,6 +1303,11 @@ namespace
         return explicitApi(api);
       }
     }
+#if defined(FAF_STUDIO_EDITOR)
+    // EDITOR: the editor's natives (overlay, mesh drawing, pop-out windows, the GPU compute adapter match) take the game's Direct3D 9 device and the editor was built and
+    // tested on it: `auto` means Direct3D 9 here. /d3d11, /d3d12 and /vulkan (or the option) still choose another renderer for the game view; those natives are then off.
+    return {DeviceApi::Direct3D9};
+#endif
 #if defined(_M_IX86)
     // The 32-bit build starts Direct3D 11 first: Direct3D 12 there faults the
     // GPU (an SM MMU fault, "device hung") on NVIDIA's 32-bit driver after
