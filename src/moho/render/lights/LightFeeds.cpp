@@ -7,6 +7,9 @@
 #include "moho/console/CConCommand.h"
 #include "moho/particles/SParticleBuffer.h"
 #include "moho/particles/SWorldParticle.h"
+#include "moho/render/lights/LightBinding.h"
+#include "moho/sim/CWldSession.h"
+#include "moho/sim/STIMap.h"
 
 namespace moho::lights
 {
@@ -34,6 +37,7 @@ namespace moho::lights
 
     LightCollector gCollector;
     std::vector<Light> gFrameLights;
+    LightGridImage gFrameImage;
     int gLogCounter = 0;
 
     void SyncQuality()
@@ -51,6 +55,22 @@ namespace moho::lights
       }
       const float frac = interop - std::floor(interop);
       return frac < 0.0f ? 0.0f : (frac > 1.0f ? 1.0f : frac);
+    }
+    // Width and depth of the active map in world units; false when there is no map (front end, loading).
+    bool ActiveMapSize(float& sizeX, float& sizeZ)
+    {
+      CWldSession* const session = WLD_GetActiveSession();
+      if (session == nullptr) {
+        return false;
+      }
+      const STIMap* const map = session->GetSTIMap();
+      const CHeightField* const field = map != nullptr ? map->GetHeightField() : nullptr;
+      if (field == nullptr || field->Width() < 2 || field->Height() < 2) {
+        return false;
+      }
+      sizeX = static_cast<float>(field->Width() - 1);
+      sizeZ = static_cast<float>(field->Height() - 1);
+      return true;
     }
   } // namespace
 
@@ -97,17 +117,34 @@ namespace moho::lights
   {
     SyncQuality();
     if (gCollector.Quality() == model::kOff) {
-      gFrameLights.clear();
+      if (!gFrameLights.empty() || gFrameImage.lightCount != 0) {
+        gFrameLights.clear();
+        gFrameImage.lightCount = 0; // the binding clears the textures once
+        LightGridImage cleared;
+        float sx = 0.0f, sz = 0.0f;
+        if (ActiveMapSize(sx, sz)) {
+          BuildLightGrid(gFrameLights, GridLayout::ForMap(sx, sz), cleared);
+          gFrameImage = cleared;
+          UpdateBinding(gFrameImage);
+        }
+      }
       return;
     }
 
     gCollector.Update(static_cast<float>(tick) + frameAlpha, kMaxFrameLights, gFrameLights);
 
+    float mapX = 0.0f, mapZ = 0.0f;
+    if (ActiveMapSize(mapX, mapZ)) {
+      BuildLightGrid(gFrameLights, GridLayout::ForMap(mapX, mapZ), gFrameImage);
+      UpdateBinding(gFrameImage);
+    }
+
     if (ren_DynLightsLog > 0 && ++gLogCounter >= ren_DynLightsLog) {
       gLogCounter = 0;
       const Stats& s = gCollector.GetStats();
       gpg::Logf(
-        "DynLights: quality=%d stored=%u offered=%u gated=%u invalid=%u full=%u expired=%u | pool=%u active=%u lights=%u cut=%u",
+        "DynLights: quality=%d stored=%u offered=%u gated=%u invalid=%u full=%u expired=%u | pool=%u active=%u lights=%u cut=%u | "
+        "grid cells=%u overflow=%u | tex uploads=%u fail=%u vars=%u",
         gCollector.Quality(),
         s.stored,
         s.offered,
@@ -118,7 +155,12 @@ namespace moho::lights
         static_cast<unsigned>(gCollector.Stored()),
         s.active,
         static_cast<unsigned>(gFrameLights.size()),
-        s.culledByCap
+        s.culledByCap,
+        gFrameImage.cellsLit,
+        gFrameImage.overflow,
+        GetBindingStats().uploads,
+        GetBindingStats().failures,
+        GetBindingStats().boundVariables
       );
     }
   }
@@ -126,5 +168,10 @@ namespace moho::lights
   const std::vector<Light>& FrameLights()
   {
     return gFrameLights;
+  }
+
+  const LightGridImage& FrameImage()
+  {
+    return gFrameImage;
   }
 } // namespace moho::lights

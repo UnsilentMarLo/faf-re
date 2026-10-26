@@ -1,6 +1,6 @@
 # Dynamic lights
 
-Branch `dynamic-lights`. Status: **stage 1 done: the light pool and the TLight feed exist, nothing draws the lights yet** (snapshot 26/10/2026).
+Branch `dynamic-lights`. Status: **stages 1 and 2 done: light pool, TLight feed, light textures and their binding exist; nothing draws the lights yet** (snapshot 26/10/2026).
 
 Dynamic lighting for explosions, muzzle flashes, beams, trails, projectiles and glowing units, built into the engine's renderer instead of patched into the shipped exe. It replaces the binary patch [FA-DynamicLights](https://github.com/UnsilentMarLo/FA-DynamicLights) (v0.1.0) on the Direct3D 11, 12 and Vulkan backends. Direct3D 9 keeps using the patch. The lights are **render only**: they read effect data and never touch the simulation, so replay parity is unaffected.
 
@@ -66,7 +66,7 @@ Off / Low / Medium / High / Ultra with the patch's importance classes (power = i
 |---|---|---|
 | 0 | Branch, toolchain, x64 Release build | **done 26/10/2026** (`main_x64.exe` links) |
 | 1 | `LightModel.h` and `LightCollector` with the `TLight` feed only, a host test (no GPU) for classes, pool, selection | **done 26/10/2026**: `faf_light_tests` passes (4240 checks); `ren_DynLights` (0-4, default 0) and `ren_DynLightsLog N` |
-| 2 | `LightBinding` + the two textures, filled and bound on D3D12; a debug cvar draws the grid; check `Float4` `Lock`/`Unlock` on D3D11/D3D12/Vulkan (never exercised by `BonePaletteTexture`) | the grid shows in a screenshot |
+| 2 | `LightBinding` + the two textures, filled and bound on D3D12; a debug cvar draws the grid; check `Float4` `Lock`/`Unlock` on D3D11/D3D12/Vulkan (never exercised by `BonePaletteTexture`) | **built 26/10/2026**: CPU image tested (37078 checks); both textures create on D3D12 without error; flashes, upload and the debug view not yet seen in game (see below) |
 | 3 | Translator step: inject `DynLight` into `mesh.fx` and `terrain.fx` lit techniques | explosions light units and ground on D3D12 |
 | 4 | Option, cvar, `docs/SWITCHES.md` entries, `data/fafengine` hook | the option works after a restart |
 | 5 | Remaining feeds: glow sprites, beams (capsules), trails, projectile and unit meshes, profiles for mods | parity with the patch's feeds |
@@ -89,3 +89,15 @@ Off / Low / Medium / High / Ultra with the patch's importance classes (power = i
 - Tests: `cmake --build --preset clang-x64-release --target faf_light_tests`, then `build/clang-x64-release/tests/faf_light_tests.exe`; also `ctest` (`dynamic_lights`).
 - Trying it: start the game with the console command `ren_DynLights 4` and `ren_DynLightsLog 60`; the log shows `DynLights: ... lights=N` once per 60 frames. Nothing is drawn yet. Not yet run in game.
 
+## Stage 2 as built
+
+- `LightGrid.{h,cpp}` (pure, tested): `GridLayout::ForMap` (whole map, at most 64 x 64 cells of at least 16 units), `BuildLightGrid` (data texture: 3 RGBA32F texels per light; grid texture: 2 texels = 8 `index + 1` entries per cell, strongest first, `0` = empty), `LightGridImage::CellLights` (the lookup the shader will do).
+- `LightBinding.{h,cpp}`: two dynamic `Float4` textures (`Lock(Discard)` / `Unlock`, as `BonePaletteTexture`), re-created when the map size changes, released with the mesh batch's shared buffers on a device reset. Binds `dynLightData`, `dynLightGrid`, `dynLightParams`, `dynLightGridSize`, `dynLightDataSize` to the `mesh` and `terrain` effects when they declare them (they do not yet).
+- `LightDebugView.{h,cpp}`: `ren_DynLightsView 1` draws every lit grid cell on the ground (green 1 light .. red 8) and a marker per light, through the viewport prim batcher before the UI. The "in front of the camera" test uses the viewport matrix' depth row; unverified.
+- `ren_DynLightsLog N` now also reports grid cells, overflow and texture uploads / failures / bound variables.
+
+### Verification so far (D3D12, RX 7900 XTX, `ren_DynLights=4`)
+
+- Both textures are created (`light data texture 1024x1`, `light grid texture 64x32`) with no error.
+- **Open:** every run with `/d3d12 /windowed 1280 720` hits a D3D12 error at session start, with the lights **off** as well (so it is not this code): the debug layer reports `CopyTextureRegion: the destination region extends past ... SrcBox width 1280, height 721`, the command list then stays closed and the log fills with `DeviceD3D12.cpp(2424) HRESULT 0x80004005`. It looks like an off-by-one between the window's client height and the back buffer for that `/windowed` size; try another size or the profile's window mode before judging stage 2 in game.
+- Not yet seen in game: flashes in the pool (`stored > 0`), a texture upload with lights, the debug view.

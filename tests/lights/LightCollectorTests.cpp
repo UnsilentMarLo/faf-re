@@ -406,6 +406,8 @@ namespace
   }
 } // namespace
 
+int RunGridTests(int& checks); // LightGridTests.cpp
+
 int main()
 {
   TestModelClasses();
@@ -424,6 +426,7 @@ int main()
   TestPoolLimit();
   TestUpdateWithBadClock();
   TestClear();
+  gFailures += RunGridTests(gChecks);
 
   std::printf("%d checks, %d failures\n", gChecks, gFailures);
   return gFailures == 0 ? 0 : 1;

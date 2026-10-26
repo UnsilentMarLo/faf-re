@@ -27,6 +27,7 @@
 #include "moho/misc/StartupHelpers.h"
 #include "moho/particles/CWorldParticles.h"
 #include "moho/render/lights/LightFeeds.h"
+#include "moho/render/lights/LightDebugView.h"
 #include "moho/mesh/MeshThumbnailRenderer.h"
 #include "moho/render/BoundaryRenderer.h"
 #include "moho/render/BoxRenderer.h"
@@ -4251,6 +4252,11 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
   {
     const gpg::gal::RenderProfileScope profileCartographic("Cartographic");
     (void)RenderCartographic(head, worldViews);
+  }
+
+  // Dynamic lights debug view (ren_DynLightsView): the light grid over the world, before the UI.
+  if (mCam != nullptr) {
+    moho::lights::DrawDebugView(*mCam, mPrimBatcher.get());
   }
 
   // Draw the UI control tree over the rendered viewport. The binary does this

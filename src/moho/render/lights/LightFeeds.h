@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "moho/render/lights/LightCollector.h"
+#include "moho/render/lights/LightGrid.h"
 
 namespace moho
 {
@@ -13,8 +14,9 @@ namespace moho
 // Engine side of the dynamic lights: reads the engine's effect records into the light pool (LightCollector) and evaluates the pool once
 // per rendered frame. Render only; nothing here reads or writes sim state, so replay parity is unaffected.
 //
-// Stage 1 (docs/DYNAMIC_LIGHTS.md): the "TLight" particles of CreateLightParticle. Nothing draws the lights yet; the result is
-// FrameLights() and the log line of ren_DynLightsLog.
+// Stage 1 (docs/DYNAMIC_LIGHTS.md): the "TLight" particles of CreateLightParticle.
+// Stage 2: BeginFrame also builds the light textures' CPU image (LightGrid) for the active map and uploads and binds it (LightBinding).
+// Nothing draws the lights yet (the shaders do not declare the parameters); see ren_DynLightsView for a debug view of the grid.
 namespace moho::lights
 {
   // Quality level, model::kOff..model::kUltra (Options > Video > Dynamic Lights later; console variable ren_DynLights meanwhile).
@@ -31,6 +33,9 @@ namespace moho::lights
 
   // The lights of the last BeginFrame, strongest first.
   const std::vector<Light>& FrameLights();
+
+  // The texture images built from them (empty while no map is loaded); what LightBinding uploads and the debug view draws.
+  const LightGridImage& FrameImage();
 
   constexpr std::size_t kMaxFrameLights = 256;
 } // namespace moho::lights
