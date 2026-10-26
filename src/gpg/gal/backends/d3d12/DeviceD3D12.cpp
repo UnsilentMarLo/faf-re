@@ -34,6 +34,7 @@
 #include "gpg/gal/VertexBufferContext.hpp"
 #include "gpg/gal/backends/common/BackendErrors.h"
 #include "gpg/gal/backends/common/ImageCodec.h"
+#include "gpg/gal/backends/common/PostProcessAA.h"
 #include "gpg/gal/backends/common/RuntimeInfo.h"
 #include "gpg/gal/backends/d3d11/D3D11VertexLayouts.h"
 #include "gpg/gal/backends/d3d11/EffectSourceD3D11.h"
@@ -381,6 +382,8 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     mPipelineCache.Close();
     mPipelines.clear();
     mBlitPipelines.clear();
+    mAaPipelines.clear();
+    mAaCopy.reset();
     mPipelineState.reset();
     mCursor.Destroy();
     mUpload.Release();
@@ -2080,6 +2083,164 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     MarkDraw("StretchRect blit");
     mList->DrawInstanced(3U, 1U, 0U, 0U);
     FinishDraw();
+    mTargetsDirty = true;
+  }
+
+  bool DeviceD3D12::PreparePostProcessAA(const std::uint32_t mode)
+  {
+    if (mode >= 32U || (mAaFailedModes & (1U << mode)) != 0U) {
+      return false;
+    }
+    if (!mAaVertexShader.empty() && mAaPixelShaders.find(mode) != mAaPixelShaders.end()) {
+      return true;
+    }
+    std::string source;
+    const char* entry = nullptr;
+    switch (mode) {
+    case kPostProcessAAFxaa:
+      source = backend::PostProcessAASource();
+      entry = "FxaaPS";
+      break;
+    default:
+      mAaFailedModes |= 1U << mode;
+      return false;
+    }
+    effects::ShaderCompiler& compiler = effects::ShaderCompiler::Instance();
+    effects::CompiledShader vs =
+      compiler.Compile(source, effects::ShaderEntry{effects::ShaderStage::Vertex, "AaVS", "", "AaVS"}, effects::ShaderTarget::Dxil);
+    effects::CompiledShader ps =
+      compiler.Compile(source, effects::ShaderEntry{effects::ShaderStage::Pixel, entry, "", entry}, effects::ShaderTarget::Dxil);
+    if (!vs.succeeded || !ps.succeeded) {
+      mAaFailedModes |= 1U << mode;
+      gpg::Warnf("D3D12: post-process anti-aliasing mode %u disabled, its shader did not compile: %s%s", mode, vs.messages.c_str(),
+                 ps.messages.c_str());
+      return false;
+    }
+    mAaVertexShader = std::move(vs.code);
+    mAaPixelShaders[mode] = std::move(ps.code);
+    gpg::Logf("D3D12: post-process anti-aliasing mode %u ready", mode);
+    return true;
+  }
+
+  bool DeviceD3D12::ApplyPostProcessAA(const std::uint32_t head, const std::uint32_t mode)
+  {
+    if (mode == kPostProcessAAOff || head >= mHeadOutputContexts.size() || mHeadOutputContexts[head].surface == nullptr) {
+      return false;
+    }
+    const std::lock_guard<std::recursive_mutex> lock(mMutex);
+    auto* const back = static_cast<RenderTargetD3D12*>(mHeadOutputContexts[head].surface.get());
+    if (!PreparePostProcessAA(mode)) {
+      return false;
+    }
+    const RenderTargetContext* const backContext = back->GetContext();
+    const std::uint32_t width = backContext->width_;
+    const std::uint32_t height = backContext->height_;
+    const DXGI_FORMAT format = back->Format();
+
+    // The copy the pass reads; made again when the back buffer changed size or format (resize, mode switch).
+    auto* copy = static_cast<RenderTargetD3D12*>(mAaCopy.get());
+    if (copy == nullptr || copy->GetContext()->width_ != width || copy->GetContext()->height_ != height || copy->Format() != format) {
+      mAaCopy.reset();
+      D3D12_RESOURCE_DESC desc{};
+      desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+      desc.Width = width;
+      desc.Height = height;
+      desc.DepthOrArraySize = 1U;
+      desc.MipLevels = 1U;
+      desc.Format = format;
+      desc.SampleDesc.Count = 1U;
+      desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+      D3D12_HEAP_PROPERTIES heap{};
+      heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+      RenderTargetD3D12::Buffer buffer;
+      CheckHresult(
+        "DeviceD3D12.cpp", __LINE__,
+        mDevice->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, kShaderRead, nullptr, IID_PPV_ARGS(&buffer.resource.resource))
+      );
+      static_cast<void>(buffer.resource.resource->SetName(L"post-process anti-aliasing copy"));
+      buffer.resource.state = kShaderRead;
+      buffer.renderTargetView = mRtvPool.Allocate();
+      mDevice->CreateRenderTargetView(buffer.resource.resource.Get(), nullptr, buffer.renderTargetView);
+      buffer.shaderResourceView = mSrvPool.Allocate();
+      mDevice->CreateShaderResourceView(buffer.resource.resource.Get(), nullptr, buffer.shaderResourceView);
+      std::vector<RenderTargetD3D12::Buffer> buffers;
+      buffers.push_back(std::move(buffer));
+      mAaCopy.reset(new RenderTargetD3D12(std::move(buffers), nullptr));
+      copy = static_cast<RenderTargetD3D12*>(mAaCopy.get());
+      gpg::Logf("D3D12: post-process anti-aliasing copy %ux%u", width, height);
+    }
+
+    RenderTargetD3D12::Buffer& from = back->Current();
+    RenderTargetD3D12::Buffer& to = copy->Current();
+    Transition(from.resource, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    Transition(to.resource, D3D12_RESOURCE_STATE_COPY_DEST);
+    FlushBarriers();
+    MarkDraw("AA copy");
+    mList->CopyResource(to.resource.resource.Get(), from.resource.resource.Get());
+    FinishDraw();
+
+    ComPtr<ID3D12PipelineState>& pipeline = mAaPipelines[{mode, format}];
+    if (pipeline == nullptr) {
+      const std::vector<std::uint8_t>& pixelShader = mAaPixelShaders[mode];
+      D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
+      desc.pRootSignature = mRootSignature.Get();
+      desc.VS = {mAaVertexShader.data(), mAaVertexShader.size()};
+      desc.PS = {pixelShader.data(), pixelShader.size()};
+      desc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
+      desc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_ZERO;
+      desc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+      desc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+      desc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
+      desc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+      desc.BlendState.RenderTarget[0].LogicOp = D3D12_LOGIC_OP_NOOP;
+      desc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+      desc.SampleMask = 0xFFFFFFFFU;
+      desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+      desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+      desc.RasterizerState.DepthClipEnable = FALSE;
+      desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+      desc.NumRenderTargets = 1U;
+      desc.RTVFormats[0] = format;
+      desc.SampleDesc.Count = 1U;
+      CheckHresult("DeviceD3D12.cpp", __LINE__, mDevice->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline)));
+    }
+    DrawPostProcessPass(pipeline.Get(), to.shaderResourceView, to.resource, from, width, height);
+    return true;
+  }
+
+  void DeviceD3D12::DrawPostProcessPass(
+    ID3D12PipelineState* const pipeline,
+    const D3D12_CPU_DESCRIPTOR_HANDLE source,
+    d3d12::TrackedResource& sourceResource,
+    RenderTargetD3D12::Buffer& destination,
+    const std::uint32_t width,
+    const std::uint32_t height
+  )
+  {
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
+    const D3D12_GPU_DESCRIPTOR_HANDLE table = AllocateTable(effects::kMaxTextureSlots, cpu);
+    mDevice->CopyDescriptorsSimple(1U, cpu, source, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE rest = cpu;
+    rest.ptr += mFrames[mFrameIndex].views.Increment();
+    mDevice->CopyDescriptorsSimple(effects::kMaxTextureSlots - 1U, rest, mNullViewRun, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    Transition(sourceResource, kShaderRead);
+    Transition(destination.resource, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    FlushBarriers();
+    mList->OMSetRenderTargets(1U, &destination.renderTargetView, FALSE, nullptr);
+    const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    mList->RSSetViewports(1U, &viewport);
+    mList->RSSetScissorRects(1U, &scissor);
+    mList->SetPipelineState(pipeline);
+    mList->SetGraphicsRootConstantBufferView(0U, 0U);
+    mList->SetGraphicsRootDescriptorTable(1U, table);
+    mList->SetGraphicsRootDescriptorTable(2U, mBlitSamplers);
+    mList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    MarkDraw("Post-process anti-aliasing");
+    mList->DrawInstanced(3U, 1U, 0U, 0U);
+    FinishDraw();
+    // The engine's next draw binds its own targets, viewport and scissor again.
     mTargetsDirty = true;
   }
 

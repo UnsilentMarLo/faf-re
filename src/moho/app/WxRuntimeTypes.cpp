@@ -28,6 +28,7 @@
 #include "moho/particles/CWorldParticles.h"
 #include "moho/render/lights/LightFeeds.h"
 #include "moho/render/lights/LightDebugView.h"
+#include "moho/render/PostProcessAntiAliasing.h"
 #include "moho/mesh/MeshThumbnailRenderer.h"
 #include "moho/render/BoundaryRenderer.h"
 #include "moho/render/BoxRenderer.h"
@@ -4259,6 +4260,14 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
   // Dynamic lights debug view (ren_DynLightsView): the light grid over the world, before the UI.
   if (mCam != nullptr) {
     moho::lights::DrawDebugView(*mCam, mPrimBatcher.get());
+  }
+
+  // FAF addition: post-process anti-aliasing (FXAA / SMAA) of the finished 3D world on the flip-model Direct3D 11 and 12 backends. The
+  // control tree (DrawUI below: panels, text, icons) and the bloom come after it, so they stay sharp; the world-space overlays drawn
+  // inside the world pass (life bars, selection brackets, range rings) are part of the world and are filtered with it.
+  if (moho::REN_GetPostProcessAAMode() != 0) {
+    const gpg::gal::RenderProfileScope profileAntiAliasing("AntiAliasing");
+    moho::REN_ApplyPostProcessAA(device->GetGalDevice(), static_cast<std::uint32_t>(mHead));
   }
 
   // Draw the UI control tree over the rendered viewport. The binary does this

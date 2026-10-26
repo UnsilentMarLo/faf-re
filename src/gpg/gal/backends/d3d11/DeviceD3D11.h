@@ -146,6 +146,7 @@ namespace gpg::gal
       std::uint32_t sourceOffset,
       std::uint32_t byteCount
     ) override;
+    bool ApplyPostProcessAA(std::uint32_t head, std::uint32_t mode) override;
 
     /**
      * Diagnostics: with FAF_GAL_TRACE_START / FAF_GAL_TRACE_FRAMES set, the
@@ -245,6 +246,13 @@ namespace gpg::gal
     Microsoft::WRL::ComPtr<ID3D11RasterizerState> mClearRasterizer;
     Microsoft::WRL::ComPtr<ID3D11BlendState> mClearBlend[2];
     Microsoft::WRL::ComPtr<ID3D11DepthStencilState> mClearDepthStencil[4];
+    // Post-process anti-aliasing (ApplyPostProcessAA): made on first use; the copy follows the back buffer's size.
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> mAaVertexShader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> mAaPixelShaders[3]; // by PostProcessAAMode
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> mAaSampler;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> mAaCopy;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> mAaCopyView;
+    std::uint32_t mAaFailedModes = 0U; // one bit per mode whose shader did not compile
     std::uint32_t mFrameIndex = 0U;
     bool mTracing = false;
     std::uint32_t mDumpSequence = 0U;
