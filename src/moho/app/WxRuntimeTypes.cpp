@@ -52,6 +52,7 @@
 #include "moho/render/VisionRenderer.h"
 #include "gpg/gal/DrawStatistics.h"
 #include "moho/editor/EdRenderStats.h"
+#include "moho/editor/EdFxaa.h"
 #include "moho/render/WRenViewport.h"
 #include "moho/render/camera/CameraImpl.h"
 #include "moho/render/camera/GeomCamera3.h"
@@ -3485,6 +3486,7 @@ void moho::WRenViewport::D3DWindowOnDeviceExit(const bool fullShutdown)
 
   mVisionRenderer.ResetRenderResources();
   mThumbnailRenderer.ReleaseTargets();
+  moho::edfxaa::ReleaseDeviceResources();   // EDITOR: ed_fxaa's off-screen scene target and quad (default pool: a Reset fails while they live)
 
   mBloomRenderers[0].ResetRenderTargets();
   mBloomRenderers[1].ResetRenderTargets();
@@ -3985,6 +3987,10 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
 
   mThumbnailRenderer.ProcessPendingRequests();
 
+  // EDITOR: ed_fxaa (EdFxaa.h). From here the head's render target is an off-screen scene target; fxaaScope.Resolve() below copies it to the back buffer, smooths
+  // the world view rectangles and leaves the UI passes (DrawUI, RenderUI) to draw on top, unfiltered. The icon pass needs hard edges against its matte colours: no FXAA there.
+  moho::edfxaa::FrameScope fxaaScope(device, head, !moho::edicon::gActive);
+
   // EDITOR: the icon pass clears to black and to white (alpha matting); every other frame clears to 0 as in the binary.
   device->SetRenderTarget2(mHead, true, moho::edicon::gActive ? static_cast<int>(moho::edicon::gClearArgb) : 0, 1.0f, 0);
 
@@ -4125,7 +4131,7 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
     // terrain/mesh/water passes through that full-screen rect instead of
     // this view's own CameraSetViewport-pushed one.
     UpdateRenderViewportCoordinates();
-
+    fxaaScope.AddRect(mScreenPos.x, mScreenPos.y, mScreenSize.x, mScreenSize.y);   // EDITOR: ed_fxaa smooths this rectangle
 
     // Render the atmosphere/cloud sky dome for this world view before the
     // terrain composite pass (binary order: WRenViewport::Render @0x007F90D0
@@ -4444,6 +4450,12 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
   // has exactly one call to this at 0x007F97A4, after the loop rather than
   // before it.
   UpdateRenderViewportCoordinates();
+
+  {
+    // EDITOR: ed_fxaa - the 3D scene is complete; smooth it into the back buffer before any UI is drawn
+    const gpg::gal::RenderProfileScope profileFxaa("Fxaa");
+    fxaaScope.Resolve();
+  }
 
   // Cartographic ("strategic"/top-down) pass. The binary calls this
   // immediately after the coordinate update and before the UI pass

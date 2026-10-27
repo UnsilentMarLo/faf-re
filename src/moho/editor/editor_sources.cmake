@@ -31,6 +31,7 @@ set(FAF_EDITOR_SOURCES
   moho/editor/EdPerf.cpp
   moho/editor/EdActivity.cpp
   moho/editor/EdRenderStats.cpp
+  moho/editor/EdFxaa.cpp
   moho/editor/EdGpu.cpp
   moho/editor/EdGpuOps.cpp
   moho/editor/EdGpuGen.cpp
