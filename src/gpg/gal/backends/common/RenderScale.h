@@ -103,7 +103,7 @@ namespace gpg::gal
     constants.dest[1] = static_cast<float>(dest.y);
     constants.dest[2] = static_cast<float>(dest.width);
     constants.dest[3] = static_cast<float>(dest.height);
-    constants.params[0] = std::clamp(sharpness, 0.0f, 1.0f);
+    constants.params[0] = std::clamp(sharpness, -1.0f, 1.0f); // < 0: diagnostic, the scaled texels unfiltered
     return constants;
   }
 
@@ -148,6 +148,12 @@ float4 UpscalePS(ScaleVertex v) : SV_Target0
     int2 pixel = int2(floor(v.position.xy));
     // The sample point in texels of the scaled target, continuous (texel i has its centre at i + 0.5).
     float2 uv = (float2(pixel) + 0.5 - uDest.xy) * (uSource.zw / uDest.zw) + uSource.xy;
+    if (uParams.x < 0.0)
+    {
+        // diagnostic (ren_RenderScaleSharpness = -1): the texels of the scaled world as they are, no filter
+        int2 lo0 = int2(uSource.xy);
+        return float4(faf_scene.Load(int3(clamp(int2(floor(uv)), lo0, lo0 + int2(uSource.zw) - 1), 0)).rgb, 1.0);
+    }
     float2 f = uv - 0.5;
     float2 base = floor(f);
     float2 fr = f - base;

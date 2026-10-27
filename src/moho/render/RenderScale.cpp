@@ -20,7 +20,7 @@
 namespace moho
 {
   int ren_RenderScale = gpg::gal::kRenderScale100;
-  float ren_RenderScaleSharpness = 0.3f;
+  float ren_RenderScaleSharpness = 0.6f;
 
   namespace
   {
@@ -37,7 +37,7 @@ namespace moho
     );
     TConVar<float> gTConVar_ren_RenderScaleSharpness(
       "ren_RenderScaleSharpness",
-      "Render scale: strength of the sharpening after the upscale, 0 (none) to 1. Default 0.3.",
+      "Render scale: strength of the sharpening after the upscale, 0 (none) to 1. Default 0.6.",
       &ren_RenderScaleSharpness
     );
 
