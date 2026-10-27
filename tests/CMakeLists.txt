@@ -68,6 +68,18 @@ endif()
 
 add_test(NAME post_process_smaa_sharpen COMMAND faf_postprocess_tests)
 
+# Render scale (src/gpg/gal/backends/common/RenderScale.h): the arithmetic, and the upscale / sharpen shaders run on a software Direct3D 11 device (WARP).
+#
+#   cmake --build --preset clang-x64-release --target faf_renderscale_tests
+add_executable(faf_renderscale_tests EXCLUDE_FROM_ALL renderscale/RenderScaleTests.cpp)
+target_include_directories(faf_renderscale_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(faf_renderscale_tests PRIVATE cxx_std_20)
+if(WIN32)
+  target_link_libraries(faf_renderscale_tests PRIVATE d3d11 d3dcompiler)
+endif()
+
+add_test(NAME render_scale COMMAND faf_renderscale_tests)
+
 # Forced anisotropic filtering rules (src/gpg/gal/ForcedAnisotropy.h): header only, compiled on its own.
 #
 #   cmake --build --preset clang-x64-release --target faf_aniso_tests

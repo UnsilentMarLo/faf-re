@@ -6,6 +6,7 @@
 #include "gpg/core/utils/Logging.h"
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/OutputContext.hpp"
+#include "gpg/gal/RenderScalePass.h"
 #include "gpg/gal/RenderTargetContext.hpp"
 #include "gpg/gal/DepthStencilTargetContext.hpp"
 
@@ -123,7 +124,8 @@ namespace gpg::gal
     if ((device.GetGpuDrivenFeatures() & kGpuFeatureVertexPulling) == 0U) {
       return refuse("this render API has no GPU programs");
     }
-    const OutputContext* const headContext = device.GetHeadOutputContext(head);
+    // The head's targets, or the scaled ones while the render scale draws the world into them.
+    const OutputContext* const headContext = WorldOutputContext(device, head);
     if (headContext == nullptr || headContext->surface == nullptr || headContext->depthStencil == nullptr) {
       return refuse("the head has no back buffer or depth buffer");
     }

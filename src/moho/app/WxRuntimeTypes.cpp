@@ -29,6 +29,7 @@
 #include "moho/render/lights/LightFeeds.h"
 #include "moho/render/lights/LightDebugView.h"
 #include "moho/render/AmbientOcclusion.h"
+#include "moho/render/RenderScale.h"
 #include "moho/render/PostProcessAntiAliasing.h"
 #include "moho/render/PostProcessSharpen.h"
 #include "moho/mesh/MeshThumbnailRenderer.h"
@@ -3470,6 +3471,7 @@ void moho::WRenViewport::D3DWindowOnDeviceExit(const bool fullShutdown)
   mDepthStencilLocks[0].reset();
   mDepthStencilLocks[1].reset();
   moho::water::ReleaseReflectionTargets(); // FAF: the Water Quality reflection targets are device resources too
+  moho::REN_ReleaseRenderScale(); // FAF: so are the render scale's targets
 }
 
 /**
@@ -3731,6 +3733,79 @@ namespace
     }();
     return disabled;
   }
+
+  // FAF addition: the render scale's frame state while the world loop runs (render thread only). UpdateRenderViewportCoordinates reads it to hand
+  // the world pass the scaled view rectangle; null whenever the world is drawn at the window's size.
+  moho::ScaledWorldFrame* sActiveScaledWorld = nullptr;
+
+  // Scaled drawing of the world loop: begins when the level asks for it, always puts the engine's lanes back, even when the loop throws.
+  class ScaledWorldScope
+  {
+  public:
+    ScaledWorldScope(
+      moho::CD3DDevice& device,
+      const int head,
+      boost::shared_ptr<moho::CD3DRenderTarget>& primary,
+      boost::shared_ptr<moho::CD3DRenderTarget>& secondary,
+      boost::shared_ptr<moho::CD3DDepthStencil>& viewportDepth
+    )
+      : mDevice(device)
+      , mPrimary(primary)
+      , mSecondary(secondary)
+      , mViewportDepth(viewportDepth)
+    {
+      if (moho::REN_BeginScaledWorld(mFrame, device, head, primary, secondary, viewportDepth)) {
+        sActiveScaledWorld = &mFrame;
+      }
+    }
+    ScaledWorldScope(const ScaledWorldScope&) = delete;
+    ScaledWorldScope& operator=(const ScaledWorldScope&) = delete;
+    ~ScaledWorldScope() { End(); }
+
+    // The world part of a view is drawn: native lanes back, then the view is upscaled into the back buffer. What is drawn after this
+    // (the unit overlay: life bars, names, icons) is at the window's size and stays sharp.
+    void Suspend(gpg::gal::Device* const galDevice)
+    {
+      if (!mFrame.active || !mFrame.swapped) {
+        return;
+      }
+      End();
+      if (galDevice != nullptr) {
+        moho::REN_ResolveScaledWorld(mFrame, *galDevice);
+      }
+    }
+
+    // The next view of the frame: the scaled targets again (not cleared).
+    void Resume()
+    {
+      if (mFrame.active && !mFrame.swapped) {
+        moho::REN_ResumeScaledWorld(mFrame, mDevice, mPrimary, mSecondary, mViewportDepth);
+        sActiveScaledWorld = &mFrame;
+      }
+    }
+
+    // The world loop is done.
+    void Finish(gpg::gal::Device* const galDevice)
+    {
+      Suspend(galDevice);
+      mFrame.active = false;
+    }
+
+  private:
+    void End()
+    {
+      if (sActiveScaledWorld == &mFrame) {
+        sActiveScaledWorld = nullptr;
+      }
+      moho::REN_EndScaledWorld(mFrame, mDevice, mPrimary, mSecondary, mViewportDepth);
+    }
+
+    moho::CD3DDevice& mDevice;
+    boost::shared_ptr<moho::CD3DRenderTarget>& mPrimary;
+    boost::shared_ptr<moho::CD3DRenderTarget>& mSecondary;
+    boost::shared_ptr<moho::CD3DDepthStencil>& mViewportDepth;
+    moho::ScaledWorldFrame mFrame;
+  };
 } // namespace
 
 /**
@@ -3877,6 +3952,14 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
   const SWorldViewInfo* const begin = worldViews.begin();
   const SWorldViewInfo* const end = worldViews.end();
 
+  // FAF addition: render scale. With a level below 100 % the world views are drawn into smaller targets (the head, the viewport's frame-copy
+  // and normal targets and the view rectangles are swapped for scaled ones) and upscaled into the back buffer after the loop; the frames
+  // drawn above and everything after the loop (cartographic view, interface, bloom) stay at the window's size.
+  ScaledWorldScope scaledWorld(*device, head, mPrimaryTargetLocks[head], mSecondaryTargetLocks[head], mDepthStencilLocks[head]);
+  if (begin == end) {
+    scaledWorld.Finish(nullptr);
+  }
+
   for (const SWorldViewInfo* worldView = begin; worldView != end; ++worldView) {
     if (worldView->mView == nullptr) {
       continue;
@@ -3944,6 +4027,7 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
     // origin) - every view, main and minimap alike, rendered its
     // terrain/mesh/water passes through that full-screen rect instead of
     // this view's own CameraSetViewport-pushed one.
+    scaledWorld.Resume();
     UpdateRenderViewportCoordinates();
 
 
@@ -4200,6 +4284,13 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
     // one in `Cartographic::Render` only ever runs for a view whose
     // orthographic flag is set, which is the minimap and whichever view the
     // player has toggled into cartographic mode.
+    // FAF render scale: this view's world is finished; upscale it, then draw the overlay at the window's size.
+    {
+      const gpg::gal::RenderProfileScope profileRenderScale("RenderScale");
+      scaledWorld.Suspend(galDevice);
+    }
+    UpdateRenderViewportCoordinates();
+
     if (moho::ren_Ui && worldView->mView != nullptr) {
       const gpg::gal::RenderProfileScope profileViewOverlay("ViewOverlay");
       worldView->mView->Render(
@@ -4241,6 +4332,11 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
     }
 
     mCam = nullptr;
+  }
+
+  {
+    const gpg::gal::RenderProfileScope profileRenderScale("RenderScale");
+    scaledWorld.Finish(galDevice);
   }
 
   // Every world view has consumed this frame's decal set, so drop the decal
@@ -4822,6 +4918,16 @@ void moho::WRenViewport::UpdateRenderViewportCoordinates()
     mScreenPos.y = static_cast<int>(camera->viewport.r[3].y);
     mScreenSize.x = static_cast<int>(camera->viewport.r[3].z);
     mScreenSize.y = static_cast<int>(camera->viewport.r[3].w);
+    if (sActiveScaledWorld != nullptr && sActiveScaledWorld->active && sActiveScaledWorld->head == mHead) {
+      // FAF render scale: the world pass sees a smaller window - the view's rectangle and the target size are scaled together.
+      const gpg::gal::RenderScaleRect scaled = moho::REN_ScaledViewRect(*sActiveScaledWorld, mScreenPos.x, mScreenPos.y, mScreenSize.x, mScreenSize.y);
+      mScreenPos.x = scaled.x;
+      mScreenPos.y = scaled.y;
+      mScreenSize.x = scaled.width;
+      mScreenSize.y = scaled.height;
+      mFullScreen.x = sActiveScaledWorld->width;
+      mFullScreen.y = sActiveScaledWorld->height;
+    }
     return;
   }
 
