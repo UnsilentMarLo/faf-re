@@ -31,7 +31,9 @@
 
 namespace gpg::gal
 {
+  class DepthStencilTarget;
   class IndexBuffer;
+  class RenderTarget;
   class Texture;
 
   /** Capability bits of `Device::GetGpuDrivenFeatures()`. */
@@ -204,6 +206,11 @@ namespace gpg::gal
     std::uint32_t constantBytes = 0U; ///< a multiple of 16, at most `kGpuMaxConstantBytes`
     GpuBuffer* readBuffers[kGpuMaxReadBuffers]{};   ///< t0..t3
     Texture* textures[kGpuMaxTextures]{};           ///< t4..t5
+    /// t4..t5 from a colour target instead of `textures[i]` (it wins when both are set): the target must not be bound for drawing.
+    RenderTarget* renderTextures[kGpuMaxTextures]{};
+    /// t4..t5 from a depth target created sampled (`DepthStencilTargetContext::field0x10_`), read as `Texture2D<float>` (.x = depth);
+    /// the target must not be bound for drawing. Wins over `renderTextures` and `textures`.
+    DepthStencilTarget* depthTextures[kGpuMaxTextures]{};
     GpuBuffer* writeBuffers[kGpuMaxWriteBuffers]{}; ///< u0..u1, compute only
   };
 

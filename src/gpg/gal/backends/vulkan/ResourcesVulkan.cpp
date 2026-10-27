@@ -233,6 +233,13 @@ namespace gpg::gal
 
   DepthStencilTargetVulkan::~DepthStencilTargetVulkan()
   {
+    if (mSampledView != VK_NULL_HANDLE) {
+      // The depth-only view has no image of its own to retire.
+      vulkan::TrackedImage none{};
+      none.owned = false;
+      RetireImage(none, mSampledView);
+      mSampledView = VK_NULL_HANDLE;
+    }
     RetireImage(mImage, mView);
     mView = VK_NULL_HANDLE;
     if (mSampledView != VK_NULL_HANDLE) {

@@ -626,7 +626,15 @@ namespace gpg::gal
     for (std::uint32_t slot = 0U; slot < kGpuMaxTextures; ++slot) {
       VkDescriptorImageInfo& info = images[slot];
       info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-      if (auto* const texture = static_cast<TextureVulkan*>(bindings.textures[slot])) {
+      if (auto* const depth = static_cast<DepthStencilTargetVulkan*>(bindings.depthTextures[slot]); depth != nullptr && depth->SampledView() != VK_NULL_HANDLE) {
+        // The depth aspect only; the layout the engine's next attachment use transitions back from.
+        info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        Transition(depth->Image(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        info.imageView = depth->SampledView();
+      } else if (auto* const target = static_cast<RenderTargetVulkan*>(bindings.renderTextures[slot])) {
+        Transition(target->Current().image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        info.imageView = target->Current().view;
+      } else if (auto* const texture = static_cast<TextureVulkan*>(bindings.textures[slot])) {
         Transition(texture->Image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         info.imageView = texture->View();
       } else {

@@ -659,6 +659,13 @@ namespace gpg::gal
       std::uint32_t sourceOffset,
       std::uint32_t byteCount
     );
+    /**
+     * Post-process anti-aliasing of head `head`'s back buffer (`PostProcessAAMode` in
+     * backends/common/PostProcessAA.h): filters what is in the back buffer now, so the caller runs it after the 3D world
+     * and before the UI. The bound render target, viewport and effect state are left as they were. False here and on a
+     * backend that cannot do it (D3D9 and D3D10 have real multisampling), having drawn nothing.
+     */
+    virtual bool ApplyPostProcessAA(std::uint32_t head, std::uint32_t mode);
 
     /**
      * FAF addition: copies the whole of `source` (a depth/stencil target) into `destination` (same size and format family) on the

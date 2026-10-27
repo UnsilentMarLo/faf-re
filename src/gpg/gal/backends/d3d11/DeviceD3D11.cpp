@@ -43,6 +43,7 @@
 #include "gpg/gal/RenderTargetContext.hpp"
 #include "gpg/gal/TextureContext.h"
 #include "gpg/gal/VertexBufferContext.hpp"
+#include "gpg/gal/backends/common/PostProcessAA.h"
 
 namespace gpg::gal
 {
@@ -342,6 +343,13 @@ namespace gpg::gal
       layout.Reset();
     }
     mRttInputLayout.Reset();
+    mAaVertexShader.Reset();
+    for (ComPtr<ID3D11PixelShader>& shader : mAaPixelShaders) {
+      shader.Reset();
+    }
+    mAaSampler.Reset();
+    mAaCopyView.Reset();
+    mAaCopy.Reset();
     mClearVertexShader.Reset();
     mClearPixelShader.Reset();
     mClearConstants.Reset();
@@ -661,7 +669,8 @@ namespace gpg::gal
       OutputContext& output = mHeadOutputContexts[headIndex];
       output.surface.reset(new RenderTargetD3D11(backBuffer.Get(), renderTargetView.Get(), shaderResourceView.Get()));
       gpg::Logf("D3D11: head %u back buffer target %p (%ux%u)", static_cast<unsigned>(headIndex), output.surface.get(), desc.Width, desc.Height);
-      const DepthStencilTargetContext depthContext(desc.Width, desc.Height, 3U, false);
+      // Sampled, so the ambient occlusion pass (and later passes) can read the scene depth.
+      const DepthStencilTargetContext depthContext(desc.Width, desc.Height, 3U, true);
       output.depthStencil = CreateDepthStencilTarget(&depthContext);
     }
 
@@ -2353,6 +2362,153 @@ namespace gpg::gal
       return false;
     }
     mImmediate->CopyResource(to.GetTexture(), from.GetTexture());
+    return true;
+  }
+
+  bool DeviceD3D11::ApplyPostProcessAA(const std::uint32_t head, const std::uint32_t mode)
+  {
+    if (mode == kPostProcessAAOff || mode >= 3U || (mAaFailedModes & (1U << mode)) != 0U || head >= mHeadOutputContexts.size() ||
+        mHeadOutputContexts[head].surface == nullptr) {
+      return false;
+    }
+    auto* const back = static_cast<RenderTargetD3D11*>(mHeadOutputContexts[head].surface.get());
+
+    if (mAaVertexShader == nullptr || mAaPixelShaders[mode] == nullptr) {
+      const char* pixelEntry = nullptr;
+      switch (mode) {
+      case kPostProcessAAFxaa:
+        pixelEntry = "FxaaPS";
+        break;
+      default:
+        mAaFailedModes |= 1U << mode;
+        return false;
+      }
+      const std::string sourceText = backend::PostProcessAASource();
+      const char* const source = sourceText.c_str();
+      ComPtr<ID3DBlob> vertexCode;
+      ComPtr<ID3DBlob> pixelCode;
+      ComPtr<ID3DBlob> errors;
+      const HRESULT vertexResult = ::D3DCompile(
+        source, std::strlen(source), "FafPostProcessAA", nullptr, nullptr, "AaVS", "vs_4_0", 0U, 0U, &vertexCode, &errors
+      );
+      const HRESULT pixelResult = FAILED(vertexResult)
+        ? vertexResult
+        : ::D3DCompile(source, std::strlen(source), "FafPostProcessAA", nullptr, nullptr, pixelEntry, "ps_4_0", 0U, 0U, &pixelCode, &errors);
+      if (FAILED(pixelResult) || FAILED(mDevice->CreateVertexShader(vertexCode->GetBufferPointer(), vertexCode->GetBufferSize(), nullptr, &mAaVertexShader)) ||
+          FAILED(mDevice->CreatePixelShader(pixelCode->GetBufferPointer(), pixelCode->GetBufferSize(), nullptr, &mAaPixelShaders[mode]))) {
+        mAaFailedModes |= 1U << mode;
+        mAaVertexShader.Reset();
+        gpg::Warnf(
+          "D3D11: post-process anti-aliasing mode %u disabled, its shader did not compile: %s", mode,
+          errors != nullptr ? static_cast<const char*>(errors->GetBufferPointer()) : "no message"
+        );
+        return false;
+      }
+      D3D11_SAMPLER_DESC samplerDesc{};
+      samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+      samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+      samplerDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+      samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+      CheckHresult("DeviceD3D11.cpp", __LINE__, mDevice->CreateSamplerState(&samplerDesc, mAaSampler.ReleaseAndGetAddressOf()));
+      gpg::Logf("D3D11: post-process anti-aliasing mode %u ready", mode);
+    }
+
+    // The copy the pass reads; made again when the back buffer changed size or format (resize, mode switch).
+    D3D11_TEXTURE2D_DESC backDesc{};
+    back->GetTexture()->GetDesc(&backDesc);
+    D3D11_TEXTURE2D_DESC copyDesc{};
+    if (mAaCopy != nullptr) {
+      mAaCopy->GetDesc(&copyDesc);
+    }
+    if (mAaCopy == nullptr || copyDesc.Width != backDesc.Width || copyDesc.Height != backDesc.Height || copyDesc.Format != backDesc.Format) {
+      mAaCopyView.Reset();
+      mAaCopy.Reset();
+      D3D11_TEXTURE2D_DESC desc{};
+      desc.Width = backDesc.Width;
+      desc.Height = backDesc.Height;
+      desc.MipLevels = 1U;
+      desc.ArraySize = 1U;
+      desc.Format = backDesc.Format;
+      desc.SampleDesc.Count = 1U;
+      desc.Usage = D3D11_USAGE_DEFAULT;
+      desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+      CheckHresult("DeviceD3D11.cpp", __LINE__, mDevice->CreateTexture2D(&desc, nullptr, &mAaCopy));
+      CheckHresult("DeviceD3D11.cpp", __LINE__, mDevice->CreateShaderResourceView(mAaCopy.Get(), nullptr, &mAaCopyView));
+      gpg::Logf("D3D11: post-process anti-aliasing copy %ux%u format %d", desc.Width, desc.Height, static_cast<int>(desc.Format));
+    }
+    mImmediate->CopyResource(mAaCopy.Get(), back->GetTexture());
+
+    // What the pass changes, so it can be put back (see ClearViewportWithDraw).
+    D3D11_PRIMITIVE_TOPOLOGY topology{};
+    mImmediate->IAGetPrimitiveTopology(&topology);
+    ComPtr<ID3D11InputLayout> layout;
+    mImmediate->IAGetInputLayout(&layout);
+    ComPtr<ID3D11VertexShader> vertexShader;
+    mImmediate->VSGetShader(&vertexShader, nullptr, nullptr);
+    ComPtr<ID3D11PixelShader> pixelShader;
+    mImmediate->PSGetShader(&pixelShader, nullptr, nullptr);
+    ComPtr<ID3D11GeometryShader> geometryShader;
+    mImmediate->GSGetShader(&geometryShader, nullptr, nullptr);
+    ComPtr<ID3D11ShaderResourceView> pixelView;
+    mImmediate->PSGetShaderResources(0U, 1U, &pixelView);
+    ComPtr<ID3D11SamplerState> pixelSampler;
+    mImmediate->PSGetSamplers(0U, 1U, &pixelSampler);
+    ComPtr<ID3D11BlendState> blend;
+    FLOAT blendFactor[4]{};
+    UINT sampleMask = 0U;
+    mImmediate->OMGetBlendState(&blend, blendFactor, &sampleMask);
+    ComPtr<ID3D11DepthStencilState> depthStencil;
+    UINT stencilRef = 0U;
+    mImmediate->OMGetDepthStencilState(&depthStencil, &stencilRef);
+    ComPtr<ID3D11RasterizerState> rasterizer;
+    mImmediate->RSGetState(&rasterizer);
+    D3D11_VIEWPORT viewport{};
+    UINT viewportCount = 1U;
+    mImmediate->RSGetViewports(&viewportCount, &viewport);
+    ComPtr<ID3D11RenderTargetView> savedTarget;
+    ComPtr<ID3D11DepthStencilView> savedDepth;
+    mImmediate->OMGetRenderTargets(1U, &savedTarget, &savedDepth);
+
+    D3D11_VIEWPORT full{};
+    full.Width = static_cast<float>(backDesc.Width);
+    full.Height = static_cast<float>(backDesc.Height);
+    full.MaxDepth = 1.0f;
+    ID3D11RenderTargetView* const target = back->GetRenderTargetView();
+    mImmediate->OMSetRenderTargets(1U, &target, nullptr);
+    mImmediate->RSSetViewports(1U, &full);
+    mImmediate->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    mImmediate->IASetInputLayout(nullptr);
+    mImmediate->VSSetShader(mAaVertexShader.Get(), nullptr, 0U);
+    mImmediate->GSSetShader(nullptr, nullptr, 0U);
+    mImmediate->PSSetShader(mAaPixelShaders[mode].Get(), nullptr, 0U);
+    ID3D11ShaderResourceView* const copyView = mAaCopyView.Get();
+    mImmediate->PSSetShaderResources(0U, 1U, &copyView);
+    ID3D11SamplerState* const sampler = mAaSampler.Get();
+    mImmediate->PSSetSamplers(0U, 1U, &sampler);
+    mImmediate->OMSetBlendState(mClearBlend[1].Get(), nullptr, 0xFFFFFFFFU);
+    mImmediate->OMSetDepthStencilState(mClearDepthStencil[0].Get(), 0U);
+    mImmediate->RSSetState(mClearRasterizer.Get());
+    mImmediate->Draw(3U, 0U);
+
+    // Leave no view of the copy bound, then the state as it was.
+    ID3D11ShaderResourceView* const noView = nullptr;
+    mImmediate->PSSetShaderResources(0U, 1U, &noView);
+    mImmediate->IASetPrimitiveTopology(topology);
+    mImmediate->IASetInputLayout(layout.Get());
+    mImmediate->VSSetShader(vertexShader.Get(), nullptr, 0U);
+    mImmediate->GSSetShader(geometryShader.Get(), nullptr, 0U);
+    mImmediate->PSSetShader(pixelShader.Get(), nullptr, 0U);
+    ID3D11ShaderResourceView* const restoredView = pixelView.Get();
+    mImmediate->PSSetShaderResources(0U, 1U, &restoredView);
+    ID3D11SamplerState* const restoredSampler = pixelSampler.Get();
+    mImmediate->PSSetSamplers(0U, 1U, &restoredSampler);
+    mImmediate->OMSetBlendState(blend.Get(), blendFactor, sampleMask);
+    mImmediate->OMSetDepthStencilState(depthStencil.Get(), stencilRef);
+    mImmediate->RSSetState(rasterizer.Get());
+    mImmediate->RSSetViewports(1U, &viewport);
+    ID3D11RenderTargetView* const restoredTarget = savedTarget.Get();
+    mImmediate->OMSetRenderTargets(1U, &restoredTarget, savedDepth.Get());
+    mInputLayoutDirty = true;
     return true;
   }
 

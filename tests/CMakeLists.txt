@@ -43,3 +43,15 @@ target_include_directories(faf_particle_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(faf_particle_tests PRIVATE cxx_std_20)
 
 add_test(NAME particle_effect_patch COMMAND faf_particle_tests)
+
+# Ambient occlusion (src/gpg/gal/backends/common/AmbientOcclusion.h): the arithmetic, and the shaders run on a software Direct3D 11 device (WARP).
+#
+#   cmake --build --preset clang-x64-release --target faf_ao_tests
+add_executable(faf_ao_tests EXCLUDE_FROM_ALL ao/AmbientOcclusionTests.cpp)
+target_include_directories(faf_ao_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(faf_ao_tests PRIVATE cxx_std_20)
+if(WIN32)
+  target_link_libraries(faf_ao_tests PRIVATE d3d11 d3dcompiler)
+endif()
+
+add_test(NAME ambient_occlusion COMMAND faf_ao_tests)

@@ -28,6 +28,8 @@
 #include "moho/particles/CWorldParticles.h"
 #include "moho/render/lights/LightFeeds.h"
 #include "moho/render/lights/LightDebugView.h"
+#include "moho/render/AmbientOcclusion.h"
+#include "moho/render/PostProcessAntiAliasing.h"
 #include "moho/mesh/MeshThumbnailRenderer.h"
 #include "moho/render/BoundaryRenderer.h"
 #include "moho/render/BoxRenderer.h"
@@ -4175,6 +4177,16 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
       RenderRefractingEffects();
     }
 
+    // FAF addition: screen-space ambient occlusion of what this view has drawn (terrain, meshes, water, effects). It comes before the view's
+    // overlays (life bars, brackets) and the control tree, which stay un-darkened. The view's pixel rectangle is the back buffer region it
+    // renders into; an orthographic view (the minimap) is skipped inside.
+    if (moho::REN_GetAmbientOcclusionLevel() > 0) {
+      const gpg::gal::RenderProfileScope profileAmbientOcclusion("AmbientOcclusion");
+      moho::REN_ApplyAmbientOcclusion(
+        device->GetGalDevice(), static_cast<std::uint32_t>(mHead), *mCam, mScreenPos.x, mScreenPos.y, mScreenSize.x, mScreenSize.y
+      );
+    }
+
     // 0x007F95B3..0x007F95EA: the world view's own overlay pass, dispatched
     // through `IRenderWorldView` slot 0 on the `+0x2140` lane this loop seeded
     // at 0x007F9379. The four arguments are laid down at 0x007F95BC..0x007F95E7:
@@ -4259,6 +4271,14 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
   // Dynamic lights debug view (ren_DynLightsView): the light grid over the world, before the UI.
   if (mCam != nullptr) {
     moho::lights::DrawDebugView(*mCam, mPrimBatcher.get());
+  }
+
+  // FAF addition: post-process anti-aliasing (FXAA / SMAA) of the finished 3D world on the flip-model Direct3D 11 and 12 backends. The
+  // control tree (DrawUI below: panels, text, icons) and the bloom come after it, so they stay sharp; the world-space overlays drawn
+  // inside the world pass (life bars, selection brackets, range rings) are part of the world and are filtered with it.
+  if (moho::REN_GetPostProcessAAMode() != 0) {
+    const gpg::gal::RenderProfileScope profileAntiAliasing("AntiAliasing");
+    moho::REN_ApplyPostProcessAA(device->GetGalDevice(), static_cast<std::uint32_t>(mHead));
   }
 
   // Draw the UI control tree over the rendered viewport. The binary does this

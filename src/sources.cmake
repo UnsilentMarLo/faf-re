@@ -67,6 +67,7 @@ set(FAF_ENGINE_SOURCES
   gpg/gal/backends/vulkan/ResourcesVulkan.cpp
   gpg/gal/backends/vulkan/DeviceVulkan.cpp
   gpg/gal/backends/vulkan/GpuDrivenVulkan.cpp
+  gpg/gal/backends/vulkan/PostProcessAAVulkan.cpp
   gpg/gal/backends/dxgi/DxgiFactory.cpp
   gpg/gal/backends/dxgi/DxgiSwapChain.cpp
   ${FAF_DEPENDENCIES_DIR}/FX11/d3dxGlobal.cpp
@@ -159,6 +160,9 @@ set(FAF_ENGINE_SOURCES
   moho/render/d3d/CD3DTextureBatcher.cpp
   moho/render/ID3DTextureSheetTypeInfo.cpp
   moho/render/IRenderWorldView.cpp
+  moho/render/PostProcessAntiAliasing.cpp
+  moho/render/AmbientOcclusion.cpp
+  gpg/gal/AmbientOcclusionPass.cpp
   moho/render/RDebugOverlay.cpp
   moho/render/SimpleRenderWorldView.cpp
   moho/render/d3d/RD3DTextureResourceTypeInfo.cpp

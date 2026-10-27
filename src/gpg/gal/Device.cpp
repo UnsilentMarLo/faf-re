@@ -461,4 +461,6 @@ namespace gpg::gal
     bool Device::CopyVertexBufferRegion(VertexBuffer&, std::uint32_t, VertexBuffer&, std::uint32_t, std::uint32_t) { return false; }
 
     bool Device::CopyDepthStencil(DepthStencilTarget&, DepthStencilTarget&) { return false; }
+
+    bool Device::ApplyPostProcessAA(std::uint32_t, std::uint32_t) { return false; }
 }

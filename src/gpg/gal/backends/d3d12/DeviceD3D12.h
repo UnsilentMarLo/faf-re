@@ -144,6 +144,7 @@ namespace gpg::gal
     bool CopyVertexBufferRegion(
       VertexBuffer& destination, std::uint32_t destinationOffset, VertexBuffer& source, std::uint32_t sourceOffset, std::uint32_t byteCount
     ) override;
+    bool ApplyPostProcessAA(std::uint32_t head, std::uint32_t mode) override;
 
     // effects::PassBinder
     void BindPass(effects::EffectProgram& program, std::uint32_t technique, std::uint32_t pass) override;
@@ -290,6 +291,17 @@ namespace gpg::gal
       std::uint32_t height
     );
 
+    /** Post-process anti-aliasing (ApplyPostProcessAA): the shaders and the copy of the back buffer are made on first use. */
+    [[nodiscard]] bool PreparePostProcessAA(std::uint32_t mode);
+    void DrawPostProcessPass(
+      ID3D12PipelineState* pipeline,
+      D3D12_CPU_DESCRIPTOR_HANDLE source,
+      d3d12::TrackedResource& sourceResource,
+      RenderTargetD3D12::Buffer& destination,
+      std::uint32_t width,
+      std::uint32_t height
+    );
+
     // ---- core objects --------------------------------------------------------
     d3d12::Library mLibrary;
     int mCurThreadId = 0;
@@ -374,6 +386,12 @@ namespace gpg::gal
     std::vector<std::uint8_t> mSolidPixelShader; // diagnostics (FAF_GAL_SOLID_PS)
     std::map<DXGI_FORMAT, Microsoft::WRL::ComPtr<ID3D12PipelineState>> mBlitPipelines;
     D3D12_GPU_DESCRIPTOR_HANDLE mBlitSamplers{};
+    // Post-process anti-aliasing: a copy of the back buffer the pass reads while it writes the back buffer.
+    std::vector<std::uint8_t> mAaVertexShader;
+    std::map<std::uint32_t, std::vector<std::uint8_t>> mAaPixelShaders; // by PostProcessAAMode
+    std::map<std::pair<std::uint32_t, DXGI_FORMAT>, Microsoft::WRL::ComPtr<ID3D12PipelineState>> mAaPipelines;
+    boost::shared_ptr<RenderTarget> mAaCopy;
+    std::uint32_t mAaFailedModes = 0U; // one bit per mode whose shader did not compile
     // What was last bound to the output merger and rasterizer (skips repeats).
     D3D12_CPU_DESCRIPTOR_HANDLE mBoundRenderTarget{};
     D3D12_CPU_DESCRIPTOR_HANDLE mBoundDepthStencil{};

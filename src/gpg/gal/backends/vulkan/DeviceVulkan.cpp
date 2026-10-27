@@ -269,6 +269,8 @@ namespace gpg::gal
     if (mDevice != VK_NULL_HANDLE) {
       Vk().vkDeviceWaitIdle(mDevice);
     }
+    mAaProgram.reset();
+    mAaCopy.reset();
     ReleaseGpuDrivenObjects();
     outputContext_ = OutputContext();
     mHeadOutputContexts.clear();
@@ -906,7 +908,8 @@ namespace gpg::gal
       OutputContext& output = mHeadOutputContexts[headIndex];
       auto* const target = new RenderTargetVulkan(std::move(buffers), DXGI_FORMAT_B8G8R8A8_UNORM, static_cast<int>(headIndex));
       output.surface.reset(target);
-      const DepthStencilTargetContext depthContext(swapChain.extent.width, swapChain.extent.height, 3U, false);
+      // Sampled, so the ambient occlusion pass (and later passes) can read the scene depth.
+      const DepthStencilTargetContext depthContext(swapChain.extent.width, swapChain.extent.height, 3U, true);
       output.depthStencil = CreateDepthStencilTarget(&depthContext);
       gpg::Logf("Vulkan: head %u back buffer target %p (%ux%u)", static_cast<unsigned>(headIndex), target, swapChain.extent.width,
                 swapChain.extent.height);
