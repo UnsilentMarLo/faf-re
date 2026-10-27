@@ -69,9 +69,12 @@ bool LRCull(float halfSize, float viewDepth)
 	return (LRParams.x < 1.5) ? large : !large;
 }
 
+// The distance along the view axis of a depth value, in world units (positive in front of the camera). The engine's projection is right
+// handed (Projection[2][3] is -1, the eye z is negative); the first version of this function left out that term and returned about -3 to -6
+// at any depth, so the composite's depth weights below compared nonsense. Same formula as SoftViewDistance.
 float LRViewZ(float depth)
 {
-	return Projection[3][2] / (depth - Projection[2][2]);
+	return -Projection[3][2] / (depth * Projection[2][3] - Projection[2][2]);
 }
 
 )HLSL";
