@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
@@ -1790,6 +1791,261 @@ namespace moho::editor::field
       return true;
     }
 
+    // ---- height from gradients (Poisson solve by FFT) -----------------------------------------------------------------------------------------------
+
+    /** A discrete Fourier transform of any length n: radix-2 when n is a power of two, else Bluestein (chirp-z through a power-of-two convolution). Immutable after construction, so threads share it. */
+    class FftPlan
+    {
+    public:
+      explicit FftPlan(const int n) : n_(n)
+      {
+        pow2_ = (n & (n - 1)) == 0;
+        m_ = n;
+        if (!pow2_) {
+          m_ = 1;
+          while (m_ < 2 * n - 1) {
+            m_ <<= 1;
+          }
+        }
+        tw_.resize(static_cast<std::size_t>(m_ / 2 > 0 ? m_ / 2 : 1));
+        for (int i = 0; i < m_ / 2; ++i) {
+          const double ang = -2.0 * 3.14159265358979323846 * i / m_;
+          tw_[static_cast<std::size_t>(i)] = std::complex<double>(std::cos(ang), std::sin(ang));
+        }
+        if (!pow2_) {
+          chirp_.resize(static_cast<std::size_t>(n));
+          for (int k = 0; k < n; ++k) {
+            const long long kk = (static_cast<long long>(k) * k) % (2LL * n);          // exact: k * k reaches 2^34 for n = 2^17
+            const double ang = -3.14159265358979323846 * static_cast<double>(kk) / n;          // exp(-i pi k^2 / n): X[k] = chirp[k] * sum (x[j] chirp[j]) conj(chirp[k - j])
+            chirp_[static_cast<std::size_t>(k)] = std::complex<double>(std::cos(ang), std::sin(ang));
+          }
+          kernel_.assign(static_cast<std::size_t>(m_), std::complex<double>(0.0, 0.0));
+          kernel_[0] = std::conj(chirp_[0]);
+          for (int k = 1; k < n; ++k) {
+            kernel_[static_cast<std::size_t>(k)] = kernel_[static_cast<std::size_t>(m_ - k)] = std::conj(chirp_[static_cast<std::size_t>(k)]);
+          }
+          Radix2(kernel_, false);
+        }
+      }
+
+      /** In place, a.size() == n. inverse = true gives the unnormalised inverse (the caller divides by n). */
+      void Run(std::vector<std::complex<double>>& a, const bool inverse) const
+      {
+        if (pow2_) {
+          Radix2(a, inverse);
+          return;
+        }
+        // the inverse transform is the forward one of the conjugate
+        if (inverse) {
+          for (auto& c : a) {
+            c = std::conj(c);
+          }
+        }
+        std::vector<std::complex<double>> t(static_cast<std::size_t>(m_), std::complex<double>(0.0, 0.0));
+        for (int k = 0; k < n_; ++k) {
+          t[static_cast<std::size_t>(k)] = a[static_cast<std::size_t>(k)] * chirp_[static_cast<std::size_t>(k)];
+        }
+        Radix2(t, false);
+        for (int i = 0; i < m_; ++i) {
+          t[static_cast<std::size_t>(i)] *= kernel_[static_cast<std::size_t>(i)];
+        }
+        Radix2(t, true);
+        const double inv = 1.0 / m_;
+        for (int k = 0; k < n_; ++k) {
+          a[static_cast<std::size_t>(k)] = t[static_cast<std::size_t>(k)] * inv * chirp_[static_cast<std::size_t>(k)];
+        }
+        if (inverse) {
+          for (auto& c : a) {
+            c = std::conj(c);
+          }
+        }
+      }
+
+    private:
+      void Radix2(std::vector<std::complex<double>>& a, const bool inverse) const
+      {
+        const int n = static_cast<int>(a.size());
+        for (int i = 1, j = 0; i < n; ++i) {
+          int bit = n >> 1;
+          for (; j & bit; bit >>= 1) {
+            j ^= bit;
+          }
+          j ^= bit;
+          if (i < j) {
+            std::swap(a[static_cast<std::size_t>(i)], a[static_cast<std::size_t>(j)]);
+          }
+        }
+        for (int len = 2; len <= n; len <<= 1) {
+          const int step = n / len;
+          for (int i = 0; i < n; i += len) {
+            for (int k = 0; k < len / 2; ++k) {
+              std::complex<double> w = twiddle(static_cast<std::size_t>(k * step), n);
+              if (inverse) {
+                w = std::conj(w);
+              }
+              const std::complex<double> u = a[static_cast<std::size_t>(i + k)];
+              const std::complex<double> v = a[static_cast<std::size_t>(i + k + len / 2)] * w;
+              a[static_cast<std::size_t>(i + k)] = u + v;
+              a[static_cast<std::size_t>(i + k + len / 2)] = u - v;
+            }
+          }
+        }
+      }
+      /** exp(-2 pi i idx / n) for the plan's own power-of-two size m_ (the table), computed directly for the other sizes Radix2 meets (never: n == m_ always). */
+      [[nodiscard]] std::complex<double> twiddle(const std::size_t idx, const int n) const
+      {
+        if (n == m_) {
+          return tw_[idx];
+        }
+        const double ang = -2.0 * 3.14159265358979323846 * static_cast<double>(idx) / n;
+        return {std::cos(ang), std::sin(ang)};
+      }
+
+      int n_;
+      int m_ = 1;
+      bool pow2_ = true;
+      std::vector<std::complex<double>> chirp_;
+      std::vector<std::complex<double>> kernel_;
+      std::vector<std::complex<double>> tw_;
+    };
+
+    /** The 2D transform of a w x h array (row-major), rows then columns, on the worker threads. */
+    void Fft2D(std::vector<std::complex<double>>& d, const int w, const int h, const bool inverse)
+    {
+      const FftPlan px(w);
+      const FftPlan pz(h);
+      Rows(h, [&](const int z0, const int z1) {
+        std::vector<std::complex<double>> t(static_cast<std::size_t>(w));
+        for (int z = z0; z < z1; ++z) {
+          std::complex<double>* row = d.data() + static_cast<std::size_t>(z) * static_cast<std::size_t>(w);
+          t.assign(row, row + w);
+          px.Run(t, inverse);
+          std::copy(t.begin(), t.end(), row);
+        }
+      });
+      Rows(w, [&](const int x0, const int x1) {
+        std::vector<std::complex<double>> t(static_cast<std::size_t>(h));
+        for (int x = x0; x < x1; ++x) {
+          for (int z = 0; z < h; ++z) {
+            t[static_cast<std::size_t>(z)] = d[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)];
+          }
+          pz.Run(t, inverse);
+          for (int z = 0; z < h; ++z) {
+            d[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] = t[static_cast<std::size_t>(z)];
+          }
+        }
+      });
+    }
+
+    /**
+     * The height whose slopes are `dx` and `dz` (d height / d x and / d z, dimensionless; the result is in world units: slope * cell), the least squares fit: the Poisson equation
+     * laplace(h) = div(slopes) solved with the discrete Laplacian's own eigenvalues, so the result reproduces any integrable field exactly. periodic = 1: the field tiles (a texture: no
+     * seam); 0 (default): the field is mirrored about its edges first (the solution then has zero slope across the border, as a map's edge). The mean is 0. Costs a transform of
+     * (2 w) x (2 h) when mirrored: at most 2^25 samples there.
+     */
+    bool OpHeightFromGradient(const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* gx = Need(a, "dx", err);
+      const Grid* gz = Need(a, "dz", err);
+      if (gx == nullptr || gz == nullptr) {
+        return false;
+      }
+      if (!gx->SameShape(*gz)) {
+        err = "height_from_gradient: dx and dz differ in size";
+        return false;
+      }
+      const int w = gx->w;
+      const int h = gx->h;
+      const bool periodic = a.p.N("periodic", 0.0) > 0.5;
+      const int ew = periodic ? w : 2 * w;
+      const int eh = periodic ? h : 2 * h;
+      if (w < 2 || h < 2 || static_cast<long long>(ew) * eh > (1LL << 25)) {
+        err = "height_from_gradient: field too small or too large (at most 32M samples after mirroring)";
+        return false;
+      }
+      const double cell = static_cast<double>(gx->cell);
+      const auto idx = [&](const int x, const int z) { return static_cast<std::size_t>(z) * static_cast<std::size_t>(ew) + static_cast<std::size_t>(x); };
+      // slopes on the edges between samples: pEdge(x, z) lies between sample x - 1 and x (the mean of the two slopes, times the cell), qEdge(x, z) between z - 1 and z
+      std::vector<double> pEdge(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0.0);
+      std::vector<double> qEdge(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0.0);
+      for (int z = 0; z < h; ++z) {
+        for (int x = 0; x < w; ++x) {
+          const int xm = x > 0 ? x - 1 : (periodic ? w - 1 : -1);
+          const int zm = z > 0 ? z - 1 : (periodic ? h - 1 : -1);
+          const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
+          if (xm >= 0) {
+            pEdge[i] = 0.5 * (static_cast<double>(gx->At(x, z)) + static_cast<double>(gx->At(xm, z))) * cell;
+          }
+          if (zm >= 0) {
+            qEdge[i] = 0.5 * (static_cast<double>(gz->At(x, z)) + static_cast<double>(gz->At(x, zm))) * cell;
+          }
+        }
+      }
+      // the extended arrays (periodic: the field itself). Mirrored, about the edge between sample w - 1 and w: the x edge slopes change sign (the edge w itself has none), the z
+      // direction repeats them; the z edge slopes are the other way round.
+      const auto at = [&](const std::vector<double>& e, const int x, const int z) { return e[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)]; };
+      const auto pe = [&](int x, int z) {
+        if (periodic) {
+          return at(pEdge, x, z);
+        }
+        const double s = x < w ? 1.0 : -1.0;
+        if (x == w) {
+          return 0.0;
+        }
+        return s * at(pEdge, x < w ? x : 2 * w - x, z < h ? z : 2 * h - 1 - z);
+      };
+      const auto qe = [&](int x, int z) {
+        if (periodic) {
+          return at(qEdge, x, z);
+        }
+        const double s = z < h ? 1.0 : -1.0;
+        if (z == h) {
+          return 0.0;
+        }
+        return s * at(qEdge, x < w ? x : 2 * w - 1 - x, z < h ? z : 2 * h - z);
+      };
+      std::vector<std::complex<double>> div(static_cast<std::size_t>(ew) * static_cast<std::size_t>(eh), std::complex<double>(0.0, 0.0));
+      for (int z = 0; z < eh; ++z) {
+        const int z1 = z + 1 == eh ? 0 : z + 1;
+        for (int x = 0; x < ew; ++x) {
+          const int x1 = x + 1 == ew ? 0 : x + 1;
+          div[idx(x, z)] = std::complex<double>((pe(x1, z) - pe(x, z)) + (qe(x, z1) - qe(x, z)), 0.0);
+        }
+      }
+      Fft2D(div, ew, eh, false);
+      const double pi2 = 2.0 * 3.14159265358979323846;
+      std::vector<double> lx(static_cast<std::size_t>(ew));
+      std::vector<double> lz(static_cast<std::size_t>(eh));
+      for (int k = 0; k < ew; ++k) {
+        lx[static_cast<std::size_t>(k)] = 2.0 * std::cos(pi2 * k / ew) - 2.0;
+      }
+      for (int l = 0; l < eh; ++l) {
+        lz[static_cast<std::size_t>(l)] = 2.0 * std::cos(pi2 * l / eh) - 2.0;
+      }
+      for (int l = 0; l < eh; ++l) {
+        for (int k = 0; k < ew; ++k) {
+          const double lam = lx[static_cast<std::size_t>(k)] + lz[static_cast<std::size_t>(l)];
+          div[idx(k, l)] = lam < -1.0e-12 ? div[idx(k, l)] / lam : std::complex<double>(0.0, 0.0);   // the mean is free: 0
+        }
+      }
+      Fft2D(div, ew, eh, true);
+      const double norm = 1.0 / (static_cast<double>(ew) * static_cast<double>(eh));
+      out = Grid(w, h, gx->cell, gx->ox, gx->oz);
+      double mean = 0.0;
+      for (int z = 0; z < h; ++z) {
+        for (int x = 0; x < w; ++x) {
+          const double v = div[idx(x, z)].real() * norm;
+          out.At(x, z) = static_cast<float>(v);
+          mean += v;
+        }
+      }
+      mean /= static_cast<double>(w) * static_cast<double>(h);
+      for (float& v : out.v) {
+        v = static_cast<float>(static_cast<double>(v) - mean);
+      }
+      return true;
+    }
+
     // ---- registry --------------------------------------------------------------------------------------------------------------------------------
 
     using OpFn = bool (*)(const OpArgs&, Grid&, std::string&);
@@ -1807,6 +2063,7 @@ namespace moho::editor::field
         {"blend", OpBlend},         {"slope", OpSlope},           {"height_band", OpHeightBand}, {"curvature", OpCurvature},  {"water_below", OpWaterBelow},
         {"water_above", OpWaterAbove}, {"water_depth", OpWaterDepth}, {"shore", OpShore},     {"distance", OpDistance},     {"thermal", OpThermal},
         {"aspect", OpAspect},       {"flow", OpFlow},           {"resample", OpResample},          {"upsample", OpUpsample},     {"downsample", OpDownsample},
+        {"height_from_gradient", OpHeightFromGradient},
       };
       return reg;
     }

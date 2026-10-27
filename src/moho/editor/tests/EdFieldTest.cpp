@@ -435,6 +435,50 @@ static void TestProperties()
     Downsample(*c, 8, 8, out);
     CHECK(out.size() == 64 && out[10] == 2.0f, "downsample");
   }
+  // height_from_gradient: integrates the slopes of a smooth height back (lengths that are not powers of two use the chirp-z transform)
+  for (const bool periodic : {true, false}) {
+    const int W = 100;
+    const int H = 80;
+    const double pi = 3.14159265358979323846;
+    auto h0 = std::make_shared<Grid>(W, H, 2.0f, 0, 0, 0.0f);
+    auto dx = std::make_shared<Grid>(W, H, 2.0f, 0, 0, 0.0f);
+    auto dz = std::make_shared<Grid>(W, H, 2.0f, 0, 0, 0.0f);
+    for (int z = 0; z < H; ++z) {
+      for (int x = 0; x < W; ++x) {
+        double v, px, pz;
+        if (periodic) {           // tiles: three periods across, two down
+          const double ax = 2 * pi * 3 / W, az = 2 * pi * 2 / H;
+          v = 10 * std::sin(ax * x) + 6 * std::cos(az * z) + 4 * std::sin(ax * x + az * z);
+          px = (10 * ax * std::cos(ax * x) + 4 * ax * std::cos(ax * x + az * z)) / 2.0;          // per world unit: the cell is 2
+          pz = (-6 * az * std::sin(az * z) + 4 * az * std::cos(ax * x + az * z)) / 2.0;
+        } else {                  // zero slope across the border
+          const double ax = pi * 2 / (W - 1), az = pi * 3 / (H - 1);
+          v = 10 * std::cos(ax * x) * std::cos(az * z) + 5 * std::cos(ax * x * 2);
+          px = (-10 * ax * std::sin(ax * x) * std::cos(az * z) - 10 * ax * std::sin(ax * x * 2)) / 2.0;
+          pz = (-10 * az * std::cos(ax * x) * std::sin(az * z)) / 2.0;
+        }
+        h0->At(x, z) = static_cast<float>(v);          // the height in world units: the sum of slope * cell
+        dx->At(x, z) = static_cast<float>(px);
+        dz->At(x, z) = static_cast<float>(pz);
+      }
+    }
+    std::string err;
+    const GridPtr r = Make("height_from_gradient", periodic ? "periodic=1" : "periodic=0", {{"dx", dx}, {"dz", dz}}, &err);
+    CHECK(r != nullptr && r->w == W && r->h == H, "height_from_gradient: %s", err.c_str());
+    if (r) {
+      double m0 = 0, m1 = 0, rms = 0, amp = 0;
+      for (std::size_t i = 0; i < r->Count(); ++i) { m0 += h0->v[i]; m1 += r->v[i]; }
+      m0 /= r->Count(); m1 /= r->Count();
+      for (std::size_t i = 0; i < r->Count(); ++i) {
+        const double a = h0->v[i] - m0, b = r->v[i] - m1;
+        rms += (a - b) * (a - b);
+        amp += a * a;
+      }
+      const double rel = std::sqrt(rms / amp);
+      std::printf("  height_from_gradient %s: relative error %.4f (mean of result %.2g)\n", periodic ? "periodic" : "mirrored", rel, m1);
+      CHECK(rel < 0.04 && std::fabs(m1) < 1.0e-3, "height_from_gradient %s: error %f mean %g", periodic ? "periodic" : "mirrored", rel, m1);
+    }
+  }
   // unknown op and missing input are errors, not crashes
   {
     std::string err;
