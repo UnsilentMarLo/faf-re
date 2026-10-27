@@ -807,15 +807,24 @@ namespace
     return nullptr;
   }
 
-  int __cdecl cfunc_EdDecalCount(lua_State* const state)
+  /** The number of map decals in one pass (NthMapDecal walks the list from its start: counting with it is quadratic, 20 ms per ed_decal_add at 1000 decals). */
+  [[nodiscard]] int CountMapDecals(moho::IDecalManager* const manager)
   {
-    moho::IDecalManager* const manager = LiveDecals();
     int n = 0;
-    if (manager != nullptr) {
-      while (NthMapDecal(manager, n) != nullptr) {
+    const int count = manager->GetDecalCount();
+    for (int i = 0; i < count; ++i) {
+      const moho::CWldTerrainDecal* const decal = manager->GetDecal(i);
+      if (decal != nullptr && decal->mArmy < 0 && decal->mUnknownA0 == 0u) {
         ++n;
       }
     }
+    return n;
+  }
+
+  int __cdecl cfunc_EdDecalCount(lua_State* const state)
+  {
+    moho::IDecalManager* const manager = LiveDecals();
+    const int n = manager != nullptr ? CountMapDecals(manager) : 0;
     lua_pushnumber(state, static_cast<lua_Number>(n));
     return 1;
   }
@@ -887,11 +896,7 @@ namespace
     decal->Update();
     manager->MarkPendingChanges();
 
-    int n = 0;
-    while (NthMapDecal(manager, n) != nullptr) {
-      ++n;
-    }
-    lua_pushnumber(state, static_cast<lua_Number>(n));
+    lua_pushnumber(state, static_cast<lua_Number>(CountMapDecals(manager)));
     return 1;
   }
 
