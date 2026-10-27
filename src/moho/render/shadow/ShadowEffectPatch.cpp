@@ -23,6 +23,9 @@ namespace moho::shadowfilter
     // was drawn. A lookup compares the receiver's depth with the casters' depth at several points of a rotated Vogel disk (equal-area
     // spiral, golden angle). Each tap compares against the receiver depth moved along the receiver's plane (derived from the screen
     // space derivatives of the shadow coordinates), so a wide kernel on a slope does not shadow its own surface.
+    // The ground is not drawn into the shadow map, so it cannot shadow itself: its lookups use no depth bias and no plane term (tokens
+    // @BIASSCALE@ / @SLOPESCALE@ are 0 there). A bias on the ground leaves a lit strip between a unit's base and its shadow, where the
+    // caster's surface is closer to the ground than the bias.
     // With a penumbra scale a first pass over the disk averages the depth of the casters in front of the receiver; the kernel radius then
     // grows with the receiver-to-caster distance (percentage-closer soft shadows): contact shadows stay sharp, far ones soften.
     constexpr const char* kLookupCode = R"HLSL(
@@ -58,10 +61,10 @@ float ShadowFilterLookup(float4 coords)
     float det = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
     float2 slope = float2(dzdp.x * duvdy.y - dzdp.y * duvdx.y, dzdp.y * duvdx.x - dzdp.x * duvdy.x);
     slope = (abs(det) > 1e-10) ? slope / det : float2(0, 0);
-    slope = clamp(slope, float2(-4, -4), float2(4, 4)) * @FILTER2@.y;
+    slope = clamp(slope, float2(-4, -4), float2(4, 4)) * @SLOPESCALE@;
 
     float texel = 1.0 / @SIZE@;
-    float bias = @FILTER2@.x * (@BIAS@);
+    float bias = @BIASSCALE@ * (@BIAS@);
 
     // a per-texel rotation of the disk (interleaved gradient noise on the shadow map texel: fixed in the world, no shimmer when the camera moves)
     float angle = 6.2831853 * frac(52.9829189 * frac(dot(floor(uv * @SIZE@), float2(0.06711056, 0.00583715))));
@@ -116,10 +119,12 @@ float ShadowFilterLookup(float4 coords)
 
     string BuildLookup(
       const string_view filter, const string_view filter2, const string_view size, const string_view bias, const string_view sampler,
-      const bool pointFromLinear
+      const bool pointFromLinear, const bool receiverCastsShadows
     )
     {
       string code = kLookupCode;
+      code = Replace(code, "@BIASSCALE@", receiverCastsShadows ? string(filter2) + ".x" : string("0.0"));
+      code = Replace(code, "@SLOPESCALE@", receiverCastsShadows ? string(filter2) + ".y" : string("0.0"));
       code = Replace(code, "@FILTER2@", filter2);
       code = Replace(code, "@FILTER@", filter);
       code = Replace(code, "@SIZE@", size);
@@ -234,7 +239,7 @@ float ShadowFilterLookup(float4 coords)
       "        return fafShadow;\n";
     s.replace(s.find(hook), hook.size(), filtered);
 
-    string code = BuildLookup("shadowFilter", "shadowFilter2", "shadowSize", "shadowBias + 0.001", "shadowSampler", false);
+    string code = BuildLookup("shadowFilter", "shadowFilter2", "shadowSize", "shadowBias + 0.001", "shadowSampler", false, true);
     code +=
       "\nfloat ComputeShadowFiltered( float4 shadowCoords)\n"
       "{\n"
@@ -305,7 +310,7 @@ float ShadowFilterLookup(float4 coords)
     }
     result.lookups = replaced;
 
-    string code = BuildLookup("ShadowFilter", "ShadowFilter2", "ShadowSize", "0.003", "ShadowSampler", true);
+    string code = BuildLookup("ShadowFilter", "ShadowFilter2", "ShadowSize", "0.003", "ShadowSampler", true, false);
     code += R"HLSL(
 // The sun term at a shadow coordinate (xy = uv, z = depth from the light): the filtered lookup, or the shipped one (the blurred G channel).
 float ShadowLookup(float4 coords)
