@@ -2046,6 +2046,23 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     target->DiscardCpuCopy();
   }
 
+  namespace
+  {
+    // A D3D9 style rectangle copy takes a source rectangle that may reach past the surface (the engine's refraction copy passes the view
+    // rectangle, which can be a row taller than a 1280x720 window); D3D11 clips it, but D3D12's CopyTextureRegion makes the command list
+    // invalid (Close returns E_INVALIDARG and every later frame fails). Clip the box to the source and to what fits at (x, y) in the destination.
+    // False when nothing is left to copy.
+    bool ClampCopyBox(D3D12_BOX& box, const UINT sourceWidth, const UINT sourceHeight, const UINT x, const UINT y, const UINT destinationWidth, const UINT destinationHeight)
+    {
+      if (x >= destinationWidth || y >= destinationHeight) {
+        return false;
+      }
+      box.right = std::min({box.right, sourceWidth, box.left + (destinationWidth - x)});
+      box.bottom = std::min({box.bottom, sourceHeight, box.top + (destinationHeight - y)});
+      return box.left < box.right && box.top < box.bottom;
+    }
+  } // namespace
+
   void DeviceD3D12::StretchRect(
     const boost::shared_ptr<RenderTarget>& source,
     const boost::shared_ptr<RenderTarget>& destination,
@@ -2092,6 +2109,9 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       }
       const UINT x = (destinationRect != nullptr) ? static_cast<UINT>(destinationRect->left) : 0U;
       const UINT y = (destinationRect != nullptr) ? static_cast<UINT>(destinationRect->top) : 0U;
+      if (boxPointer != nullptr && !ClampCopyBox(box, sourceContext->width_, sourceContext->height_, x, y, destinationContext->width_, destinationContext->height_)) {
+        return;
+      }
       MarkDraw("StretchRect copy");
       mList->CopyTextureRegion(&target, x, y, 0U, &origin, boxPointer);
       FinishDraw();
@@ -2361,6 +2381,10 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       }
       const UINT x = (destinationRect != nullptr) ? static_cast<UINT>(destinationRect->left) : 0U;
       const UINT y = (destinationRect != nullptr) ? static_cast<UINT>(destinationRect->top) : 0U;
+      if (boxPointer != nullptr &&
+          !ClampCopyBox(box, static_cast<UINT>(sourceDesc.Width), sourceDesc.Height, x, y, static_cast<UINT>(destinationDesc.Width), destinationDesc.Height)) {
+        return;
+      }
       MarkDraw("UpdateSurface copy");
       mList->CopyTextureRegion(&target, x, y, 0U, &origin, boxPointer);
       FinishDraw();
