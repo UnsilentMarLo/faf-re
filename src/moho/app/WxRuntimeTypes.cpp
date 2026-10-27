@@ -4224,6 +4224,12 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
       const gpg::gal::RenderProfileScope profileEffects("Effects");
       RenderEffects(false);
     }
+    // FAF addition: the ambient occlusion reads the depth as it is here. The 0x28 stage draws the shield bubbles, and their ShieldFill pass
+    // writes the whole bubble into the depth buffer (colour-less), which would hide the ground under every bubble from the occlusion.
+    if (moho::REN_GetAmbientOcclusionLevel() > 0) {
+      const gpg::gal::RenderProfileScope profileAmbientOcclusionDepth("AmbientOcclusionDepth");
+      moho::REN_CaptureAmbientOcclusionDepth(device->GetGalDevice(), static_cast<std::uint32_t>(mHead), *mCam);
+    }
     {
       const gpg::gal::RenderProfileScope profileMeshes("Meshes");
       RenderMeshes(0x28, false);

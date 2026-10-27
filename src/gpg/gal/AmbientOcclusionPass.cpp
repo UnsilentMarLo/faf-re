@@ -43,11 +43,57 @@ namespace gpg::gal
     mComposite.reset();
     mTargetA.reset();
     mTargetB.reset();
+    mSceneDepth.reset();
+    mSceneDepthWidth = 0U;
+    mSceneDepthHeight = 0U;
+    mSceneDepthFormat = 0U;
+    mSceneDepthFresh = false;
+    mCopyUnsupported = false;
     mTargetWidth = 0U;
     mTargetHeight = 0U;
     mDevice = nullptr;
     mFailed = false;
     mLoggedRefusal = false;
+  }
+
+  bool AmbientOcclusionPass::CaptureSceneDepth(Device& device, const std::uint32_t head)
+  {
+    mSceneDepthFresh = false;
+    if (mFailed || mCopyUnsupported || (device.GetGpuDrivenFeatures() & kGpuFeatureVertexPulling) == 0U) {
+      return false;
+    }
+    if (mDevice != &device) {
+      Release();
+      mDevice = &device;
+    }
+    const OutputContext* const headContext = WorldOutputContext(device, head);
+    if (headContext == nullptr || headContext->depthStencil == nullptr || !headContext->depthStencil->GetContext()->field0x10_) {
+      return false;
+    }
+    const DepthStencilTargetContext* const source = headContext->depthStencil->GetContext();
+    if (mSceneDepth == nullptr || mSceneDepthWidth != source->width_ || mSceneDepthHeight != source->height_ || mSceneDepthFormat != source->format_) {
+      mSceneDepth.reset();
+      D3DVIEWPORT9 savedViewport{};
+      device.GetViewport(&savedViewport);
+      // Creating a target resets the device's viewport on some backends.
+      mSceneDepth = DepthStencilTarget::Create(DepthStencilTargetContext(source->width_, source->height_, source->format_, true));
+      device.SetViewport(&savedViewport);
+      if (mSceneDepth == nullptr) {
+        mCopyUnsupported = true;
+        gpg::Warnf("Ambient occlusion: no %ux%u depth copy; the live depth buffer is used (shield bubbles hide the ground from it)", source->width_, source->height_);
+        return false;
+      }
+      mSceneDepthWidth = source->width_;
+      mSceneDepthHeight = source->height_;
+      mSceneDepthFormat = source->format_;
+    }
+    if (!device.CopyDepthStencil(*mSceneDepth, *headContext->depthStencil)) {
+      mCopyUnsupported = true;
+      gpg::Warnf("Ambient occlusion: the backend cannot copy depth; the live depth buffer is used (shield bubbles hide the ground from it)");
+      return false;
+    }
+    mSceneDepthFresh = true;
+    return true;
   }
 
   bool AmbientOcclusionPass::EnsureResources(Device& device, const std::uint32_t width, const std::uint32_t height, const bool halfRes)
@@ -149,7 +195,11 @@ namespace gpg::gal
       constants.aoRect[0], constants.aoRect[1], constants.aoRect[2] - constants.aoRect[0] + 1.0f, constants.aoRect[3] - constants.aoRect[1] + 1.0f
     );
     const boost::shared_ptr<RenderTarget> back = headContext->surface;
-    const boost::shared_ptr<DepthStencilTarget> depth = headContext->depthStencil;
+    // The copy taken before the shield bubbles were drawn when there is one (CaptureSceneDepth), else the live buffer.
+    const bool useCopy = mSceneDepthFresh && mSceneDepth != nullptr && mSceneDepthWidth == headContext->depthStencil->GetContext()->width_ &&
+      mSceneDepthHeight == headContext->depthStencil->GetContext()->height_;
+    mSceneDepthFresh = false;
+    const boost::shared_ptr<DepthStencilTarget> depth = useCopy ? mSceneDepth : headContext->depthStencil;
     const boost::shared_ptr<DepthStencilTarget> noDepth;
 
     const auto draw = [&](GpuProgram* const program, const boost::shared_ptr<RenderTarget>& output, const D3DVIEWPORT9& viewport,

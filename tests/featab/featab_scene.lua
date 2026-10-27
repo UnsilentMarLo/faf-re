@@ -62,6 +62,31 @@ ForkThread(function()
         Say('static scene created')
         return
     end
+    if AB_SCENE == 'shield' then
+        -- a shield generator with structures and units under its bubble (west), the same group without a shield (east) as the control
+        WaitUntil(4)
+        local function Group(cx, cz, withShield)
+            if withShield then
+                CreateUnitHPR('ueb4202', brainA.Name, cx, GetTerrainHeight(cx, cz), cz, 0, 0, 0)
+            end
+            local ids = { 'ueb1101', 'ueb2101', 'ueb0101', 'ueb2301', 'ueb1103', 'ueb3101' }
+            for i = 1, 6 do
+                local a = i * math.pi / 3
+                local ux, uz = cx + 11 * math.cos(a), cz + 11 * math.sin(a)
+                if __blueprints[ids[i]] then
+                    CreateUnitHPR(ids[i], brainA.Name, ux, GetTerrainHeight(ux, uz), uz, 0, 0, 0)
+                end
+            end
+            for i = 1, 3 do
+                local ux, uz = cx - 6 + i * 6, cz + 3
+                CreateUnitHPR('uel0303', brainA.Name, ux, GetTerrainHeight(ux, uz), uz, 0, 0.5 * i, 0)
+            end
+        end
+        Group(x0 - 25, z0, true)
+        Group(x0 + 25, z0, false)
+        Say(string.format('shield scene created, ground height %.2f', GetTerrainHeight(x0, z0)))
+        return
+    end
     if AB_SCENE == 'water' then
         -- hover tanks and a few structures on and around the lake at (AB_TX, AB_TZ): the mirrored pass draws what stands on the water
         WaitUntil(4)

@@ -24,6 +24,11 @@ namespace moho
   // The level after the command line was applied (once).
   [[nodiscard]] int REN_GetAmbientOcclusionLevel();
 
+  // Copies head `head`'s depth buffer for the next REN_ApplyAmbientOcclusion. Call it before the mesh stage that draws the shield bubbles
+  // (RenderMeshes 0x28): the ShieldFill pass writes the whole bubble into the depth buffer (colour-less), and the ground under it would
+  // read as the bubble. Does nothing for an orthographic camera or when ambient occlusion is off.
+  void REN_CaptureAmbientOcclusionDepth(gpg::gal::Device* device, std::uint32_t head, const GeomCamera3& camera);
+
   // Darkens head `head`'s back buffer inside the pixel rectangle (x, y, width, height) from the depth buffer, seen through `camera`. Nothing is
   // drawn for an orthographic camera or when the backend cannot (the first refusal is logged once).
   void REN_ApplyAmbientOcclusion(gpg::gal::Device* device, std::uint32_t head, const GeomCamera3& camera, int x, int y, int width, int height);
