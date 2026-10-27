@@ -224,6 +224,8 @@ set(FAF_ENGINE_SOURCES
   moho/render/lights/LightTextureCache.cpp
   moho/render/lights/LightMeshEmission.cpp
   moho/render/lights/SimLights.cpp
+  moho/render/shadow/ShadowEffectPatch.cpp
+  moho/render/shadow/ShadowFilter.cpp
   moho/render/lights/LightFeeds.cpp
   moho/render/RenderFeatures.cpp
   moho/render/lights/LightFeedSources.cpp

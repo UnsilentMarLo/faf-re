@@ -70,6 +70,10 @@ What would cut it is fewer pixels, not a different D3D12 path: drawing the large
 
 D3D11's GPU timestamps are not usable for this comparison: a region shows 14 ms for 12 draws, more than the frame's wall time (cause not investigated). D3D12's agree with the frame time.
 
+## Shadow filtering
+
+The filtered shadow lookup (Options, Video, Shadow Filtering) is roughly cost-neutral at 3840x2160 on an RX 7900 XTX: the ground lookups cost 0.2 to 0.8 ms per frame, the blur passes it makes unnecessary cost about as much, so the three shadow passes sum to between -0.2 and +0.35 ms of the Off value on Direct3D 12 and Vulkan (tables, method and noise in [Shadow filtering](SHADOW_FILTERING.md#measured)).
+
 ## Next
 
 1. Pose and animation on sim workers (about 14 % of sim time).
