@@ -32,6 +32,10 @@ ForkThread(function()
     end
     local camera = GetCamera('WorldCamera')
     if AB_FOCUS and AB_FOCUS > 0 then SetFocusArmy(AB_FOCUS) end
+    if AB_SELECT then
+        WaitSeconds(1)
+        UISelectionByCategory('ALLUNITS', false, false, false, false)
+    end
     local last = nil
     for i, step in AB_STEPS do
         local p = AB_PRESETS[step[3]]

@@ -4167,6 +4167,18 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
       RenderWater(terrain);
     }
 
+    // FAF addition: screen-space ambient occlusion of the opaque world this view has drawn (terrain, opaque meshes, water). It runs here, before
+    // everything that must stay un-darkened and must not count as geometry: the unit selection brackets and the other world-space UI (RenUI),
+    // the shield bubbles (their ShieldFill pass writes the whole bubble into the depth buffer, which hid the ground under a bubble from the
+    // pass), the explosion and cloud meshes, the particle effects after the water and the refracting effects. The view's pixel rectangle is
+    // the back buffer region it renders into; an orthographic view (the minimap) is skipped inside.
+    if (moho::REN_GetAmbientOcclusionLevel() > 0) {
+      const gpg::gal::RenderProfileScope profileAmbientOcclusion("AmbientOcclusion");
+      moho::REN_ApplyAmbientOcclusion(
+        device->GetGalDevice(), static_cast<std::uint32_t>(mHead), *mCam, mScreenPos.x, mScreenPos.y, mScreenSize.x, mScreenSize.y
+      );
+    }
+
     // The playable-boundary pass and the UI selection pass, in that order,
     // between RenderWater and the 0x24 mesh bucket.
     //
@@ -4224,12 +4236,6 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
       const gpg::gal::RenderProfileScope profileEffects("Effects");
       RenderEffects(false);
     }
-    // FAF addition: the ambient occlusion reads the depth as it is here. The 0x28 stage draws the shield bubbles, and their ShieldFill pass
-    // writes the whole bubble into the depth buffer (colour-less), which would hide the ground under every bubble from the occlusion.
-    if (moho::REN_GetAmbientOcclusionLevel() > 0) {
-      const gpg::gal::RenderProfileScope profileAmbientOcclusionDepth("AmbientOcclusionDepth");
-      moho::REN_CaptureAmbientOcclusionDepth(device->GetGalDevice(), static_cast<std::uint32_t>(mHead), *mCam);
-    }
     {
       const gpg::gal::RenderProfileScope profileMeshes("Meshes");
       RenderMeshes(0x28, false);
@@ -4268,16 +4274,6 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
     {
       const gpg::gal::RenderProfileScope profileRefraction("Refraction");
       RenderRefractingEffects();
-    }
-
-    // FAF addition: screen-space ambient occlusion of what this view has drawn (terrain, meshes, water, effects). It comes before the view's
-    // overlays (life bars, brackets) and the control tree, which stay un-darkened. The view's pixel rectangle is the back buffer region it
-    // renders into; an orthographic view (the minimap) is skipped inside.
-    if (moho::REN_GetAmbientOcclusionLevel() > 0) {
-      const gpg::gal::RenderProfileScope profileAmbientOcclusion("AmbientOcclusion");
-      moho::REN_ApplyAmbientOcclusion(
-        device->GetGalDevice(), static_cast<std::uint32_t>(mHead), *mCam, mScreenPos.x, mScreenPos.y, mScreenSize.x, mScreenSize.y
-      );
     }
 
     // 0x007F95B3..0x007F95EA: the world view's own overlay pass, dispatched

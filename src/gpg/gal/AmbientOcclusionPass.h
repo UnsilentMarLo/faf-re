@@ -35,14 +35,6 @@ namespace gpg::gal
      */
     bool Apply(Device& device, std::uint32_t head, const AmbientOcclusionParams& params);
 
-    /**
-     * Copies head `head`'s depth buffer as it is now; the next `Apply` reads the copy instead of the live buffer. The engine calls it before
-     * the mesh stage that draws the shield bubbles: their ShieldFill pass writes the bubble's far side into the depth buffer, so the live
-     * buffer under a bubble holds the bubble and not the ground. False (nothing copied, `Apply` uses the live buffer) when the backend
-     * cannot copy depth or the head's depth buffer is not sampled.
-     */
-    bool CaptureSceneDepth(Device& device, std::uint32_t head);
-
     /** Frees the targets and programs (a device reset or exit). */
     void Release();
 
@@ -58,12 +50,6 @@ namespace gpg::gal
     boost::shared_ptr<GpuProgram> mComposite;
     boost::shared_ptr<RenderTarget> mTargetA;
     boost::shared_ptr<RenderTarget> mTargetB;
-    boost::shared_ptr<DepthStencilTarget> mSceneDepth; // the depth copy of CaptureSceneDepth
-    std::uint32_t mSceneDepthWidth = 0U;
-    std::uint32_t mSceneDepthHeight = 0U;
-    std::uint32_t mSceneDepthFormat = 0U;
-    bool mSceneDepthFresh = false; // taken this frame, not yet used by Apply
-    bool mCopyUnsupported = false; // the backend refused a depth copy: Apply keeps using the live buffer
     std::uint32_t mTargetWidth = 0U;
     std::uint32_t mTargetHeight = 0U;
     std::uint32_t mFrames = 0U;

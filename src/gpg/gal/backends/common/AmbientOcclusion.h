@@ -223,7 +223,9 @@ float2 AoComputePS(AoVertex v) : SV_Target0
         N = -N;
 
     float radius = uQuality.x;
-    float radiusPixels = min(radius / z * uProj.x * 0.5 * uRect.z, 160.0);
+    // The search is also capped in screen space (6 % of the view height): zoomed in, the world radius spans hundreds of pixels, the taps
+    // leave the cache and the cost doubles, and the occlusion becomes a wide haze around every object instead of a contact shadow.
+    float radiusPixels = min(radius / z * uProj.x * 0.5 * uRect.z, uRect.w * 0.06);
     if (radiusPixels < 1.5)
         return float2(1.0, zNorm);
 

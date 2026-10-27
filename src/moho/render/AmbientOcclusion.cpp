@@ -104,18 +104,6 @@ namespace moho
     return ren_AmbientOcclusion;
   }
 
-  void REN_CaptureAmbientOcclusionDepth(gpg::gal::Device* const device, const std::uint32_t head, const GeomCamera3& camera)
-  {
-    if (REN_GetAmbientOcclusionLevel() <= 0 || device == nullptr) {
-      return;
-    }
-    const auto& projection = camera.projection;
-    if (std::fabs(projection.r[2].w) < 0.5f || std::fabs(projection.r[3].w) > 0.5f) {
-      return; // orthographic: the apply skips it too
-    }
-    gpg::gal::AmbientOcclusionPass::Instance().CaptureSceneDepth(*device, head);
-  }
-
   void REN_ApplyAmbientOcclusion(
     gpg::gal::Device* const device, const std::uint32_t head, const GeomCamera3& camera, const int x, const int y, const int width, const int height
   )
