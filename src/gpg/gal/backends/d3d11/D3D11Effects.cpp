@@ -15,8 +15,11 @@
 #include "TextureD3D11.h"
 
 #include "gpg/gal/DepthStencilTargetContext.hpp"
+
+#include "gpg/core/utils/Logging.h"
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/DrawStatistics.h"
+#include "gpg/gal/ForcedAnisotropy.h"
 #include "gpg/gal/Matrix.h"
 
 namespace gpg::gal
@@ -52,12 +55,128 @@ namespace gpg::gal
   } // namespace
 
   // ---------------------------------------------------------------------------
+  // Forced anisotropic filtering
+
+  void EffectSamplersD3D11::Collect(ID3DX11Effect* const effect, const std::vector<std::pair<std::string, std::string>>& samplerTextures)
+  {
+    D3DX11_EFFECT_DESC effectDesc{};
+    if (effect == nullptr || FAILED(effect->GetDesc(&effectDesc))) {
+      return;
+    }
+    effect->GetDevice(&device);
+    for (UINT index = 0U; index < effectDesc.GlobalVariables; ++index) {
+      ID3DX11EffectVariable* const variable = effect->GetVariableByIndex(index);
+      if (variable == nullptr || !variable->IsValid()) {
+        continue;
+      }
+      D3DX11_EFFECT_VARIABLE_DESC variableDesc{};
+      D3DX11_EFFECT_TYPE_DESC typeDesc{};
+      ID3DX11EffectType* const type = variable->GetType();
+      if (type == nullptr || FAILED(variable->GetDesc(&variableDesc)) || FAILED(type->GetDesc(&typeDesc)) ||
+          typeDesc.Type != D3D_SVT_SAMPLER) {
+        continue;
+      }
+      ID3DX11EffectSamplerVariable* const sampler = variable->AsSampler();
+      if (sampler == nullptr || !sampler->IsValid()) {
+        continue;
+      }
+      Entry entry;
+      entry.name = (variableDesc.Name != nullptr) ? variableDesc.Name : "";
+      for (const auto& link : samplerTextures) {
+        if (link.first == entry.name) {
+          entry.texture = link.second;
+          break;
+        }
+      }
+      if (entry.texture.empty()) {
+        continue; // reads no known texture variable: never forced
+      }
+      entry.variable = sampler;
+      const UINT elements = std::max(typeDesc.Elements, 1U);
+      for (UINT element = 0U; element < elements; ++element) {
+        D3D11_SAMPLER_DESC authored{};
+        if (FAILED(sampler->GetBackingStore(element, &authored))) {
+          entry.authored.clear();
+          break;
+        }
+        entry.authored.push_back(authored);
+      }
+      if (!entry.authored.empty()) {
+        samplers.push_back(std::move(entry));
+      }
+    }
+  }
+
+  std::vector<std::size_t> EffectSamplersD3D11::ReadersOf(const std::string& texture) const
+  {
+    std::vector<std::size_t> readers;
+    for (std::size_t index = 0U; index < samplers.size(); ++index) {
+      if (samplers[index].texture == texture) {
+        readers.push_back(index);
+      }
+    }
+    return readers;
+  }
+
+  void EffectSamplersD3D11::Apply(Entry& entry)
+  {
+    const int forced = ForcedAnisotropy();
+    for (UINT element = 0U; element < entry.authored.size(); ++element) {
+      // Back to the effect's own state first, then the anisotropic copy when this sampler qualifies.
+      static_cast<void>(entry.variable->UndoSetSampler(element));
+      D3D11_SAMPLER_DESC desc = entry.authored[element];
+      std::uint32_t filter = static_cast<std::uint32_t>(desc.Filter);
+      if (forced <= 1 || !entry.world || device == nullptr || IsDataSampler(entry.name) || desc.MaxLOD <= 0.5f ||
+          !ForceAnisotropicFilter(filter)) {
+        continue;
+      }
+      desc.Filter = static_cast<D3D11_FILTER>(filter);
+      desc.MaxAnisotropy = static_cast<UINT>(forced);
+      Microsoft::WRL::ComPtr<ID3D11SamplerState> state;
+      if (SUCCEEDED(device->CreateSamplerState(&desc, &state))) {
+        static_cast<void>(entry.variable->SetSampler(element, state.Get()));
+        static const bool log = std::getenv("FAF_ANISO_LOG") != nullptr;
+        if (log && element == 0U) {
+          gpg::Logf("Aniso: forced %dx on sampler %s (texture %s)", forced, entry.name.c_str(), entry.texture.c_str());
+        }
+      }
+    }
+  }
+
+  void EffectSamplersD3D11::NoteBinding(const std::vector<std::size_t>& readers, const bool world)
+  {
+    for (const std::size_t index : readers) {
+      Entry& entry = samplers[index];
+      if (entry.world != world) {
+        entry.world = world;
+        Apply(entry);
+      }
+    }
+  }
+
+  void EffectSamplersD3D11::Sync()
+  {
+    const unsigned wanted = ForcedAnisotropyEpoch();
+    if (wanted == epoch) {
+      return;
+    }
+    epoch = wanted;
+    for (Entry& entry : samplers) {
+      Apply(entry);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // EffectD3D11
 
-  EffectD3D11::EffectD3D11(const EffectContext& context, ID3DX11Effect* const effect)
+  EffectD3D11::EffectD3D11(
+    const EffectContext& context, ID3DX11Effect* const effect, const std::vector<std::pair<std::string, std::string>>& samplerTextures
+  )
     : mContext(context)
     , mEffect(effect)
+    , mSamplers(std::make_shared<EffectSamplersD3D11>())
   {
+    mSamplers->Collect(effect, samplerTextures);
     // The wrapper keeps no source once the effect exists (D3D10 empties the
     // copied buffer in `SetEffect`, 0x0094BFE0).
     mContext.mSourceBuffer.Reset();
@@ -86,7 +205,7 @@ namespace gpg::gal
       D3DX11_TECHNIQUE_DESC techniqueDesc{};
       CheckHresult("EffectD3D11.cpp", __LINE__, technique->GetDesc(&techniqueDesc));
       outTechniques.push_back(
-        boost::shared_ptr<EffectTechnique>(new EffectTechniqueD3D11(techniqueDesc.Name, mEffect.Get(), technique))
+        boost::shared_ptr<EffectTechnique>(new EffectTechniqueD3D11(techniqueDesc.Name, mEffect.Get(), technique, mSamplers))
       );
     }
   }
@@ -100,7 +219,7 @@ namespace gpg::gal
     if (variable == nullptr || !variable->IsValid()) {
       ThrowMissing("EffectD3D11.cpp", __LINE__, "variable", name);
     }
-    return boost::shared_ptr<EffectVariable>(new EffectVariableD3D11(name, mEffect.Get(), variable));
+    return boost::shared_ptr<EffectVariable>(new EffectVariableD3D11(name, mEffect.Get(), variable, mSamplers));
   }
 
   boost::shared_ptr<EffectTechnique> EffectD3D11::GetTechnique(const char* const name)
@@ -112,7 +231,7 @@ namespace gpg::gal
     if (technique == nullptr || !technique->IsValid()) {
       ThrowMissing("EffectD3D11.cpp", __LINE__, "technique", name);
     }
-    return boost::shared_ptr<EffectTechnique>(new EffectTechniqueD3D11(name, mEffect.Get(), technique));
+    return boost::shared_ptr<EffectTechnique>(new EffectTechniqueD3D11(name, mEffect.Get(), technique, mSamplers));
   }
 
   void EffectD3D11::OnReset() {}
@@ -123,11 +242,13 @@ namespace gpg::gal
   // EffectTechniqueD3D11
 
   EffectTechniqueD3D11::EffectTechniqueD3D11(
-    const char* const name, ID3DX11Effect* const effect, ID3DX11EffectTechnique* const technique
+    const char* const name, ID3DX11Effect* const effect, ID3DX11EffectTechnique* const technique,
+    std::shared_ptr<EffectSamplersD3D11> samplers
   )
     : mName((name != nullptr) ? name : "")
     , mEffect(effect)
     , mTechnique(technique)
+    , mSamplers(std::move(samplers))
   {
     if (mEffect == nullptr) {
       ThrowError("EffectTechniqueD3D11.cpp", __LINE__, "invalid effect specified");
@@ -156,6 +277,9 @@ namespace gpg::gal
     Device::GetInstance()->BeginTechnique();
     if (ActiveDevice().Tracing()) {
       ActiveDevice().Trace("BeginTechnique %s", mName.c_str());
+    }
+    if (mSamplers != nullptr) {
+      mSamplers->Sync(); // forced anisotropic filtering (ForcedAnisotropy.h)
     }
 
     D3DX11_TECHNIQUE_DESC desc{};
@@ -262,12 +386,17 @@ namespace gpg::gal
   // EffectVariableD3D11
 
   EffectVariableD3D11::EffectVariableD3D11(
-    const char* const name, ID3DX11Effect* const effect, ID3DX11EffectVariable* const variable
+    const char* const name, ID3DX11Effect* const effect, ID3DX11EffectVariable* const variable,
+    std::shared_ptr<EffectSamplersD3D11> samplers
   )
     : mName((name != nullptr) ? name : "")
     , mEffect(effect)
     , mVariable(variable)
+    , mSamplers(std::move(samplers))
   {
+    if (mSamplers != nullptr) {
+      mSamplerReaders = mSamplers->ReadersOf(mName.c_str());
+    }
     if (mEffect == nullptr) {
       ThrowError("EffectVariableD3D11.cpp", __LINE__, "invalid effect specified");
     }
@@ -296,6 +425,9 @@ namespace gpg::gal
     ID3D11ShaderResourceView* const view =
       (renderTarget != nullptr) ? static_cast<RenderTargetD3D11*>(renderTarget.get())->GetShaderResourceView() : nullptr;
     CheckHresult("EffectVariableD3D11.cpp", __LINE__, mVariable->AsShaderResource()->SetResource(view));
+    if (!mSamplerReaders.empty()) {
+      mSamplers->NoteBinding(mSamplerReaders, false); // a render target is not a world texture
+    }
     RecordStateChange();
   }
 
@@ -320,6 +452,9 @@ namespace gpg::gal
     ID3D11ShaderResourceView* const view =
       (texture != nullptr) ? static_cast<TextureD3D11*>(texture.get())->GetShaderResourceView() : nullptr;
     CheckHresult("EffectVariableD3D11.cpp", __LINE__, mVariable->AsShaderResource()->SetResource(view));
+    if (!mSamplerReaders.empty()) {
+      mSamplers->NoteBinding(mSamplerReaders, texture != nullptr && static_cast<TextureD3D11*>(texture.get())->IsWorldTexture());
+    }
     RecordStateChange();
   }
 

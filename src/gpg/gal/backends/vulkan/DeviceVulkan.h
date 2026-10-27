@@ -281,7 +281,8 @@ namespace gpg::gal
      * out the upload memory the snapshot was taken into.
      */
     void CarryBoundPass();
-    [[nodiscard]] VkSampler SamplerFor(const effects::SamplerDesc& desc);
+    [[nodiscard]] VkSampler SamplerFor(const effects::SamplerDesc& desc, bool worldTexture = false);
+    void UpdateAnisotropicSamplers(effects::EffectProgram& program, ProgramState& state);
     [[nodiscard]] VkShaderModule ModuleFor(const effects::CompiledEntry& entry, const effects::CompiledEntry* vertex);
     [[nodiscard]] const effects::SpirvInterface& InterfaceOf(const effects::CompiledEntry& entry);
     [[nodiscard]] VkPipeline PipelineFor(const BoundPass& pass, VkPrimitiveTopology topology);

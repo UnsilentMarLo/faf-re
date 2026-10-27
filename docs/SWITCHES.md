@@ -47,6 +47,7 @@ Every performance change has a switch that brings back the original path, and bo
 | `wld_FrameClock` | 1 | `/con` | live | Replays and single player: game clock from the mean frame time (0: the original median, 2: each frame's own time) |
 | `wld_VisionChainHints` | 1 | `/con` | live | Vision-tree chain tails and predecessors from checked hints instead of chain walks |
 | `wld_VisionRepeatInsert` | 1 | `/con` | live | A vision entry identical to the previous one goes where the tree walk would put it, without the walk |
+| `ren_Anisotropy` | 0 (the Anisotropic Filtering option, Options, Video) | `/con` | live | Forced anisotropic filtering of the effects' linear samplers: 0 off, 1 2x, 2 4x, 3 8x, 4 16x (docs/RENDERER_BACKENDS.md, "Anisotropic filtering") |
 | `ren_ParticleKeyShortcut` | 1 | `/con` | live | Particles reuse the cached render bucket when their key would match, without building the key |
 | `ren_FrustumCacheLodUnits` | 20000 | `/con` | live | From this many entities in view, a camera's unit lists refresh every `ren_FrustumCacheLodInterval` s |
 | `ren_FrustumCacheLodInterval` | 2.0 | `/con` | live | That refresh interval, in seconds |

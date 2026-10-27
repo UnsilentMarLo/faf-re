@@ -232,3 +232,44 @@ Screen-space ambient occlusion darkens the finished 3D world where geometry clos
 - **Cost** (RX 7900 XTX, windowed 1600x900, skirmish on adaptive_acid_lakes with structures of four factions and unit clusters, game paused, `FAF_GPU_PROFILE=300`, region `AmbientOcclusion`, three draws): D3D12 High about 0.65-0.95 ms per frame, Medium 0.5-0.65 ms, Low 0.35-0.55 ms; D3D11 High 0.2-0.55 ms, Vulkan High 0.4-0.8 ms. The GPU clock was not pinned, so the spread is as large as the difference between levels (and D3D11's timestamps are wall-clock based). The blur and composite passes at back buffer resolution cost about as much as the half-resolution search, which is why Low is not much cheaper than Medium.
 - **Verified (2026-10-27, in game, windowed 1600x900, same scene, paused, `ren_AmbientOcclusion` switched 0 / 3 every few seconds, frames dumped with `FAF_GAL_DUMP_SECONDS=1`):** D3D11, D3D12 and Vulkan draw the pass (3 draws); the frame mean falls from 59.5 to 58.2 on all three and the mean absolute per-pixel difference is 1.20 / 1.23 / 1.25 (D3D12 / D3D11 / Vulkan). The darkening sits at the feet of structures and in the creases of the ACU; flat ground, the sky and the interface are unchanged. `SC_PrimaryAdapter 1280,720,60`, `1920,1080,60` and `windowed` with the pass on (Medium half and High full resolution): the targets are recreated for the new size on all three APIs, no crash. Host test `tests/ao/AmbientOcclusionTests.cpp` (`faf_ao_tests`) runs the real shaders on a WARP device over synthetic depth buffers: open ground stays above 0.97, the ground at a box's foot drops to 0.76-0.78, the box's wall is 0.65-0.75 at its foot against 0.995 higher up, the roof and the sky stay open, half and full resolution agree to 0.002 mean difference.
 - **Limits.** It darkens the finished colour (sun, specular and emission too), so a strong setting looks like dirt in the creases rather than missing ambient light; translucent effects and the water surface are darkened by the occlusion of what is behind them; thin objects get no special handling (no thickness heuristic); the screen-space search sees nothing outside the screen or hidden behind objects. Not verified: exclusive full screen, a lost device, split screen (more than one world view), the Options > Video entry itself (the registry logs `render feature ambient_occlusion on <api>: level 0`), D3D9 (unsupported by design) and D3D10, other GPUs.
+
+| Anisotropic Filtering (`aniso_quality`, Off / 2x / 4x / 8x / 16x, default 4x, applies at once) | yes (state manager) | no: the Direct3D 10 renderer does not start | yes | yes | yes |
+
+Verified by running the staged battle (`tests/lights/ingame/dynlights_census.lua`) on each API with only the profile option set (no command-line switch): effects patched, lights drawn on D3D11, D3D12 and Vulkan, no entry and a log line on D3D9.
+
+## Anisotropic filtering
+
+Forced anisotropic texture filtering (`src/gpg/gal/ForcedAnisotropy.h`, `src/moho/render/AnisotropicFilter.cpp`; render feature `aniso_quality`, console variable `ren_Anisotropy` 0..4 = Off, 2x, 4x, 8x, 16x). The shipped effects pick their own samplers, nearly all trilinear, so ground, decals and units blur at grazing angles. Nothing in the game data changes: each backend rewrites the sampler it builds for an effect.
+
+Rule (`ForceAnisotropicFilter` / `ForceAnisotropicSampler`): a 2D effect sampler with a linear min and mag filter (trilinear or bilinear) becomes `ANISOTROPIC` with the chosen maximum. Left alone: point and mixed filters, comparison (shadow) samplers, samplers that already are anisotropic, mip-less samplers (`MaxLOD` 0), the engine's own blit / post-process / GPU-driven samplers, samplers whose names mark a lookup table (`dynLight*`, `*lookup*`, `anisotropic*`, `*ramp*`, `fresnel*`, `falloff*`), cube and volume textures, and, on every API except Direct3D 9, any sampler whose texture variable currently holds a render target (shadow maps and blurs, reflection / refraction, frame buffers) or a texture without a mip chain. With Off the effects' own states are used unchanged.
+
+| API | Where | Live change | Texture-aware |
+|---|---|---|---|
+| Direct3D 9 | `StateManagerD3D9::SetSamplerState`: linear MIN / MAG filters become anisotropic and `MAXANISOTROPY` is set, for pixel samplers 0..15 | yes (the cache keeps what the device holds) | no: the state manager does not know the texture, so render-target reads also go anisotropic (1:1 reads look the same) |
+| Direct3D 11 | Effects 11: `ID3DX11EffectSamplerVariable::SetSampler` with an anisotropic copy of the effect's state, `UndoSetSampler` to give it back. Which sampler reads which texture variable comes from the effect source (preprocessed, translated and parsed as the D3D12 / Vulkan runtimes do, `DeviceD3D11::SamplerTextures`); `EffectVariableD3D11::SetTexture / SetRenderTarget` report whether the variable holds a world texture (`TextureD3D11::IsWorldTexture`) | yes (`EffectSamplersD3D11::Sync` at technique begin) | yes |
+| Direct3D 12 | `DeviceD3D12::SamplerTable(samplers, mask)`: the program's sampler table is built for the samplers whose bound texture is a world texture (`UpdateAnisotropicSamplers`, at the texture-table rebuild). Tables with a forced sampler live at the back of the 2048-descriptor sampler heap and are dropped whole, after a GPU wait, when the heap is full (`ResetForcedSamplerTables`); programs rebuild theirs when the generation changes | yes | yes |
+| Vulkan | `DeviceVulkan::SamplerFor(desc, worldTexture)` with the same mask (`UpdateAnisotropicSamplers`); needs `samplerAnisotropy` (every desktop GPU) | yes | yes |
+| Direct3D 10 | not reachable: the renderer does not start | - | - |
+
+Notes:
+
+- A Direct3D 12 sampler heap holds 2048 descriptors, 32 tables of the 64 the root signature needs. A first version that cached forced tables in the permanent map hung the game (the heap filled after a few level changes); the end region is why switching levels back and forth is safe.
+- The profile stores the state key (`x4`), and the options module writes a feature's default into the profile the first time the options are built, so a changed default only reaches profiles that never saw the option.
+- `FAF_ANISO_LOG=1` logs every sampler that gets forced (`Aniso: forced 16x on sampler Stratum0AlbedoSampler (texture Stratum0AlbedoTexture)`, Direct3D 11 and 12).
+- Host test: `cmake --build --preset clang-x64-release --target faf_aniso_tests` (`tests/aniso/AnisotropyTests.cpp`, the filter, level, epoch and data-sampler rules).
+
+Verified 2026-10-27 (RX 7900 XTX, 1600x900 windowed, `adaptive_acid_lakes`, camera pitch 0.32 rad over the lake terrain with roads and decals, game paused, level switched live with `ren_Anisotropy`): Direct3D 9, 11, 12 and Vulkan all change by the same mean 2.0 grey levels per frame at each switch (D3D9 1.4, measured on window captures), and the 16x frames keep ground detail the Off frames smear. The forced samplers on D3D11 and D3D12 are the same 39 (strata albedo and normal, terrain decals, skirts, mesh albedo / normals / specular, particles, ...); none of the render-target samplers.
+
+GPU cost per frame (`FAF_GPU_PROFILE`, same paused frame, median of alternating segments, other sessions' games were running, so +-0.1 ms):
+
+| Level | D3D12 |
+|---|---|
+| Off | 1.50 ms |
+| 2x | 1.55 ms (+0.05) |
+| 4x | 1.91 ms (+0.41) |
+| 8x | 1.89 ms (+0.39) |
+| 16x | 2.22 ms (+0.72) |
+
+Vulkan 16x: 2.01 -> 2.39 ms (+0.38). Direct3D 11: GPU timestamps are not usable and the paused frame is vsync bound (4.26 -> 4.32 ms wall), so no cost figure. The first version, which also forced the shadow, reflection and frame samplers, cost +0.95 ms at 16x on D3D12; the texture-aware rule saved about 0.2 ms of that.
+
+Not verified: a full game with many units (the staged scene is mostly terrain), multi-monitor / split screen, switching the Graphics API with the option set, Direct3D 9 on a real GPU other than this one, the Options screen drawn by the game (the Lua `GetRenderFeatures()` result lists the entry with the right levels and default on Direct3D 12; the dropdown itself was not clicked).

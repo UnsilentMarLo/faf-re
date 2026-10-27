@@ -55,3 +55,12 @@ if(WIN32)
 endif()
 
 add_test(NAME ambient_occlusion COMMAND faf_ao_tests)
+
+# Forced anisotropic filtering rules (src/gpg/gal/ForcedAnisotropy.h): header only, compiled on its own.
+#
+#   cmake --build --preset clang-x64-release --target faf_aniso_tests
+add_executable(faf_aniso_tests EXCLUDE_FROM_ALL aniso/AnisotropyTests.cpp)
+target_include_directories(faf_aniso_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(faf_aniso_tests PRIVATE cxx_std_20)
+
+add_test(NAME forced_anisotropy COMMAND faf_aniso_tests)
