@@ -163,6 +163,8 @@ set(FAF_ENGINE_SOURCES
   moho/render/PostProcessAntiAliasing.cpp
   moho/render/AmbientOcclusion.cpp
   gpg/gal/AmbientOcclusionPass.cpp
+  gpg/gal/RenderScalePass.cpp
+  moho/render/RenderScale.cpp
   moho/render/RDebugOverlay.cpp
   moho/render/SimpleRenderWorldView.cpp
   moho/render/d3d/RD3DTextureResourceTypeInfo.cpp

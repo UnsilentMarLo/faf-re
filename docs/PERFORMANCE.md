@@ -121,6 +121,10 @@ Switches: `ren_ParticleLowRes` (0, 1, 2), `ren_ParticleLowResSize` (320), `ren_P
 
 The filtered shadow lookup (Options, Video, Shadow Filtering) is roughly cost-neutral at 3840x2160 on an RX 7900 XTX: the ground lookups cost 0.2 to 0.8 ms per frame, the blur passes it makes unnecessary cost about as much, so the three shadow passes sum to between -0.2 and +0.35 ms of the Off value on Direct3D 12 and Vulkan (tables, method and noise in [Shadow filtering](SHADOW_FILTERING.md#measured)).
 
+## Render scale
+
+Options, Video, Render Scale draws the 3D world at 85 / 75 / 67 / 50 % of the window and upscales it before the interface (details, method and verification in [Renderer backends](RENDERER_BACKENDS.md#render-scale)). Whole-frame GPU time of the staged battle scene on an RX 7900 XTX at 3840x2160: Direct3D 12 8.32 ms at 100 %, 6.72 ms at 67 % (-19 %), 5.23 ms at 50 % (-37 %); Vulkan 4.33 / 3.47 / 2.23 ms. The upscale and sharpen pass costs 0.3 to 0.45 ms at 4K and 0.1 to 0.2 ms at 1600x900.
+
 ## Next
 
 1. Pose and animation on sim workers (about 14 % of sim time).
