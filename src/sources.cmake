@@ -161,6 +161,8 @@ set(FAF_ENGINE_SOURCES
   moho/render/ID3DTextureSheetTypeInfo.cpp
   moho/render/IRenderWorldView.cpp
   moho/render/PostProcessAntiAliasing.cpp
+  moho/render/PostProcessSharpen.cpp
+  gpg/gal/PostProcessPass.cpp
   moho/render/AmbientOcclusion.cpp
   gpg/gal/AmbientOcclusionPass.cpp
   moho/render/RDebugOverlay.cpp

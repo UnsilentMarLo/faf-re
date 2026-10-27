@@ -5,6 +5,7 @@
 
 #include "gpg/core/utils/Logging.h"
 #include "gpg/gal/Device.hpp"
+#include "gpg/gal/PostProcessPass.h"
 #include "gpg/gal/backends/common/PostProcessAA.h"
 #include "moho/console/CConCommand.h"
 #include "moho/misc/StartupHelpers.h"
@@ -19,13 +20,12 @@ namespace moho
     // The console variable. Registration is kept in this one object so it can move into the render feature registry unchanged.
     TConVar<int> gTConVar_ren_AntiAliasing(
       "ren_AntiAliasing",
-      "Post-process anti-aliasing of the 3D world on Direct3D 11, 12 and Vulkan: 0 off (the default), 1 FXAA (2 SMAA is reserved and not "
-      "implemented: the backends refuse it and nothing is filtered). Direct3D 9 uses its own multisampling (Options > Video). "
-      "/aa off|fxaa on the command line sets it at start (docs/RENDERER_BACKENDS.md).",
+      "Post-process anti-aliasing of the 3D world on Direct3D 11, 12 and Vulkan: 0 off (the default), 1 FXAA, 2 SMAA 1x. Direct3D 9 uses "
+      "its own multisampling (Options > Video). /aa off|fxaa|smaa on the command line sets it at start (docs/RENDERER_BACKENDS.md).",
       &ren_AntiAliasing
     );
 
-    // The Options > Video entry (render features registry): Off / FXAA are ren_AntiAliasing 0..1. Applies live (a console variable the
+    // The Options > Video entry (render features registry): Off / FXAA / SMAA are ren_AntiAliasing 0..2. Applies live (a console variable the
     // pass reads every frame). Direct3D 11 and 12 cannot multisample a flip-model swap chain, so they filter the finished world instead;
     // Direct3D 9 keeps its real multisampling dropdown (Options, Video, Anti-Aliasing) and Direct3D 10 does not start.
     const bool gRegisteredFeature = [] {
@@ -34,9 +34,9 @@ namespace moho
       feature.key = "post_aa";
       feature.title = "Post-process Anti-Aliasing";
       feature.tip = "Smooths the jagged edges of units, buildings and terrain in the 3D world; the interface stays sharp. FXAA is a single cheap pass "
-                    "(about 0.05 ms per frame at 1600x900). Render only. Takes effect at once.";
+                    "(about 0.05 ms per frame at 1600x900); SMAA 1x takes three passes (about 0.1 ms) and keeps fine detail sharper. Render only. Takes effect at once.";
       feature.console = "ren_AntiAliasing";
-      feature.states = {{"Off", "off"}, {"FXAA", "fxaa"}};
+      feature.states = {{"Off", "off"}, {"FXAA", "fxaa"}, {"SMAA", "smaa"}};
       feature.defaultLevel = 0;
       feature.needsRestart = false;
       feature.apis[static_cast<int>(Api::D3D9)].reason = "Direct3D 9 has real multisampling (Options, Video, Anti-Aliasing)";
@@ -93,7 +93,9 @@ namespace moho
       return;
     }
     static int sLoggedMode = -1;
-    const bool applied = device->ApplyPostProcessAA(head, static_cast<std::uint32_t>(mode));
+    // FXAA is one pass per backend (Device::ApplyPostProcessAA); SMAA is three and runs the same on every backend with GPU programs.
+    const bool applied = mode == gpg::gal::kPostProcessAASmaa ? gpg::gal::PostProcessPass::Instance().ApplySmaa(*device, head)
+                                                              : device->ApplyPostProcessAA(head, static_cast<std::uint32_t>(mode));
     if (sLoggedMode != mode) {
       sLoggedMode = mode;
       if (applied) {

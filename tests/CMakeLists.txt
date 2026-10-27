@@ -56,6 +56,18 @@ endif()
 
 add_test(NAME ambient_occlusion COMMAND faf_ao_tests)
 
+# SMAA 1x and sharpening (src/gpg/gal/backends/common/PostProcessSmaa.h): the shaders run on a software Direct3D 11 device (WARP) over synthetic images.
+#
+#   cmake --build --preset clang-x64-release --target faf_postprocess_tests
+add_executable(faf_postprocess_tests EXCLUDE_FROM_ALL postprocess/PostProcessTests.cpp)
+target_include_directories(faf_postprocess_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(faf_postprocess_tests PRIVATE cxx_std_20)
+if(WIN32)
+  target_link_libraries(faf_postprocess_tests PRIVATE d3d11 d3dcompiler)
+endif()
+
+add_test(NAME post_process_smaa_sharpen COMMAND faf_postprocess_tests)
+
 # Forced anisotropic filtering rules (src/gpg/gal/ForcedAnisotropy.h): header only, compiled on its own.
 #
 #   cmake --build --preset clang-x64-release --target faf_aniso_tests
