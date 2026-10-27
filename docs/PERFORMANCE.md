@@ -66,9 +66,56 @@ In the heaviest 600-frame blocks the `EffParticles` pass (inside `Effects`) take
 - **Not the translation**: the draws are the same instanced quads, the state is the effect's (`Depth_Enable_Less_Write_None`, blend per technique), the target is the same BGRA8 back buffer on both APIs (one shared format table), and the particle draws only bind their own textures and buffers (no copies or render-target switches in the pass).
 - **Scales with the pixels** (extrapolated, not measured): at 2560x1440 the same blocks would cost about 2.5x, at 3840x2160 5.8x (about 4 and 10 ms), which is what a "100 % GPU" report at the nuke looks like on a larger screen or a frame limiter that leaves the GPU no idle time.
 
-What would cut it is fewer pixels, not a different D3D12 path: drawing the large soft particles (quads of more than some 100,000 pixels) into a half-resolution target and compositing them, or capping a particle's screen size. Both change the picture, so neither is done.
+What cuts it is fewer pixels, not a different D3D12 path: the next section draws the large soft particles into a smaller target.
 
 D3D11's GPU timestamps are not usable for this comparison: a region shows 14 ms for 12 draws, more than the frame's wall time (cause not investigated). D3D12's agree with the frame time.
+
+## Large particles in a lower-resolution target
+
+*Done 26/10/2026 on branch `particle-overdraw`. Measured on the RX 7900 XTX, D3D12, `adaptive_acid_lakes` seed 7, a staged scene of 67 structures and two strategic nukes (`tests/lights/ingame/dynlights_census_structures.lua`, nuke at game time 13 s, camera zoom 22, the game paused at 43 s inside the fireball so that every frame is the same one), `FAF_GPU_PROFILE=300`, the setting switched between Full, Half and Quarter in the running process.*
+
+The quads of a big explosion are drawn over each other until a screen carries a hundred layers; the page above shows that this costs blend and ROP bandwidth. Those quads are soft clouds, so the engine now draws the ones of 320 pixels and more (side of a square, at full resolution; `ren_ParticleLowResSize`) into a half or quarter resolution target and blends that onto the scene. Everything smaller is drawn as before. The setting is **Options > Video > Large Particle Quality** (Full / Half / Quarter resolution, default Half; `ren_ParticleLowRes` 0 / 1 / 2) on Direct3D 11, Direct3D 12 and Vulkan.
+
+How it works (`src/moho/particles/ParticleLowRes.cpp`, `ParticleEffectPatch.cpp`; no game file is changed):
+
+- **The effect is patched as it loads** (like the dynamic lights): `particle.fx` gets the globals `LRParams` and friends, a size test in `WorldVS` / `WorldVSAlign` that collapses the quads of the other size class (the test needs only the instance data and the camera, so two draws of one bucket agree on which quad is which), an `_LR` twin of every ADD, ALPHABLEND and PREMODALPHA world-particle technique, and the downsample and composite passes. `/noparticlelowres` leaves the file alone; a source that does not match leaves it unpatched, and a patched effect that does not build falls back to the original.
+- **Per `RenderEffects` call** the scene depth is copied once (`Device::CopyDepthStencil`, so the depth buffer itself never changes state between runs), and downsampled to the farthest depth of each low-resolution pixel's footprint, written as the depth of the low-resolution target.
+- **Per run of buckets** (same sort scalar; the game sorts them by sort scalar, then blend mode, then texture pointer) whose large quads are estimated to cover at least 30 Mpix (`ren_ParticleLowResMinMpix`): the large quads are drawn into the cleared target with the `_LR` techniques, depth-tested by the hardware against the downsampled depth; the target is composited onto the scene; then the same instanced draws are issued again for the small quads. The estimate comes from a copy of each uploaded particle's vertex-shader inputs, evaluated at the frame's time, so a frame without a big explosion takes exactly the old path (the vertex shader still classifies every quad; a wrong estimate costs time, never pixels).
+- **The blending is exact**, not an approximation of it: the target holds S (colour) and coverage A. An "over" quad (ALPHABLEND, PREMODALPHA) does `S = c*a + S*(1-a)`, `A = a + A*(1-a)`, an ADD quad does `S += c*a` and leaves A, and any mix of the two composes in drawing order: `scene = S + scene*(1-A)`. (The backends blend alpha with the colour factors, as D3D9 did, so the "over" quads are written premultiplied to get this.) What changes is the order of large against small quads inside one sort scalar (all large ones first, then the small ones) and the 8 bit clamping of the additive sum.
+- **The composite is depth aware**: each pixel takes the four nearest low-resolution pixels weighted by how close their depth is to its own (bilinear on a smooth surface, the side of the edge it is on at a silhouette), which keeps units in front of a fireball free of halos.
+- MODULATE, REFRACT and TLight buckets, beams and trails are not touched; a MODULATE bucket ends a run.
+
+Frame GPU time (`GPU`) and the `EffParticles` pass per frame, Full / Half / Quarter, with the defaults of the engine otherwise (`ren_ParticleBatch` off on D3D12, 196 draws in the pass):
+
+| Resolution | Full | Half | Quarter |
+|---|---|---|---|
+| 1600x900 | 3.32 ms (pass 2.69) | 3.11 ms (2.48) | 2.99 ms (2.37) |
+| 2560x1440 | 4.59 ms (3.52) | 4.00 ms (2.87) | 3.75 ms (2.63) |
+| 3840x2160 | 5.94 ms (4.44) | 4.73 ms (3.31) | 4.24 ms (2.81) |
+
+So the gain grows with the resolution (6 % of the frame at 1600x900, 13 % at 1440p, 20 % at 4K for Half; 10 / 18 / 29 % for Quarter). At 1600x900 on this card it is small because the card draws 270 Mpix in 2.7 ms and the passes cost about 0.4 ms (the depth copy and downsample, one clear and composite per run, and the large quads' draws twice: draw cost, about 6 us each here, dominates before fill does). With `ren_ParticleBatch` forced on (36 draws) the pass is 1.60 / 1.43 / 1.31 ms and the frame GPU time stays at 2.25 / 2.25 / 2.23 ms at 1600x900. The run of the same scene on Direct3D 11 at 3840x2160 goes from 7.8 ms per frame to the 240 fps limiter (4.2 ms) with Half and with Quarter (its GPU timestamps are not usable, see below); Vulkan 3840x2160: 6.23 / 4.92 / 4.38 ms frame GPU time.
+
+What was checked in game (D3D12, paused frames A/B in one process, Half against Full, `FAF_GAL_DUMP_DIR`; the difference image is the largest channel difference per pixel):
+
+- The nuke fireball filling the screen (zoom 45, 1600x900), six paused frames, three Half and three Full: mean difference 0.18-0.23 of 255, 0.05-0.12 % of the pixels differ by more than 24, the 99.9th percentile is 18-28; two frames of the same setting differ by 0.002-0.05 on average. The difference image is nearly black, with thin lines on the fireball's silhouette.
+- The staged battle with experimentals and shield hits (`dynlights_census.lua`, zoom 28), with the minimum raised to 0 so that the path runs whenever there is one large quad: mean 0.17, 0.08 % over 24; a crop of a shield bubble with an Aeon Czar at 2.5x shows no halo, no step pattern and no visible softening. An earlier hard "nearest texel" composite showed 2x2 steps there and was replaced by the weighted one.
+- An odd size (1367x769, targets 684x385 and 342x193), zoom 14, Half and Quarter: as noisy as the same setting against itself.
+- Direct3D 11 and Vulkan, the same nuke: mean 0.31-0.36 on both, 0.01-0.1 % over 24.
+- Not checked: Quarter at the threshold by eye (it is visibly softer on fine detail and meant for slow cards), a resolution change in the running game, split screens.
+
+Per API:
+
+| API | Large Particle Quality | Why |
+|---|---|---|
+| Direct3D 9 | not offered | it runs the shipped effects, which this patch does not touch, and the shipped exe path has no render-target switch to hang it on; a smaller target also would not pay for itself at the pass costs above |
+| Direct3D 10 | not offered | the renderer does not start |
+| Direct3D 11 | yes | verified in game |
+| Direct3D 12 | yes | verified in game |
+| Vulkan | yes | verified in game (the same effect layer: sampled depth views, `CopyDepthStencil` as `vkCmdCopyImage`) |
+
+Limits: the large quads lose about half a pixel of sharpness at Half (the textures are soft; a thin ring or a spark texture of 320 px or more would show it, Quarter shows it everywhere); the 30 Mpix minimum is a guess made on a fast card (a slower card would profit from less, `ren_ParticleLowResMinMpix`); the estimate is evaluated on the CPU once per frame for the buckets of runs (a few hundred particles); a quad exactly at the threshold changes class once as it grows, which is not visible because both classes draw the same picture.
+
+Switches: `ren_ParticleLowRes` (0, 1, 2), `ren_ParticleLowResSize` (320), `ren_ParticleLowResMinMpix` (30), `/noparticlelowres` on the command line; for comparisons `FAF_PARTICLE_LOWRES`, `FAF_PARTICLE_LOWRES_SIZE`, `FAF_PARTICLE_LOWRES_MINMPIX` in the environment (they win over the console variables) and `FAF_PARTICLE_LOWRES_DEBUG=1` (a log line per run now and then; the passes show up as `LRDepth`, `LRAccum`, `LRComposite` in `FAF_GPU_PROFILE`). Host test of the effect patch: `faf_particle_tests` (`FAF_STOCK_FX_DIR` for the real `particle.fx`).
 
 ## Next
 

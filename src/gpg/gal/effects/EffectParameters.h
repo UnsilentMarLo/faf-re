@@ -19,6 +19,7 @@
 
 namespace gpg::gal
 {
+  class DepthStencilTarget;
   class RenderTarget;
   class Texture;
 } // namespace gpg::gal
@@ -30,8 +31,9 @@ namespace gpg::gal::effects
   {
     boost::shared_ptr<Texture> texture;
     boost::shared_ptr<RenderTarget> renderTarget;
+    boost::shared_ptr<DepthStencilTarget> depthStencil; // its depth, sampled (the particle low-resolution passes)
 
-    [[nodiscard]] bool Empty() const noexcept { return texture == nullptr && renderTarget == nullptr; }
+    [[nodiscard]] bool Empty() const noexcept { return texture == nullptr && renderTarget == nullptr && depthStencil == nullptr; }
   };
 
   class ParameterStore
@@ -67,6 +69,7 @@ namespace gpg::gal::effects
 
     void SetTexture(std::uint32_t parameter, const boost::shared_ptr<Texture>& texture);
     void SetRenderTarget(std::uint32_t parameter, const boost::shared_ptr<RenderTarget>& renderTarget);
+    void SetDepthStencil(std::uint32_t parameter, const boost::shared_ptr<DepthStencilTarget>& depthStencil);
     [[nodiscard]] const TextureBinding& Binding(std::uint32_t parameter) const;
 
   private:

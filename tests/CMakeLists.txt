@@ -32,3 +32,14 @@ target_compile_features(faf_dxgi_tests PRIVATE cxx_std_20)
 target_link_libraries(faf_dxgi_tests PRIVATE dxgi)
 
 add_test(NAME dxgi_swap_chain_policy COMMAND faf_dxgi_tests)
+
+# Particle effect patch (src/moho/particles/ParticleEffectPatch): pure text, compiled on its own, no engine objects. FAF_STOCK_FX_DIR (a folder
+# with FAF's particle.fx) switches on the check of the real file.
+#
+#   cmake --build --preset clang-x64-release --target faf_particle_tests
+add_executable(faf_particle_tests EXCLUDE_FROM_ALL particles/ParticleEffectPatchTests.cpp
+               ${CMAKE_SOURCE_DIR}/src/moho/particles/ParticleEffectPatch.cpp)
+target_include_directories(faf_particle_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(faf_particle_tests PRIVATE cxx_std_20)
+
+add_test(NAME particle_effect_patch COMMAND faf_particle_tests)

@@ -660,6 +660,12 @@ namespace gpg::gal
       std::uint32_t byteCount
     );
 
+    /**
+     * FAF addition: copies the whole of `source` (a depth/stencil target) into `destination` (same size and format family) on the
+     * GPU, in command order. `destination` should have been created sampled. False here, having copied nothing.
+     */
+    virtual bool CopyDepthStencil(DepthStencilTarget& destination, DepthStencilTarget& source);
+
   protected:
     OutputContext outputContext_{}; // +0x04 the bound targets (`ClearTarget` / `GetContext`)
   };

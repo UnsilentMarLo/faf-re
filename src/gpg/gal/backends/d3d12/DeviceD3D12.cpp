@@ -341,6 +341,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     std::uint64_t tableEpoch = ~0ULL;
     std::uint64_t textureVersion = 0;
     const RenderTarget* tableSurface = nullptr; // the colour target bound when the table was built
+    const DepthStencilTarget* tableDepth = nullptr; // and the depth target (a sampled depth is a null view while it is the output)
     D3D12_GPU_DESCRIPTOR_HANDLE table{};
     std::shared_ptr<const std::vector<effects::TextureBinding>> tableBindings;
   };
@@ -1281,6 +1282,22 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     MarkDraw("buffer upload");
     mList->CopyBufferRegion(destination.resource.Get(), offset, upload.resource, upload.offset, bytes);
     FinishDraw();
+  }
+
+  bool DeviceD3D12::CopyDepthStencil(DepthStencilTarget& destination, DepthStencilTarget& source)
+  {
+    auto& to = static_cast<DepthStencilTargetD3D12&>(destination);
+    auto& from = static_cast<DepthStencilTargetD3D12&>(source);
+    if (&to == &from || to.GetContext()->width_ != from.GetContext()->width_ || to.GetContext()->height_ != from.GetContext()->height_) {
+      return false;
+    }
+    const std::lock_guard<std::recursive_mutex> lock(mMutex);
+    // In command order: later draws move both back (BindTargets, TransitionSampled).
+    Transition(from.Resource(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    Transition(to.Resource(), D3D12_RESOURCE_STATE_COPY_DEST);
+    FlushBarriers();
+    mList->CopyResource(to.Resource().resource.Get(), from.Resource().resource.Get());
+    return true;
   }
 
   bool DeviceD3D12::CopyVertexBufferRegion(
@@ -2835,7 +2852,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
 
     // The texture table: rebuilt when a binding changed or the frame moved on.
     if (state.tableFrame != mFrameCount || state.tableEpoch != mArenaEpoch || state.textureVersion != parameters.TextureVersion() ||
-        state.tableSurface != outputContext_.surface.get()) {
+        state.tableSurface != outputContext_.surface.get() || state.tableDepth != outputContext_.depthStencil.get()) {
       const auto& slots = program.Modern().textures;
       const auto& slotParameters = program.TextureSlotParameters();
       auto bindings = std::make_shared<std::vector<effects::TextureBinding>>();
@@ -2875,6 +2892,19 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
             continue;
           }
           view = static_cast<RenderTargetD3D12*>(binding.renderTarget.get())->Current().shaderResourceView;
+        } else if (binding.depthStencil != nullptr && slot.dimension == effects::TextureDimension::Texture2D) {
+          // A sampled depth target (the particle low-resolution passes). Never the one bound as the depth output.
+          const D3D12_CPU_DESCRIPTOR_HANDLE depthView = static_cast<DepthStencilTargetD3D12*>(binding.depthStencil.get())->ShaderView();
+          if (binding.depthStencil.get() != outputContext_.depthStencil.get() && depthView.ptr != 0U) {
+            view = depthView;
+          } else {
+            bindings->push_back(effects::TextureBinding{});
+            written = static_cast<std::uint32_t>(index + 1U);
+            D3D12_CPU_DESCRIPTOR_HANDLE destination = cpu;
+            destination.ptr += static_cast<SIZE_T>(index) * increment;
+            mDevice->CopyDescriptorsSimple(1U, destination, view, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            continue;
+          }
         }
         D3D12_CPU_DESCRIPTOR_HANDLE destination = cpu;
         destination.ptr += static_cast<SIZE_T>(index) * increment;
@@ -2893,6 +2923,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       state.tableEpoch = mArenaEpoch;
       state.textureVersion = parameters.TextureVersion();
       state.tableSurface = outputContext_.surface.get();
+      state.tableDepth = outputContext_.depthStencil.get();
     }
     bound.textures = state.table;
     bound.tableFrame = state.tableFrame;
@@ -2929,6 +2960,11 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
           continue;
         }
         Transition(buffer.resource, kShaderRead);
+      } else if (binding.depthStencil != nullptr) {
+        auto* const depth = static_cast<DepthStencilTargetD3D12*>(binding.depthStencil.get());
+        if (depth->ShaderView().ptr != 0U && depth->DepthView().ptr != mBoundDepthStencil.ptr) {
+          Transition(depth->Resource(), kShaderRead);
+        }
       }
     }
   }

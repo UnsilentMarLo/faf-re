@@ -73,6 +73,7 @@ namespace gpg::gal
     /** No cube targets on this backend yet, as on D3D10. */
     void SetCubeRenderTarget(boost::shared_ptr<CubeRenderTarget> cubeTarget) override;
     void SetRenderTarget(boost::shared_ptr<RenderTarget> renderTarget) override;
+    void SetDepthStencil(boost::shared_ptr<DepthStencilTarget> depthStencil) override;
     void SetTexture(boost::shared_ptr<Texture> texture) override;
     void SetMatrix4x4(const Matrix* matrix) override;
     void SetFloatArray(std::uint32_t count, const float* values) override;

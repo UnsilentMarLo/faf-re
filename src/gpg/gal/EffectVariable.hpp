@@ -10,6 +10,7 @@
 namespace gpg::gal
 {
     class CubeRenderTarget;
+    class DepthStencilTarget;
     class RenderTarget;
     class Texture;
 
@@ -159,6 +160,16 @@ namespace gpg::gal
          * Slot: 17
          */
         virtual bool GetAnnotationString(msvc8::string* outValue, const msvc8::string& annotationName) = 0;
+
+        /**
+         * FAF addition (after the shipped slots; not in the binary).
+         *
+         * What it does:
+         * Binds a depth/stencil target's depth as a texture (the target has to have been created
+         * sampled); a null target unbinds. Only the Direct3D 11 and 12 backends implement it; the
+         * caller must not have the target bound as the depth output of the pass that samples it.
+         */
+        virtual void SetDepthStencil(boost::shared_ptr<DepthStencilTarget> depthStencil) { static_cast<void>(depthStencil); }
     };
 
     static_assert(sizeof(EffectVariable) == 0x4, "gpg::gal::EffectVariable size must be 0x4");

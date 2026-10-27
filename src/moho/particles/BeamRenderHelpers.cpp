@@ -349,7 +349,7 @@ namespace moho
    * variable takes as a 4-byte payload even though the lane is one byte -- and
    * the extra `_REFRACT` suffix.
    */
-  void SParticleRenderBucket::SelectTechnique() const
+  void SParticleRenderBucket::SelectTechnique(const bool lowResolution) const
   {
     const bool drag = dragEnabled;
     ShaderVar& dragEnabledShaderVar = GetParticleDragEnabledShaderVar();
@@ -362,6 +362,9 @@ namespace moho
 
     std::string techniqueName(tag.data(), tag.size());
     techniqueName += ResolveParticleTechniqueSuffix(blendMode, true, kParticleSelectTechniqueWithDragAssertLine);
+    if (lowResolution) {
+      techniqueName += "_LR"; // the low-resolution twin of ParticleEffectPatch.h
+    }
 
     CD3DDevice* const device = D3D_GetDevice();
     if (device != nullptr) {

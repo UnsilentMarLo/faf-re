@@ -669,6 +669,14 @@ namespace gpg::gal
     }
   }
 
+  void ProgramEffectVariable::SetDepthStencil(const boost::shared_ptr<DepthStencilTarget> depthStencil)
+  {
+    RecordStateChange();
+    if (mParameter >= 0) {
+      mProgram->Parameters().SetDepthStencil(static_cast<std::uint32_t>(mParameter), depthStencil);
+    }
+  }
+
   void ProgramEffectVariable::SetTexture(const boost::shared_ptr<Texture> texture)
   {
     RecordStateChange();
