@@ -20,7 +20,7 @@
 namespace moho
 {
   int ren_RenderScale = gpg::gal::kRenderScale100;
-  float ren_RenderScaleSharpness = 0.6f;
+  float ren_RenderScaleSharpness = 0.3f;
 
   namespace
   {
@@ -37,7 +37,7 @@ namespace moho
     );
     TConVar<float> gTConVar_ren_RenderScaleSharpness(
       "ren_RenderScaleSharpness",
-      "Render scale: strength of the sharpening after the upscale, 0 (none) to 1. Default 0.6.",
+      "Render scale: strength of the sharpening after the upscale, 0 (none) to 1. Default 0.3.",
       &ren_RenderScaleSharpness
     );
 
@@ -130,6 +130,16 @@ namespace moho
   float REN_GetRenderScaleFactor()
   {
     return gpg::gal::RenderScaleFactorFor(REN_GetRenderScaleLevel());
+  }
+
+  namespace
+  {
+    float gWorldDrawScale = 1.0f;
+  }
+
+  float REN_GetWorldDrawScale()
+  {
+    return gWorldDrawScale;
   }
 
   bool REN_BeginScaledWorld(
@@ -227,6 +237,7 @@ namespace moho
     viewportDepth = state.viewportDepth;
     gpg::gal::SetWorldOutputOverride(static_cast<std::uint32_t>(frame.head), state.galColor, state.galDepth);
     frame.swapped = true;
+    gWorldDrawScale = frame.factor;
     // Bind the scaled head again; the first caller after a resume sets its own viewport.
     device.SetRenderTarget2(frame.head, false, 0, 1.0f, 0);
   }
@@ -258,6 +269,7 @@ namespace moho
       return;
     }
     frame.swapped = false;
+    gWorldDrawScale = 1.0f;
     device.mRenderTargetLocks[frame.head] = frame.savedHeadColor;
     device.mDepthStencilLocks[frame.head] = frame.savedHeadDepth;
     primary = frame.savedPrimary;
