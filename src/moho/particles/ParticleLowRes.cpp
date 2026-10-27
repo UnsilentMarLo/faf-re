@@ -522,6 +522,7 @@ namespace moho
 
       device->GetContext(&state.saved);
       if (state.saved.surface == nullptr || state.saved.depthStencil == nullptr || state.copyFailed) {
+        state.saved = gpg::gal::OutputContext();
         return false;
       }
       device->GetViewport(&state.savedViewport);
@@ -533,6 +534,7 @@ namespace moho
       state.lowActive = mode > 0 && state.savedViewport.Width >= 256U && state.savedViewport.Height >= 128U &&
                         EnsureTargets(state, scale, state.savedViewport);
       if (!state.lowActive && !state.softActive) {
+        state.saved = gpg::gal::OutputContext();
         return false;
       }
       if (state.lowActive) {
@@ -695,6 +697,9 @@ namespace moho
       state.softActive = false;
       state.lowActive = false;
       SetMode(state, 0);
+      // The saved output holds the swap chain's back buffer: kept past the frame, ResizeBuffers fails with DXGI_ERROR_INVALID_CALL
+      // when the window is resized and the game stops drawing.
+      state.saved = gpg::gal::OutputContext();
       ++state.frames;
       state.totalRuns += state.runs;
       if (Debugging() && state.frames % 120U == 0U) {
