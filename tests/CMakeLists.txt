@@ -64,3 +64,14 @@ target_include_directories(faf_aniso_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(faf_aniso_tests PRIVATE cxx_std_20)
 
 add_test(NAME forced_anisotropy COMMAND faf_aniso_tests)
+
+# Shadow filter effect patch (src/moho/render/shadow): pure text in, text out. With FAF_STOCK_FX_DIR set it patches FAF's stock effects.
+#
+#   cmake --build --preset clang-x64-release --target faf_shadow_tests
+add_executable(faf_shadow_tests EXCLUDE_FROM_ALL shadow/ShadowEffectPatchTests.cpp
+               ${CMAKE_SOURCE_DIR}/src/moho/render/shadow/ShadowEffectPatch.cpp
+               ${CMAKE_SOURCE_DIR}/src/moho/render/lights/LightEffectPatch.cpp)
+target_include_directories(faf_shadow_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(faf_shadow_tests PRIVATE cxx_std_20)
+
+add_test(NAME shadow_filter_patch COMMAND faf_shadow_tests)

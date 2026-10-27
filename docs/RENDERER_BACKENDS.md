@@ -273,3 +273,9 @@ GPU cost per frame (`FAF_GPU_PROFILE`, same paused frame, median of alternating 
 Vulkan 16x: 2.01 -> 2.39 ms (+0.38). Direct3D 11: GPU timestamps are not usable and the paused frame is vsync bound (4.26 -> 4.32 ms wall), so no cost figure. The first version, which also forced the shadow, reflection and frame samplers, cost +0.95 ms at 16x on D3D12; the texture-aware rule saved about 0.2 ms of that.
 
 Not verified: a full game with many units (the staged scene is mostly terrain), multi-monitor / split screen, switching the Graphics API with the option set, Direct3D 9 on a real GPU other than this one, the Options screen drawn by the game (the Lua `GetRenderFeatures()` result lists the entry with the right levels and default on Direct3D 12; the dropdown itself was not clicked).
+
+| Shadow Filtering (`shadow_filter`, Off / Low / Medium / High / Ultra; applies at once) | no: ps_2_a has 32 constant registers, the patched lookup does not compile (see [Shadow filtering](SHADOW_FILTERING.md)) | no: does not start | yes (verified 2026-10-27) | yes (verified 2026-10-27) | yes (verified 2026-10-27) |
+
+Verified by running the staged battle (`tests/lights/ingame/dynlights_census.lua`) on each API with only the profile option set (no command-line switch): effects patched, lights drawn on D3D11, D3D12 and Vulkan, no entry and a log line on D3D9.
+
+Shadow Filtering was verified in the staged scene of `tests/shadow/ingame` on Direct3D 11, 12 and Vulkan by cycling `ren_ShadowFilter` (the effect text patched, Off identical before and after, filtered shadows drawn, GPU time measured); the Options entry was checked from Lua (`GetOptionsData()`), not by clicking through the screen, and the profile-stored level was not tested at start-up.

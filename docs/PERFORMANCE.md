@@ -117,6 +117,10 @@ Limits: the large quads lose about half a pixel of sharpness at Half (the textur
 
 Switches: `ren_ParticleLowRes` (0, 1, 2), `ren_ParticleLowResSize` (320), `ren_ParticleLowResMinMpix` (30), `/noparticlelowres` on the command line; for comparisons `FAF_PARTICLE_LOWRES`, `FAF_PARTICLE_LOWRES_SIZE`, `FAF_PARTICLE_LOWRES_MINMPIX` in the environment (they win over the console variables) and `FAF_PARTICLE_LOWRES_DEBUG=1` (a log line per run now and then; the passes show up as `LRDepth`, `LRAccum`, `LRComposite` in `FAF_GPU_PROFILE`). Host test of the effect patch: `faf_particle_tests` (`FAF_STOCK_FX_DIR` for the real `particle.fx`).
 
+## Shadow filtering
+
+The filtered shadow lookup (Options, Video, Shadow Filtering) is roughly cost-neutral at 3840x2160 on an RX 7900 XTX: the ground lookups cost 0.2 to 0.8 ms per frame, the blur passes it makes unnecessary cost about as much, so the three shadow passes sum to between -0.2 and +0.35 ms of the Off value on Direct3D 12 and Vulkan (tables, method and noise in [Shadow filtering](SHADOW_FILTERING.md#measured)).
+
 ## Next
 
 1. Pose and animation on sim workers (about 14 % of sim time).

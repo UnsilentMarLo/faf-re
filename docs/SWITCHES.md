@@ -56,6 +56,9 @@ Every performance change has a switch that brings back the original path, and bo
 | `ren_GpuFog` | −1 (auto) | `/con` | live | Fog of war drawn by the GPU |
 | `ren_GpuSelectBrackets` | −1 (auto) | `/con` | live | Selection brackets drawn by the GPU |
 | `ren_GpuProjectileIcons` | −1 (auto) | `/con` | live | Projectile icons drawn by the GPU |
+| `ren_ShadowFilter` | 0 (Off) | `/con` or Options, Video, Shadow Filtering | live | Filtered shadows: 0 the shipped lookup, 1 Low .. 4 Ultra (map size, taps, contact hardening); Direct3D 11, 12, Vulkan, see [Shadow filtering](SHADOW_FILTERING.md) |
+| `ren_ShadowFilterBias` | 0.5 | `/con` | live | Scale of the constant depth bias of the filtered lookup (1 = the shipped bias) |
+| `ren_ShadowFilterSlope` | 1 | `/con` | live | Scale of the receiver-plane (slope) bias of the filtered lookup; 0 = none |
 | `ren_GpuShapes` | −1 (auto) | `/con` | live | FAF's `UI_DrawLine`/`UI_DrawRect`/`UI_DrawCircle` world shapes drawn by the GPU, one instanced draw per run of same-kind shapes (0: the prim batcher, as FA-Binary-Patches draws them) |
 | `ren_ParticleBatch` | −1 (auto) | `/con` | live | Each particle bucket drawn as one instanced draw |
 | `ren_ParticleLowRes` | 1 (Half) | `/con`, Options > Video | live | Particle quads of `ren_ParticleLowResSize` pixels and more drawn into a half (1) or quarter (2) resolution target and composited; 0 draws them at full resolution. Direct3D 11, 12 and Vulkan |

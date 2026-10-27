@@ -13,6 +13,7 @@
 #include "moho/render/d3d/CD3DDepthStencil.h"
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/d3d/CD3DRenderTarget.h"
+#include "moho/render/shadow/ShadowFilter.h"
 #include "moho/collision/CGeomSolid3.h"
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/STIMap.h"
@@ -225,8 +226,10 @@ namespace moho
   {
     // Both tuning values are sampled before the reset below, which zeroes the
     // cached copies.
-    const int shadowSize = ren_ShadowSize;
-    const bool shadowBlur = ren_ShadowBlur;
+    // FAF: with the shadow filter on (shadowfilter::Active) the level sets the map size and the variance blur is not used (the patched
+    // lookups compare depth in the raw map), so its two targets are not allocated either.
+    const int shadowSize = shadowfilter::WantedMapSize(ren_ShadowSize);
+    const bool shadowBlur = ren_ShadowBlur && !shadowfilter::Active();
 
     (void)ReleaseRenderResources();
 
@@ -399,6 +402,8 @@ namespace moho
     const float farMagnitude = std::fabs(lightSpaceVolume.Min.Z());
     const float nearDepth = std::min(nearMagnitude, farMagnitude) - 25.0f;
     const float farDepth = std::max(nearMagnitude, farMagnitude);
+    // FAF: the world size of the light volume, for the penumbra estimate of the shadow filter
+    shadowfilter::SetLightVolume(lightSpaceVolume.Max.X() - lightSpaceVolume.Min.X(), farDepth - nearDepth);
 
     // Orthographic projection fitted to the light-space volume, built by
     // hand rather than through a helper - the binary writes these seven
@@ -606,15 +611,19 @@ namespace moho
     }
     shadow_Fidelity = fidelity;
 
+    const bool filtered = shadowfilter::Active();
     if (fidelity != mShadowFidelity
-      || ren_ShadowSize != mShadowSize
-      || ren_ShadowBlur != mShadowBlurEnabled) {
+      || shadowfilter::WantedMapSize(ren_ShadowSize) != mShadowSize
+      || (ren_ShadowBlur && !filtered) != mShadowBlurEnabled) {
       (void)Init(fidelity);
 
-      // Init settles what could actually be allocated; publish that back.
+      // Init settles what could actually be allocated; publish that back. (Not while the shadow filter overrides the size and the blur:
+      // the user's ren_ShadowSize / ren_ShadowBlur come back when it is switched off.)
       shadow_Fidelity = mShadowFidelity;
-      ren_ShadowSize = mShadowSize;
-      ren_ShadowBlur = mShadowBlurEnabled;
+      if (!filtered) {
+        ren_ShadowSize = mShadowSize;
+        ren_ShadowBlur = mShadowBlurEnabled;
+      }
     }
 
     IWldTerrainRes* const terrainRes = REN_GetTerrainRes();
@@ -624,6 +633,7 @@ namespace moho
 
     const Wm3::Vector3f sunDirection = terrainRes->GetSunDirection();
     (void)PrepareLightCamera(viewCamera, sunDirection, zoom);
+    shadowfilter::UpdateShaderVars(mShadowSize);
     RenderShadowMap(terrain, viewCamera);
   }
 

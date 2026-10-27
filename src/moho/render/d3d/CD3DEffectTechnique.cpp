@@ -23,6 +23,8 @@
 #include "moho/particles/ParticleEffectPatch.h"
 #include "moho/render/lights/LightEffectPatch.h"
 #include "moho/render/lights/LightFeeds.h"
+#include "moho/render/shadow/ShadowEffectPatch.h"
+#include "moho/render/shadow/ShadowFilter.h"
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/render/d3d/CD3DDevice.h"
@@ -473,31 +475,72 @@ namespace moho
         std::copy_n(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount, mergedBuffer.GetPtr(compatByteCount, 0U));
       }
 
-      // FAF addition: the dynamic lights (docs/DYNAMIC_LIGHTS.md) are patched into mesh.fx and terrain.fx as the text is read, on the
-      // Direct3D 10 dialect backends and with /dynlights on the command line. A source the patch does not recognise compiles
-      // unchanged, without lights.
+      // FAF addition: the effect text is patched as it is read, on the Direct3D 10 dialect backends, by up to two patches that chain (each
+      // continues from the text of the one before; a source a patch does not recognise compiles without it):
+      //   1. the shadow filter (docs/SHADOW_FILTERING.md) in mesh.fx and terrain.fx: a filtered shadow-map lookup, switched by the
+      //      Shadow Filtering option at run time (the patch is there whatever the level);
+      //   2. the dynamic lights (docs/DYNAMIC_LIGHTS.md) in mesh.fx and terrain.fx, with /dynlights on the command line or the Dynamic
+      //      Lights option not Off.
+      // The cache name carries a tag per patch that was applied, so every combination compiles to its own cached effect.
       bool dynLights = false;
-      if (deviceContext != nullptr && gpg::gal::UsesD3D10EffectDialect(deviceContext->mDeviceType) && effectByteCount > 0U &&
-          (CFG_GetArgOption("/dynlights", 0U, nullptr) || lights::LightsWanted(deviceContext->mDeviceType))) {
-        const lights::PatchedEffect which = lights::EffectForName(std::string(effectBaseName.c_str()));
-        if (which != lights::PatchedEffect::None) {
-          std::string text(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);
-          const int flood = CFG_GetArgOption("/dynlightsflood2", 0U, nullptr) ? 2 : (CFG_GetArgOption("/dynlightsflood", 0U, nullptr) ? 1 : 0);
-          const lights::EffectPatchResult patch =
-            which == lights::PatchedEffect::Mesh ? lights::PatchMeshEffect(text, flood) : lights::PatchTerrainEffect(text, flood);
+      bool shadowFilter = false;
+      const auto assembleSource = [&](const bool withShadowFilter) {
+        mergedBuffer = gpg::AllocMemBuffer(compatByteCount + effectByteCount);
+        if (compatByteCount > 0U) {
+          std::copy_n(compatStateBuffer.GetPtr(0U, 0U), compatByteCount, mergedBuffer.GetPtr(0U, 0U));
+        }
+        if (effectByteCount > 0U) {
+          std::copy_n(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount, mergedBuffer.GetPtr(compatByteCount, 0U));
+        }
+        dynLights = false;
+        shadowFilter = false;
+        const bool dialect10 = deviceContext != nullptr && gpg::gal::UsesD3D10EffectDialect(deviceContext->mDeviceType);
+        if (!dialect10 || effectByteCount == 0U) {
+          return;
+        }
+        const std::string baseName(effectBaseName.c_str());
+        const bool isMesh = baseName == "mesh";
+        const bool wantsShadow = withShadowFilter && shadowfilter::HandlesEffect(baseName) && shadowfilter::Supported(deviceContext->mDeviceType);
+        const lights::PatchedEffect which = lights::EffectForName(baseName);
+        const bool wantsLights = which != lights::PatchedEffect::None &&
+                                 (CFG_GetArgOption("/dynlights", 0U, nullptr) || lights::LightsWanted(deviceContext->mDeviceType));
+        if (!wantsShadow && !wantsLights) {
+          return;
+        }
+        std::string text(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);
+        if (wantsShadow) {
+          const shadowfilter::PatchResult patch = isMesh ? shadowfilter::PatchMeshEffect(text) : shadowfilter::PatchTerrainEffect(text);
           if (patch.patched) {
-            mergedBuffer = gpg::AllocMemBuffer(compatByteCount + text.size());
-            if (compatByteCount > 0U) {
-              std::copy_n(compatStateBuffer.GetPtr(0U, 0U), compatByteCount, mergedBuffer.GetPtr(0U, 0U));
-            }
-            std::copy_n(text.data(), text.size(), mergedBuffer.GetPtr(compatByteCount, 0U));
+            shadowFilter = true;
+            gpg::Logf("ShadowFilter: %s patched, %d shadow lookups go through the filter", baseName.c_str(), patch.lookups);
+          } else {
+            text.assign(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);
+            gpg::Warnf("ShadowFilter: %s not patched: %s", baseName.c_str(), patch.error.c_str());
+          }
+          shadowfilter::NoteEffectPatched(!isMesh, shadowFilter);
+        }
+        if (wantsLights) {
+          const int flood = CFG_GetArgOption("/dynlightsflood2", 0U, nullptr) ? 2 : (CFG_GetArgOption("/dynlightsflood", 0U, nullptr) ? 1 : 0);
+          std::string lit = text;
+          const lights::EffectPatchResult patch =
+            which == lights::PatchedEffect::Mesh ? lights::PatchMeshEffect(lit, flood) : lights::PatchTerrainEffect(lit, flood);
+          if (patch.patched) {
+            text = std::move(lit);
             dynLights = true;
             gpg::Logf("DynLights: %s patched, %d techniques have the light pass", effectBaseName.c_str(), patch.techniques);
           } else {
             gpg::Warnf("DynLights: %s not patched: %s", effectBaseName.c_str(), patch.error.c_str());
           }
         }
-      }
+        if (shadowFilter || dynLights) {
+          mergedBuffer = gpg::AllocMemBuffer(compatByteCount + text.size());
+          if (compatByteCount > 0U) {
+            std::copy_n(compatStateBuffer.GetPtr(0U, 0U), compatByteCount, mergedBuffer.GetPtr(0U, 0U));
+          }
+          std::copy_n(text.data(), text.size(), mergedBuffer.GetPtr(compatByteCount, 0U));
+        }
+      };
+      assembleSource(true);
 
       // FAF addition: particle.fx gets the low-resolution twins of its large-particle techniques (ParticleEffectPatch.h) on the
       // Direct3D 10 dialect backends; /noparticlelowres leaves it alone. If the patched effect does not build, the original does.
@@ -529,7 +572,7 @@ namespace moho
       // into different shaders, so it is cached under a name of its own.
       const auto createEffect = [&](const bool boneTexture) {
         const msvc8::string cachePath =
-          cacheDirectory + "/" + mName + (dynLights ? ".dynlights" : "") + (lowResParticles ? ".lowres" : "") +
+          cacheDirectory + "/" + mName + (dynLights ? ".dynlights" : "") + (shadowFilter ? ".shadowf" : "") + (lowResParticles ? ".lowres" : "") +
           (boneTexture ? ".bonetex." : ".") + engineVersion;
         SDiskFileInfo cacheInfo{};
         bool useCachePayload = false;
@@ -570,7 +613,19 @@ namespace moho
             createEffect(false);
           }
         } else {
-          createEffect(false);
+          try {
+            createEffect(false);
+          } catch (const std::exception& exception) {
+            if (!shadowFilter) {
+              throw;
+            }
+            // the shadow filter did not compile on this device: build the effect without it (the lights patch is applied again)
+            gpg::Warnf("%s: %s; building it without the shadow filter", effectFilePath, exception.what());
+            mEffect.reset();
+            assembleSource(false);
+            shadowfilter::NoteEffectPatched(std::string(effectBaseName.c_str()) == "terrain", false);
+            createEffect(false);
+          }
         }
       }
 

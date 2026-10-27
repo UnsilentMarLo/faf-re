@@ -312,8 +312,24 @@ namespace gpg::gal
         text.pop_back();
       }
       if (text.size() > 1500U) {
-        text.resize(1500U);
-        text += "...";
+        // The errors first: a long effect prints hundreds of warnings before the line that matters.
+        std::string errorLines;
+        for (std::size_t begin = 0U; begin < text.size();) {
+          std::size_t end = text.find('\n', begin);
+          end = (end == std::string::npos) ? text.size() : end + 1U;
+          const std::string line = text.substr(begin, end - begin);
+          if (line.find(": error ") != std::string::npos) {
+            errorLines += line;
+          }
+          begin = end;
+        }
+        if (!errorLines.empty()) {
+          text = errorLines + "(warnings left out)\n" + text;
+        }
+        if (text.size() > 1500U) {
+          text.resize(1500U);
+          text += "...";
+        }
       }
       return text;
     }
