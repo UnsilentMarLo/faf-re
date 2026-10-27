@@ -62,6 +62,28 @@ ForkThread(function()
         Say('static scene created')
         return
     end
+    if AB_SCENE == 'water' then
+        -- hover tanks and a few structures on and around the lake at (AB_TX, AB_TZ): the mirrored pass draws what stands on the water
+        WaitUntil(4)
+        local ids = { 'uel0203', 'url0203', 'ual0203', 'xsl0203', 'uel0203', 'url0203', 'ual0203', 'xsl0203' }
+        for i = 1, 8 do
+            local a = i * math.pi / 4
+            local r = 6 + 4 * math.mod(i, 2)
+            local ux, uz = AB_TX + r * math.cos(a), AB_TZ + r * math.sin(a)
+            if __blueprints[ids[i]] then
+                CreateUnitHPR(ids[i], brainA.Name, ux, GetSurfaceHeight(ux, uz), uz, 0, a, 0)
+            end
+        end
+        for i = 1, 6 do
+            local ux, uz = AB_TX - 30 + i * 10, AB_TZ + 24
+            local id = ({ 'ueb2101', 'uab2101', 'urb2101', 'xsb2101', 'ueb1101', 'uab1101' })[i]
+            if __blueprints[id] then
+                CreateUnitHPR(id, brainA.Name, ux, GetTerrainHeight(ux, uz), uz, 0, 0, 0)
+            end
+        end
+        Say('water scene created')
+        return
+    end
     if AB_SCENE == 'nuke' then
         WaitUntil(10)
         local launcher = CreateUnitHPR('xsb2305', brainB.Name, x0 + 60, GetTerrainHeight(x0 + 60, z0), z0, 0, 0, 0)
