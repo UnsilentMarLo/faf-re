@@ -57,6 +57,7 @@ namespace moho
   DEFINE_WATER2_SHADER_VAR_GETTER(GetWater2SunColorShaderVar, "SunColor")
   DEFINE_WATER2_SHADER_VAR_GETTER(GetWater2SunGlowShaderVar, "SunGlow")
   DEFINE_WATER2_SHADER_VAR_GETTER(GetWater2TerrainScaleShaderVar, "TerrainScale")
+  DEFINE_WATER2_SHADER_VAR_GETTER(GetWater2WaterFilterShaderVar, "faf_WaterFilter")
 
   /**
    * Address: 0x008111E0 (FUN_008111E0)
