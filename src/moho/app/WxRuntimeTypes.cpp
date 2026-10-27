@@ -5085,8 +5085,14 @@ void moho::WRenViewport::TransformTerrainNormals()
     0
   );
 
-  const int headWidth = device->GetHeadWidth(static_cast<unsigned int>(head));
-  const int headHeight = device->GetHeadHeight(static_cast<unsigned int>(head));
+  int headWidth = device->GetHeadWidth(static_cast<unsigned int>(head));
+  int headHeight = device->GetHeadHeight(static_cast<unsigned int>(head));
+  if (sActiveScaledWorld != nullptr && sActiveScaledWorld->active && sActiveScaledWorld->swapped && sActiveScaledWorld->head == head) {
+    // FAF render scale: the lane this pass draws into is the scaled one. A quad of the window's size would fill only the top-left part of
+    // it with the lower-left part of the normal buffer (zoomed by 1 / scale), and the ground's lighting would sample the wrong normals.
+    headWidth = sActiveScaledWorld->width;
+    headHeight = sActiveScaledWorld->height;
+  }
   mFrame.mName = "TCreateBasis";
   mFrame.InitTransformedVerts(static_cast<float>(headWidth), static_cast<float>(headHeight));
   mFrame.SetTexture(0u, mSecondaryTargetLocks[head]);
