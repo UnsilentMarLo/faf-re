@@ -135,3 +135,26 @@ Options, Video, Render Scale draws the 3D world at 85 / 75 / 67 / 50 % of the wi
 2. D3D12 cost in replays at full speed.
 3. Memory use.
 4. GPU-driven draws (branch `gpu-driven`, not merged).
+
+## Renderer features together (`render-integration`)
+
+*Measured 27/10/2026, RX 7900 XTX, D3D12, 1600x900 windowed, `adaptive_acid_lakes` seed 7, the structure census scene of `tests/lights/ingame/dynlights_census_structures.lua` (67 structures, shield hits, a nuke; camera zoom 40), `FAF_GPU_PROFILE=600`, one game on the machine at a time (a first matrix with other sessions' games running was discarded: every pass, Terrain included, grew tenfold in run order).*
+
+Each run starts with every feature off and switches one on. GPU ms per frame, mean over about 60 blocks of 600 frames:
+
+| Configuration | GPU | vs. baseline |
+|---|---|---|
+| everything off (start / repeated at the end) | 2.34 / 2.12 | the two baselines differ by 0.22 ms: smaller differences are noise |
+| dynamic lights (Ultra) | 2.51 | +0.17 |
+| ambient occlusion High | 2.41 | +0.08 |
+| anisotropic 16x | 2.36 | +0.02 |
+| FXAA / SMAA / sharpening | 2.36 / 2.38 / 2.43 | +0.02 / +0.04 / +0.10 |
+| shadow filter High | 2.36 | +0.03 (Terrain pass 0.24 -> 0.52, Shadows 0.23 -> 0.08) |
+| water quality High | 2.34 | +0.01 |
+| half-resolution particles | 2.34 | 0.00 (Effects pass 0.73 -> 0.83 in this run, 0.30 with everything on) |
+| soft particles High | 2.44 | +0.10 |
+| render scale 67 % | 2.06 | -0.27 |
+| all features on (lights Ultra, AO High, 16x, SMAA, shadow High, water High, half-res particles, soft High, sharpen Low) | 2.22 | -0.12 (wall 4.46 ms against 4.25) |
+| all on + render scale 67 % | 2.11 | -0.23 |
+
+The scene is CPU/wall bound at about 4.25 ms per frame, so every feature fits in the GPU's idle time at this resolution; costs scale with pixels (4K about 5.8x). D3D11 and Vulkan were not timed (D3D11's timestamps are unusable here, see above).
