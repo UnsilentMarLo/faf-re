@@ -83,8 +83,8 @@ namespace moho::editor::field::t7
     }
     const int w = static_cast<int>(a.p.N("width", 0));
     const int h = static_cast<int>(a.p.N("height", 0));
-    if (w < 1 || h < 1 || static_cast<long long>(w) * h > (1LL << 24)) {
-      err = "give 'like' or 'a', or width and height (at most 16M samples)";
+    if (w < 1 || h < 1 || static_cast<long long>(w) * h > (1LL << 27)) {
+      err = "give 'like' or 'a', or width and height (at most 128M samples)";
       return false;
     }
     out = Grid(w, h, static_cast<float>(a.p.N("cell", 1.0)), static_cast<float>(a.p.N("ox", 0.0)), static_cast<float>(a.p.N("oz", 0.0)));

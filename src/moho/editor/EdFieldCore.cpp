@@ -246,8 +246,8 @@ namespace moho::editor::field
       }
       const int w = static_cast<int>(a.p.N("width", 0));
       const int h = static_cast<int>(a.p.N("height", 0));
-      if (w < 1 || h < 1 || static_cast<long long>(w) * h > (1LL << 24)) {
-        err = "give 'like' or 'a', or width and height (at most 16M samples)";
+      if (w < 1 || h < 1 || static_cast<long long>(w) * h > (1LL << 27)) {
+        err = "give 'like' or 'a', or width and height (at most 128M samples)";
         return false;
       }
       out = Grid(w, h, static_cast<float>(a.p.N("cell", 1.0)), static_cast<float>(a.p.N("ox", 0.0)), static_cast<float>(a.p.N("oz", 0.0)));
@@ -1138,7 +1138,7 @@ namespace moho::editor::field
       }
       const int w = static_cast<int>(a.p.N("width", src->w));
       const int h = static_cast<int>(a.p.N("height", src->h));
-      if (w < 2 || h < 2 || static_cast<long long>(w) * h > (1LL << 24)) {
+      if (w < 2 || h < 2 || static_cast<long long>(w) * h > (1LL << 27)) {
         err = "resize: bad size";
         return false;
       }
@@ -1669,6 +1669,127 @@ namespace moho::editor::field
       return true;
     }
 
+    /** Catmull-Rom (C1) value at fractional sample coordinates: a height put on a finer grid keeps smooth slopes (bilinear would make flat facets, and the normals of a 4x grid blocks). */
+    inline float Bicubic(const Grid& g, const double gx, const double gz)
+    {
+      const double fx = std::floor(gx);
+      const double fz = std::floor(gz);
+      const float tx = static_cast<float>(gx - fx);
+      const float tz = static_cast<float>(gz - fz);
+      const int ix = static_cast<int>(fx);
+      const int iz = static_cast<int>(fz);
+      const auto weights = [](const float t, float (&k)[4]) {
+        const float t2 = t * t;
+        const float t3 = t2 * t;
+        k[0] = -0.5f * t3 + t2 - 0.5f * t;
+        k[1] = 1.5f * t3 - 2.5f * t2 + 1.0f;
+        k[2] = -1.5f * t3 + 2.0f * t2 + 0.5f * t;
+        k[3] = 0.5f * t3 - 0.5f * t2;
+      };
+      float kx[4];
+      float kz[4];
+      weights(tx, kx);
+      weights(tz, kz);
+      float sum = 0.0f;
+      for (int j = 0; j < 4; ++j) {
+        float row = 0.0f;
+        for (int i = 0; i < 4; ++i) {
+          row += kx[i] * Fetch(g, ix - 1 + i, iz - 1 + j, kClamp, 0.0f);
+        }
+        sum += kz[j] * row;
+      }
+      return sum;
+    }
+
+    /** Reads `a` at the world positions of the samples of `like`, smoothly (Catmull-Rom; `linear` = 1 for masks that must not overshoot): puts a field on a finer grid. */
+    bool OpUpsample(const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = Need(a, "a", err);
+      const Grid* like = Get(a, "like");
+      if (src == nullptr) {
+        return false;
+      }
+      if (like != nullptr) {
+        out = Grid(like->w, like->h, like->cell, like->ox, like->oz);
+      } else {
+        const int k = static_cast<int>(a.p.N("factor", 2));
+        if (k < 1 || k > 16 || static_cast<long long>(src->w - 1) * k + 1 > 32768 || static_cast<long long>(src->h - 1) * k + 1 > 32768 ||
+            (static_cast<long long>(src->w - 1) * k + 1) * ((static_cast<long long>(src->h - 1)) * k + 1) > (1LL << 27)) {
+          err = "upsample: bad factor or too large (at most 128M samples)";
+          return false;
+        }
+        out = Grid((src->w - 1) * k + 1, (src->h - 1) * k + 1, src->cell / static_cast<float>(k), src->ox, src->oz);      // the same world extent, first and last samples kept
+      }
+      const bool linear = a.p.N("linear", 0.0) > 0.5;
+      const Grid& g = out;
+      const double inv = 1.0 / static_cast<double>(src->cell);
+      Cells(out, [&](const int x, const int z) {
+        const double gx = (WorldX(g, x) - static_cast<double>(src->ox)) * inv;
+        const double gz = (WorldZ(g, z) - static_cast<double>(src->oz)) * inv;
+        return linear ? Bilinear(*src, gx, gz, kClamp, 0.0f) : Bicubic(*src, gx, gz);
+      });
+      return true;
+    }
+
+    /** Brings a finer field onto the grid of `like` with a tent (triangle) filter as wide as the sample ratio: every coarse sample is the weighted mean of the fine samples around it (no aliasing, unlike resample). */
+    bool OpDownsample(const OpArgs& a, Grid& out, std::string& err)
+    {
+      const Grid* src = Need(a, "a", err);
+      const Grid* like = Need(a, "like", err);
+      if (src == nullptr || like == nullptr) {
+        return false;
+      }
+      out = Grid(like->w, like->h, like->cell, like->ox, like->oz);
+      const double ratio = static_cast<double>(like->cell) / static_cast<double>(src->cell);
+      if (ratio <= 1.0001) {
+        const Grid& g = out;
+        Cells(out, [&](const int x, const int z) { return SampleWorld(*src, WorldX(g, x), WorldZ(g, z)); });
+        return true;
+      }
+      const int radius = std::max(1, static_cast<int>(std::ceil(ratio - 0.0001)));
+      // horizontal pass into a strip grid (like's columns, a's rows), then the vertical pass
+      Grid strip(like->w, src->h, like->cell, like->ox, src->oz);
+      Rows(src->h, [&](const int z0, const int z1) {
+        for (int z = z0; z < z1; ++z) {
+          for (int x = 0; x < like->w; ++x) {
+            const double cx = (WorldX(*like, x) - static_cast<double>(src->ox)) / static_cast<double>(src->cell);
+            const int lo = std::max(0, static_cast<int>(std::ceil(cx - radius)));
+            const int hi = std::min(src->w - 1, static_cast<int>(std::floor(cx + radius)));
+            double sum = 0.0;
+            double wsum = 0.0;
+            for (int i = lo; i <= hi; ++i) {
+              const double wt = 1.0 - std::abs(static_cast<double>(i) - cx) / radius;
+              if (wt > 0.0) {
+                sum += wt * static_cast<double>(src->At(i, z));
+                wsum += wt;
+              }
+            }
+            strip.At(x, z) = wsum > 0.0 ? static_cast<float>(sum / wsum) : 0.0f;
+          }
+        }
+      });
+      Rows(like->h, [&](const int z0, const int z1) {
+        for (int z = z0; z < z1; ++z) {
+          const double cz = (WorldZ(*like, z) - static_cast<double>(src->oz)) / static_cast<double>(src->cell);
+          const int lo = std::max(0, static_cast<int>(std::ceil(cz - radius)));
+          const int hi = std::min(src->h - 1, static_cast<int>(std::floor(cz + radius)));
+          for (int x = 0; x < like->w; ++x) {
+            double sum = 0.0;
+            double wsum = 0.0;
+            for (int j = lo; j <= hi; ++j) {
+              const double wt = 1.0 - std::abs(static_cast<double>(j) - cz) / radius;
+              if (wt > 0.0) {
+                sum += wt * static_cast<double>(strip.At(x, j));
+                wsum += wt;
+              }
+            }
+            out.At(x, z) = wsum > 0.0 ? static_cast<float>(sum / wsum) : 0.0f;
+          }
+        }
+      });
+      return true;
+    }
+
     // ---- registry --------------------------------------------------------------------------------------------------------------------------------
 
     using OpFn = bool (*)(const OpArgs&, Grid&, std::string&);
@@ -1685,7 +1806,7 @@ namespace moho::editor::field
         {"min", OpMin},             {"max", OpMax},               {"add", OpAdd},             {"sub", OpSub},               {"mul", OpMul},
         {"blend", OpBlend},         {"slope", OpSlope},           {"height_band", OpHeightBand}, {"curvature", OpCurvature},  {"water_below", OpWaterBelow},
         {"water_above", OpWaterAbove}, {"water_depth", OpWaterDepth}, {"shore", OpShore},     {"distance", OpDistance},     {"thermal", OpThermal},
-        {"aspect", OpAspect},       {"flow", OpFlow},           {"resample", OpResample},
+        {"aspect", OpAspect},       {"flow", OpFlow},           {"resample", OpResample},          {"upsample", OpUpsample},     {"downsample", OpDownsample},
       };
       return reg;
     }

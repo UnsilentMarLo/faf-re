@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "moho/editor/EdDdsDecode.h"
@@ -216,21 +217,45 @@ namespace moho::editor::dds
     std::memcpy(&out[84], "DXT5", 4);
     put(108, count > 1 ? 0x00401008u : 0x00001000u);
 
+    // the block rows of each level are split between threads (a 4096 x 4096 map texture is a million blocks)
+    std::size_t total = 128;
+    std::vector<std::size_t> offset;
     for (const Image& level : chain) {
+      offset.push_back(total);
+      total += static_cast<std::size_t>(std::max(1, (level.w + 3) / 4)) * static_cast<std::size_t>(std::max(1, (level.h + 3) / 4)) * 16;
+    }
+    out.resize(total, '\0');
+    const unsigned workers = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+    for (std::size_t li = 0; li < chain.size(); ++li) {
+      const Image& level = chain[li];
       const int bw = std::max(1, (level.w + 3) / 4);
       const int bh = std::max(1, (level.h + 3) / 4);
-      for (int by = 0; by < bh; ++by) {
-        for (int bx = 0; bx < bw; ++bx) {
-          Px block[16];
-          for (int i = 0; i < 16; ++i) {
-            const int x = std::min(level.w - 1, bx * 4 + (i & 3));
-            const int y = std::min(level.h - 1, by * 4 + (i >> 2));
-            block[i] = level.px[static_cast<std::size_t>(y) * static_cast<std::size_t>(level.w) + static_cast<std::size_t>(x)];
+      char* const dst = &out[offset[li]];
+      const auto rows = [&](const int by0, const int by1) {
+        for (int by = by0; by < by1; ++by) {
+          for (int bx = 0; bx < bw; ++bx) {
+            Px block[16];
+            for (int i = 0; i < 16; ++i) {
+              const int x = std::min(level.w - 1, bx * 4 + (i & 3));
+              const int y = std::min(level.h - 1, by * 4 + (i >> 2));
+              block[i] = level.px[static_cast<std::size_t>(y) * static_cast<std::size_t>(level.w) + static_cast<std::size_t>(x)];
+            }
+            EncodeBlockDxt5(block, reinterpret_cast<std::uint8_t*>(dst + (static_cast<std::size_t>(by) * static_cast<std::size_t>(bw) + static_cast<std::size_t>(bx)) * 16));
           }
-          std::uint8_t encoded[16];
-          EncodeBlockDxt5(block, encoded);
-          out.append(reinterpret_cast<const char*>(encoded), 16);
         }
+      };
+      if (workers <= 1 || bh < 16) {
+        rows(0, bh);
+        continue;
+      }
+      std::vector<std::thread> pool;
+      for (unsigned t = 0; t < workers; ++t) {
+        const int a = static_cast<int>(static_cast<long long>(bh) * t / workers);
+        const int b = static_cast<int>(static_cast<long long>(bh) * (t + 1) / workers);
+        pool.emplace_back(rows, a, b);
+      }
+      for (std::thread& th : pool) {
+        th.join();
       }
     }
     return out;

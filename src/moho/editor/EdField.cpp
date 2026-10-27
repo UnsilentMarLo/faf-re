@@ -288,7 +288,7 @@ namespace
   {
     const int w = static_cast<int>(luaL_checknumber(L, 1));
     const int h = static_cast<int>(luaL_checknumber(L, 2));
-    if (w < 1 || h < 1 || static_cast<long long>(w) * h > (1LL << 24)) {
+    if (w < 1 || h < 1 || static_cast<long long>(w) * h > (1LL << 27)) {
       return Fail(L, "bad size");
     }
     Grid g(w, h, static_cast<float>(OptNum(L, 4, 1)), static_cast<float>(OptNum(L, 5, 0)), static_cast<float>(OptNum(L, 6, 0)), static_cast<float>(luaL_checknumber(L, 3)));
@@ -301,7 +301,7 @@ namespace
     const int w = static_cast<int>(luaL_checknumber(L, 1));
     const int h = static_cast<int>(luaL_checknumber(L, 2));
     luaL_checktype(L, 3, LUA_TTABLE);
-    if (w < 1 || h < 1 || static_cast<long long>(w) * h > (1LL << 24)) {
+    if (w < 1 || h < 1 || static_cast<long long>(w) * h > (1LL << 27)) {
       return Fail(L, "bad size");
     }
     Grid g(w, h, static_cast<float>(OptNum(L, 4, 1)), static_cast<float>(OptNum(L, 5, 0)), static_cast<float>(OptNum(L, 6, 0)));
@@ -330,7 +330,7 @@ namespace
     const float scale = height ? 1.0f / 128.0f : 1.0f / 65535.0f;
     const int tw = static_cast<int>(OptField(L, 2, "width", iw));
     const int th = static_cast<int>(OptField(L, 2, "height", ih));
-    if (tw < 2 || th < 2 || static_cast<long long>(tw) * th > (1LL << 24)) {
+    if (tw < 2 || th < 2 || static_cast<long long>(tw) * th > (1LL << 27)) {
       return Fail(L, "bad size");
     }
     Grid g(tw, th, static_cast<float>(OptField(L, 2, "cell", 1)), 0.0f, 0.0f);

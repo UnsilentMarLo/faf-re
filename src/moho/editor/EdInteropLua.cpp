@@ -7,6 +7,9 @@
 //                                    r | g | b | a; raw options as above; nodata = value: NaN, infinity, that value and anything below -1e30 become the lowest valid value (info.nodata = how many)
 //   ed_img_write(path, field[, opts]) -> true | nil, message    (creates the folder) .png (8 / 16 bit), .tif / .tiff (8 / 16 bit, 32 = float), .raw / .r16 (16 bit words) or .r32 (float). opts: bits (8 | 16 | 32),
 //                                    lo, hi (the field value that becomes 0 and the maximum; default: the field's range), big (0 | 1: big endian raw)
+//   ed_dds_fields(path, size, span, r, g, b, a[, mips]) -> bytes | nil, message    a size x size DXT5 DDS (mip maps down to 1 x 1 unless mips is given) from four fields of 0..1 (ids; the same id may
+//                                    stand for several channels). span = the world size of the map: the texel centres at (i + 0.5) * span / size are sampled in the fields (bilinear), whatever their resolution. No
+//                                    Lua tables of pixels, so 4096 and 8192 wide textures fit
 //   ed_dir_stamps(dir[, exts])       -> { name = "size:mtime" } | nil   the files of a folder (not recursive), exts = "png;tif;tiff;raw;r16;r32"; cheap change detection for the live link
 //   ed_files_dialog(title, filter)   -> { path, ... } | nil     open dialog with multi-selection
 //   ed_folder_dialog(title)          -> path | nil              folder picker
@@ -16,6 +19,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <windows.h>
@@ -25,6 +29,7 @@
 
 #include "lua/LuaPrimitives.h"
 #include "lua/LuaRuntimeTypes.h"
+#include "moho/editor/EdDdsEncode.h"
 #include "moho/editor/EdFieldCore.h"
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/lua/CScrLuaInitForm.h"
@@ -871,6 +876,90 @@ namespace
     return fallbackSet;
   }
 
+  int __cdecl cfunc_DdsFields(lua_State* const L)
+  {
+    const char* const utf8 = lua_tostring(L, 1);
+    const int size = static_cast<int>(luaL_checknumber(L, 2));
+    const double span = luaL_checknumber(L, 3);
+    if (utf8 == nullptr) {
+      return Fail(L, "bad path");
+    }
+    if (size < 4 || size > 16384 || !(span > 0.0)) {
+      return Fail(L, "bad size or span");
+    }
+    moho::editor::field::GridPtr grids[4];
+    int ids[4];
+    for (int c = 0; c < 4; ++c) {
+      ids[c] = static_cast<int>(luaL_checknumber(L, 4 + c));
+      grids[c] = moho::editor::field::FindGrid(ids[c]);
+      if (!grids[c]) {
+        return Fail(L, "no such field");
+      }
+    }
+    const int mips = lua_type(L, 8) == LUA_TNUMBER ? static_cast<int>(lua_tonumber(L, 8)) : 99;
+    moho::editor::dds::Image img;
+    img.w = size;
+    img.h = size;
+    img.px.resize(static_cast<std::size_t>(size) * static_cast<std::size_t>(size));
+    const double cell = span / static_cast<double>(size);
+    const auto rows = [&](const int z0, const int z1) {
+      for (int z = z0; z < z1; ++z) {
+        const double wz = (static_cast<double>(z) + 0.5) * cell;
+        for (int x = 0; x < size; ++x) {
+          const double wx = (static_cast<double>(x) + 0.5) * cell;
+          std::uint8_t v[4];
+          for (int c = 0; c < 4; ++c) {
+            int same = -1;
+            for (int d = 0; d < c; ++d) {
+              if (ids[d] == ids[c]) {
+                same = d;
+                break;
+              }
+            }
+            if (same >= 0) {
+              v[c] = v[same];
+              continue;
+            }
+            const float f = moho::editor::field::SampleWorld(*grids[c], wx, wz) * 255.0f + 0.5f;
+            v[c] = static_cast<std::uint8_t>(f < 0.0f ? 0.0f : (f > 255.0f ? 255.0f : f));
+          }
+          img.px[static_cast<std::size_t>(z) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x)] = moho::editor::dds::Px{v[0], v[1], v[2], v[3]};
+        }
+      }
+    };
+    const unsigned workers = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+    {
+      std::vector<std::thread> pool;
+      for (unsigned t = 0; t < workers; ++t) {
+        pool.emplace_back(rows, static_cast<int>(static_cast<long long>(size) * t / workers), static_cast<int>(static_cast<long long>(size) * (t + 1) / workers));
+      }
+      for (std::thread& th : pool) {
+        th.join();
+      }
+    }
+    const std::string bytes = moho::editor::dds::EncodeDxt5(img, std::max(1, mips));
+    const std::wstring path = Widen(utf8);
+    {
+      std::error_code ec;
+      const fs::path parent = fs::path(path).parent_path();
+      if (!parent.empty()) {
+        fs::create_directories(parent, ec);
+      }
+    }
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+      return Fail(L, "cannot create the file");
+    }
+    DWORD written = 0;
+    const BOOL ok = WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
+    CloseHandle(file);
+    if (!ok || written != bytes.size()) {
+      return Fail(L, "write failed");
+    }
+    lua_pushnumber(L, static_cast<double>(bytes.size()));
+    return 1;
+  }
+
   struct EdInteropLuaBootstrap
   {
     EdInteropLuaBootstrap()
@@ -879,6 +968,7 @@ namespace
       (void)new moho::CScrLuaBinder(set, "ed_img_info", &cfunc_ImgInfo, nullptr, "<global>", "ed_img_info(path[, opts]) -> info | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_img_read", &cfunc_ImgRead, nullptr, "<global>", "ed_img_read(path[, opts]) -> field, info | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_img_write", &cfunc_ImgWrite, nullptr, "<global>", "ed_img_write(path, field[, opts]) -> true | nil, message");
+      (void)new moho::CScrLuaBinder(set, "ed_dds_fields", &cfunc_DdsFields, nullptr, "<global>", "ed_dds_fields(path, size, span, r, g, b, a[, mips]) -> bytes | nil, message");
       (void)new moho::CScrLuaBinder(set, "ed_dir_stamps", &cfunc_DirStamps, nullptr, "<global>", "ed_dir_stamps(dir[, exts]) -> { name = stamp }");
       (void)new moho::CScrLuaBinder(set, "ed_files_dialog", &cfunc_FilesDialog, nullptr, "<global>", "ed_files_dialog(title, filter) -> { path, ... } | nil");
       (void)new moho::CScrLuaBinder(set, "ed_folder_dialog", &cfunc_FolderDialog, nullptr, "<global>", "ed_folder_dialog(title) -> path | nil");
