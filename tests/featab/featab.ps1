@@ -1,7 +1,7 @@
 # usage: featab.ps1 -Api d3d12 -Exe main_x64_lrfix -Scene static|nuke|scan -Tag t1 [-Steps steps_static.lua] [-Tx 0 -Ty 0 -Tz 0] [-PauseAt 0] [-Hold 6] [-Start 14]
 # Frames go to out\featab_<tag>_<api>\, steps.csv lists "step,label,frameIndexAtStepStart" (frames are 1 per second).
 param([string]$Api = 'd3d12', [string]$Exe = 'main_x64_lrfix', [string]$Scene = 'static', [string]$Tag = 't1', [string]$Steps = 'steps_static.lua',
-      [double]$Tx = 0, [double]$Ty = 0, [double]$Tz = 0, [double]$PauseAt = 0, [int]$Hold = 6, [int]$Start = 14, [int]$Timeout = 420)
+      [double]$Tx = 0, [double]$Ty = 0, [double]$Tz = 0, [double]$PauseAt = 0, [int]$Hold = 6, [int]$Start = 14, [int]$Timeout = 420, [int]$Width = 1600, [int]$Height = 900)
 $bin = 'C:\ProgramData\FAForever\bin_x64'
 $logs = 'C:\ProgramData\FAForever\logs'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -21,7 +21,7 @@ $env:FAF_GAL_DUMP_SECONDS = '1'
 $log = "$logs\featab_${Tag}_$Api.log"
 Remove-Item $log -ErrorAction SilentlyContinue
 $p = Start-Process -FilePath "$bin\$Exe.exe" -WorkingDirectory $bin -PassThru -ArgumentList @(
-  '/init', 'C:/ProgramData/FAForever/bin/init_faf.lua', '/nobugreport', '/log', $log, "/$Api", '/windowed', '1600', '900', '/nomovie', '/nosound',
+  '/init', 'C:/ProgramData/FAForever/bin/init_faf.lua', '/nobugreport', '/log', $log, "/$Api", '/windowed', "$Width", "$Height", '/nomovie', '/nosound',
   '/seed', '7', '/noai', '/faction', '1', '/map', '/maps/adaptive_acid_lakes.v0004/adaptive_acid_lakes_scenario.lua',
   '/con', 'ren_SoftParticles=0;ren_DynLights=0;ren_AmbientOcclusion=0;ren_Anisotropy=0;ren_AntiAliasing=0;ren_ShadowFilter=0;ren_WaterQuality=0;ren_ParticleLowRes=0;ren_SharpenQuality=0;ren_RenderScale=0')
 $deadline = (Get-Date).AddSeconds($Timeout)

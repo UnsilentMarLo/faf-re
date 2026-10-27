@@ -29,7 +29,7 @@ namespace moho
 {
   // ren_RenderScale: 0 = 100 % (off, the default), 1 = 85 %, 2 = 75 %, 3 = 67 %, 4 = 50 %. /renderscale 100|85|75|67|50 on the command line
   // sets it at start. The Options > Video item comes from the render feature registry (key "render_scale"); the console variable is its
-  // backing value. ren_RenderScaleSharpness (0..1, default 0.6) is the strength of the sharpening after the upscale.
+  // backing value. ren_RenderScaleSharpness (0..1, default 0.3) is the strength of the sharpening after the upscale.
   extern int ren_RenderScale;
   extern float ren_RenderScaleSharpness;
 
@@ -62,6 +62,11 @@ namespace moho
 
   // The scale factor the next frame uses: 1 when the level is 100 % or the backend cannot (no GPU programs).
   [[nodiscard]] float REN_GetRenderScaleFactor();
+
+  // The scale of the target the world is being drawn into right now: the frame's factor while the scaled targets are in the engine's lanes
+  // (REN_BeginScaledWorld / REN_ResumeScaledWorld .. REN_EndScaledWorld), 1 otherwise. Thin geometry sized in pixels (range rings) divides its
+  // thickness by it so a line keeps its width in source texels and does not break up into dots.
+  [[nodiscard]] float REN_GetWorldDrawScale();
 
   // Starts scaled drawing of head `head`: swaps the head's colour and depth lanes of `device` and the viewport's three frame lanes
   // (`primary`, `secondary`, `viewportDepth`, the references stay the caller's) for scaled ones, clears them, and returns true. False
