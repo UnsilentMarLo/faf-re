@@ -87,6 +87,63 @@ ForkThread(function()
         Say(string.format('shield scene created, ground height %.2f', GetTerrainHeight(x0, z0)))
         return
     end
+    if AB_SCENE == 'fire' then
+        -- weapons of all four factions (tanks, bots, point defence, artillery, the commanders) shoot at tanks of the other army that keep coming back
+        local shooters = { 'l0201', 'l0202', 'l0303', 'l0103', 'l0001', 'b2101', 'b2301', 'b2303', 'l0203', 'l0106' }
+        local n = 0
+        for fi, prefix in FACTIONS do
+            for si, sid in shooters do
+                local id = prefix .. sid
+                if __blueprints[id] then
+                    local ux, uz = x0 - 28 + (si - 1) * 4.5, z0 - 24 + (fi - 1) * 9
+                    CreateUnitHPR(id, brainA.Name, ux, GetTerrainHeight(ux, uz), uz, 0, math.pi * 0.5, 0)
+                    n = n + 1
+                end
+            end
+        end
+        Say(string.format('%d shooters created, ground height %.2f', n, GetTerrainHeight(x0, z0)))
+        local targets = {}
+        while GetGameTimeSeconds() < 120 do
+            local alive = 0
+            for _, t in targets do
+                if t and not t.Dead then alive = alive + 1 end
+            end
+            if alive < 8 then
+                for i = 1, 8 do
+                    local ux, uz = x0 + 16 + math.mod(i, 3) * 4, z0 - 24 + i * 6
+                    local u = CreateUnitHPR('uel0201', brainB.Name, ux, GetTerrainHeight(ux, uz), uz, 0, -math.pi * 0.5, 0)
+                    if u then table.insert(targets, u) end
+                end
+            end
+            local dead = 0
+            for _, t in targets do
+                if not t or t.Dead then dead = dead + 1 end
+            end
+            Say(string.format('targets alive %d, dead %d, total %d', alive, dead, table.getn(targets)))
+            WaitSeconds(3)
+        end
+        return
+    end
+    if AB_SCENE == 'lightdisc' then
+        -- long-lived light particles of different sizes at known places; the footprint of each should be a smooth disc
+        WaitUntil(4)
+        local sizes = { 6, 14, 30 }
+        local anchors = {}
+        for i = 1, 3 do
+            local ux, uz = x0 - 50 + (i - 1) * 50, z0
+            local u = CreateUnitHPR('ueb1101', brainA.Name, ux, GetTerrainHeight(ux, uz), uz, 0, 0, 0)
+            table.insert(anchors, u)
+        end
+        for round = 1, 20 do
+            for i = 1, 3 do
+                if anchors[i] and not anchors[i].Dead then
+                    CreateLightParticle(anchors[i], -1, brainA:GetArmyIndex(), sizes[i], 150, 'glow_03', 'ramp_flare_02')
+                end
+            end
+            WaitSeconds(14)
+        end
+        return
+    end
     if AB_SCENE == 'water' then
         -- hover tanks and a few structures on and around the lake at (AB_TX, AB_TZ): the mirrored pass draws what stands on the water
         WaitUntil(4)

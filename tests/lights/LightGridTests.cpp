@@ -137,6 +137,36 @@ namespace
     GCHECK(image.lightCount == kLightsPerCell + 4); // all lights are in the data texture, only the cell lists are limited
   }
 
+  void TestCellKeepsWhatAddsMost()
+  {
+    // Eight strong lights that only graze the cell at (128, 128) come first in the ranking; a weak one right on top of the cell comes last.
+    // The cell keeps what adds the most at its middle, so the weak one stays and the weakest graze (the last of the strong ones) goes.
+    const GridLayout layout = GridLayout::ForMap(256.0f, 256.0f); // 8 unit cells: the cell [128,136) has its middle at 132
+    std::vector<Light> lights;
+    for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {
+      lights.push_back(MakeLight(141.5f, 0.0f, 132.0f, 10.0f, 100.0f - static_cast<float>(i)));
+    }
+    Light weak = MakeLight(132.0f, 0.0f, 132.0f, 10.0f, 1.0f);
+    weak.rgb[0] = 0.3f;
+    weak.rgb[1] = 0.15f;
+    weak.rgb[2] = 0.07f;
+    lights.push_back(weak);
+    LightGridImage image;
+    BuildLightGrid(lights, layout, image);
+
+    std::uint32_t idx[kLightsPerCell];
+    GCHECK(image.CellLights(132.0f, 132.0f, idx) == kLightsPerCell);
+    bool hasWeak = false;
+    bool hasLastStrong = false;
+    for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {
+      hasWeak = hasWeak || idx[i] == kLightsPerCell;
+      hasLastStrong = hasLastStrong || idx[i] == kLightsPerCell - 1;
+      GCHECK(i == 0 || idx[i - 1] < idx[i]); // still in ranking order
+    }
+    GCHECK(hasWeak);
+    GCHECK(!hasLastStrong);
+  }
+
   void TestHugeLightAndEdges()
   {
     const GridLayout layout = GridLayout::ForMap(1024.0f, 1024.0f);
@@ -321,6 +351,7 @@ int RunGridTests(int& checks)
   TestDataTextureLayout();
   TestMembership();
   TestOrderAndOverflow();
+  TestCellKeepsWhatAddsMost();
   TestHugeLightAndEdges();
   TestInvalidLights();
   TestCapAndEmpty();

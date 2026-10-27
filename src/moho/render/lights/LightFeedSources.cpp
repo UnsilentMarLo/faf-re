@@ -31,6 +31,11 @@ namespace moho::lights
     constexpr float kMergeCell = 3.0f;       // glow sprites born in the same beat inside one cell of this size, with the same texture and similar life, are one light
     constexpr float kGlowPeakMin = 0.20f;    // a texture whose brightest alpha x luminance is below this does not glow (smoke, dust); the census showed fire at 0.25
     constexpr float kGlowEnergyCap = 1.2f;   // energy of one merged light
+    // A muzzle flash is a small additive sprite that lives a tick or two: the size model gives it a radius of 3 and an energy of about 0.1, which
+    // lights nothing (a Cybran point defence fired in the dark with the ground around it unlit). Sprites this short and this big or more are flashes.
+    constexpr float kFlashLifeTicks = 5.0f;
+    constexpr float kFlashMinSize = 0.25f;
+    constexpr float kFlashBoost = 4.0f;
     constexpr float kAlphaHotMinAlpha = 0.08f; // an alpha-blended sprite whose texture is nearly transparent (noise clouds) is not a flame
     constexpr float kAlphaHotGain = 0.5f;      // an alpha-blended flame lights less than an additive one: it covers what is behind it
     constexpr float kWhiteReduction = 0.6f;  // how much of the white of texture x ramp is taken out of the light colour
@@ -374,7 +379,8 @@ namespace moho::lights
       // all over (high mean); a noise cloud with a faint peak gives little
       const float spriteGain = (blend == 4 ? 0.7f : 1.0f) * (alphaBlend ? kAlphaHotGain : 1.0f) *
                                model::Clamp(0.15f + 0.5f * texture->colour.peak + 1.5f * texture->colour.brightness, 0.2f, 1.0f);
-      const float energy = model::GlowEnergy(peakSize) * spriteGain;
+      const bool muzzleFlash = particle.mLifetime <= kFlashLifeTicks && peakSize >= kFlashMinSize;
+      const float energy = model::GlowEnergy(peakSize) * spriteGain * (muzzleFlash ? kFlashBoost : 1.0f);
       if (census) {
         CensusNote("particle", censusKey, alphaBlend ? "ok:hot alpha sprite" : "ok:glow sprite", peakSize, censusColour);
       }

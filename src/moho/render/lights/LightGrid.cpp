@@ -72,8 +72,15 @@ namespace moho::lights
     image.data.assign(static_cast<std::size_t>(LightGridImage::DataRows(static_cast<std::uint32_t>(requested))) * kDataWidth * 4u, 0.0f);
     image.grid.assign(static_cast<std::size_t>(image.GridWidth()) * layout.cellsZ * 4u, 0.0f);
 
-    // Fill counters per cell: how many of the 8 entries are taken.
-    std::vector<std::uint8_t> filled(static_cast<std::size_t>(layout.cellsX) * layout.cellsZ, 0);
+    // Every (cell, light) pair the lights' footprints produce, with what the light adds at the middle of the cell.
+    struct CellLight
+    {
+      std::uint32_t cell;
+      float contribution;
+      std::uint32_t light;
+    };
+    std::vector<CellLight> pairs;
+    pairs.reserve(requested * 16u);
 
     const float invCell = 1.0f / layout.cellSize;
     const float spanX = static_cast<float>(layout.cellsX) * layout.cellSize;
@@ -161,20 +168,52 @@ namespace moho::lights
               continue;
             }
           }
-          const std::size_t cell = static_cast<std::size_t>(cz) * layout.cellsX + cx;
-          const std::uint8_t slot = filled[cell];
-          if (slot >= kLightsPerCell) {
-            ++image.overflow;
-            continue;
-          }
-          if (slot == 0) {
-            ++image.cellsLit;
-          }
-          filled[cell] = static_cast<std::uint8_t>(slot + 1);
-          // entries 0..3 are the first texel, 4..7 the second, and so on
-          image.grid[(static_cast<std::size_t>(cz) * image.GridWidth() + kCellTexels * cx) * 4u + slot] = static_cast<float>(index + 1u);
+          // What the light adds at the middle of the cell: the shader's windowed falloff at the closest point of the light's segment.
+          const float px = cellMinX + 0.5f * layout.cellSize - l.pos[0];
+          const float pz = cellMinZ + 0.5f * layout.cellSize - l.pos[2];
+          const float t = capsule && segLen2 > 1.0e-6f ? std::min(1.0f, std::max(0.0f, (px * segX + pz * segZ) / segLen2)) : 0.0f;
+          const float qx = px - segX * t;
+          const float qz = pz - segZ * t;
+          const float falloff = std::max(0.0f, 1.0f - (qx * qx + qz * qz) / r2);
+          const float peak = std::max(l.rgb[0], std::max(l.rgb[1], l.rgb[2]));
+          pairs.push_back(CellLight{static_cast<std::uint32_t>(cz) * layout.cellsX + cx, peak * falloff, index});
         }
       }
+    }
+
+    // A cell keeps the kLightsPerCell lights that add the most at its middle. Ranking them by the power the light has overall (the order of
+    // `lights`) let a strong light that only grazes the cell push out a weak one right on top of it; whatever is dropped now is the least
+    // visible in that cell, so the step at the border to the next cell (where the same light may still be listed) stays small.
+    std::sort(pairs.begin(), pairs.end(), [](const CellLight& a, const CellLight& b) {
+      if (a.cell != b.cell) {
+        return a.cell < b.cell;
+      }
+      if (a.contribution != b.contribution) {
+        return a.contribution > b.contribution;
+      }
+      return a.light < b.light;
+    });
+    for (std::size_t first = 0; first < pairs.size();) {
+      std::size_t last = first;
+      while (last < pairs.size() && pairs[last].cell == pairs[first].cell) {
+        ++last;
+      }
+      const std::size_t count = last - first;
+      const std::size_t kept = std::min<std::size_t>(count, kLightsPerCell);
+      image.overflow += static_cast<std::uint32_t>(count - kept);
+      std::uint32_t slots[kLightsPerCell];
+      for (std::size_t k = 0; k < kept; ++k) {
+        slots[k] = pairs[first + k].light;
+      }
+      std::sort(slots, slots + kept); // the strongest light first: the ranking order of `lights`
+      const std::uint32_t cz = pairs[first].cell / layout.cellsX;
+      const std::uint32_t cx = pairs[first].cell % layout.cellsX;
+      ++image.cellsLit;
+      // entries 0..3 are the first texel, 4..7 the second, and so on
+      for (std::size_t k = 0; k < kept; ++k) {
+        image.grid[(static_cast<std::size_t>(cz) * image.GridWidth() + kCellTexels * cx) * 4u + k] = static_cast<float>(slots[k] + 1u);
+      }
+      first = last;
     }
   }
 } // namespace moho::lights

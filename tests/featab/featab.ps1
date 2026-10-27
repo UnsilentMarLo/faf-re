@@ -17,7 +17,7 @@ if ($Scene -eq 'scan') { $camHeader += "AB_STEPS = {}`nAB_PRESETS = {}`n"; $step
 Set-Content "$test\dynlights_camera.lua" ($camHeader + $stepsText + "`n" + (Get-Content "$here\featab_camera.lua" -Raw)) -Encoding ascii
 $env:FAF_CRASH_NO_DIALOG = '1'
 $env:FAF_GAL_DUMP_DIR = $dump
-$env:FAF_GAL_DUMP_SECONDS = '1'
+$env:FAF_GAL_DUMP_SECONDS = $(if ($env:FEATAB_DUMP) { $env:FEATAB_DUMP } else { '1' })
 $log = "$logs\featab_${Tag}_$Api.log"
 Remove-Item $log -ErrorAction SilentlyContinue
 $p = Start-Process -FilePath "$bin\$Exe.exe" -WorkingDirectory $bin -PassThru -ArgumentList @(

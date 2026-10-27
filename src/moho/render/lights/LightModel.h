@@ -119,7 +119,8 @@ namespace moho::lights::model
   // ------------------------------------------------------------------------------------------------ glow sprites (fire, plasma, flares)
   constexpr float GlowRadius(const float size)
   {
-    return Clamp(2.4f * size, 3.0f, 40.0f); // a nuke's cloud sprites are tens of units across: they light that far
+    // a nuke's cloud sprites are tens of units across: they light that far; a muzzle flash (size 0.3..1) still lights its gun and the ground around
+    return Clamp(2.4f * size + 2.5f, 5.0f, 40.0f);
   }
   inline float GlowEnergy(const float size) // per sprite, before the texture and ramp brightness; grows with the root of the size
   {
