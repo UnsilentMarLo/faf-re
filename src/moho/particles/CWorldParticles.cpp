@@ -1301,7 +1301,9 @@ namespace moho
     std::optional<gpg::gal::RenderProfileScope> profileStep(std::in_place, "EffParticles"); // FAF instrumentation
     // Engine addition (ParticleLowRes.h): the large quads of a run of buckets (same sort scalar, same blend class) go into a
     // lower-resolution target, composited onto the scene before the small ones are drawn at full resolution.
-    const bool lowResolution = suppressTLight == 0 && camera != nullptr && moho::particlelowres::Begin(*camera);
+    // The same call starts the soft particles (ADD / ALPHABLEND / PREMODALPHA buckets fade by the scene depth), which need no run grouping.
+    const bool particlePass = suppressTLight == 0 && camera != nullptr && moho::particlelowres::Begin(*camera);
+    const bool lowResolution = particlePass && moho::particlelowres::LowResActive();
     std::vector<moho::SParticleRenderBucket*> lowResolutionRun;
     std::vector<bool> lowResolutionLarge;
     const auto bucketEnd = mParticleBuckets.end();
@@ -1323,6 +1325,9 @@ namespace moho
         }
       }
 
+      if (particlePass && moho::ParticleLowResEligible(*bucket)) {
+        moho::particlelowres::EnsureSoftDepth();
+      }
       if (lowResolution && moho::ParticleLowResEligible(*bucket)) {
         const float runSortScalar = bucketKey.sortScalar;
         lowResolutionRun.clear();
@@ -1368,7 +1373,7 @@ namespace moho
       (void)moho::RenderParticleBucket(*bucket, static_cast<float>(tick), suppressTLight != 0);
       ++bucketIt;
     }
-    if (lowResolution) {
+    if (particlePass) {
       moho::particlelowres::End();
     }
 

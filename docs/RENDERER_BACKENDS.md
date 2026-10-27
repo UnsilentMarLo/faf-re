@@ -196,6 +196,7 @@ Registered features:
 |---|---|---|---|---|---|
 | Dynamic Lights (`dynlights_quality`, Off / Low / Medium / High / Ultra; off to on needs a restart) | no: the shipped vs_1_1 / ps_2_0 techniques cannot host the ps_3_0 light pass (the executable patch has lights for it) | no: does not start | yes (verified 2026-10-26) | yes | yes (verified 2026-10-26) |
 | Large Particle Quality (`particle_quality`, Full / Half / Quarter resolution, default Half; live) | no: the shipped effects are not patched and a smaller target would not pay for itself | no: does not start | yes (verified 2026-10-26) | yes (verified 2026-10-26) | yes (verified 2026-10-26) |
+| Soft Particles (`soft_particles`, Off / Low / High, default Low; live; [below](#soft-particles)) | no: the shipped ps_2_0 particle shaders run directly and cannot read the depth buffer | no: does not start | yes (verified 2026-10-27) | yes (verified 2026-10-27) | yes (verified 2026-10-27) |
 
 | Water Quality (`water_quality`, Off / Low / Medium / High; default Medium, applies live; [docs/WATER_QUALITY.md](WATER_QUALITY.md)) | reflection target size only (the `ps_2_a` water shader has no room for the filter); default Off | no: does not start | yes (verified 2026-10-27) | yes (verified 2026-10-27) | yes (verified 2026-10-27) |
 
@@ -207,6 +208,37 @@ Large Particle Quality (`src/moho/particles/ParticleLowRes.cpp`, docs/PERFORMANC
 | Ambient Occlusion (`ambient_occlusion`, Off / Low / Medium / High; applies at once) | no: the shipped shader model 2 techniques and a depth buffer it cannot sample | no: does not start | yes (verified 2026-10-27) | yes (verified 2026-10-27) | yes (verified 2026-10-27) |
 
 Verified by running the staged battle (`tests/lights/ingame/dynlights_census.lua`) on each API with only the profile option set (no command-line switch): effects patched, lights drawn on D3D11, D3D12 and Vulkan, no entry and a log line on D3D9.
+
+## Soft particles
+
+Smoke, fire and explosion quads are flat cards: where one cuts into the ground, a unit or the water it leaves a hard line. Soft particles fade the quad's alpha by the distance between its own depth and the scene depth behind it, so the line becomes a gradient. Option: **Options > Video > Soft Particles** (`soft_particles`, Off / Low / High, default Low; console variable `ren_SoftParticles` 0 / 1 / 2, live) on Direct3D 11, 12 and Vulkan; Direct3D 9 runs the shipped ps_2_0 particle shaders as they are and has no depth read there, Direct3D 10 does not start.
+
+- **Shader** (`src/moho/particles/ParticleEffectPatch.cpp`, the same load-time patch of `particle.fx` as Large Particle Quality, no game file changed): the ADD, ALPHABLEND and PREMODALPHA world-particle techniques (and their `_LR` twins of the half-resolution path) use `WorldPSSoft` / `WorldPSSoftPremod` (`WorldPSSoftLR*` for the twins) in place of `WorldPS`. They read the scene depth copy (`LRSceneDepthTexture`), convert both depths to a distance along the view axis and scale the alpha (the whole colour for PREMODALPHA, whose alpha is already in the colour) by `smoothstep(gap / SoftParams.x)`. `SoftParams.x` is the soft-edge distance in world units, 0 = off, then the shader is the plain one (fade 1; the branch is on a constant). The engine's projection is right handed (`Projection[2][3]` = -1, near 6.3, far about 17,000 at the default camera), so the distance is `-P[3][2] / (depth * P[2][3] - P[2][2])`; the older `LRViewZ` helper of the low-resolution composite does not give a distance (it is only used there for relative weights). `TRampFlat` / `TRampAnimateFlat` techniques lie on the ground by design (they would fade away completely) and keep their hard edge; MODULATE*, REFRACT and TLight techniques, beams and trails are not touched.
+- **Distance per level**: Low 1 world unit, High 3 (`kSoftDistance` in `ParticleLowRes.cpp`), times `ren_SoftParticleScale` (default 1; `FAF_SOFT_PARTICLES` and `FAF_SOFT_PARTICLE_SCALE` in the environment win over the console variables).
+- **Depth**: the same sampled copy of the scene depth the half-resolution path uses (`Device::CopyDepthStencil` into a `DepthStencilTarget` created sampled, `EffectVariable::SetDepthStencil`; D3D11, D3D12, Vulkan), taken once per `RenderEffects` call, lazily, just before the first eligible bucket is drawn (`particlelowres::EnsureSoftDepth`), and kept bound until the end of the call. The particle pass writes no depth, so the copy stays valid for the half-resolution passes, which share it (a call with both runs one copy). Region `SoftDepth` in `FAF_GPU_PROFILE`. A copy the backend refuses turns the feature off for the session (a log line).
+- **With the half-resolution path**: the low-resolution passes have their own (downsampled) depth buffer, which cannot be sampled while it is the depth test, so the `_LR` twins look the same scene copy up at the full-resolution pixel their low-resolution pixel is centred on (`LRView + position * LRRatio`).
+- **Host test**: `faf_particle_tests` (patch text on a minimal source and on the real `particle.fx` with `FAF_STOCK_FX_DIR`: 24 low-resolution twins, 18 softened, flat techniques untouched, the soft shaders defined before the first technique that uses them).
+
+Verified 2026-10-27 (RX 7900 XTX, 1600x900 windowed, `adaptive_acid_lakes` seed 7, `tests/softp/ingame`: a strategic missile on dry land at game time 10 + about 30 s and eight big units killed in the shallow lake; paused frames, level switched live with `ren_SoftParticles`, `FAF_GAL_DUMP_DIR` dumps):
+
+| API | nuke over terrain, Off against High (mean largest channel difference, 0-255) |
+|---|---|
+| Direct3D 12 | 3.0 (3.8 % of the pixels differ by more than 24); two frames of one setting differ by 0.02-0.04 |
+| Direct3D 11 | 3.3 (4.7 %) |
+| Vulkan | 1.6 (1.2 %) |
+
+Images ([D3D12](images/soft_particles_d3d12_nuke_terrain.png), [D3D11](images/soft_particles_d3d11_nuke_terrain.png), [Vulkan](images/soft_particles_vulkan_nuke_terrain.png): left Off, right High, crop of the same paused frame): the stair-step bands where the fireball's quads meet the terrain become a smooth gradient on all three; [smoke and fire of eight wrecks in the lake (D3D12)](images/soft_particles_d3d12_wrecks_water.png) fades where it meets the water and the ground (mean difference 1.1). A first version that used the low-resolution composite's `LRViewZ` faded every particle away (its gap was a fraction of a world unit); the host test cannot see that, the in-game frames did.
+
+GPU cost (`FAF_GPU_PROFILE=300`, the same paused frame per level, averages of 8-17 blocks of 300 frames): the frame is 0.01 to 0.06 ms slower and the `EffParticles` pass 0.02 to 0.04 ms (about 3 %), plus the depth copy (0.009 ms at 1600x900 on the nuke frame, 0.020 ms in the battle, region `SoftDepth`; with the half-resolution path on the copy moves there from `LRDepth`, which gets cheaper by the same amount).
+
+| Scene (D3D12 unless noted) | Off | Low | High |
+|---|---|---|---|
+| nuke, half-resolution path on: frame GPU / `EffParticles` | 2.469 / 1.291 ms | 2.473 / 1.326 | 2.469 / 1.324 |
+| nuke, `ren_ParticleLowRes` 0: frame GPU / `EffParticles` | 2.453 / 1.280 ms | 2.465 / 1.322 | 2.470 / 1.321 |
+| staged battle (`dynlights_census.lua`, zoom 28, game time 82 s): frame GPU / `EffParticles` | 1.760 / 0.267 ms | 1.796 / 0.289 | 1.818 / 0.293 |
+| nuke, Vulkan: frame GPU / `EffParticles` | 2.297 / 1.180 ms | 2.306 / 1.199 | 2.306 / 1.198 |
+
+Direct3D 11 GPU timestamps are not usable (the paired frames above are the only D3D11 check). Not verified: exclusive full screen, a resolution change in the running game, split screen, the Options entry itself (registry log line `render feature soft_particles on <api>: level 1 (low)` only), other GPUs, a unit-over-water scene with a naval unit, a Low against High comparison by eye. The 1 / 3 unit distances are a first guess: the quads of the nuke are tens of units wide, so High removes a visible band on the biggest ones; `ren_SoftParticleScale` tunes it without a rebuild.
 
 ## Post-process anti-aliasing
 
