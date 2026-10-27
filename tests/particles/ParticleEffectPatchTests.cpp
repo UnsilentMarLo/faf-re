@@ -98,6 +98,30 @@ technique TRamp_ALPHABLEND
 		PixelShader = compile ps_2_0 WorldPS();
 	}
 }
+technique TRampFlat_ADD
+{
+	pass P0
+	{
+		AlphaState( AlphaBlend_SrcAlpha_One )
+		DepthState( Depth_Enable_Less_Write_None )
+		RasterizerState( Rasterizer_Cull_None )
+
+		VertexShader = compile vs_1_1 WorldVS(false,true);
+		PixelShader = compile ps_2_0 WorldPS();
+	}
+}
+technique TRamp_PREMODALPHA
+{
+	pass P0
+	{
+		AlphaState( AlphaBlend_One_InvSrcAlpha_Write_RGB )
+		DepthState( Depth_Enable_Less_Write_None )
+		RasterizerState( Rasterizer_Cull_None )
+
+		VertexShader = compile vs_1_1 WorldVS(false,false);
+		PixelShader = compile ps_2_0 WorldPS();
+	}
+}
 technique TRamp_MODULATEINVERSE
 {
 	pass P0
@@ -134,16 +158,33 @@ technique TLight_ADD
     std::string text = kMinimal;
     const moho::ParticleEffectPatchResult result = moho::PatchParticleEffect(text);
     CHECK(result.patched);
-    CHECK(result.techniques == 2); // the ADD and ALPHABLEND ones; neither MODULATE nor the TLight technique
+    CHECK(result.techniques == 4); // the ADD, ALPHABLEND, PREMODALPHA and flat ADD ones; neither MODULATE nor the TLight technique
+    CHECK(result.softened == 3);   // the flat one stays hard-edged
     CHECK(Count(text, "technique TRamp_ADD_LR") == 1U);
     CHECK(Count(text, "technique TRamp_ALPHABLEND_LR") == 1U);
+    CHECK(Count(text, "technique TRamp_PREMODALPHA_LR") == 1U);
     CHECK(Count(text, "MODULATEINVERSE_LR") == 0U);
     CHECK(Count(text, "TLight_ADD_LR") == 0U);
     CHECK(Count(text, "LRCull(") >= 3U); // the declaration and the two vertex shader hooks
-    CHECK(Count(text, "WorldPSLRPremultiplied()") == 1U); // only the ALPHABLEND twin
+    CHECK(Count(text, "WorldPSSoftLRPremultiplied()") == 1U); // only the ALPHABLEND twin
+    CHECK(Count(text, "WorldPSSoftLR()") == 1U);              // the ADD twin
+    CHECK(Count(text, "WorldPSSoftLRPremod()") == 1U);        // the PREMODALPHA twin
     CHECK(Count(text, "technique LRComposite") == 1U);
     CHECK(Count(text, "LRDownsamplePS2") >= 2U && Count(text, "LRDownsamplePS4") >= 2U);
     CHECK(Braces(text) == Braces(std::string(kMinimal)));
+
+    // Soft particles: the full-resolution ADD / ALPHABLEND techniques use WorldPSSoft, PREMODALPHA the premodulated one; MODULATE and TLight
+    // keep their shaders; the soft shaders are defined before the first technique that uses them.
+    CHECK(Count(text, "WorldPSSoft()") == 2U);
+    CHECK(Count(text, "WorldPSSoftPremod()") == 1U);
+    CHECK(Count(text, "WorldPS()") == 3U); // MODULATEINVERSE, and the flat ADD technique with its twin
+    CHECK(Count(text, "LightPS()") == 1U);
+    CHECK(Count(text, "float4 SoftParams") == 1U);
+    CHECK(text.find("PS_OUTPUT WorldPSSoft(") < text.find("technique TRamp_ADD"));
+    CHECK(text.find("PS_OUTPUT WorldPSSoftPremod(") < text.find("technique TRamp_PREMODALPHA"));
+    CHECK(text.find("PS_OUTPUT WorldPS(") < text.find("PS_OUTPUT WorldPSSoft("));
+    CHECK(text.find("float SoftFade(") < text.find("PS_OUTPUT WorldPSSoft("));
+    CHECK(text.find("float4 SoftParams") < text.find("float SoftFade("));
 
     // The vertex shader hooks sit where the quad is still the particle's centre.
     CHECK(text.find("LRCull") < text.find("WORLD_OUTPUT WorldVS("));
@@ -174,6 +215,8 @@ technique TLight_ADD
     CHECK(result.patched);
     // 8 tags (TRamp, TRampAnimate, TRampAlign, TRampAnimateAlign, TRampAnimateAlignToBone, TRampAlignToBone, TRampFlat, TRampAnimateFlat) x 3 blends.
     CHECK(result.techniques == 24);
+    CHECK(result.softened == 18); // not the Flat and AnimateFlat tags
+    CHECK(Count(text, "WorldPSSoft()") + Count(text, "WorldPSSoftPremod()") == 18U);
     CHECK(Braces(text) == Braces(original));
     CHECK(Count(text, "_LR\n") + Count(text, "_LR\r\n") == 24U);
   }

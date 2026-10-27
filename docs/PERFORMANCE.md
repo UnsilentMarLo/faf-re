@@ -117,6 +117,10 @@ Limits: the large quads lose about half a pixel of sharpness at Half (the textur
 
 Switches: `ren_ParticleLowRes` (0, 1, 2), `ren_ParticleLowResSize` (320), `ren_ParticleLowResMinMpix` (30), `/noparticlelowres` on the command line; for comparisons `FAF_PARTICLE_LOWRES`, `FAF_PARTICLE_LOWRES_SIZE`, `FAF_PARTICLE_LOWRES_MINMPIX` in the environment (they win over the console variables) and `FAF_PARTICLE_LOWRES_DEBUG=1` (a log line per run now and then; the passes show up as `LRDepth`, `LRAccum`, `LRComposite` in `FAF_GPU_PROFILE`). Host test of the effect patch: `faf_particle_tests` (`FAF_STOCK_FX_DIR` for the real `particle.fx`).
 
+## Soft particles
+
+*Done 27/10/2026 on branch `soft-particles` (RX 7900 XTX, 1600x900, paused frames, `FAF_GPU_PROFILE=300`).* Options > Video > Soft Particles (Off / Low / High) fades ADD, ALPHABLEND and PREMODALPHA particles where they meet the geometry, from the same scene depth copy as the half-resolution path (see docs/RENDERER_BACKENDS.md, "Soft particles"). Cost on the nuke frame: the depth copy 0.009 ms, the `EffParticles` pass +0.035 ms (1.291 to 1.326 ms) with the half-resolution path on, +0.042 ms with it off; the frame GPU time moves by 0.004 to 0.017 ms. The staged battle: frame 1.760 ms Off, 1.796 Low, 1.818 High (the copy 0.020 ms of it). Vulkan nuke: +0.009 ms per frame. The extra cost is one depth lookup and a few ALU per particle pixel and one more texture slot; it scales with particle overdraw like the particles themselves.
+
 ## Shadow filtering
 
 The filtered shadow lookup (Options, Video, Shadow Filtering) is roughly cost-neutral at 3840x2160 on an RX 7900 XTX: the ground lookups cost 0.2 to 0.8 ms per frame, the blur passes it makes unnecessary cost about as much, so the three shadow passes sum to between -0.2 and +0.35 ms of the Off value on Direct3D 12 and Vulkan (tables, method and noise in [Shadow filtering](SHADOW_FILTERING.md#measured)).

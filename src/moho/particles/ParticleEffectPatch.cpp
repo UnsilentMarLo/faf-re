@@ -18,6 +18,7 @@ float4 LRView = float4(0, 0, 1, 1);        // the viewport in the scene target: 
 float4 LRScene = float4(1, 1, 1, 1);       // the scene target: width, height, 1/width, 1/height
 float4 LRRatio = float4(2, 2, 2, 0);       // xy: viewport pixels per low-resolution pixel, z: the integer scale
 float4 LRQuad = float4(1, 1, 1, 1);        // the output target of the full-screen passes: width, height, 1/width, 1/height
+float4 SoftParams = float4(0, 0, 0, 0);    // soft particles: x the soft-edge distance in world units along the view axis (0: off, the scene depth is not bound)
 
 texture LRAccumTexture;
 texture LRDepthTexture;
@@ -75,6 +76,51 @@ float LRViewZ(float depth)
 
 )HLSL";
 
+    // Inserted after WorldPS (the techniques that use them come before the end of the file): the pixel shaders of the soft particles. The
+    // particle's depth is its own fragment's, the scene's is the copy taken before the particle pass (LRSceneDepthTexture); both go through
+    // LRViewZ, so the gap is a distance along the view axis in world units whatever the projection. The fade is a smoothstep of
+    // gap / SoftParams.x: 0 where the quad meets the geometry, 1 once it is a soft-edge distance in front. ADD and ALPHABLEND blend with
+    // the source alpha, so the alpha is scaled; PREMODALPHA has the alpha in the colour already, so the whole colour is scaled.
+    constexpr std::string_view kSoftShaders = R"HLSL(
+
+// ---- FAF: soft particles (ParticleLowRes.cpp) ---------------------------------------------------------------------------------
+// The distance along the view axis of a depth value (the engine's projection is right handed: Projection[2][3] is -1, the eye z is negative).
+float SoftViewDistance(float depth)
+{
+	return -Projection[3][2] / (depth * Projection[2][3] - Projection[2][2]);
+}
+
+float SoftFade(float2 sceneUV, float fragmentDepth)
+{
+	float fade = 1.0;
+	if (SoftParams.x > 0.0)
+	{
+		float gap = SoftViewDistance(tex2Dlod(LRSceneDepthSampler, float4(sceneUV, 0, 0)).x) - SoftViewDistance(fragmentDepth);
+		float f = saturate(gap / SoftParams.x);
+		fade = f * f * (3.0 - 2.0 * f);
+	}
+	return fade;
+}
+
+PS_OUTPUT WorldPSSoft(WORLD_OUTPUT inData)
+{
+	PS_OUTPUT o = (PS_OUTPUT)0;
+	float4 color = tex2D(ParticleSampler0,inData.mTex0) * tex2D(ParticleSampler1,inData.mTex1);
+	color.a *= SoftFade(inData.mPos.xy * LRScene.zw, inData.mPos.z);
+	o.color = color;
+	return o;
+}
+
+PS_OUTPUT WorldPSSoftPremod(WORLD_OUTPUT inData)
+{
+	PS_OUTPUT o = (PS_OUTPUT)0;
+	float4 color = tex2D(ParticleSampler0,inData.mTex0) * tex2D(ParticleSampler1,inData.mTex1);
+	o.color = color * SoftFade(inData.mPos.xy * LRScene.zw, inData.mPos.z);
+	return o;
+}
+
+)HLSL";
+
     // Appended at the end of the file (everything it uses is declared above).
     constexpr std::string_view kShaders = R"HLSL(
 
@@ -86,6 +132,39 @@ PS_OUTPUT WorldPSLRPremultiplied(WORLD_OUTPUT inData)
 {
 	PS_OUTPUT o = (PS_OUTPUT)0;
 	float4 color = tex2D(ParticleSampler0,inData.mTex0) * tex2D(ParticleSampler1,inData.mTex1);
+	o.color = float4(color.rgb * color.a, color.a);
+	return o;
+}
+
+// The soft particles of the low-resolution passes (SoftParams.x = 0 makes them the plain shaders): the pixel sits in the low-resolution target,
+// the scene depth copy is at full resolution, so the lookup goes to the full-resolution pixel the low-resolution pixel is centred on.
+float2 LRSceneUV(float4 position)
+{
+	return (LRView.xy + position.xy * LRRatio.xy) * LRScene.zw;
+}
+
+PS_OUTPUT WorldPSSoftLR(WORLD_OUTPUT inData)
+{
+	PS_OUTPUT o = (PS_OUTPUT)0;
+	float4 color = tex2D(ParticleSampler0,inData.mTex0) * tex2D(ParticleSampler1,inData.mTex1);
+	color.a *= SoftFade(LRSceneUV(inData.mPos), inData.mPos.z);
+	o.color = color;
+	return o;
+}
+
+PS_OUTPUT WorldPSSoftLRPremod(WORLD_OUTPUT inData)
+{
+	PS_OUTPUT o = (PS_OUTPUT)0;
+	float4 color = tex2D(ParticleSampler0,inData.mTex0) * tex2D(ParticleSampler1,inData.mTex1);
+	o.color = color * SoftFade(LRSceneUV(inData.mPos), inData.mPos.z);
+	return o;
+}
+
+PS_OUTPUT WorldPSSoftLRPremultiplied(WORLD_OUTPUT inData)
+{
+	PS_OUTPUT o = (PS_OUTPUT)0;
+	float4 color = tex2D(ParticleSampler0,inData.mTex0) * tex2D(ParticleSampler1,inData.mTex1);
+	color.a *= SoftFade(LRSceneUV(inData.mPos), inData.mPos.z);
 	o.color = float4(color.rgb * color.a, color.a);
 	return o;
 }
@@ -254,10 +333,26 @@ technique LRComposite
       return text.size() >= suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
     }
 
-    /** The `_LR` twins of every world-particle technique with an ADD, ALPHABLEND or PREMODALPHA blend. */
-    std::string BuildLowResolutionTechniques(const std::string& source, int& count)
+    enum class Blend
     {
-      std::string twins;
+      Add,
+      Alpha,
+      Premod,
+    };
+
+    /** A world-particle technique with an ADD, ALPHABLEND or PREMODALPHA blend and the plain WorldPS: `open`..`close` is its `{ ... }`. */
+    struct WorldTechnique
+    {
+      std::string name;
+      Blend blend = Blend::Add;
+      bool flat = false; // lies on the ground by design (TRampFlat, TRampAnimateFlat): it would fade away completely, so it stays hard-edged
+      std::size_t open = 0U;
+      std::size_t close = 0U;
+    };
+
+    std::vector<WorldTechnique> FindWorldTechniques(const std::string& source)
+    {
+      std::vector<WorldTechnique> found;
       constexpr std::string_view kKeyword = "technique ";
       std::size_t at = 0U;
       while ((at = source.find(kKeyword, at)) != std::string::npos) {
@@ -268,35 +363,83 @@ technique LRComposite
         if (!lineStart || nameEnd == std::string::npos) {
           continue;
         }
-        const std::string name = source.substr(nameBegin, nameEnd - nameBegin);
-        const std::size_t open = source.find('{', nameEnd);
-        const std::size_t close = (open != std::string::npos) ? MatchingBrace(source, open) : std::string::npos;
-        if (close == std::string::npos) {
+        WorldTechnique technique;
+        technique.name = source.substr(nameBegin, nameEnd - nameBegin);
+        technique.open = source.find('{', nameEnd);
+        technique.close = (technique.open != std::string::npos) ? MatchingBrace(source, technique.open) : std::string::npos;
+        if (technique.close == std::string::npos) {
           continue;
         }
-        at = close;
-        const bool add = EndsWith(name, "_ADD");
-        const bool alpha = EndsWith(name, "_ALPHABLEND");
-        const bool premod = EndsWith(name, "_PREMODALPHA");
-        if (!(add || alpha || premod) || name.rfind("TRamp", 0U) != 0U) {
+        at = technique.close;
+        const bool add = EndsWith(technique.name, "_ADD");
+        const bool alpha = EndsWith(technique.name, "_ALPHABLEND");
+        const bool premod = EndsWith(technique.name, "_PREMODALPHA");
+        if (!(add || alpha || premod) || technique.name.rfind("TRamp", 0U) != 0U) {
           continue;
         }
-        std::string body = source.substr(open, close - open + 1U);
+        const std::string body = source.substr(technique.open, technique.close - technique.open + 1U);
         if (body.find("WorldPS()") == std::string::npos ||
             (body.find("WorldVS(") == std::string::npos && body.find("WorldVSAlign(") == std::string::npos)) {
           continue;
         }
-        if (!add && !ReplaceCallArgument(body, "AlphaState", "AlphaBlend_One_InvSrcAlpha_Write_RGBA")) {
+        technique.blend = add ? Blend::Add : (alpha ? Blend::Alpha : Blend::Premod);
+        technique.flat = technique.name.find("Flat") != std::string::npos;
+        found.push_back(std::move(technique));
+      }
+      return found;
+    }
+
+    /** Replaces the plain WorldPS() of a technique body with `shader` (a call, `Name()`). */
+    void UseShader(std::string& body, const std::string_view shader)
+    {
+      const std::size_t at = body.find("WorldPS()");
+      if (at != std::string::npos) {
+        body.replace(at, 9U, shader);
+      }
+    }
+
+    /** The `_LR` twins of every world-particle technique with an ADD, ALPHABLEND or PREMODALPHA blend (with the soft-particle shaders). */
+    std::string BuildLowResolutionTechniques(const std::string& source, int& count)
+    {
+      std::string twins;
+      for (const WorldTechnique& technique : FindWorldTechniques(source)) {
+        std::string body = source.substr(technique.open, technique.close - technique.open + 1U);
+        if (technique.blend != Blend::Add && !ReplaceCallArgument(body, "AlphaState", "AlphaBlend_One_InvSrcAlpha_Write_RGBA")) {
           continue;
         }
-        if (alpha) {
-          const std::size_t shader = body.find("WorldPS()");
-          body.replace(shader, 9U, "WorldPSLRPremultiplied()");
+        if (technique.flat) {
+          if (technique.blend == Blend::Alpha) {
+            UseShader(body, "WorldPSLRPremultiplied()");
+          }
+        } else {
+          UseShader(
+            body,
+            technique.blend == Blend::Add ? "WorldPSSoftLR()"
+                                          : (technique.blend == Blend::Alpha ? "WorldPSSoftLRPremultiplied()" : "WorldPSSoftLRPremod()")
+          );
         }
-        twins += "\ntechnique " + name + "_LR\n" + body + "\n";
+        twins += "\ntechnique " + technique.name + "_LR\n" + body + "\n";
         ++count;
       }
       return twins;
+    }
+
+    /** The same techniques at full resolution get the soft-particle shader in place of WorldPS (fade 1 while SoftParams.x is 0). */
+    int SoftenTechniques(std::string& source)
+    {
+      const std::vector<WorldTechnique> techniques = FindWorldTechniques(source);
+      int softened = 0;
+      // Back to front, so the offsets of the ones still to do stay valid.
+      for (auto it = techniques.rbegin(); it != techniques.rend(); ++it) {
+        if (it->flat) {
+          continue;
+        }
+        ++softened;
+        std::string body = source.substr(it->open, it->close - it->open + 1U);
+        UseShader(body, it->blend == Blend::Premod ? "WorldPSSoftPremod()" : "WorldPSSoft()");
+        source.replace(it->open, it->close - it->open + 1U, body);
+      }
+      return softened;
     }
   } // namespace
 
@@ -359,12 +502,25 @@ technique LRComposite
       patched.insert(at, std::string(kDeclarations));
     }
 
+    {
+      // The soft-particle shaders go right after WorldPS, which the techniques that use them come after.
+      const std::size_t pixelShader = patched.find("PS_OUTPUT WorldPS(");
+      const std::size_t open = patched.find('{', pixelShader);
+      const std::size_t close = open != std::string::npos ? MatchingBrace(patched, open) : std::string::npos;
+      if (close == std::string::npos) {
+        result.error = "WorldPS has no body";
+        return result;
+      }
+      patched.insert(close + 1U, kSoftShaders);
+    }
+
     int twins = 0;
     const std::string lowResolution = BuildLowResolutionTechniques(patched, twins);
     if (twins == 0) {
       result.error = "no ADD / ALPHABLEND / PREMODALPHA world-particle technique found";
       return result;
     }
+    result.softened = SoftenTechniques(patched);
 
     std::string shaders(kShaders);
     const std::string downsample = DownsampleShader(2) + "\n" + DownsampleShader(4);

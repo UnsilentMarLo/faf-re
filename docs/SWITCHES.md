@@ -65,6 +65,8 @@ Every performance change has a switch that brings back the original path, and bo
 | `ren_ParticleLowRes` | 1 (Half) | `/con`, Options > Video | live | Particle quads of `ren_ParticleLowResSize` pixels and more drawn into a half (1) or quarter (2) resolution target and composited; 0 draws them at full resolution. Direct3D 11, 12 and Vulkan |
 | `ren_ParticleLowResSize` | 320 | `/con` | live | Side in pixels, at full resolution, of a square particle quad that counts as large |
 | `ren_ParticleLowResMinMpix` | 30 | `/con` | live | Millions of pixels of large quads (overdraw included) a run of particle buckets must be estimated to cover before it takes the low-resolution path |
+| `ren_SoftParticles` | 1 (Low) | `/con`, Options > Video | live | Soft particles: ADD / ALPHABLEND / PREMODALPHA particles fade where they meet terrain, units or water, by the distance to the scene depth behind them. 0 off, 1 low (1 world unit), 2 high (3). Direct3D 11, 12 and Vulkan. `FAF_SOFT_PARTICLES` in the environment overrides it |
+| `ren_SoftParticleScale` | 1 | `/con` | live | Multiplies the soft-edge distance of the level (`FAF_SOFT_PARTICLE_SCALE` overrides it) |
 | `/noparticlelowres` | off | command line | start | Does not patch `particle.fx` for the low-resolution particles |
 | `ren_CacheFogFootprint` | 1 | `/con` | live | The fog pass keeps each camera's terrain footprint until the camera or terrain changes |
 | `ui_IconRecords` | 1 | `/con` | live | Strategic icons classified from per-unit records refreshed only after a sync beat or a view-list rebuild |

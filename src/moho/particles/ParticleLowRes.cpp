@@ -36,6 +36,8 @@ namespace moho
   int ren_ParticleLowRes = 1;
   float ren_ParticleLowResSize = 320.0f;
   float ren_ParticleLowResMinMpix = 30.0f;
+  int ren_SoftParticles = 1;
+  float ren_SoftParticleScale = 1.0f;
 
   namespace
   {
@@ -77,6 +79,46 @@ namespace moho
       return true;
     }();
 
+    TConVar<int> gTConVar_ren_SoftParticles(
+      "ren_SoftParticles",
+      "Soft particles: ADD, ALPHABLEND and PREMODALPHA particles fade out where they meet terrain, units or water instead of showing a hard cut line, "
+      "by the distance between the particle and the scene depth behind it. 0 off, 1 low (narrow fade), 2 high (wide fade). The default is 1; Options, "
+      "Video has the same setting. Direct3D 11, 12 and Vulkan only. The environment variable FAF_SOFT_PARTICLES overrides it.",
+      &ren_SoftParticles
+    );
+
+    TConVar<float> gTConVar_ren_SoftParticleScale(
+      "ren_SoftParticleScale",
+      "Multiplies the soft-edge distance of the ren_SoftParticles level (1 = the level's own distance in world units; FAF_SOFT_PARTICLE_SCALE overrides it).",
+      &ren_SoftParticleScale
+    );
+
+    // The soft-edge distance (world units along the view axis) of each ren_SoftParticles level; level 0 is off.
+    constexpr float kSoftDistance[3] = {0.0f, 1.0f, 3.0f};
+
+    // Options > Video: Off / Low / High are ren_SoftParticles 0, 1, 2. Live; the patched particle effect carries the shaders whatever the level, the
+    // level decides whether the scene depth is copied and bound for the particle pass and how wide the fade is.
+    const bool gRegisteredSoftFeature = [] {
+      using render::Api;
+      render::Feature feature;
+      feature.key = "soft_particles";
+      feature.title = "Soft Particles";
+      feature.tip = "Smoke, fire and explosion particles fade out where they touch the ground, units or water instead of showing a hard line where the "
+                    "flat particle cuts into the surface. High fades over a wider distance. Cheap for the graphics card. Render only, never affects the game.";
+      feature.console = "ren_SoftParticles";
+      feature.states = {{"Off", "off"}, {"Low", "low"}, {"High", "high"}};
+      feature.defaultLevel = 1;
+      feature.apis[static_cast<int>(Api::D3D9)].reason =
+        "Direct3D 9 runs the shipped particle shaders as they are and has no way to read the depth buffer in a pixel shader on all cards";
+      feature.apis[static_cast<int>(Api::D3D10)].reason = "the Direct3D 10 renderer does not start";
+      feature.apis[static_cast<int>(Api::D3D11)].supported = true;
+      feature.apis[static_cast<int>(Api::D3D12)].supported = true;
+      feature.apis[static_cast<int>(Api::Vulkan)].supported = true;
+      feature.apply = [](const int level) { ren_SoftParticles = level; };
+      render::RegisterFeature(feature);
+      return true;
+    }();
+
     TConVar<float> gTConVar_ren_ParticleLowResMinMpix(
       "ren_ParticleLowResMinMpix",
       "Millions of pixels of large particle quads (overdraw included) that a run of particle buckets must be estimated to cover before ren_ParticleLowRes "
@@ -107,6 +149,7 @@ namespace moho
       ShaderVar accum;
       ShaderVar depth;
       ShaderVar sceneDepth;
+      ShaderVar soft;
     };
 
     Variables& GetVariables()
@@ -122,6 +165,7 @@ namespace moho
         RegisterShaderVar("LRAccumTexture", &variables.accum, "particle");
         RegisterShaderVar("LRDepthTexture", &variables.depth, "particle");
         RegisterShaderVar("LRSceneDepthTexture", &variables.sceneDepth, "particle");
+        RegisterShaderVar("SoftParams", &variables.soft, "particle");
         return true;
       }();
       static_cast<void>(registered);
@@ -145,6 +189,7 @@ namespace moho
       std::uint32_t sceneCopyWidth = 0U;
       std::uint32_t sceneCopyHeight = 0U;
       bool copyFailed = false;
+      bool sceneCopyFresh = false; // sceneCopy holds the scene depth of this RenderEffects call
       std::uint32_t lowWidth = 0U;
       std::uint32_t lowHeight = 0U;
       std::uint32_t scale = 0U;
@@ -156,7 +201,11 @@ namespace moho
       float sceneQuadHeight = 0.0f;
 
       // One RenderEffects call.
-      bool active = false;
+      bool active = false;     // the soft particles, the low-resolution path, or both are running
+      bool lowActive = false;  // the low-resolution path is
+      bool softActive = false; // the soft particles are (the scene depth is bound once the first soft bucket asks, EnsureSoftDepth)
+      bool softBound = false;  // the scene depth copy is bound to the particle effect for the rest of the call
+      float softDistance = 0.0f;
       bool depthReady = false;
       bool depthOk = false;
       int currentMode = 0; // LRParams.x as last set
@@ -202,6 +251,22 @@ namespace moho
         return EnvironmentValue("FAF_PARTICLE_LOWRES_SIZE", value) ? static_cast<float>(value) : -1.0f;
       }();
       return envSize > 0.0f ? envSize : ren_ParticleLowResSize;
+    }
+
+    // The soft-edge distance in world units (0: off).
+    [[nodiscard]] float SoftDistance()
+    {
+      static const int envLevel = [] {
+        double value = 0.0;
+        return EnvironmentValue("FAF_SOFT_PARTICLES", value) ? static_cast<int>(value) : -1;
+      }();
+      static const float envScale = [] {
+        double value = 0.0;
+        return EnvironmentValue("FAF_SOFT_PARTICLE_SCALE", value) ? static_cast<float>(value) : -1.0f;
+      }();
+      const int level = std::clamp(envLevel >= 0 ? envLevel : ren_SoftParticles, 0, 2);
+      const float scale = envScale >= 0.0f ? envScale : ren_SoftParticleScale;
+      return kSoftDistance[level] * std::max(scale, 0.0f);
     }
 
     [[nodiscard]] bool HasTechnique(CD3DEffect& effect, const char* const name)
@@ -290,11 +355,12 @@ namespace moho
       );
     }
 
+    // The soft particles keep the copy bound from the first bucket that needs it to the end of the call, whatever the low-resolution passes do.
     void BindSceneDepth(State& state, const bool bind)
     {
       Variables& vars = GetVariables();
       if (vars.sceneDepth.Exists()) {
-        vars.sceneDepth.mEffectVariable->SetDepthStencil(bind ? state.sceneCopy : boost::shared_ptr<gpg::gal::DepthStencilTarget>());
+        vars.sceneDepth.mEffectVariable->SetDepthStencil(bind || state.softBound ? state.sceneCopy : boost::shared_ptr<gpg::gal::DepthStencilTarget>());
       }
     }
 
@@ -304,6 +370,9 @@ namespace moho
     {
       if (state.copyFailed) {
         return false;
+      }
+      if (state.sceneCopyFresh) {
+        return true; // the soft particles took it already in this call; the particle pass writes no depth
       }
       gpg::gal::DepthStencilTargetContext* const source = state.saved.depthStencil->GetContext();
       if (state.sceneCopy == nullptr || state.sceneCopyWidth != source->width_ || state.sceneCopyHeight != source->height_) {
@@ -325,6 +394,7 @@ namespace moho
         state.copyFailed = true;
         return false;
       }
+      state.sceneCopyFresh = true;
       return true;
     }
 
@@ -406,6 +476,11 @@ namespace moho
            ParticleEffectPatched();
   }
 
+  bool SoftParticlesSupported()
+  {
+    return ParticleLowResSupported();
+  }
+
   bool ParticleLowResEligible(const SParticleRenderBucket& bucket) noexcept
   {
     if (bucket.tag.size() < 5U || bucket.tag.compare(0U, 5U, "TRamp", 5U) != 0) {
@@ -420,8 +495,13 @@ namespace moho
     {
       State& state = GetState();
       state.active = false;
+      state.lowActive = false;
+      state.softActive = false;
+      state.softBound = false;
+      state.sceneCopyFresh = false;
       const int mode = Mode();
-      if (mode <= 0 || !ParticleLowResSupported()) {
+      const float softDistance = SoftDistance();
+      if ((mode <= 0 && softDistance <= 0.0f) || !ParticleLowResSupported()) {
         return false;
       }
       gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
@@ -445,17 +525,20 @@ namespace moho
         return false;
       }
       device->GetViewport(&state.savedViewport);
-      if (state.savedViewport.Width < 256U || state.savedViewport.Height < 128U) {
-        return false;
-      }
       state.sceneWidth = state.saved.surface->GetContext()->width_;
       state.sceneHeight = state.saved.surface->GetContext()->height_;
+      state.softActive = softDistance > 0.0f;
+      state.softDistance = softDistance;
       const std::uint32_t scale = mode >= 2 ? 4U : 2U;
-      if (!EnsureTargets(state, scale, state.savedViewport)) {
+      state.lowActive = mode > 0 && state.savedViewport.Width >= 256U && state.savedViewport.Height >= 128U &&
+                        EnsureTargets(state, scale, state.savedViewport);
+      if (!state.lowActive && !state.softActive) {
         return false;
       }
-      BindQuad(state.sceneQuad, state.sceneQuadWidth, state.sceneQuadHeight, static_cast<float>(state.sceneWidth),
-               static_cast<float>(state.sceneHeight));
+      if (state.lowActive) {
+        BindQuad(state.sceneQuad, state.sceneQuadWidth, state.sceneQuadHeight, static_cast<float>(state.sceneWidth),
+                 static_cast<float>(state.sceneHeight));
+      }
 
       const float side = SizeSetting();
       state.gate.area = side * side;
@@ -475,6 +558,29 @@ namespace moho
       state.runs = 0U;
       SetMode(state, 0);
       return true;
+    }
+
+    bool LowResActive()
+    {
+      return GetState().lowActive;
+    }
+
+    void EnsureSoftDepth()
+    {
+      State& state = GetState();
+      if (!state.softActive || state.softBound) {
+        return;
+      }
+      const gpg::gal::RenderProfileScope profileCopy("SoftDepth");
+      if (!CopySceneDepth(state)) {
+        state.softActive = false;
+        return;
+      }
+      state.softBound = true;
+      SetVector(GetVariables().scene, static_cast<float>(state.sceneWidth), static_cast<float>(state.sceneHeight),
+                1.0f / static_cast<float>(state.sceneWidth), 1.0f / static_cast<float>(state.sceneHeight));
+      SetVector(GetVariables().soft, state.softDistance, 0.0f, 0.0f, 0.0f);
+      BindSceneDepth(state, true);
     }
 
     const LargeQuadGate& Gate()
@@ -581,6 +687,13 @@ namespace moho
         return;
       }
       state.active = false;
+      if (state.softBound) {
+        SetVector(GetVariables().soft, 0.0f, 0.0f, 0.0f, 0.0f); // the plain particle shaders for anything else that draws with the effect
+        state.softBound = false;
+        BindSceneDepth(state, false);
+      }
+      state.softActive = false;
+      state.lowActive = false;
       SetMode(state, 0);
       ++state.frames;
       state.totalRuns += state.runs;

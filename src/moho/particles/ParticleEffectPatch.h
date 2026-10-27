@@ -20,12 +20,20 @@
 //     does S += c*a and leaves A alone (colour-only writes). Any order of the two kinds composes exactly: scene' = S + scene*(1-A);
 //   - LRDownsample2 / LRDownsample4: the farthest scene depth of the footprint of each low-resolution pixel, written as depth;
 //   - LRComposite: the depth-aware upsample of S and A onto the scene (the nearest low-resolution pixel in depth at depth edges).
+//
+// Soft particles (ParticleLowRes.cpp, feature `soft_particles`) are in the same patch:
+//   - SoftParams.x is the soft-edge distance in world units (0 = off, then every pixel shader below is the plain one);
+//   - the ADD, ALPHABLEND and PREMODALPHA techniques (and their `_LR` twins) use WorldPSSoft / WorldPSSoftPremod (WorldPSSoftLR* for the
+//     twins), which scale the particle's alpha (the whole colour for PREMODALPHA, whose alpha is in the colour) by a smoothstep of
+//     (scene view depth - fragment view depth) / SoftParams.x. The scene depth is LRSceneDepthTexture, the copy taken before the particle
+//     pass that the low-resolution passes sample too; the twins look it up at the full-resolution pixel their low-resolution pixel sits on.
 namespace moho
 {
   struct ParticleEffectPatchResult
   {
     bool patched = false;
     int techniques = 0; // low-resolution twins added
+    int softened = 0;   // techniques whose pixel shader fades by the scene depth (soft particles)
     std::string error;  // why nothing was patched, when `patched` is false
   };
 

@@ -19,6 +19,9 @@
 //     runs without such a bucket, draw once at full resolution exactly as before;
 //   - one instanced draw per bucket is issued twice from the same data; the vertex shader collapses the quads of the other size class
 //     (the size is a function of the instance data and the camera only, so both draws agree on which quad is which).
+// The soft particles (docs/RENDERER_BACKENDS.md, "Soft particles") share this file's runtime because they need the same thing: a sampled copy of
+// the scene depth, taken once per RenderEffects call before the particle pass, and the patched particle effect. They work with the
+// low-resolution path off or on (the low-resolution passes read the same copy at full resolution).
 // ADD and the "over" blends (ALPHABLEND, PREMODALPHA) accumulate together in their drawing order (see ParticleEffectPatch.h), which is
 // exact up to the 8 bit clamping of the scene. MODULATE*, REFRACT and TLight buckets are not touched; they end a run.
 namespace moho
@@ -35,8 +38,16 @@ namespace moho
   /** Millions of pixels (full resolution, overdraw included) of large quads a run needs before it takes the low-resolution path (`ren_ParticleLowResMinMpix`; FAF_PARTICLE_LOWRES_MINMPIX). */
   extern float ren_ParticleLowResMinMpix;
 
-  /** Whether the active backend can run the path at all (Direct3D 11 or 12, effect patched). The settings registry asks this. */
+  /** Soft particles level (console variable `ren_SoftParticles`; FAF_SOFT_PARTICLES overrides it): 0 off, 1 low, 2 high. */
+  extern int ren_SoftParticles;
+  /** Multiplies the soft-edge distance of the level (`ren_SoftParticleScale`; FAF_SOFT_PARTICLE_SCALE). */
+  extern float ren_SoftParticleScale;
+
+  /** Whether the active backend can run the path at all (Direct3D 11, 12 or Vulkan, effect patched). The settings registry asks this. */
   [[nodiscard]] bool ParticleLowResSupported();
+
+  /** Whether the soft particles can run (same condition: the patched particle effect on a backend that copies the depth). */
+  [[nodiscard]] bool SoftParticlesSupported();
 
   /** Whether a bucket may take part (a world-particle technique with the ADD, ALPHABLEND or PREMODALPHA blend). */
   [[nodiscard]] bool ParticleLowResEligible(const SParticleRenderBucket& bucket) noexcept;
@@ -44,10 +55,20 @@ namespace moho
   namespace particlelowres
   {
     /**
-     * Starts one RenderEffects call (the output target and viewport are the scene's). False: the path is off or unusable right now,
-     * and nothing in the other calls may be used.
+     * Starts one RenderEffects call (the output target and viewport are the scene's). False: neither the low-resolution path nor the soft
+     * particles are on or usable right now, and nothing in the other calls may be used. True: call End when the buckets are drawn; the
+     * low-resolution calls (Gate, WorthIt, BeginAccumulate, ...) need LowResActive too.
      */
     [[nodiscard]] bool Begin(const GeomCamera3& camera);
+
+    /** Whether the low-resolution path runs in this call (after a successful Begin). */
+    [[nodiscard]] bool LowResActive();
+
+    /**
+     * Soft particles: copies the scene depth once per call (shared with the low-resolution path) and binds it to the particle effect. Call it
+     * before drawing the first bucket that is eligible for it (ParticleLowResEligible); cheap afterwards. A copy that fails turns them off.
+     */
+    void EnsureSoftDepth();
 
     /** The camera as the large-quad estimate sees it (valid after a successful Begin). */
     [[nodiscard]] const LargeQuadGate& Gate();
