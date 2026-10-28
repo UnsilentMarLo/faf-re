@@ -30,7 +30,7 @@ namespace moho::lights
     constexpr float kHoldTicks = 3.0f;       // a tracked light fades out this long after its last refresh
     constexpr float kMergeCell = 3.0f;       // glow sprites born in the same beat inside one cell of this size, with the same texture and similar life, are one light
     constexpr float kGlowPeakMin = 0.20f;    // a texture whose brightest alpha x luminance is below this does not glow (smoke, dust); the census showed fire at 0.25
-    constexpr float kGlowEnergyCap = 1.2f;   // energy of one merged light
+    constexpr float kGlowEnergyCap = 4.0f;   // energy of one merged light (a fireball is hundreds of sprites; sprites of one cell add up)
     // A muzzle flash is a small additive sprite that lives a tick or two: the size model gives it a radius of 3 and an energy of about 0.1, which
     // lights nothing (a Cybran point defence fired in the dark with the ground around it unlit). Sprites this short and this big or more are flashes.
     constexpr float kFlashLifeTicks = 5.0f;
@@ -38,7 +38,7 @@ namespace moho::lights
     constexpr float kFlashBoost = 4.0f;
     constexpr float kAlphaHotMinAlpha = 0.08f; // an alpha-blended sprite whose texture is nearly transparent (noise clouds) is not a flame
     constexpr float kAlphaHotGain = 0.5f;      // an alpha-blended flame lights less than an additive one: it covers what is behind it
-    constexpr float kWhiteReduction = 0.6f;  // how much of the white of texture x ramp is taken out of the light colour
+    constexpr float kWhiteReduction = 0.9f;  // how much of the white of texture x ramp is taken out of the light colour (a pale lavender stays a violet, a pink a red)
     constexpr float kRampAlphaExponent = 0.6f; // the ramp fades the sprite; the light fades less than the sprite (a faint sprite still colours the ground)
 
     constexpr std::uint64_t kKeyLua = 1ull << 40;
@@ -140,7 +140,7 @@ namespace moho::lights
     {
       Emission e;
       float strongest = 0.0f; // energy of the representative
-      float energy2 = 0.0f;   // sum of the squares of all energies
+      float energySum = 0.0f;  // sum of the energies of all sprites of the cell
       float peakSize = 0.0f;  // peak size of the representative
     };
 
@@ -392,7 +392,7 @@ namespace moho::lights
         cell.strongest = energy;
         cell.peakSize = peakSize;
       }
-      cell.energy2 += energy * energy;
+      cell.energySum += energy;
     }
     for (const auto& item : glow) {
       const GlowCell& c = item.second;
@@ -400,7 +400,7 @@ namespace moho::lights
         continue;
       }
       Emission e = c.e;
-      const float total = std::min(kGlowEnergyCap, std::sqrt(c.energy2)); // sprites of one cell add as energy, not as a sum
+      const float total = std::min(kGlowEnergyCap, c.energySum); // the light of sprites in one place adds up (it was the root of the sum of squares: a fireball of 100 sprites lit like 10)
       e.gain = total / std::max(1.0e-4f, model::GlowEnergy(c.peakSize));
       (void)collector.Add(e);
     }
@@ -439,14 +439,31 @@ namespace moho::lights
       e.size0 = e.size1 = trail.mSize;
       FillColour(e, texture, nullptr, 0.0f);
       if (ramp != nullptr) {
-        float rgba[4];
-        SampleRamp(ramp->image, 0.1f, 0.0f, rgba); // the head of the trail
-        const float rampRgb[3] = {rgba[0], rgba[1], rgba[2]};
-        float chroma[3];
-        float brightness = 0.0f;
-        LightChroma(texture->colour.tint, rampRgb, chroma, brightness);
-        for (int c = 0; c < 3; ++c) {
-          e.rgb[c] = chroma[c] * std::max(0.35f, brightness);
+        // The colour of the bulk of the trail, not its head: a tracer's head is white hot and the rest is red, blue or green. Four samples along
+        // the ramp, weighted by how much each one glows (alpha x brightest channel).
+        float sum[3] = {0.0f, 0.0f, 0.0f};
+        float weights = 0.0f;
+        float alphaSum = 0.0f;
+        for (int i = 0; i < 4; ++i) {
+          float rgba[4];
+          SampleRamp(ramp->image, 0.1f + 0.2f * static_cast<float>(i), 0.0f, rgba);
+          const float glow = rgba[3] * std::max(rgba[0], std::max(rgba[1], rgba[2]));
+          for (int c = 0; c < 3; ++c) {
+            sum[c] += rgba[c] * glow;
+          }
+          weights += glow;
+          alphaSum += rgba[3];
+        }
+        if (weights > 1.0e-4f) {
+          const float rampRgb[3] = {sum[0] / weights, sum[1] / weights, sum[2] / weights};
+          float chroma[3];
+          float brightness = 0.0f;
+          LightChroma(texture->colour.tint, rampRgb, chroma, brightness);
+          // how strongly the trail shines: the ramp's brightness and alpha, not a floor (a faint trail is a faint light)
+          const float level = model::Clamp(brightness * std::pow(std::max(0.0f, alphaSum * 0.25f), kRampAlphaExponent), 0.12f, 1.0f);
+          for (int c = 0; c < 3; ++c) {
+            e.rgb[c] = chroma[c] * level;
+          }
         }
       }
       const std::uint64_t id = Follow(

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstdlib>
 #include "moho/render/lights/LightFeeds.h"
 #include "moho/render/RenderFeatures.h"
 
@@ -146,6 +147,19 @@ namespace moho::lights
 
     if (ren_DynLightsLog > 0 && ++gLogCounter >= ren_DynLightsLog) {
       gLogCounter = 0;
+      // FAF_DYNLIGHT_DUMP=1 (diagnostics): one line per light of the frame, for tools that group the lights by place (tests/featab)
+      static const bool dumpAll = [] {
+        const char* const value = std::getenv("FAF_DYNLIGHT_DUMP");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+      }();
+      if (dumpAll) {
+        for (const Light& l : gFrameLights) {
+          gpg::Logf(
+            "DYNLIGHT-DUMP %d %.1f %.1f %.1f %.2f %.3f %.3f %.3f %.0f T%d", static_cast<int>(l.kind), l.pos[0], l.pos[1], l.pos[2], l.radius, l.rgb[0],
+            l.rgb[1], l.rgb[2], l.power, static_cast<int>(tick)
+          );
+        }
+      }
       for (std::size_t i = 0; i < gFrameLights.size() && i < 4; ++i) {
         const Light& l = gFrameLights[i];
         gpg::Logf(

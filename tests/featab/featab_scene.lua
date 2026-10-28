@@ -23,6 +23,14 @@ ForkThread(function()
     SetAlliance(1, 2, 'Enemy')
     SetAlliance(2, 1, 'Enemy')
     Say(string.format('start position (%.1f, %.1f)', x0, z0))
+    -- The commanders are moved far away and out of view: an ACU at the start position fires at the test units and glows, and its lights and
+    -- effects skewed every capture (they are only collected while on screen).
+    for _, brain in { brainA, brainB } do
+        for _, u in brain:GetListOfUnits(categories.COMMAND, false) do
+            local fx, fz = 470, 40
+            Warp(u, Vector(fx, GetTerrainHeight(fx, fz), fz))
+        end
+    end
 
     if AB_SCENE == 'scan' then
         for r = 10, 250, 4 do
@@ -148,6 +156,42 @@ ForkThread(function()
             CreateUnitHPR('url0402', brainA.Name, sx, GetTerrainHeight(sx, sz), sz, 0, a + math.pi, 0)
         end
         Say('ring scene created')
+        return
+    end
+    if AB_SCENE == 'sources' then
+        -- one shooter type at a time on the flat start area, firing at an immortal tank 24 units away; then units of different sizes are killed
+        local ids = { 'url0402', 'uel0201', 'xel0305', 'xsl0201', 'xsl0202', 'xsl0303', 'uel0303', 'url0303', 'ual0303', 'xsl0305', 'uel0304', 'ual0202' }
+        WaitUntil(6)
+        Say('SLOT warm up')
+        WaitSeconds(5)
+        for i, id in ids do
+            if __blueprints[id] then
+                local s = CreateUnitHPR(id, brainA.Name, x0 - 12, GetTerrainHeight(x0 - 12, z0), z0, 0, math.pi * 0.5, 0)
+                local t = CreateUnitHPR('ueb1103', brainB.Name, x0 + 12, GetTerrainHeight(x0 + 12, z0), z0, 0, 0, 0)
+                if t then t:SetCanTakeDamage(false) end
+                if s and t then IssueAttack({ s }, t) end
+                Say(string.format('SLOT shoot %s', id))
+                WaitSeconds(2)
+                local w = s and s:GetWeapon(1)
+                Say(string.format('weapon %s target %s unitsOK %s', id, tostring(w and w:GetCurrentTarget() ~= nil), tostring(s ~= nil and not s.Dead)))
+                WaitSeconds(7)
+                if s then s:Destroy() end
+                if t then t:Destroy() end
+                WaitSeconds(1.5)
+            end
+        end
+        local dying = { 'uel0201', 'url0402', 'xsl0201', 'uel0303', 'uel0401', 'xsl0303', 'xel0305', 'xsb2301', 'uab2305' }
+        for i, id in dying do
+            if __blueprints[id] then
+                local u = CreateUnitHPR(id, brainA.Name, x0, GetTerrainHeight(x0, z0), z0, 0, 0, 0)
+                WaitSeconds(1)
+                Say(string.format('SLOT dies %s', id))
+                if u then u:Kill() end
+                WaitSeconds(6)
+                if u and not u.Dead then u:Destroy() end
+            end
+        end
+        Say('SLOT end')
         return
     end
     if AB_SCENE == 'lightdisc' then

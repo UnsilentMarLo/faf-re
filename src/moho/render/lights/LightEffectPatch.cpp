@@ -153,7 +153,8 @@ float3 DynLightsBRDF(float3 worldPos, float3 n, float3 v, float3 albedo, float m
         }
         DynLightsBRDFQuad(DynLightGridTexel(first + (float)t), worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total);
     }
-    return total / (1.0 + 0.2 * total);   // soft limit at 5 (it was 2): twelve beams on one unit must light it far more than one, and still not clip every channel at once
+    float top = max(total.x, max(total.y, total.z));
+    return total / (1.0 + 0.2 * top);   // soft limit at 5 on the brightest channel: the hue stays however strong the light is (a limit per channel drifts every strong light to white)
 }
 
 // tangent-space meshes (units, normal-mapped props). The result is masked for the water-mirrored pass instead of clip()ped.
@@ -253,7 +254,8 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
 {
     float3 normal = normalize(SampleScreen(NormalSampler, inV.mTexSS).xyz * 2 - 1);
     float3 total = DynLightTerrain(inV.mTexWT.xzy, normal);   // mTexWT = (x, z, height)
-    return float4(0.75 * total / (1.0 + 0.125 * total), 0);   // soft limit at 6 (it was 1: one beam and twelve looked the same); the pass multiplies the terrain by (1 + light)
+    float top = max(total.x, max(total.y, total.z));
+    return float4(0.75 * total / (1.0 + 0.125 * top), 0);   // soft limit at 6 on the brightest channel, the hue is kept; the pass multiplies the terrain by (1 + light)
 }
 
 )HLSL";
@@ -759,7 +761,7 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
       const size_t p = s.find(marker);
       string code = kTerrainPassCode;
       if (flood != 0) {
-        const string ret = "    return float4(0.75 * total / (1.0 + 0.125 * total), 0);";
+        const string ret = "    return float4(0.75 * total / (1.0 + 0.125 * top), 0);";
         const size_t at = code.find(ret);
         if (at != npos) {
           code.replace(

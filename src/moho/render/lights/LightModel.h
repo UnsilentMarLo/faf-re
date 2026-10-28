@@ -34,9 +34,9 @@ namespace moho::lights::model
     kHuge = 3,
     kClassCount = 4
   };
-  constexpr float kPowerNormal = 6.0f;
-  constexpr float kPowerLarge = 400.0f;
-  constexpr float kPowerHuge = 8000.0f;
+  constexpr float kPowerNormal = 9.0f;
+  constexpr float kPowerLarge = 580.0f;
+  constexpr float kPowerHuge = 11600.0f; // the three limits are the earlier 6 / 400 / 8000 times 1.45, the factor the flash intensity grew by (0.55 to 0.8): the same lights stay in the same class
 
   // Quality levels (Options > Video > Dynamic Lights, cvar ren_DynLights).
   //   Off     no lights
@@ -113,7 +113,7 @@ namespace moho::lights::model
   }
   constexpr float FlashIntensity(const float size)
   {
-    return Clamp(0.55f + 0.004f * size, 0.55f, 1.4f);
+    return Clamp(0.80f + 0.004f * size, 0.80f, 1.6f);
   }
 
   // ------------------------------------------------------------------------------------------------ glow sprites (fire, plasma, flares)
@@ -122,9 +122,12 @@ namespace moho::lights::model
     // a nuke's cloud sprites are tens of units across: they light that far; a muzzle flash (size 0.3..1) still lights its gun and the ground around
     return Clamp(2.4f * size + 2.5f, 5.0f, 40.0f);
   }
-  inline float GlowEnergy(const float size) // per sprite, before the texture and ramp brightness; grows with the root of the size
+  // Per sprite, before the texture and ramp brightness. What a sprite emits follows its area: the energy is proportional to the size (with the
+  // radius, which is also proportional to it, the power follows the area). It was 0.05 + 0.12 sqrt(size): a spark of 0.2 got 0.1, which with
+  // the flash boost and a hundred sparks per volley made tiny projectiles the brightest things on the map, while a big plasma ball got little.
+  inline float GlowEnergy(const float size)
   {
-    return 0.05f + 0.12f * std::sqrt(size);
+    return Clamp(0.08f * size, 0.02f, 1.2f);
   }
 
   // ------------------------------------------------------------------------------------------------ trails and beams
@@ -135,7 +138,7 @@ namespace moho::lights::model
   }
   constexpr float TrailIntensity(const float size) // of the piece at the head; the pieces behind it are weaker
   {
-    return Clamp(0.40f + 0.2f * size, 0.40f, 0.70f);
+    return Clamp(0.28f + 0.2f * size, 0.28f, 0.60f);
   }
 
   // A beam is a long bright line (laser, ion blast, a unit's build or reclaim ray): wider than a trail's thread, brighter than a trail.
@@ -153,11 +156,11 @@ namespace moho::lights::model
   // grows with the radius: a nuke has to stay a nuke.
   constexpr float WeakenFloor(const float radius)
   {
-    return radius >= 300.0f ? 0.55f : (radius >= 100.0f ? 0.45f : 0.30f);
+    return radius >= 300.0f ? 0.70f : (radius >= 100.0f ? 0.65f : 0.60f);
   }
   constexpr float WeakenFactor(const float radius) // multiplies the intensity of a light of this radius
   {
-    return Clamp(20.0f / radius, WeakenFloor(radius), 1.0f);
+    return Clamp(40.0f / radius, WeakenFloor(radius), 1.0f); // it started at 20: with the higher soft limits of the light shaders a big light need not be dimmed that much
   }
 
   // ------------------------------------------------------------------------------------------------ envelope

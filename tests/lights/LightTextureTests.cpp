@@ -296,7 +296,8 @@ namespace
     const TextureColour c = Summarise(img);
     TCHECK(c.valid);
     TCHECK(c.tint[0] > c.tint[1] && c.tint[1] > c.tint[2]);
-    TCHECK(c.tint[2] < c.average[2] / c.average[0]); // less blue than the plain average
+    // the tint is the glow-weighted hue: no white taken out (taking 75 % out turned a slightly bluish white into a clear blue)
+    TCHECK(Near(c.tint[0], c.hue[0]) && Near(c.tint[1], c.hue[1]) && Near(c.tint[2], c.hue[2]));
     TCHECK(Near(c.average[0], 1.0f));
     TCHECK(Near(c.tint[0], 1.0f)); // normalised: brightest channel 1
     // a dark texture (a spark: black with one bright texel) has the same tint as a bright one
@@ -306,6 +307,14 @@ namespace
     dark.rgba = {10, 5, 1, 255, 10, 5, 1, 255, 10, 5, 1, 255, 10, 5, 1, 255};
     const TextureColour dc = Summarise(dark);
     TCHECK(Near(dc.tint[0], 1.0f) && dc.tint[1] < 1.0f && dc.tint[2] < dc.tint[1]);
+
+    // a bluish white stays nearly white (it used to become a clear blue)
+    Rgba8Image bluish;
+    bluish.width = 2;
+    bluish.height = 2;
+    bluish.rgba = {230, 237, 255, 255, 230, 237, 255, 255, 230, 237, 255, 255, 230, 237, 255, 255};
+    const TextureColour bc = Summarise(bluish);
+    TCHECK(bc.tint[0] > 0.85f && bc.tint[1] > 0.9f && Near(bc.tint[2], 1.0f));
   }
 
   void TestRamp()

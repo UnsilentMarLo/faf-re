@@ -79,7 +79,7 @@ namespace
 
     // a nuke keeps its size: radius 420 (the cap), not 60 as in the first patch
     CHECK(Near(model::FlashRadius(kNukeSize), 420.0f));
-    CHECK(Near(model::FlashIntensity(kNukeSize), 1.4f));
+    CHECK(Near(model::FlashIntensity(kNukeSize), 1.6f));
     CHECK(model::WeakenFactor(520.0f) >= 0.55f);
     CHECK(model::WeakenFactor(2.0f) == 1.0f);
   }

@@ -289,10 +289,12 @@ namespace moho::lights
     } else {
       out.average[0] = out.average[1] = out.average[2] = 1.0f;
     }
+    // The colour the texture glows in is where it is bright: the glow-weighted hue (brightest channel 1). The earlier version took 75 % of the
+    // white out of the alpha-weighted average, which turns a slightly bluish white (0.90 0.93 1.00) into a clear blue (0.69 0.78 1.00): every
+    // light of a bluish-white sprite got a blue cast and the ramp's own colour (red, orange, purple) was muted by it.
     for (int c = 0; c < 3; ++c) {
-      out.tint[c] = out.average[c];
+      out.tint[c] = out.hue[c];
     }
-    ReduceWhite(out.tint, kTintWhiteReduction);
     // the tint is a colour, not a brightness (how much of the quad glows is `brightness` / `peak`): its brightest channel is 1
     const float tintTop = std::max(out.tint[0], std::max(out.tint[1], out.tint[2]));
     if (tintTop > 1.0e-6f) {

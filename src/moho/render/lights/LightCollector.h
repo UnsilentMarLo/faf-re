@@ -90,7 +90,7 @@ namespace moho::lights
     static constexpr std::size_t kPoolCapacity = 16384;
 
     // How far past its last refresh a tracked light is carried along its velocity, in ticks.
-    static constexpr float kMaxCarryTicks = 2.0f;
+    static constexpr float kMaxCarryTicks = 1.0f; // one tick: the gap to the next refresh; a projectile that hit something must not carry its light on past the impact
 
     // Quality: model::kOff..model::kUltra. Lowering it also drops stored lights the new level no longer admits.
     void SetQuality(int quality);
