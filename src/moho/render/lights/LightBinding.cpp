@@ -92,6 +92,31 @@ namespace moho::lights
       return true;
     }
 
+    // The light data texture in one lock (a Discard lock drops what an earlier one wrote): the rows of the lights at row 0, the rows of the
+    // shadow casters at LightGridImage::OccluderFirstRow().
+    bool UploadData(gpg::gal::Texture& texture, const LightGridImage& image)
+    {
+      const RECT wholeLevel{};
+      const gpg::gal::TextureLockRect lock = texture.Lock(0, wholeLevel, static_cast<int>(gpg::gal::MohoD3DLockFlags::Discard));
+      if (lock.bits == nullptr) {
+        return false;
+      }
+      const std::size_t rowBytes = static_cast<std::size_t>(kDataWidth) * 4u * sizeof(float);
+      auto* const destination = static_cast<std::uint8_t*>(lock.bits);
+      const std::uint32_t lightRows = std::min(image.DataRows(), LightGridImage::OccluderFirstRow());
+      for (std::uint32_t row = 0; row < lightRows; ++row) {
+        std::memcpy(destination + static_cast<std::size_t>(row) * static_cast<std::size_t>(lock.pitch),
+                    reinterpret_cast<const std::uint8_t*>(image.data.data()) + row * rowBytes, rowBytes);
+      }
+      const std::uint32_t occluderRows = std::min(image.OccluderRows(), kOccluderRows);
+      for (std::uint32_t row = 0; row < occluderRows; ++row) {
+        std::memcpy(destination + static_cast<std::size_t>(LightGridImage::OccluderFirstRow() + row) * static_cast<std::size_t>(lock.pitch),
+                    reinterpret_cast<const std::uint8_t*>(image.occluders.data()) + row * rowBytes, rowBytes);
+      }
+      (void)texture.Unlock(lock);
+      return true;
+    }
+
     bool SetVec(ShaderVar& var, const float (&v)[4])
     {
       if (!var.Exists()) {
@@ -115,7 +140,7 @@ namespace moho::lights
     {
       const GridLayout& l = image.layout;
       // the texture always has the rows of the largest light count: that is the height the shader divides by, not the rows in use
-      const float rows = static_cast<float>(image.DataRows(static_cast<std::uint32_t>(kMaxGridLights)));
+      const float rows = static_cast<float>(LightGridImage::TextureRows());
       const float params[4] = {l.originX, l.originZ, 1.0f / l.cellSize, static_cast<float>(image.lightCount)};
       const float gridSize[4] = {
         static_cast<float>(l.cellsX), static_cast<float>(l.cellsZ), 1.0f / static_cast<float>(kGridTexelWidth), 1.0f / static_cast<float>(kGridRows)
@@ -143,7 +168,7 @@ namespace moho::lights
     }
 
     try {
-      const std::uint32_t rows = image.DataRows(static_cast<std::uint32_t>(kMaxGridLights));
+      const std::uint32_t rows = LightGridImage::TextureRows();
       // The grid texture has a fixed size (a table texel per cell, then the lists); an upload copies the rows in use.
       const std::uint32_t gridWidth = kGridTexelWidth;
       const std::uint32_t gridHeight = kGridRows;
@@ -170,7 +195,7 @@ namespace moho::lights
 
       // The data texture is a fixed size (room for kMaxGridLights); the image carries only the rows it needs, the rest stays as it was
       // (never read: the shader indexes below lightCount).
-      const bool dataOk = Upload(*s.dataTexture, image.data, kDataWidth, image.DataRows());
+      const bool dataOk = UploadData(*s.dataTexture, image);
       const bool gridOk = Upload(*s.gridTexture, image.grid, gridWidth, std::min(image.GridRows(), gridHeight));
       if (!dataOk || !gridOk) {
         ++s.stats.failures;

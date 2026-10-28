@@ -54,6 +54,12 @@ namespace moho::lights
   // Console variable ren_DynLightsTest N: every N ticks a flash (size 12, 2 seconds) appears on the ground in the middle of the view.
   extern int ren_DynLightsTest;
 
+  // Console variable ren_DynLightsShadows (default 1): the shadow casters of the view shade the dynamic lights (docs/DYNAMIC_LIGHTS.md, "Shadows").
+  extern int ren_DynLightsShadows;
+
+  // The shadow casters of the last FeedMeshes (the previous frame's batch: the terrain is lit before this frame's meshes are batched).
+  const std::vector<Occluder>& FrameOccluders();
+
   // The lights of the last BeginFrame, strongest first.
   const std::vector<Light>& FrameLights();
 

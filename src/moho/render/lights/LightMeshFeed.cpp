@@ -33,6 +33,87 @@ namespace moho::lights
     };
 
     std::unordered_map<std::string, LodGlow> gGlow; // keyed by albedo | specular | shader
+    std::vector<Occluder> gOccluders;
+    constexpr std::size_t kMaxFrameOccluders = 4096;
+    constexpr float kBoxGrow = 1.25f; // the engine's box is tighter than the model (thin parts, turrets, legs): the shadow is of the whole unit
+
+    // The material of a bucket draws into the sun shadow map: the render stage has the depth bit and a depth technique is defined, the gate of
+    // MeshRenderer::RenderDepth. Both are cached on the material the first time it is drawn, so a material nobody has drawn yet is no caster.
+    std::uint32_t gCasterReasons[5] = {}; // diagnostics: buckets that cast, no render stage yet, no depth bit, depth technique not resolved, no depth technique
+
+    bool CastsShadows(const MeshLOD& lod)
+    {
+      const MeshMaterial& material = lod.mat;
+      if (material.mShaderIndex < 0) {
+        ++gCasterReasons[1];
+        return false;
+      }
+      if ((material.mShaderIndex & 1) == 0) {
+        ++gCasterReasons[2];
+        return false;
+      }
+      if (!material.mDepthTechniqueResolved) {
+        ++gCasterReasons[3];
+        return false;
+      }
+      if (material.mDepthTechnique.size() == 0) {
+        ++gCasterReasons[4];
+        return false;
+      }
+      ++gCasterReasons[0];
+      return true;
+    }
+
+    // The oriented box of an instance as an occluder. The box is the engine's (MeshInstance::box, from the mesh resource's own bounds); a box
+    // that is not finite, not positive, or far from the instance's sphere is replaced by a box inside the sphere.
+    std::uint32_t gInstanceReasons[5] = {}; // diagnostics: taken, hidden, dissolved, radius out of range, box replaced by the fallback
+
+    void AddOccluder(const MeshInstance& instance)
+    {
+      if (instance.isHidden != 0) {
+        ++gInstanceReasons[1];
+        return;
+      }
+      if (instance.dissolve < 0.6f || gOccluders.size() >= kMaxFrameOccluders) {
+        ++gInstanceReasons[2];
+        return;
+      }
+      const float radius = instance.sphere.Radius;
+      if (!std::isfinite(radius) || !(radius > 0.3f) || radius > 40.0f || !std::isfinite(instance.sphere.Center.x) || !std::isfinite(instance.sphere.Center.z)) {
+        ++gInstanceReasons[3];
+        return;
+      }
+      ++gInstanceReasons[0];
+      Occluder o;
+      bool boxOk = true; // boundsValid is 0 on every instance seen, and the box (centre, extents, axes) is right all the same
+      for (int i = 0; i < 3 && boxOk; ++i) {
+        const float extent = instance.box.Extent[i];
+        boxOk = std::isfinite(extent) && extent > 0.02f && extent <= radius * 1.5f;
+      }
+      if (boxOk) {
+        const float dx = instance.box.Center[0] - instance.sphere.Center.x;
+        const float dy = instance.box.Center[1] - instance.sphere.Center.y;
+        const float dz = instance.box.Center[2] - instance.sphere.Center.z;
+        boxOk = std::isfinite(dx) && std::isfinite(dy) && std::isfinite(dz) && dx * dx + dy * dy + dz * dz <= radius * radius * 2.25f;
+      }
+      if (boxOk) {
+        for (int i = 0; i < 3; ++i) {
+          o.center[i] = instance.box.Center[i];
+          for (int k = 0; k < 3; ++k) {
+            o.axis[i][k] = instance.box.Axis[i][k] * instance.box.Extent[i] * kBoxGrow;
+          }
+        }
+      } else {
+        ++gInstanceReasons[4];
+        o.center[0] = instance.sphere.Center.x;
+        o.center[1] = instance.sphere.Center.y;
+        o.center[2] = instance.sphere.Center.z;
+        for (int i = 0; i < 3; ++i) {
+          o.axis[i][i] = radius * 0.55f;
+        }
+      }
+      gOccluders.push_back(o);
+    }
 
     // Copies the three names out of a blueprint LOD. Not every LOD the renderer batches has a blueprint behind it (the engine makes some LODs
     // itself, for shields and the like) and such a record can hold anything, so the read is guarded: false when it faults. No C++ objects
@@ -113,6 +194,14 @@ namespace moho::lights
 
     std::size_t emitted = 0;
     static int sFrame = 0;
+    gOccluders.clear();
+    for (std::uint32_t& n : gCasterReasons) {
+      n = 0;
+    }
+    for (std::uint32_t& n : gInstanceReasons) {
+      n = 0;
+    }
+    const bool shadows = ren_DynLightsShadows != 0;
     for (const MeshBatchBucket& bucket : renderer->meshes) {
       MeshLOD* const lod = bucket.first.mLod;
       // MeshRenderer::Batch stores Mesh::ComputeLOD's result in the key, and that is -1 (all bits set) for an instance that is too far for
@@ -120,6 +209,13 @@ namespace moho::lights
       const auto lodValue = reinterpret_cast<std::uintptr_t>(lod);
       if (lodValue < 0x10000u || lodValue == ~static_cast<std::uintptr_t>(0)) {
         continue;
+      }
+      if (shadows && CastsShadows(*lod)) {
+        for (const MeshInstance* const instance : bucket.second) {
+          if (instance != nullptr) {
+            AddOccluder(*instance);
+          }
+        }
       }
       // the LOD's blueprint copy can be a marker too (LODs the engine makes itself, shields): only a plausible address is used
       const RMeshBlueprintLOD* const blueprintLod = lod->lodBlueprintCopy.get();
@@ -197,8 +293,23 @@ namespace moho::lights
         }
       }
     }
-    if (emitted > 0 && (++sFrame % 240) == 1) {
-      gpg::Logf("DynLights: %u mesh lights this frame", static_cast<unsigned>(emitted));
+    if ((++sFrame % 240) == 1) {
+      gpg::Logf("DynLights: %u mesh lights, %u shadow casters this frame; buckets: cast %u, no stage %u, no depth bit %u, unresolved %u, no technique %u",
+                static_cast<unsigned>(emitted), static_cast<unsigned>(gOccluders.size()), gCasterReasons[0], gCasterReasons[1], gCasterReasons[2], gCasterReasons[3], gCasterReasons[4]);
+      for (std::size_t i = 0; i < gOccluders.size() && i < 3; ++i) {
+        const Occluder& o = gOccluders[i];
+        gpg::Logf(
+          "DynLights:   caster %u centre (%.1f %.1f %.1f) half extents (%.2f %.2f %.2f)", static_cast<unsigned>(i), o.center[0], o.center[1], o.center[2],
+          std::sqrt(o.axis[0][0] * o.axis[0][0] + o.axis[0][1] * o.axis[0][1] + o.axis[0][2] * o.axis[0][2]),
+          std::sqrt(o.axis[1][0] * o.axis[1][0] + o.axis[1][1] * o.axis[1][1] + o.axis[1][2] * o.axis[1][2]),
+          std::sqrt(o.axis[2][0] * o.axis[2][0] + o.axis[2][1] * o.axis[2][1] + o.axis[2][2] * o.axis[2][2])
+        );
+      }
     }
+  }
+
+  const std::vector<Occluder>& FrameOccluders()
+  {
+    return gOccluders;
   }
 } // namespace moho::lights

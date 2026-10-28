@@ -25,9 +25,18 @@ namespace moho::lights
     return (texels + kDataWidth - 1) / kDataWidth;
   }
 
+  float Occluder::Radius() const
+  {
+    float s = 0.0f;
+    for (int i = 0; i < 3; ++i) {
+      s += axis[i][0] * axis[i][0] + axis[i][1] * axis[i][1] + axis[i][2] * axis[i][2];
+    }
+    return std::sqrt(s);
+  }
+
   namespace
   {
-    // The table texel of cell (cx, cz): x = first list texel, y = list texels, z = entries.
+    // The table texel of cell (cx, cz): x = first light list texel, y = light list texels, z = first occluder list texel, w = occluder list texels.
     const float* TableTexel(const LightGridImage& image, const std::uint32_t cx, const std::uint32_t cz)
     {
       const std::size_t cell = static_cast<std::size_t>(cz) * image.layout.cellsX + cx;
@@ -37,20 +46,22 @@ namespace moho::lights
       return &image.grid[cell * 4u];
     }
 
-    std::uint32_t ReadList(const LightGridImage& image, const float* const table, std::uint32_t (&indices)[kMaxLightsPerCell])
+    // The entries of a list of `texels` texels at `first`, up to `capacity`; entries are index + 1, zero ends a list.
+    std::uint32_t ReadList(const LightGridImage& image, const float first, const float texels, std::uint32_t* const indices, const std::uint32_t capacity)
     {
-      const auto first = static_cast<std::size_t>(table[0]);
-      const auto entries = static_cast<std::uint32_t>(table[2]);
       std::uint32_t n = 0;
-      for (std::uint32_t i = 0; i < entries && i < kMaxLightsPerCell; ++i) {
-        const std::size_t at = (first + i / 4u) * 4u + (i % 4u);
+      const auto start = static_cast<std::size_t>(first);
+      const auto count = static_cast<std::size_t>(texels) * 4u;
+      for (std::size_t i = 0; i < count && n < capacity; ++i) {
+        const std::size_t at = start * 4u + i;
         if (at >= image.grid.size()) {
           break;
         }
         const float entry = image.grid[at];
-        if (entry != 0.0f) {
-          indices[n++] = static_cast<std::uint32_t>(entry) - 1u;
+        if (entry == 0.0f) {
+          break;
         }
+        indices[n++] = static_cast<std::uint32_t>(entry) - 1u;
       }
       return n;
     }
@@ -59,7 +70,11 @@ namespace moho::lights
   std::uint32_t LightGridImage::CellCount(const std::uint32_t cx, const std::uint32_t cz) const
   {
     const float* const table = TableTexel(*this, cx, cz);
-    return table == nullptr ? 0u : static_cast<std::uint32_t>(table[2]);
+    if (table == nullptr) {
+      return 0u;
+    }
+    std::uint32_t scratch[kMaxLightsPerCell];
+    return ReadList(*this, table[0], table[1], scratch, kMaxLightsPerCell);
   }
 
   std::uint32_t LightGridImage::CellLights(const float x, const float z, std::uint32_t (&indices)[kMaxLightsPerCell]) const
@@ -70,10 +85,21 @@ namespace moho::lights
       return 0;
     }
     const float* const table = TableTexel(*this, static_cast<std::uint32_t>(fx), static_cast<std::uint32_t>(fz));
-    return table == nullptr ? 0u : ReadList(*this, table, indices);
+    return table == nullptr ? 0u : ReadList(*this, table[0], table[1], indices, kMaxLightsPerCell);
   }
 
-  void BuildLightGrid(const std::vector<Light>& lights, const GridLayout& layout, LightGridImage& image)
+  std::uint32_t LightGridImage::CellOccluders(const float x, const float z, std::uint32_t (&indices)[kMaxOccludersPerCell]) const
+  {
+    const float fx = std::floor((x - layout.originX) / layout.cellSize);
+    const float fz = std::floor((z - layout.originZ) / layout.cellSize);
+    if (!(fx >= 0.0f && fz >= 0.0f && fx < static_cast<float>(layout.cellsX) && fz < static_cast<float>(layout.cellsZ)) || grid.empty()) {
+      return 0;
+    }
+    const float* const table = TableTexel(*this, static_cast<std::uint32_t>(fx), static_cast<std::uint32_t>(fz));
+    return table == nullptr ? 0u : ReadList(*this, table[2], table[3], indices, kMaxOccludersPerCell);
+  }
+
+  void BuildLightGrid(const std::vector<Light>& lights, const GridLayout& layout, LightGridImage& image, const std::vector<Occluder>* const occluders)
   {
     image.layout = layout;
     image.cellsLit = 0;
@@ -85,6 +111,9 @@ namespace moho::lights
     image.lightCount = 0;
     image.data.assign(static_cast<std::size_t>(LightGridImage::DataRows(static_cast<std::uint32_t>(requested))) * kDataWidth * 4u, 0.0f);
     image.entries = 0;
+    image.occluderCount = 0;
+    image.occluderEntries = 0;
+    image.occluders.clear();
     // the table first: one texel per cell, all zero (no list); the lists are appended behind it
     const std::size_t tableTexels = static_cast<std::size_t>(layout.cellsX) * layout.cellsZ;
     image.grid.assign(tableTexels * 4u, 0.0f);
@@ -230,12 +259,119 @@ namespace moho::lights
         float* const table = &image.grid[static_cast<std::size_t>(pairs[first].cell) * 4u];
         table[0] = static_cast<float>(cursor);
         table[1] = static_cast<float>(listTexels);
-        table[2] = static_cast<float>(kept);
         cursor += listTexels;
         image.entries += static_cast<std::uint32_t>(kept);
         ++image.cellsLit;
       }
       first = last;
+    }
+    // ---- shadow casters
+    if (occluders != nullptr && !occluders->empty() && !lights.empty()) {
+      // the ones that touch the sphere of a light that casts shadows, largest first, at most kMaxOccluders
+      struct Candidate
+      {
+        std::size_t index;
+        float radius;
+      };
+      std::vector<Candidate> chosen;
+      for (std::size_t o = 0; o < occluders->size(); ++o) {
+        const Occluder& occluder = (*occluders)[o];
+        const float radius = occluder.Radius();
+        if (!(radius > 0.05f) || !std::isfinite(radius) || !std::isfinite(occluder.center[0]) || !std::isfinite(occluder.center[2])) {
+          continue;
+        }
+        bool relevant = false;
+        for (std::size_t i = 0; i < requested && !relevant; ++i) {
+          const Light& l = lights[i];
+          if (!(l.radius > 0.0f) || l.radius > kMaxShadowLightRadius || !std::isfinite(l.pos[0])) {
+            continue;
+          }
+          const float dx = occluder.center[0] - l.pos[0];
+          const float dy = occluder.center[1] - l.pos[1];
+          const float dz = occluder.center[2] - l.pos[2];
+          const float reach = l.radius + radius;
+          relevant = dx * dx + dy * dy + dz * dz <= reach * reach;
+        }
+        if (relevant) {
+          chosen.push_back(Candidate{o, radius});
+        }
+      }
+      std::stable_sort(chosen.begin(), chosen.end(), [](const Candidate& a, const Candidate& b) { return a.radius > b.radius; });
+      if (chosen.size() > kMaxOccluders) {
+        chosen.resize(kMaxOccluders);
+      }
+      image.occluderCount = static_cast<std::uint32_t>(chosen.size());
+      image.occluders.assign(static_cast<std::size_t>(image.OccluderRows()) * kDataWidth * 4u, 0.0f);
+      struct CellOccluder
+      {
+        std::uint32_t cell;
+        std::uint32_t occluder; // rank among the chosen = its index in the data texture
+      };
+      std::vector<CellOccluder> cellPairs;
+      for (std::size_t k = 0; k < chosen.size(); ++k) {
+        const Occluder& o = (*occluders)[chosen[k].index];
+        float* const t = &image.occluders[k * kOccluderTexels * 4u];
+        t[0] = o.center[0];
+        t[1] = o.center[1];
+        t[2] = o.center[2];
+        for (int a = 0; a < 3; ++a) {
+          const float length2 = o.axis[a][0] * o.axis[a][0] + o.axis[a][1] * o.axis[a][1] + o.axis[a][2] * o.axis[a][2];
+          float* const texel = t + (a + 1) * 4;
+          texel[0] = o.axis[a][0];
+          texel[1] = o.axis[a][1];
+          texel[2] = o.axis[a][2];
+          texel[3] = length2 > 1.0e-8f ? 1.0f / length2 : 0.0f;
+        }
+        // the cells the occluder can shadow: its bounding circle grown by the reach
+        const float reach = chosen[k].radius + kShadowReach;
+        const float minX = o.center[0] - reach - layout.originX;
+        const float maxX = o.center[0] + reach - layout.originX;
+        const float minZ = o.center[2] - reach - layout.originZ;
+        const float maxZ = o.center[2] + reach - layout.originZ;
+        if (maxX < 0.0f || maxZ < 0.0f || minX >= spanX || minZ >= spanZ) {
+          continue;
+        }
+        const auto cx0 = static_cast<std::uint32_t>(std::max(0.0f, std::floor(minX * invCell)));
+        const auto cz0 = static_cast<std::uint32_t>(std::max(0.0f, std::floor(minZ * invCell)));
+        const auto cx1 = static_cast<std::uint32_t>(std::min(static_cast<float>(layout.cellsX - 1), std::floor(maxX * invCell)));
+        const auto cz1 = static_cast<std::uint32_t>(std::min(static_cast<float>(layout.cellsZ - 1), std::floor(maxZ * invCell)));
+        for (std::uint32_t cz = cz0; cz <= cz1; ++cz) {
+          const float cellMinZ = layout.originZ + static_cast<float>(cz) * layout.cellSize;
+          const float dz = std::max(std::max(cellMinZ - o.center[2], o.center[2] - (cellMinZ + layout.cellSize)), 0.0f);
+          for (std::uint32_t cx = cx0; cx <= cx1; ++cx) {
+            const float cellMinX = layout.originX + static_cast<float>(cx) * layout.cellSize;
+            const float dx = std::max(std::max(cellMinX - o.center[0], o.center[0] - (cellMinX + layout.cellSize)), 0.0f);
+            if (dx * dx + dz * dz <= reach * reach) {
+              cellPairs.push_back(CellOccluder{cz * layout.cellsX + cx, static_cast<std::uint32_t>(k)});
+            }
+          }
+        }
+      }
+      // the largest first in each cell (the rank is the order of `chosen`), at most kMaxOccludersPerCell
+      std::sort(cellPairs.begin(), cellPairs.end(), [](const CellOccluder& a, const CellOccluder& b) {
+        return a.cell != b.cell ? a.cell < b.cell : a.occluder < b.occluder;
+      });
+      for (std::size_t first = 0; first < cellPairs.size();) {
+        std::size_t last = first;
+        while (last < cellPairs.size() && cellPairs[last].cell == cellPairs[first].cell) {
+          ++last;
+        }
+        std::size_t kept = std::min<std::size_t>(last - first, kMaxOccludersPerCell);
+        const std::size_t listTexels = (kept + 3u) / 4u;
+        if (cursor + listTexels > capacityTexels) {
+          break; // no room left in the texture
+        }
+        image.grid.resize((cursor + listTexels) * 4u, 0.0f);
+        for (std::size_t k = 0; k < kept; ++k) {
+          image.grid[cursor * 4u + k] = static_cast<float>(cellPairs[first + k].occluder + 1u);
+        }
+        float* const table = &image.grid[static_cast<std::size_t>(cellPairs[first].cell) * 4u];
+        table[2] = static_cast<float>(cursor);
+        table[3] = static_cast<float>(listTexels);
+        cursor += listTexels;
+        image.occluderEntries += static_cast<std::uint32_t>(kept);
+        first = last;
+      }
     }
     image.gridTexels = static_cast<std::uint32_t>(cursor);
     // whole rows, so the upload copies full rows

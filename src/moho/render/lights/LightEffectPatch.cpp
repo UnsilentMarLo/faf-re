@@ -62,24 +62,82 @@ float4 DynLightGridTexel(float k)
     return tex2Dlod(dynLightGridSampler, float4((col + 0.5) * dynLightGridSize.z, (row + 0.5) * dynLightGridSize.w, 0, 0));
 }
 
-// The list of the grid cell that holds the world position: its first texel and how many texels it has; 0 outside the map.
-void DynLightCell(float3 worldPos, out float first, out float texels)
+// The lists of the grid cell that holds the world position: the first texel and the texel count of its lights, and of its shadow casters
+// (occ.x, occ.y); 0 outside the map.
+void DynLightCell(float3 worldPos, out float first, out float texels, out float2 occ)
 {
     first = 0.0;
     texels = 0.0;
+    occ = float2(0.0, 0.0);
     float2 cell = floor((worldPos.xz - dynLightParams.xy) * dynLightParams.z);
     if (cell.x >= 0 && cell.y >= 0 && cell.x < dynLightGridSize.x && cell.y < dynLightGridSize.y && dynLightParams.w > 0.5)
     {
         float4 t = DynLightGridTexel(cell.y * dynLightGridSize.x + cell.x);
         first = t.x;
         texels = t.y;
+        occ = t.zw;
     }
+}
+
+// Soft shadow of the shadow casters of the cell (oriented boxes, four texels each in the data texture from texel 12288 on: centre, then the
+// three half-extent vectors with 1 / length squared in w). The ray from the pixel `p` to the light (`d` = pixel to light) is cut against each
+// box in the box's own frame; the length of the ray inside a box, over 0.8 units, is how much of the light it takes (a box the ray only
+// grazes shades a little: a soft edge). A box the pixel is on (its own unit) and a light inside a box (a muzzle flash at the barrel) are skipped.
+float DynLightShadow(float3 p, float3 d, float2 occ)
+{
+    float shadow = 1.0;
+    float len = length(d);
+    if (len < 0.05)
+    {
+        return 1.0;
+    }
+    for (int t = 0; t < 4; ++t)
+    {
+        if ((float)t >= occ.y)
+        {
+            break;
+        }
+        float4 e = DynLightGridTexel(occ.x + (float)t);
+        for (int q = 0; q < 4; ++q)
+        {
+            float entry = (q == 0) ? e.x : ((q == 1) ? e.y : ((q == 2) ? e.z : e.w));
+            if (entry > 0.5)
+            {
+                float k0 = 12288.0 + (entry - 1.0) * 4.0;
+                float4 c = DynLightTexel(k0);
+                float4 a0 = DynLightTexel(k0 + 1.0);
+                float4 a1 = DynLightTexel(k0 + 2.0);
+                float4 a2 = DynLightTexel(k0 + 3.0);
+                float3 rel = p - c.xyz;
+                float3 x = float3(dot(rel, a0.xyz) * a0.w, dot(rel, a1.xyz) * a1.w, dot(rel, a2.xyz) * a2.w);
+                float3 dd = float3(dot(d, a0.xyz) * a0.w, dot(d, a1.xyz) * a1.w, dot(d, a2.xyz) * a2.w);
+                float3 l = x + dd;
+                float xTop = max(abs(x.x), max(abs(x.y), abs(x.z)));
+                float lTop = max(abs(l.x), max(abs(l.y), abs(l.z)));
+                if (xTop > 1.12 && lTop > 1.25)
+                {
+                    float3 s = float3((abs(dd.x) < 0.00001) ? 0.00001 : dd.x, (abs(dd.y) < 0.00001) ? 0.00001 : dd.y, (abs(dd.z) < 0.00001) ? 0.00001 : dd.z);
+                    float3 t0 = (float3(-1, -1, -1) - x) / s;
+                    float3 t1 = (float3(1, 1, 1) - x) / s;
+                    float3 tmin = min(t0, t1);
+                    float3 tmax = max(t0, t1);
+                    float tEnter = max(max(tmin.x, tmin.y), max(tmin.z, 0.0));
+                    float tExit = min(min(tmax.x, tmax.y), min(tmax.z, 1.0));
+                    float chord = max(tExit - tEnter, 0.0) * len;
+                    // a light is not a point: the shadow gets lighter the further the pixel is behind the box (a penumbra that grows)
+                    float behind = saturate(tEnter * len / 10.0);
+                    shadow *= 1.0 - 0.8 * saturate(chord / 0.8) * (1.0 - 0.6 * behind);
+                }
+            }
+        }
+    }
+    return shadow;
 }
 
 // One light as the pixel sees it: closest point of the light's segment (a point light has a zero-length one; a spotlight is a point
 // light with a cone), windowed falloff. Returns the attenuation; `toLight` is the vector from the pixel to that point, `colour` the
 // light's colour x intensity.
-float DynLightAt(float entry, float3 worldPos, out float3 toLight, out float3 colour)
+float DynLightAt(float entry, float3 worldPos, float2 occ, out float3 toLight, out float3 colour)
 {
     float k = (entry - 1.0) * 3.0;
     float4 a = DynLightTexel(k);
@@ -100,6 +158,10 @@ float DynLightAt(float entry, float3 worldPos, out float3 toLight, out float3 co
     if (atten > 0.002)
     {
         colour = DynLightTexel(k + 1.0).rgb;   // fetched only by the lights that reach this pixel
+        if (occ.y > 0.5 && r <= 40.0)   // a light that lights a screen casts no shadows
+        {
+            atten *= DynLightShadow(worldPos, toLight, occ);
+        }
     }
     return atten;
 }
@@ -108,11 +170,11 @@ float DynLightAt(float entry, float3 worldPos, out float3 toLight, out float3 co
     constexpr const char* kMeshLightCode = R"HLSL(
 float4 dynLightCamera;   // world position of the camera (set per view)
 
-void DynLightsBRDFOne(float entry, float3 worldPos, float3 n, float3 v, float nDotV, float3 F0, float3 albedo, float metallic, float roughness, inout float3 total)
+void DynLightsBRDFOne(float entry, float3 worldPos, float2 occ, float3 n, float3 v, float nDotV, float3 F0, float3 albedo, float metallic, float roughness, inout float3 total)
 {
     float3 d;
     float3 lightColour;
-    float atten = DynLightAt(entry, worldPos, d, lightColour);
+    float atten = DynLightAt(entry, worldPos, occ, d, lightColour);
     if (atten > 0.002)   // the cell is bigger than the light: most entries do not reach this pixel, and the BRDF is the expensive part
     {
         float3 l = normalize(d);
@@ -128,19 +190,20 @@ void DynLightsBRDFOne(float entry, float3 worldPos, float3 n, float3 v, float nD
     }
 }
 
-void DynLightsBRDFQuad(float4 e, float3 worldPos, float3 n, float3 v, float nDotV, float3 F0, float3 albedo, float metallic, float roughness, inout float3 total)
+void DynLightsBRDFQuad(float4 e, float3 worldPos, float2 occ, float3 n, float3 v, float nDotV, float3 F0, float3 albedo, float metallic, float roughness, inout float3 total)
 {
-    if (e.x > 0.5) { DynLightsBRDFOne(e.x, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total); }
-    if (e.y > 0.5) { DynLightsBRDFOne(e.y, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total); }
-    if (e.z > 0.5) { DynLightsBRDFOne(e.z, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total); }
-    if (e.w > 0.5) { DynLightsBRDFOne(e.w, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total); }
+    if (e.x > 0.5) { DynLightsBRDFOne(e.x, worldPos, occ, n, v, nDotV, F0, albedo, metallic, roughness, total); }
+    if (e.y > 0.5) { DynLightsBRDFOne(e.y, worldPos, occ, n, v, nDotV, F0, albedo, metallic, roughness, total); }
+    if (e.z > 0.5) { DynLightsBRDFOne(e.z, worldPos, occ, n, v, nDotV, F0, albedo, metallic, roughness, total); }
+    if (e.w > 0.5) { DynLightsBRDFOne(e.w, worldPos, occ, n, v, nDotV, F0, albedo, metallic, roughness, total); }
 }
 
 float3 DynLightsBRDF(float3 worldPos, float3 n, float3 v, float3 albedo, float metallic, float roughness)
 {
     float first;
     float texels;
-    DynLightCell(worldPos, first, texels);
+    float2 occ;
+    DynLightCell(worldPos, first, texels, occ);
     float nDotV = abs(dot(n, v)) + 0.001;
     float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
     float3 total = float3(0, 0, 0);
@@ -151,7 +214,7 @@ float3 DynLightsBRDF(float3 worldPos, float3 n, float3 v, float3 albedo, float m
         {
             break;
         }
-        DynLightsBRDFQuad(DynLightGridTexel(first + (float)t), worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total);
+        DynLightsBRDFQuad(DynLightGridTexel(first + (float)t), worldPos, occ, n, v, nDotV, F0, albedo, metallic, roughness, total);
     }
     float top = max(total.x, max(total.y, total.z));
     return total / (1.0 + 0.2 * top);   // soft limit at 5 on the brightest channel: the hue stays however strong the light is (a limit per channel drifts every strong light to white)
@@ -190,23 +253,23 @@ float4 DynLightsVertexNormalPS(VERTEXNORMAL_VERTEX vertex) : COLOR0
 
     // Terrain: the light term at a world position with a normal, shared by the composite light pass and CalculateLighting.
     constexpr const char* kTerrainLightFunction = R"HLSL(
-void DynLightTerrainOne(float entry, float3 worldPos, float3 normal, inout float3 total)
+void DynLightTerrainOne(float entry, float3 worldPos, float2 occ, float3 normal, inout float3 total)
 {
     float3 d;
     float3 lightColour;
-    float atten = DynLightAt(entry, worldPos, d, lightColour);
+    float atten = DynLightAt(entry, worldPos, occ, d, lightColour);
     if (atten > 0.002)
     {
         total += lightColour * (atten * saturate((dot(normal, normalize(d)) + 0.5) / 1.5));   // wrapped: a light just above the ground lights it
     }
 }
 
-void DynLightTerrainQuad(float4 e, float3 worldPos, float3 normal, inout float3 total)
+void DynLightTerrainQuad(float4 e, float3 worldPos, float2 occ, float3 normal, inout float3 total)
 {
-    if (e.x > 0.5) { DynLightTerrainOne(e.x, worldPos, normal, total); }
-    if (e.y > 0.5) { DynLightTerrainOne(e.y, worldPos, normal, total); }
-    if (e.z > 0.5) { DynLightTerrainOne(e.z, worldPos, normal, total); }
-    if (e.w > 0.5) { DynLightTerrainOne(e.w, worldPos, normal, total); }
+    if (e.x > 0.5) { DynLightTerrainOne(e.x, worldPos, occ, normal, total); }
+    if (e.y > 0.5) { DynLightTerrainOne(e.y, worldPos, occ, normal, total); }
+    if (e.z > 0.5) { DynLightTerrainOne(e.z, worldPos, occ, normal, total); }
+    if (e.w > 0.5) { DynLightTerrainOne(e.w, worldPos, occ, normal, total); }
 }
 
 // All the lights of the cell (the composite light pass).
@@ -214,7 +277,8 @@ float3 DynLightTerrain(float3 worldPos, float3 normal)
 {
     float first;
     float texels;
-    DynLightCell(worldPos, first, texels);
+    float2 occ;
+    DynLightCell(worldPos, first, texels, occ);
     float3 total = float3(0, 0, 0);
     for (int t = 0; t < 64; ++t)
     {
@@ -222,7 +286,7 @@ float3 DynLightTerrain(float3 worldPos, float3 normal)
         {
             break;
         }
-        DynLightTerrainQuad(DynLightGridTexel(first + (float)t), worldPos, normal, total);
+        DynLightTerrainQuad(DynLightGridTexel(first + (float)t), worldPos, occ, normal, total);
     }
     return total;
 }
@@ -233,7 +297,8 @@ float3 DynLightTerrainFew(float3 worldPos, float3 normal)
 {
     float first;
     float texels;
-    DynLightCell(worldPos, first, texels);
+    float2 occ;
+    DynLightCell(worldPos, first, texels, occ);
     float3 total = float3(0, 0, 0);
     for (int t = 0; t < 4; ++t)
     {
@@ -241,7 +306,7 @@ float3 DynLightTerrainFew(float3 worldPos, float3 normal)
         {
             break;
         }
-        DynLightTerrainQuad(DynLightGridTexel(first + (float)t), worldPos, normal, total);
+        DynLightTerrainQuad(DynLightGridTexel(first + (float)t), worldPos, occ, normal, total);
     }
     return total;
 }

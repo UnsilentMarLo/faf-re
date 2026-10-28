@@ -194,6 +194,27 @@ ForkThread(function()
         Say('SLOT end')
         return
     end
+    if AB_SCENE == 'shadow' then
+        -- a steady light 3 units above the ground, with a heavy unit, a building and two tanks around it: what they shade is what the test shows
+        WaitUntil(3)
+        local lx, lz = x0, z0
+        local ly = GetTerrainHeight(lx, lz) + 3
+        local others = {
+            { 'uel0303', lx + 4, lz + 0.5, 0 }, { 'ueb0101', lx - 6, lz + 1, 0 }, { 'url0402', lx + 1, lz - 5, 0 }, { 'uel0201', lx - 1, lz + 5, 0 },
+        }
+        for _, o in others do
+            if __blueprints[o[1]] then
+                CreateUnitHPR(o[1], brainA.Name, o[2], GetTerrainHeight(o[2], o[3]), o[3], 0, o[4], 0)
+            end
+        end
+        Say(string.format('shadow scene: light at %.1f %.1f %.1f', lx, ly, lz))
+        -- a Lua light: constant while it lives (the particle flash of the first version faded between the frames that were compared)
+        local Light = import('/fafengine/lua/dynlights/light.lua')
+        local lamp = Light.Create(nil, nil, 1.0, 0.7, 0.4, 24, 6)
+        lamp:SetPosition(lx, ly, lz)
+        WaitSeconds(300)
+        return
+    end
     if AB_SCENE == 'lightdisc' then
         -- long-lived light particles of different sizes at known places; the footprint of each should be a smooth disc
         WaitUntil(4)

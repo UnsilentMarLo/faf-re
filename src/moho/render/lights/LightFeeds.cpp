@@ -74,6 +74,13 @@ namespace moho::lights
       return true;
     }();
 
+    TConVar<int> gTConVar_ren_DynLightsShadows(
+      "ren_DynLightsShadows",
+      "Dynamic lights: 1 (the default) lets the buildings and units of the view shade the lights (a soft shadow behind them), 0 lights through "
+      "everything.",
+      &ren_DynLightsShadows
+    );
+
     LightCollector gCollector;
     std::vector<Light> gFrameLights;
     LightGridImage gFrameImage;
@@ -97,6 +104,8 @@ namespace moho::lights
       return true;
     }
   } // namespace
+
+  int ren_DynLightsShadows = 1;
 
   LightCollector& Collector()
   {
@@ -139,7 +148,7 @@ namespace moho::lights
 
     float mapX = 0.0f, mapZ = 0.0f;
     if (ActiveMapSize(mapX, mapZ)) {
-      BuildLightGrid(gFrameLights, GridLayout::ForMap(mapX, mapZ), gFrameImage);
+      BuildLightGrid(gFrameLights, GridLayout::ForMap(mapX, mapZ), gFrameImage, ren_DynLightsShadows != 0 ? &FrameOccluders() : nullptr);
       UpdateBinding(gFrameImage);
     }
     gpg::gal::gDynLightPassActive.store(gFrameImage.lightCount > 0, std::memory_order_relaxed);
@@ -212,7 +221,7 @@ namespace moho::lights
       const Stats& s = gCollector.GetStats();
       gpg::Logf(
         "DynLights: quality=%d stored=%u offered=%u gated=%u invalid=%u full=%u expired=%u | pool=%u active=%u lights=%u cut=%u | "
-        "grid cells=%u overflow=%u | tex uploads=%u fail=%u vars=%u",
+        "grid cells=%u overflow=%u occluders=%u/%u | tex uploads=%u fail=%u vars=%u",
         gCollector.Quality(),
         s.stored,
         s.offered,
@@ -226,6 +235,8 @@ namespace moho::lights
         s.culledByCap,
         gFrameImage.cellsLit,
         gFrameImage.overflow,
+        gFrameImage.occluderCount,
+        static_cast<unsigned>(FrameOccluders().size()),
         GetBindingStats().uploads,
         GetBindingStats().failures,
         GetBindingStats().boundVariables

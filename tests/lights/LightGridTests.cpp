@@ -187,6 +187,63 @@ namespace
     GCHECK(idx[1] == 0 && idx[2] == 1 && idx[3] == 2);
   }
 
+  Occluder BoxAt(const float x, const float y, const float z, const float hx, const float hy, const float hz)
+  {
+    Occluder o;
+    o.center[0] = x;
+    o.center[1] = y;
+    o.center[2] = z;
+    o.axis[0][0] = hx;
+    o.axis[1][1] = hy;
+    o.axis[2][2] = hz;
+    return o;
+  }
+
+  void TestOccluders()
+  {
+    const GridLayout layout = GridLayout::ForMap(256.0f, 256.0f); // cells of 4
+    std::vector<Light> lights{MakeLight(100.0f, 3.0f, 100.0f, 12.0f)};
+    // one box beside the light, one far away, one big and beside it
+    std::vector<Occluder> boxes{BoxAt(106.0f, 1.0f, 100.0f, 1.0f, 1.0f, 2.0f), BoxAt(200.0f, 1.0f, 200.0f, 1.0f, 1.0f, 1.0f),
+                                BoxAt(94.0f, 2.0f, 103.0f, 3.0f, 2.0f, 3.0f)};
+    LightGridImage image;
+    BuildLightGrid(lights, layout, image, &boxes);
+    // the far box does not touch a light: not in the data texture; the other two are, the larger first
+    GCHECK(image.occluderCount == 2);
+    GCHECK(image.OccluderRows() == 1);
+    GCHECK(image.occluders[0] == 94.0f && image.occluders[1] == 2.0f && image.occluders[2] == 103.0f); // the larger box has index 0
+    // texel 1 is the first half-extent vector with 1 / length squared in w
+    GCHECK(image.occluders[4] == 3.0f && image.occluders[5] == 0.0f && image.occluders[7] > 0.1f && image.occluders[7] < 0.12f);
+    GCHECK(image.occluders[8 + 1] == 2.0f && image.occluders[12 + 2] == 3.0f);
+    // the box next to the light is listed in the cell of the light and in the cells behind it, up to the reach
+    std::uint32_t idx[kMaxOccludersPerCell];
+    GCHECK(image.CellOccluders(100.0f, 100.0f, idx) == 2);
+    GCHECK(image.CellOccluders(120.0f, 100.0f, idx) >= 1);   // 14 behind the small box (reach 16 + its radius)
+    GCHECK(image.CellOccluders(200.0f, 200.0f, idx) == 0);   // nothing near
+    GCHECK(image.occluderEntries > 4);
+    // the light lists did not change
+    std::uint32_t lightIdx[kMaxLightsPerCell];
+    GCHECK(image.CellLights(100.0f, 100.0f, lightIdx) == 1 && lightIdx[0] == 0);
+
+    // a light that lights a screen casts no shadows: the same box is not listed
+    std::vector<Light> big{MakeLight(100.0f, 3.0f, 100.0f, 100.0f)};
+    BuildLightGrid(big, layout, image, &boxes);
+    GCHECK(image.occluderCount == 0 && image.CellOccluders(100.0f, 100.0f, idx) == 0);
+
+    // no occluders given: no change in the lists, an empty occluder texture
+    BuildLightGrid(lights, layout, image);
+    GCHECK(image.occluderCount == 0 && image.occluders.empty() && image.CellLights(100.0f, 100.0f, lightIdx) == 1);
+
+    // more than kMaxOccludersPerCell around one light: the cell lists the first (largest) ones
+    boxes.clear();
+    for (int i = 0; i < 40; ++i) {
+      boxes.push_back(BoxAt(100.0f + 0.1f * static_cast<float>(i), 1.0f, 100.0f, 1.0f + 0.01f * static_cast<float>(40 - i), 1.0f, 1.0f));
+    }
+    BuildLightGrid(lights, layout, image, &boxes);
+    GCHECK(image.CellOccluders(100.0f, 100.0f, idx) == kMaxOccludersPerCell);
+    GCHECK(idx[0] == 0);
+  }
+
   void TestHugeLightAndEdges()
   {
     const GridLayout layout = GridLayout::ForMap(1024.0f, 1024.0f);
@@ -373,6 +430,7 @@ int RunGridTests(int& checks)
   TestOrderAndOverflow();
   TestCellListsAreComplete();
   TestStrongestAtTheMiddleFirst();
+  TestOccluders();
   TestHugeLightAndEdges();
   TestInvalidLights();
   TestCapAndEmpty();
