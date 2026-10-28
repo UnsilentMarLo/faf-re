@@ -600,6 +600,68 @@ namespace
     CHECK(c.GetStats().active == 10000 && c.GetStats().culledByCap == 10000 - 4096);
   }
 
+  // ---------------------------------------------------------------------------------------------------- mixing
+  Light PointLight(const float x, const float z, const float radius, const float level, const Kind kind = Kind::Glow)
+  {
+    Light l{};
+    l.pos[0] = x;
+    l.pos[1] = 1.0f;
+    l.pos[2] = z;
+    l.end[0] = x;
+    l.end[1] = 1.0f;
+    l.end[2] = z;
+    l.radius = radius;
+    l.rgb[0] = level;
+    l.rgb[1] = level * 0.5f;
+    l.rgb[2] = level * 0.25f;
+    l.kind = kind;
+    l.power = level * radius * radius;
+    return l;
+  }
+
+  void TestMixPointLights()
+  {
+    // two lights on one spot add up exactly (colour x radius squared is kept, the radius stays)
+    {
+      std::vector<Light> lights{PointLight(10.0f, 10.0f, 6.0f, 0.4f), PointLight(10.0f, 10.0f, 6.0f, 0.3f)};
+      const std::uint32_t mixed = MixPointLights(lights);
+      CHECK(mixed == 1 && lights.size() == 1);
+      CHECK(Near(lights[0].radius, 6.0f) && Near(lights[0].rgb[0], 0.7f) && Near(lights[0].rgb[1], 0.35f));
+    }
+    // close (below 0.6 of the smaller radius): mixed; the radius holds both and the total is kept
+    {
+      std::vector<Light> lights{PointLight(10.0f, 10.0f, 6.0f, 0.5f), PointLight(12.0f, 10.0f, 6.0f, 0.5f)};
+      const float total = 0.5f * 36.0f + 0.5f * 36.0f;
+      CHECK(MixPointLights(lights) == 1 && lights.size() == 1);
+      CHECK(Near(lights[0].pos[0], 11.0f) && lights[0].radius >= 6.0f + 1.0f - 1.0e-3f);
+      CHECK(Near(lights[0].rgb[0] * lights[0].radius * lights[0].radius, total, 1.0e-2f));
+    }
+    // far apart: left alone
+    {
+      std::vector<Light> lights{PointLight(10.0f, 10.0f, 6.0f, 0.5f), PointLight(18.0f, 10.0f, 6.0f, 0.5f)};
+      CHECK(MixPointLights(lights) == 0 && lights.size() == 2);
+    }
+    // a beam, a trail, a spotlight and a big light are never mixed
+    {
+      std::vector<Light> lights{
+        PointLight(10.0f, 10.0f, 6.0f, 0.5f, Kind::Beam), PointLight(10.0f, 10.0f, 6.0f, 0.5f, Kind::Trail),
+        PointLight(10.0f, 10.0f, 6.0f, 0.5f, Kind::Spot), PointLight(10.0f, 10.0f, 30.0f, 0.5f), PointLight(10.0f, 10.0f, 30.0f, 0.5f)};
+      CHECK(MixPointLights(lights) == 0 && lights.size() == 5);
+    }
+    // a swarm on one spot becomes one light, and a light beside it stays; the result is ordered strongest first
+    {
+      std::vector<Light> lights;
+      for (int i = 0; i < 30; ++i) {
+        lights.push_back(PointLight(20.0f + 0.05f * static_cast<float>(i), 20.0f, 5.0f, 0.1f));
+      }
+      lights.push_back(PointLight(60.0f, 60.0f, 5.0f, 0.2f));
+      const std::uint32_t mixed = MixPointLights(lights);
+      CHECK(mixed == 29 && lights.size() == 2);
+      CHECK(lights[0].power >= lights[1].power);
+      CHECK(Near(lights[0].rgb[0] * lights[0].radius * lights[0].radius, 30.0f * 0.1f * 25.0f, 0.5f));
+    }
+  }
+
   void TestClear()
   {
     LightCollector c;
@@ -641,6 +703,7 @@ int main()
   TestTrackedMotionAtFrameRate();
   TestGain();
   TestManyLightsInPool();
+  TestMixPointLights();
   TestClear();
   gFailures += RunGridTests(gChecks);
   gFailures += RunPatchTests(gChecks);

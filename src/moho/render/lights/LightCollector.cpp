@@ -441,6 +441,109 @@ namespace moho::lights
     stats_.culledByCap = static_cast<std::uint32_t>(culled);
   }
 
+  std::uint32_t MixPointLights(std::vector<Light>& lights)
+  {
+    // The heads of the clusters, by place: a hash of 10 unit cells over the XZ plane (a mixable light has a radius of 16 at most, so two lights
+    // that mix are less than 10 units apart and a head is always found in the 3 x 3 cells around a light).
+    constexpr float kCell = 10.0f;
+    struct Key
+    {
+      std::int32_t x;
+      std::int32_t z;
+      bool operator==(const Key& o) const { return x == o.x && z == o.z; }
+    };
+    struct KeyHash
+    {
+      std::size_t operator()(const Key& k) const
+      {
+        return static_cast<std::size_t>(static_cast<std::uint32_t>(k.x) * 73856093u ^ static_cast<std::uint32_t>(k.z) * 19349663u);
+      }
+    };
+    const auto cellOf = [](const float v) { return static_cast<std::int32_t>(std::floor(v / kCell)); };
+    const auto mixable = [](const Light& l) {
+      return (l.kind == Kind::Flash || l.kind == Kind::Glow || l.kind == Kind::Mesh) && l.radius > 0.0f && l.radius <= model::kMixMaxRadius;
+    };
+
+    std::unordered_map<Key, std::vector<std::size_t>, KeyHash> heads;
+    std::vector<char> gone(lights.size(), 0);
+    std::uint32_t mixed = 0;
+    for (std::size_t i = 0; i < lights.size(); ++i) {
+      Light& l = lights[i];
+      if (!mixable(l)) {
+        continue;
+      }
+      // the nearest head this light sits inside of: its distance below kMixShare of the smaller radius
+      std::size_t best = lights.size();
+      float bestDistance = 0.0f;
+      const std::int32_t cx = cellOf(l.pos[0]);
+      const std::int32_t cz = cellOf(l.pos[2]);
+      for (std::int32_t dz = -1; dz <= 1; ++dz) {
+        for (std::int32_t dx = -1; dx <= 1; ++dx) {
+          const auto it = heads.find(Key{cx + dx, cz + dz});
+          if (it == heads.end()) {
+            continue;
+          }
+          for (const std::size_t h : it->second) {
+            const Light& head = lights[h];
+            const float ex = head.pos[0] - l.pos[0];
+            const float ey = head.pos[1] - l.pos[1];
+            const float ez = head.pos[2] - l.pos[2];
+            const float distance = std::sqrt(ex * ex + ey * ey + ez * ez);
+            if (distance <= model::kMixShare * std::min(head.radius, l.radius) && (best == lights.size() || distance < bestDistance)) {
+              best = h;
+              bestDistance = distance;
+            }
+          }
+        }
+      }
+      if (best == lights.size()) {
+        heads[Key{cx, cz}].push_back(i);
+        continue;
+      }
+      // Mix l into the head: the position follows the brighter light, the radius is the sphere that holds both, and the colour keeps the
+      // light's total (colour x radius squared is what a light puts into the world), so two lights on one spot add up exactly.
+      Light& head = lights[best];
+      const float wHead = std::max(head.rgb[0], std::max(head.rgb[1], head.rgb[2])) + 1.0e-6f;
+      const float wLight = std::max(l.rgb[0], std::max(l.rgb[1], l.rgb[2])) + 1.0e-6f;
+      float centre[3];
+      for (int k = 0; k < 3; ++k) {
+        centre[k] = (head.pos[k] * wHead + l.pos[k] * wLight) / (wHead + wLight);
+      }
+      const auto reach = [&centre](const Light& a) {
+        const float ex = a.pos[0] - centre[0];
+        const float ey = a.pos[1] - centre[1];
+        const float ez = a.pos[2] - centre[2];
+        return a.radius + std::sqrt(ex * ex + ey * ey + ez * ez);
+      };
+      const float radius = std::max(reach(head), reach(l));
+      const float r2 = radius * radius;
+      for (int k = 0; k < 3; ++k) {
+        head.rgb[k] = (head.rgb[k] * head.radius * head.radius + l.rgb[k] * l.radius * l.radius) / r2;
+        head.pos[k] = centre[k];
+        head.end[k] = centre[k];
+      }
+      head.radius = radius;
+      head.power += l.power;
+      gone[i] = 1;
+      ++mixed;
+    }
+    if (mixed > 0) {
+      std::size_t keep = 0;
+      for (std::size_t i = 0; i < lights.size(); ++i) {
+        if (gone[i] == 0) {
+          if (keep != i) {
+            lights[keep] = lights[i];
+          }
+          ++keep;
+        }
+      }
+      lights.resize(keep);
+      // the heads gained power: keep the ranking order the grid and its cells rely on
+      std::stable_sort(lights.begin(), lights.end(), [](const Light& a, const Light& b) { return a.power > b.power; });
+    }
+    return mixed;
+  }
+
   void LightCollector::Clear()
   {
     pool_.clear();

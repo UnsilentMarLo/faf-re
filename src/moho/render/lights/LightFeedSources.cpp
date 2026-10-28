@@ -28,7 +28,8 @@ namespace moho::lights
   namespace
   {
     constexpr float kHoldTicks = 3.0f;       // a tracked light fades out this long after its last refresh
-    constexpr float kMergeCell = 3.0f;       // glow sprites born in the same beat inside one cell of this size, with the same texture and similar life, are one light
+    constexpr float kMergeCell = 4.0f;       // glow sprites born in the same beat inside one cell of this size, with the same texture and similar life, are one light (small ones: whatever the texture)
+    constexpr float kSmallSpriteSize = 1.5f; // sprites up to this peak size merge by place and two life classes only
     constexpr float kGlowPeakMin = 0.20f;    // a texture whose brightest alpha x luminance is below this does not glow (smoke, dust); the census showed fire at 0.25
     constexpr float kGlowEnergyCap = 1.2f;   // energy of one merged light
     // A muzzle flash is a small additive sprite that lives a tick or two: the size model gives it a radius of 3 and an energy of about 0.1, which
@@ -173,7 +174,7 @@ namespace moho::lights
     std::uint64_t gNextFollowKey = 1;
     constexpr std::size_t kMaxFollowed = 2048;
     constexpr int kFollowForgetBeats = 8;
-    constexpr int kTrailPieces = 3;          // a trail's light is this many capsules along its path
+    constexpr int kTrailPieces = 2;          // a trail's light is this many capsules along its path (3 filled the cells at a muzzle: 21 trail lights from 7 trails)
     constexpr float kTrailLightShare = 0.7f; // of the trail's drawn length (ticks) the light covers ...
     constexpr float kTrailLightMaxTicks = 20.0f; // ... but never more than this
     constexpr int kBeamRefreshTicks = 2;   // a beam is sent every tick; its light is refreshed every frame while its record is this young
@@ -384,8 +385,17 @@ namespace moho::lights
       if (census) {
         CensusNote("particle", censusKey, alphaBlend ? "ok:hot alpha sprite" : "ok:glow sprite", peakSize, censusColour);
       }
-      std::uint64_t cellKey = Mix(CellKey(particle.mPos.x, particle.mPos.y, particle.mPos.z, kMergeCell), std::hash<std::string>{}(texturePath));
-      cellKey = Mix(cellKey, static_cast<std::uint64_t>(static_cast<int>(particle.mLifetime / 6.0f)));
+      // Small sprites (sparks, flashes, flame licks: a spider bot firing makes about 30 of them per frame at its muzzle and its impact) merge by
+      // place alone, whatever their texture, and by two life classes (a flash, anything longer): lights of several textures in one cell filled
+      // the cell's list (16 entries) and the lists of neighbouring cells then differed, which showed as lit squares. Bigger sprites (fire,
+      // plasma, explosions) keep the texture and the life bucket.
+      const bool smallSprite = peakSize < kSmallSpriteSize;
+      std::uint64_t cellKey = CellKey(particle.mPos.x, particle.mPos.y, particle.mPos.z, kMergeCell);
+      if (!smallSprite) {
+        cellKey = Mix(cellKey, std::hash<std::string>{}(texturePath));
+      }
+      const int lifeClass = smallSprite ? (particle.mLifetime <= kFlashLifeTicks ? 0 : 1) : static_cast<int>(particle.mLifetime / 6.0f);
+      cellKey = Mix(cellKey, static_cast<std::uint64_t>(lifeClass));
       GlowCell& cell = glow[cellKey];
       if (energy > cell.strongest) {
         cell.e = e;
@@ -487,7 +497,7 @@ namespace moho::lights
           out[k] = path[i0].p[k] + (path[i1].p[k] - path[i0].p[k]) * f;
         }
       };
-      static const float kPieceGain[kTrailPieces] = {1.0f, 0.7f, 0.45f};
+      static const float kPieceGain[kTrailPieces] = {1.0f, 0.6f};
       for (int piece = 0; piece < kTrailPieces; ++piece) {
         Emission piece_e = e;
         pointAt(static_cast<float>(piece) / static_cast<float>(kTrailPieces), piece_e.end);

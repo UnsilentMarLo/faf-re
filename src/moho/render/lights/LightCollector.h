@@ -83,6 +83,13 @@ namespace moho::lights
     std::uint32_t tracked = 0;  // tracked lights alive
   };
 
+  // Mixes point lights (flashes, glows, mesh lights of a radius up to model::kMixMaxRadius) that sit inside each other (closer than
+  // model::kMixShare of the smaller radius) into one: the position follows the brighter light, the radius is the sphere that holds both, the
+  // colour keeps the total (colour x radius squared). A muzzle or an impact makes dozens of sprites in one place; kept as separate lights they
+  // filled the grid cells (16 entries) and the lists of neighbouring cells then differed, which showed as lit squares. Beams, trails and
+  // spotlights are not touched. Returns how many lights were mixed away; `lights` stays ordered strongest first.
+  std::uint32_t MixPointLights(std::vector<Light>& lights);
+
   class LightCollector
   {
   public:
