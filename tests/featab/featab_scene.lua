@@ -137,6 +137,19 @@ ForkThread(function()
         Say(string.format('beam scene: shooter %s target %s ground %.2f', tostring(shooter and shooter:GetBlueprint().BlueprintId), tostring(target ~= nil), GetTerrainHeight(x0, z0)))
         return
     end
+    if AB_SCENE == 'ring' then
+        -- twelve spider bots around one immortal tank, all firing at it: the beams meet in one impact
+        local ux, uz = x0, z0
+        local target = CreateUnitHPR('uel0201', brainB.Name, ux, GetTerrainHeight(ux, uz), uz, 0, 0, 0)
+        if target then target:SetCanTakeDamage(false) end
+        for i = 1, 12 do
+            local a = i * math.pi / 6
+            local sx, sz = ux + 26 * math.cos(a), uz + 26 * math.sin(a)
+            CreateUnitHPR('url0402', brainA.Name, sx, GetTerrainHeight(sx, sz), sz, 0, a + math.pi, 0)
+        end
+        Say('ring scene created')
+        return
+    end
     if AB_SCENE == 'lightdisc' then
         -- long-lived light particles of different sizes at known places; the footprint of each should be a smooth disc
         WaitUntil(4)

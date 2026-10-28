@@ -92,7 +92,7 @@ namespace
     const std::size_t o = 3 * 4;
     GCHECK(image.data[o + 0] == 500.0f && image.data[o + 3] == 12.0f);
     GCHECK(image.data[o + 4] == 2.0f && image.data[o + 7] == static_cast<float>(Kind::Glow));
-    GCHECK(image.grid.size() == static_cast<std::size_t>(image.GridWidth()) * layout.cellsZ * 4);
+    GCHECK(image.grid.size() == static_cast<std::size_t>(image.GridRows()) * kGridTexelWidth * 4 && image.GridRows() >= 1);
   }
 
   void TestMembership()
@@ -102,7 +102,7 @@ namespace
     LightGridImage image;
     BuildLightGrid(lights, layout, image);
 
-    std::uint32_t idx[kLightsPerCell];
+    std::uint32_t idx[kMaxLightsPerCell];
     GCHECK(image.CellLights(100.0f, 100.0f, idx) == 1 && idx[0] == 0); // at the centre
     GCHECK(image.CellLights(115.0f, 100.0f, idx) == 1);                // in the cell next door, within the radius
     GCHECK(image.CellLights(85.0f, 100.0f, idx) == 1);
@@ -123,30 +123,54 @@ namespace
 
   void TestOrderAndOverflow()
   {
+    // more lights on one spot than a cell lists: the safety limit holds, the strongest come first, nothing else is lost
     const GridLayout layout = GridLayout::ForMap(256.0f, 256.0f);
     std::vector<Light> lights;
-    for (std::uint32_t i = 0; i < kLightsPerCell + 4; ++i) {
+    for (std::uint32_t i = 0; i < kMaxLightsPerCell + 16; ++i) {
       lights.push_back(MakeLight(128.0f, 0.0f, 128.0f, 10.0f, 100.0f - static_cast<float>(i)));
     }
     LightGridImage image;
     BuildLightGrid(lights, layout, image);
 
-    std::uint32_t idx[kLightsPerCell];
-    GCHECK(image.CellLights(128.0f, 128.0f, idx) == kLightsPerCell);
-    for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {
-      GCHECK(idx[i] == i); // the first 16 in ranking order (strongest first)
+    std::uint32_t idx[kMaxLightsPerCell];
+    GCHECK(image.CellLights(128.0f, 128.0f, idx) == kMaxLightsPerCell);
+    for (std::uint32_t i = 0; i < kMaxLightsPerCell; ++i) {
+      GCHECK(idx[i] == i); // equal at the middle of the cell: the ranking order of the lights
     }
     GCHECK(image.overflow > 0);
-    GCHECK(image.lightCount == kLightsPerCell + 4); // all lights are in the data texture, only the cell lists are limited
+    GCHECK(image.lightCount == kMaxLightsPerCell + 16); // all lights are in the data texture, only the cell list is limited
   }
 
-  void TestCellKeepsWhatAddsMost()
+  void TestCellListsAreComplete()
   {
-    // Eight strong lights that only graze the cell at (128, 128) come first in the ranking; a weak one right on top of the cell comes last.
-    // The cell keeps what adds the most at its middle, so the weak one stays and the weakest graze (the last of the strong ones) goes.
+    // Twenty lights reach the same cells (more than the 8 and 16 entries of the earlier layouts): every one of them is listed in every
+    // cell it reaches, so two neighbouring cells never disagree about a light that reaches both (that disagreement was the lit square).
+    const GridLayout layout = GridLayout::ForMap(256.0f, 256.0f); // cells of 4
+    std::vector<Light> lights;
+    for (std::uint32_t i = 0; i < 20; ++i) {
+      lights.push_back(MakeLight(130.0f + 0.5f * static_cast<float>(i), 0.0f, 130.0f, 12.0f, 100.0f - static_cast<float>(i)));
+    }
+    LightGridImage image;
+    BuildLightGrid(lights, layout, image);
+    GCHECK(image.overflow == 0);
+    std::uint32_t idx[kMaxLightsPerCell];
+    for (float x = 120.0f; x < 150.0f; x += 4.0f) {
+      GCHECK(image.CellLights(x + 2.0f, 130.0f, idx) >= 1);
+    }
+    // a point close to every light's centre sees all 20 on both sides of a cell border
+    GCHECK(image.CellLights(135.9f, 130.0f, idx) == 20);
+    GCHECK(image.CellLights(136.1f, 130.0f, idx) == 20);
+    GCHECK(image.CellLights(135.9f, 133.9f, idx) == 20);
+    GCHECK(image.CellLights(135.9f, 134.1f, idx) == 20);
+  }
+
+  void TestStrongestAtTheMiddleFirst()
+  {
+    // Three strong lights that only graze the cell at (134, 134) are first in the ranking; a weak one right on top of the cell comes last.
+    // The list is ordered by what each adds at the middle of the cell, so the weak one leads.
     const GridLayout layout = GridLayout::ForMap(256.0f, 256.0f); // 4 unit cells: the cell [132,136) has its middle at 134
     std::vector<Light> lights;
-    for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {
+    for (std::uint32_t i = 0; i < 3; ++i) {
       lights.push_back(MakeLight(143.5f, 0.0f, 134.0f, 10.0f, 100.0f - static_cast<float>(i)));
     }
     Light weak = MakeLight(134.0f, 0.0f, 134.0f, 10.0f, 1.0f);
@@ -157,17 +181,10 @@ namespace
     LightGridImage image;
     BuildLightGrid(lights, layout, image);
 
-    std::uint32_t idx[kLightsPerCell];
-    GCHECK(image.CellLights(134.0f, 134.0f, idx) == kLightsPerCell);
-    bool hasWeak = false;
-    bool hasLastStrong = false;
-    for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {
-      hasWeak = hasWeak || idx[i] == kLightsPerCell;
-      hasLastStrong = hasLastStrong || idx[i] == kLightsPerCell - 1;
-      GCHECK(i == 0 || idx[i - 1] < idx[i]); // still in ranking order
-    }
-    GCHECK(hasWeak);
-    GCHECK(!hasLastStrong);
+    std::uint32_t idx[kMaxLightsPerCell];
+    GCHECK(image.CellLights(134.0f, 134.0f, idx) == 4);
+    GCHECK(idx[0] == 3); // the weak one on top of the cell
+    GCHECK(idx[1] == 0 && idx[2] == 1 && idx[3] == 2);
   }
 
   void TestHugeLightAndEdges()
@@ -178,7 +195,7 @@ namespace
     LightGridImage image;
     BuildLightGrid(lights, layout, image);
     GCHECK(image.cellsLit > 2500);
-    std::uint32_t idx[kLightsPerCell];
+    std::uint32_t idx[kMaxLightsPerCell];
     GCHECK(image.CellLights(0.5f, 0.5f, idx) == 0);       // corner of the map: 701 from the nearest point of its cell -> outside the circle
     GCHECK(image.CellLights(200.0f, 200.0f, idx) == 1);   // 441 away: inside
     GCHECK(image.CellLights(512.0f, 512.0f, idx) == 1);
@@ -221,7 +238,7 @@ namespace
     BuildLightGrid(lights, layout, image);
     GCHECK(image.skipped == 4);
     GCHECK(image.lightCount == 1);
-    std::uint32_t idx[kLightsPerCell];
+    std::uint32_t idx[kMaxLightsPerCell];
     GCHECK(image.CellLights(100.0f, 100.0f, idx) == 1 && idx[0] == 0);
   }
 
@@ -254,7 +271,7 @@ namespace
     GCHECK(image.cellsLit > 0);
     lights.clear();
     BuildLightGrid(lights, layout, image);
-    std::uint32_t idx[kLightsPerCell];
+    std::uint32_t idx[kMaxLightsPerCell];
     GCHECK(image.CellLights(100.0f, 100.0f, idx) == 0);
   }
 
@@ -277,9 +294,9 @@ namespace
     const std::size_t col = last % kDataWidth;
     const float* a = &image.data[(row * kDataWidth + col) * 4];
     GCHECK(a[0] == lights.back().pos[0] && a[2] == lights.back().pos[2] && a[3] == 12.0f);
-    std::uint32_t idx[kLightsPerCell];
+    std::uint32_t idx[kMaxLightsPerCell];
     const std::uint32_t n = image.CellLights(lights.back().pos[0], lights.back().pos[2], idx);
-    GCHECK(n >= 1 && n <= kLightsPerCell);
+    GCHECK(n >= 1 && n <= kMaxLightsPerCell);
   }
 
   void TestCapsuleAndSpot()
@@ -294,7 +311,7 @@ namespace
     std::vector<Light> lights{beam};
     LightGridImage image;
     BuildLightGrid(lights, layout, image);
-    std::uint32_t idx[kLightsPerCell];
+    std::uint32_t idx[kMaxLightsPerCell];
     GCHECK(image.CellLights(100.0f, 500.0f, idx) == 1);
     GCHECK(image.CellLights(200.0f, 500.0f, idx) == 1); // the middle of the segment
     GCHECK(image.CellLights(299.0f, 505.0f, idx) == 1); // the far end
@@ -339,9 +356,9 @@ namespace
     }
     LightGridImage image;
     BuildLightGrid(lights, layout, image);
-    std::uint32_t idx[kLightsPerCell];
+    std::uint32_t idx[kMaxLightsPerCell];
     const std::uint32_t n = image.CellLights(300.0f, 300.0f, idx);
-    GCHECK(n == kLightsPerCell);
+    GCHECK(n == kMaxLightsPerCell);
     for (std::uint32_t i = 0; i < n; ++i) {
       GCHECK(idx[i] == i);
     }
@@ -354,7 +371,8 @@ int RunGridTests(int& checks)
   TestDataTextureLayout();
   TestMembership();
   TestOrderAndOverflow();
-  TestCellKeepsWhatAddsMost();
+  TestCellListsAreComplete();
+  TestStrongestAtTheMiddleFirst();
   TestHugeLightAndEdges();
   TestInvalidLights();
   TestCapAndEmpty();

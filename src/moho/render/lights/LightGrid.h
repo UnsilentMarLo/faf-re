@@ -26,14 +26,15 @@ namespace moho::lights
   constexpr std::uint32_t kDataWidth = 1024;       // texels
   constexpr std::uint32_t kTexelsPerLight = 3;
   constexpr std::uint32_t kMaxGridCells = 128;     // per side
-  // The lights one pixel can add up; the ones that add the most at the middle of a cell. 8 overflowed in every fight (a beam hitting the
-  // ground is a capsule, a flash, a dozen spark sprites and trail pieces in one place: 36 to 40 (light, cell) pairs dropped per frame, 450 at
-  // most) and the lists then differ from cell to cell, which draws the cell as a lit or dark square. The shader fetches a texel of four
-  // entries only when the one before is full (LightEffectPatch.cpp), so a cell with a few lights costs what it did with 8.
-  constexpr std::uint32_t kLightsPerCell = 16;
-  constexpr std::uint32_t kCellTexels = kLightsPerCell / 4;
-  // World units. A cell is a few times the size of a typical light; on a small map (10 km: 128 cells of 4) they are half what they were,
-  // so a cell sees fewer lights and the step at its border is smaller. A larger map has 128 cells per side, so cells grow with the map.
+  // The grid texture is one linear store of RGBA32F texels, kGridTexelWidth wide, kGridRows high (a texel k sits at column k mod width, row
+  // k div width): first one table texel per cell (x = first list texel, y = list texels, z = entries), then the lists. A list holds the
+  // lights that reach the cell, "light index + 1", four to a texel, 0 = empty, strongest at the middle of the cell first. There is no
+  // fixed number per cell (the first versions had 8, then 16 entries, and a cell that overflowed listed other lights than its neighbour:
+  // lit squares); only a safety limit, and the whole texture's room.
+  constexpr std::uint32_t kGridTexelWidth = 1024;
+  constexpr std::uint32_t kGridRows = 128;
+  constexpr std::uint32_t kMaxLightsPerCell = 256;
+  // World units. A cell is a few times the size of a typical light; on a small map (10 km: 128 cells of 4) a cell sees few lights.
   constexpr float kMinCellSize = 4.0f;
   constexpr std::size_t kMaxGridLights = 4096;     // the data texture holds this many (12288 texels = 12 rows); the first patch had 16 / 28
 
@@ -56,20 +57,22 @@ namespace moho::lights
     GridLayout layout;
     std::uint32_t lightCount = 0;
     std::vector<float> data; // RGBA texels, kDataWidth x DataRows()
-    std::vector<float> grid; // RGBA texels, GridWidth() x layout.cellsZ
+    std::vector<float> grid; // RGBA texels, kGridTexelWidth wide, GridRows() rows in use (the texture has kGridRows)
+    std::uint32_t gridTexels = 0; // texels in use: the table and the lists
 
     // Statistics of the last Build
     std::uint32_t cellsLit = 0;    // cells with at least one light
-    std::uint32_t overflow = 0;    // (light, cell) pairs that did not fit the 8 entries
+    std::uint32_t overflow = 0;    // (light, cell) pairs dropped: a cell over kMaxLightsPerCell, or no room left in the texture
+    std::uint32_t entries = 0;     // (light, cell) pairs listed
     std::uint32_t outsideMap = 0;  // lights whose footprint misses the map entirely
     std::uint32_t skipped = 0;     // invalid lights (non-finite)
 
-    [[nodiscard]] std::uint32_t GridWidth() const { return layout.cellsX * kCellTexels; }
+    [[nodiscard]] std::uint32_t GridRows() const { return (gridTexels + kGridTexelWidth - 1) / kGridTexelWidth; }
     [[nodiscard]] static std::uint32_t DataRows(std::uint32_t lightCount);
     [[nodiscard]] std::uint32_t DataRows() const { return DataRows(lightCount); }
 
-    // The up to 8 light indices of the cell containing the world point (what the shader does); returns how many. 0 outside the map.
-    std::uint32_t CellLights(float x, float z, std::uint32_t (&indices)[kLightsPerCell]) const;
+    // The light indices of the cell containing the world point (what the shader does), strongest first; returns how many. 0 outside the map.
+    std::uint32_t CellLights(float x, float z, std::uint32_t (&indices)[kMaxLightsPerCell]) const;
     // Number of lights in cell (cx, cz).
     [[nodiscard]] std::uint32_t CellCount(std::uint32_t cx, std::uint32_t cz) const;
   };

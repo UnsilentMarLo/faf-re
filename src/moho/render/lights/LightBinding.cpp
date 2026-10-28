@@ -118,8 +118,7 @@ namespace moho::lights
       const float rows = static_cast<float>(image.DataRows(static_cast<std::uint32_t>(kMaxGridLights)));
       const float params[4] = {l.originX, l.originZ, 1.0f / l.cellSize, static_cast<float>(image.lightCount)};
       const float gridSize[4] = {
-        static_cast<float>(l.cellsX), static_cast<float>(l.cellsZ), 1.0f / (static_cast<float>(kCellTexels) * static_cast<float>(l.cellsX)),
-        1.0f / static_cast<float>(l.cellsZ)
+        static_cast<float>(l.cellsX), static_cast<float>(l.cellsZ), 1.0f / static_cast<float>(kGridTexelWidth), 1.0f / static_cast<float>(kGridRows)
       };
       const float dataSize[4] = {1.0f / static_cast<float>(kDataWidth), 1.0f / rows, static_cast<float>(kDataWidth), rows};
 
@@ -145,8 +144,9 @@ namespace moho::lights
 
     try {
       const std::uint32_t rows = image.DataRows(static_cast<std::uint32_t>(kMaxGridLights));
-      const std::uint32_t gridWidth = image.GridWidth();
-      const std::uint32_t gridHeight = image.layout.cellsZ;
+      // The grid texture has a fixed size (a table texel per cell, then the lists); an upload copies the rows in use.
+      const std::uint32_t gridWidth = kGridTexelWidth;
+      const std::uint32_t gridHeight = kGridRows;
 
       if (!s.dataTexture || s.dataRows != rows) {
         s.dataTexture = CreateFloat4Texture(kDataWidth, rows);
@@ -171,7 +171,7 @@ namespace moho::lights
       // The data texture is a fixed size (room for kMaxGridLights); the image carries only the rows it needs, the rest stays as it was
       // (never read: the shader indexes below lightCount).
       const bool dataOk = Upload(*s.dataTexture, image.data, kDataWidth, image.DataRows());
-      const bool gridOk = Upload(*s.gridTexture, image.grid, gridWidth, gridHeight);
+      const bool gridOk = Upload(*s.gridTexture, image.grid, gridWidth, std::min(image.GridRows(), gridHeight));
       if (!dataOk || !gridOk) {
         ++s.stats.failures;
         return;

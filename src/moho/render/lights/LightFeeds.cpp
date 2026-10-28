@@ -75,7 +75,6 @@ namespace moho::lights
 
     LightCollector gCollector;
     std::vector<Light> gFrameLights;
-    std::uint32_t gMixedLights = 0; // lights of the last frame mixed into a neighbour
     LightGridImage gFrameImage;
     int gLogCounter = 0;
     int gLastTick = -1; // tick of the last BeginFrame
@@ -136,7 +135,6 @@ namespace moho::lights
 
     FeedBeamsForFrame(tick, frameAlpha);
     gCollector.Update(static_cast<float>(tick) + frameAlpha, kMaxFrameLights, gFrameLights);
-    gMixedLights = MixPointLights(gFrameLights); // dozens of sprites at a muzzle or an impact become one light each, not a cell list that overflows
 
     float mapX = 0.0f, mapZ = 0.0f;
     if (ActiveMapSize(mapX, mapZ)) {
@@ -199,7 +197,7 @@ namespace moho::lights
       }
       const Stats& s = gCollector.GetStats();
       gpg::Logf(
-        "DynLights: quality=%d stored=%u offered=%u gated=%u invalid=%u full=%u expired=%u | pool=%u active=%u lights=%u cut=%u mixed=%u | "
+        "DynLights: quality=%d stored=%u offered=%u gated=%u invalid=%u full=%u expired=%u | pool=%u active=%u lights=%u cut=%u | "
         "grid cells=%u overflow=%u | tex uploads=%u fail=%u vars=%u",
         gCollector.Quality(),
         s.stored,
@@ -212,7 +210,6 @@ namespace moho::lights
         s.active,
         static_cast<unsigned>(gFrameLights.size()),
         s.culledByCap,
-        gMixedLights,
         gFrameImage.cellsLit,
         gFrameImage.overflow,
         GetBindingStats().uploads,

@@ -42,7 +42,7 @@ sampler2D dynLightGridSampler = sampler_state
     AddressV  = CLAMP;
 };
 float4 dynLightParams;     // gridOriginX, gridOriginZ, 1 / cellSize, lightCount
-float4 dynLightGridSize;   // cellsX, cellsZ, 1 / (4 cellsX), 1 / cellsZ
+float4 dynLightGridSize;   // cellsX, cellsZ, 1 / gridWidth (1024), 1 / gridRows
 float4 dynLightDataSize;   // 1 / dataWidth, 1 / dataRows, dataWidth, dataRows
 
 float4 DynLightTexel(float k)
@@ -52,32 +52,27 @@ float4 DynLightTexel(float k)
     return tex2Dlod(dynLightDataSampler, float4((col + 0.5) * dynLightDataSize.x, (row + 0.5) * dynLightDataSize.y, 0, 0));
 }
 
-// The up to 16 entries (light index + 1, 0 = none) of the grid cell that holds the world position, four to a texel; all 0 outside the map.
-// A texel is only fetched when the one before it is full (its fourth entry is set), so a cell with a few lights costs one fetch.
-void DynLightCell(float3 worldPos, out float4 e0, out float4 e1, out float4 e2, out float4 e3)
+// The grid texture is one linear store of texels (column k mod 1024, row k div 1024): a table texel per cell (x = first list texel,
+// y = list texels), then the lists of "light index + 1", four to a texel. A cell lists every light that reaches it, so two cells never
+// disagree about a light near their border: no lit squares.
+float4 DynLightGridTexel(float k)
 {
-    e0 = float4(0, 0, 0, 0);
-    e1 = float4(0, 0, 0, 0);
-    e2 = float4(0, 0, 0, 0);
-    e3 = float4(0, 0, 0, 0);
+    float row = floor(k * dynLightGridSize.z);
+    float col = k - row * 1024.0;
+    return tex2Dlod(dynLightGridSampler, float4((col + 0.5) * dynLightGridSize.z, (row + 0.5) * dynLightGridSize.w, 0, 0));
+}
+
+// The list of the grid cell that holds the world position: its first texel and how many texels it has; 0 outside the map.
+void DynLightCell(float3 worldPos, out float first, out float texels)
+{
+    first = 0.0;
+    texels = 0.0;
     float2 cell = floor((worldPos.xz - dynLightParams.xy) * dynLightParams.z);
     if (cell.x >= 0 && cell.y >= 0 && cell.x < dynLightGridSize.x && cell.y < dynLightGridSize.y && dynLightParams.w > 0.5)
     {
-        float v = (cell.y + 0.5) * dynLightGridSize.w;
-        float u = cell.x * 4.0 + 0.5;
-        e0 = tex2Dlod(dynLightGridSampler, float4(u * dynLightGridSize.z, v, 0, 0));
-        if (e0.w > 0.5)
-        {
-            e1 = tex2Dlod(dynLightGridSampler, float4((u + 1.0) * dynLightGridSize.z, v, 0, 0));
-            if (e1.w > 0.5)
-            {
-                e2 = tex2Dlod(dynLightGridSampler, float4((u + 2.0) * dynLightGridSize.z, v, 0, 0));
-                if (e2.w > 0.5)
-                {
-                    e3 = tex2Dlod(dynLightGridSampler, float4((u + 3.0) * dynLightGridSize.z, v, 0, 0));
-                }
-            }
-        }
+        float4 t = DynLightGridTexel(cell.y * dynLightGridSize.x + cell.x);
+        first = t.x;
+        texels = t.y;
     }
 }
 
@@ -143,26 +138,22 @@ void DynLightsBRDFQuad(float4 e, float3 worldPos, float3 n, float3 v, float nDot
 
 float3 DynLightsBRDF(float3 worldPos, float3 n, float3 v, float3 albedo, float metallic, float roughness)
 {
-    float4 e0, e1, e2, e3;
-    DynLightCell(worldPos, e0, e1, e2, e3);
+    float first;
+    float texels;
+    DynLightCell(worldPos, first, texels);
     float nDotV = abs(dot(n, v)) + 0.001;
     float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
     float3 total = float3(0, 0, 0);
-    // the entries of a cell are packed at the front, strongest first: a quad is looked at only when the one before it was full
-    DynLightsBRDFQuad(e0, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total);
-    if (e0.w > 0.5)
+    // the whole list of the cell, four lights to a texel, strongest first (a cell holds 256 lights at most)
+    for (int t = 0; t < 64; ++t)
     {
-        DynLightsBRDFQuad(e1, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total);
-        if (e1.w > 0.5)
+        if ((float)t >= texels)
         {
-            DynLightsBRDFQuad(e2, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total);
-            if (e2.w > 0.5)
-            {
-                DynLightsBRDFQuad(e3, worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total);
-            }
+            break;
         }
+        DynLightsBRDFQuad(DynLightGridTexel(first + (float)t), worldPos, n, v, nDotV, F0, albedo, metallic, roughness, total);
     }
-    return total / (1.0 + 0.5 * total);   // soft limit: many overlapping lights must not white out the unit
+    return total / (1.0 + 0.2 * total);   // soft limit at 5 (it was 2): twelve beams on one unit must light it far more than one, and still not clip every channel at once
 }
 
 // tangent-space meshes (units, normal-mapped props). The result is masked for the water-mirrored pass instead of clip()ped.
@@ -220,36 +211,36 @@ void DynLightTerrainQuad(float4 e, float3 worldPos, float3 normal, inout float3 
 // All the lights of the cell (the composite light pass).
 float3 DynLightTerrain(float3 worldPos, float3 normal)
 {
-    float4 e0, e1, e2, e3;
-    DynLightCell(worldPos, e0, e1, e2, e3);
+    float first;
+    float texels;
+    DynLightCell(worldPos, first, texels);
     float3 total = float3(0, 0, 0);
-    DynLightTerrainQuad(e0, worldPos, normal, total);
-    if (e0.w > 0.5)
+    for (int t = 0; t < 64; ++t)
     {
-        DynLightTerrainQuad(e1, worldPos, normal, total);
-        if (e1.w > 0.5)
+        if ((float)t >= texels)
         {
-            DynLightTerrainQuad(e2, worldPos, normal, total);
-            if (e2.w > 0.5)
-            {
-                DynLightTerrainQuad(e3, worldPos, normal, total);
-            }
+            break;
         }
+        DynLightTerrainQuad(DynLightGridTexel(first + (float)t), worldPos, normal, total);
     }
     return total;
 }
 
-// The eight strongest lights of the cell: every decal and splat layer lights itself through CalculateLighting, so this one runs several
+// The sixteen strongest lights of the cell: every decal and splat layer lights itself through CalculateLighting, so this one runs several
 // times per pixel where the composite pass runs once.
 float3 DynLightTerrainFew(float3 worldPos, float3 normal)
 {
-    float4 e0, e1, e2, e3;
-    DynLightCell(worldPos, e0, e1, e2, e3);
+    float first;
+    float texels;
+    DynLightCell(worldPos, first, texels);
     float3 total = float3(0, 0, 0);
-    DynLightTerrainQuad(e0, worldPos, normal, total);
-    if (e0.w > 0.5)
+    for (int t = 0; t < 4; ++t)
     {
-        DynLightTerrainQuad(e1, worldPos, normal, total);
+        if ((float)t >= texels)
+        {
+            break;
+        }
+        DynLightTerrainQuad(DynLightGridTexel(first + (float)t), worldPos, normal, total);
     }
     return total;
 }
@@ -262,7 +253,7 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
 {
     float3 normal = normalize(SampleScreen(NormalSampler, inV.mTexSS).xyz * 2 - 1);
     float3 total = DynLightTerrain(inV.mTexWT.xzy, normal);   // mTexWT = (x, z, height)
-    return float4(total / (1.0 + 1.0 * total), 0);   // soft limit; the pass multiplies the terrain by (1 + light)
+    return float4(0.75 * total / (1.0 + 0.125 * total), 0);   // soft limit at 6 (it was 1: one beam and twelve looked the same); the pass multiplies the terrain by (1 + light)
 }
 
 )HLSL";
@@ -768,7 +759,7 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
       const size_t p = s.find(marker);
       string code = kTerrainPassCode;
       if (flood != 0) {
-        const string ret = "    return float4(total / (1.0 + 1.0 * total), 0);";
+        const string ret = "    return float4(0.75 * total / (1.0 + 0.125 * total), 0);";
         const size_t at = code.find(ret);
         if (at != npos) {
           code.replace(

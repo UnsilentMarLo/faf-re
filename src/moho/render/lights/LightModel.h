@@ -168,8 +168,4 @@ namespace moho::lights::model
   constexpr float kBigLightRadius = 80.0f;
   constexpr int kMaxBigLights = 8;
   constexpr float kMinVisible = 0.035f; // colour x intensity below this adds nothing visible: the light is dropped
-  // Mixing of point lights that sit inside each other (MixPointLights): only small lights (a spark, a flash, a muzzle) and only when the
-  // distance is below this share of the smaller radius.
-  constexpr float kMixMaxRadius = 16.0f;
-  constexpr float kMixShare = 0.6f;
 } // namespace moho::lights::model

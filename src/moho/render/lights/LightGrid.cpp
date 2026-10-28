@@ -25,38 +25,52 @@ namespace moho::lights
     return (texels + kDataWidth - 1) / kDataWidth;
   }
 
+  namespace
+  {
+    // The table texel of cell (cx, cz): x = first list texel, y = list texels, z = entries.
+    const float* TableTexel(const LightGridImage& image, const std::uint32_t cx, const std::uint32_t cz)
+    {
+      const std::size_t cell = static_cast<std::size_t>(cz) * image.layout.cellsX + cx;
+      if (cx >= image.layout.cellsX || cz >= image.layout.cellsZ || (cell + 1) * 4u > image.grid.size()) {
+        return nullptr;
+      }
+      return &image.grid[cell * 4u];
+    }
+
+    std::uint32_t ReadList(const LightGridImage& image, const float* const table, std::uint32_t (&indices)[kMaxLightsPerCell])
+    {
+      const auto first = static_cast<std::size_t>(table[0]);
+      const auto entries = static_cast<std::uint32_t>(table[2]);
+      std::uint32_t n = 0;
+      for (std::uint32_t i = 0; i < entries && i < kMaxLightsPerCell; ++i) {
+        const std::size_t at = (first + i / 4u) * 4u + (i % 4u);
+        if (at >= image.grid.size()) {
+          break;
+        }
+        const float entry = image.grid[at];
+        if (entry != 0.0f) {
+          indices[n++] = static_cast<std::uint32_t>(entry) - 1u;
+        }
+      }
+      return n;
+    }
+  } // namespace
+
   std::uint32_t LightGridImage::CellCount(const std::uint32_t cx, const std::uint32_t cz) const
   {
-    if (cx >= layout.cellsX || cz >= layout.cellsZ || grid.empty()) {
-      return 0;
-    }
-    const std::size_t base = (static_cast<std::size_t>(cz) * GridWidth() + kCellTexels * cx) * 4u;
-    std::uint32_t n = 0;
-    for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {
-      if (grid[base + i] != 0.0f) {
-        ++n;
-      }
-    }
-    return n;
+    const float* const table = TableTexel(*this, cx, cz);
+    return table == nullptr ? 0u : static_cast<std::uint32_t>(table[2]);
   }
 
-  std::uint32_t LightGridImage::CellLights(const float x, const float z, std::uint32_t (&indices)[kLightsPerCell]) const
+  std::uint32_t LightGridImage::CellLights(const float x, const float z, std::uint32_t (&indices)[kMaxLightsPerCell]) const
   {
     const float fx = std::floor((x - layout.originX) / layout.cellSize);
     const float fz = std::floor((z - layout.originZ) / layout.cellSize);
-    if (!(fx >= 0.0f && fz >= 0.0f && fx < static_cast<float>(layout.cellsX) && fz < static_cast<float>(layout.cellsZ)) ||
-        grid.empty()) {
+    if (!(fx >= 0.0f && fz >= 0.0f && fx < static_cast<float>(layout.cellsX) && fz < static_cast<float>(layout.cellsZ)) || grid.empty()) {
       return 0;
     }
-    const std::size_t base = (static_cast<std::size_t>(fz) * GridWidth() + kCellTexels * static_cast<std::size_t>(fx)) * 4u;
-    std::uint32_t n = 0;
-    for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {
-      const float entry = grid[base + i];
-      if (entry != 0.0f) {
-        indices[n++] = static_cast<std::uint32_t>(entry) - 1u;
-      }
-    }
-    return n;
+    const float* const table = TableTexel(*this, static_cast<std::uint32_t>(fx), static_cast<std::uint32_t>(fz));
+    return table == nullptr ? 0u : ReadList(*this, table, indices);
   }
 
   void BuildLightGrid(const std::vector<Light>& lights, const GridLayout& layout, LightGridImage& image)
@@ -70,7 +84,10 @@ namespace moho::lights
     const std::size_t requested = std::min(lights.size(), kMaxGridLights);
     image.lightCount = 0;
     image.data.assign(static_cast<std::size_t>(LightGridImage::DataRows(static_cast<std::uint32_t>(requested))) * kDataWidth * 4u, 0.0f);
-    image.grid.assign(static_cast<std::size_t>(image.GridWidth()) * layout.cellsZ * 4u, 0.0f);
+    image.entries = 0;
+    // the table first: one texel per cell, all zero (no list); the lists are appended behind it
+    const std::size_t tableTexels = static_cast<std::size_t>(layout.cellsX) * layout.cellsZ;
+    image.grid.assign(tableTexels * 4u, 0.0f);
 
     // Every (cell, light) pair the lights' footprints produce, with what the light adds at the middle of the cell.
     struct CellLight
@@ -181,9 +198,7 @@ namespace moho::lights
       }
     }
 
-    // A cell keeps the kLightsPerCell lights that add the most at its middle. Ranking them by the power the light has overall (the order of
-    // `lights`) let a strong light that only grazes the cell push out a weak one right on top of it; whatever is dropped now is the least
-    // visible in that cell, so the step at the border to the next cell (where the same light may still be listed) stays small.
+    // A cell lists every light that reaches it, strongest at the cell's middle first (the shader's `Few` path reads only the first texels).
     std::sort(pairs.begin(), pairs.end(), [](const CellLight& a, const CellLight& b) {
       if (a.cell != b.cell) {
         return a.cell < b.cell;
@@ -193,27 +208,37 @@ namespace moho::lights
       }
       return a.light < b.light;
     });
+    const std::size_t capacityTexels = static_cast<std::size_t>(kGridTexelWidth) * kGridRows;
+    std::size_t cursor = tableTexels;
     for (std::size_t first = 0; first < pairs.size();) {
       std::size_t last = first;
       while (last < pairs.size() && pairs[last].cell == pairs[first].cell) {
         ++last;
       }
       const std::size_t count = last - first;
-      const std::size_t kept = std::min<std::size_t>(count, kLightsPerCell);
-      image.overflow += static_cast<std::uint32_t>(count - kept);
-      std::uint32_t slots[kLightsPerCell];
-      for (std::size_t k = 0; k < kept; ++k) {
-        slots[k] = pairs[first + k].light;
+      std::size_t kept = std::min<std::size_t>(count, kMaxLightsPerCell);
+      if (cursor + (kept + 3u) / 4u > capacityTexels) {
+        kept = 0; // no room left in the texture: the cell stays empty (counted as overflow)
       }
-      std::sort(slots, slots + kept); // the strongest light first: the ranking order of `lights`
-      const std::uint32_t cz = pairs[first].cell / layout.cellsX;
-      const std::uint32_t cx = pairs[first].cell % layout.cellsX;
-      ++image.cellsLit;
-      // entries 0..3 are the first texel, 4..7 the second, and so on
-      for (std::size_t k = 0; k < kept; ++k) {
-        image.grid[(static_cast<std::size_t>(cz) * image.GridWidth() + kCellTexels * cx) * 4u + k] = static_cast<float>(slots[k] + 1u);
+      image.overflow += static_cast<std::uint32_t>(count - kept);
+      if (kept > 0) {
+        const std::size_t listTexels = (kept + 3u) / 4u;
+        image.grid.resize((cursor + listTexels) * 4u, 0.0f);
+        for (std::size_t k = 0; k < kept; ++k) {
+          image.grid[cursor * 4u + k] = static_cast<float>(pairs[first + k].light + 1u);
+        }
+        float* const table = &image.grid[static_cast<std::size_t>(pairs[first].cell) * 4u];
+        table[0] = static_cast<float>(cursor);
+        table[1] = static_cast<float>(listTexels);
+        table[2] = static_cast<float>(kept);
+        cursor += listTexels;
+        image.entries += static_cast<std::uint32_t>(kept);
+        ++image.cellsLit;
       }
       first = last;
     }
+    image.gridTexels = static_cast<std::uint32_t>(cursor);
+    // whole rows, so the upload copies full rows
+    image.grid.resize(static_cast<std::size_t>(image.GridRows()) * kGridTexelWidth * 4u, 0.0f);
   }
 } // namespace moho::lights

@@ -46,7 +46,7 @@ namespace moho::lights
 
     std::uint32_t HeatColour(const std::uint32_t count)
     {
-      const float t = std::min(1.0f, static_cast<float>(count - 1u) / static_cast<float>(kLightsPerCell - 1u));
+      const float t = std::min(1.0f, static_cast<float>(count - 1u) / 15.0f);
       const auto r = static_cast<std::uint32_t>(40.0f + 215.0f * t);
       const auto g = static_cast<std::uint32_t>(220.0f - 160.0f * t);
       return 0x60000000u | (r << 16) | (g << 8) | 0x30u; // ARGB, translucent
