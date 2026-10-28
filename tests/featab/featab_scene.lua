@@ -128,18 +128,27 @@ ForkThread(function()
         end
         return
     end
+    if AB_SCENE == 'beam1' then
+        -- one spider bot firing at one immortal tank: a single beam and its impact, nothing else
+        local shooter = CreateUnitHPR('url0402', brainA.Name, x0, GetTerrainHeight(x0, z0), z0, 0, math.pi * 0.5, 0)
+        local ux, uz = x0 + 28, z0
+        local target = CreateUnitHPR('uel0201', brainB.Name, ux, GetTerrainHeight(ux, uz), uz, 0, -math.pi * 0.5, 0)
+        if target then target:SetCanTakeDamage(false) end
+        Say(string.format('beam scene: shooter %s target %s ground %.2f', tostring(shooter and shooter:GetBlueprint().BlueprintId), tostring(target ~= nil), GetTerrainHeight(x0, z0)))
+        return
+    end
     if AB_SCENE == 'lightdisc' then
         -- long-lived light particles of different sizes at known places; the footprint of each should be a smooth disc
         WaitUntil(4)
-        local sizes = { 6, 14, 30 }
+        local sizes = AB_SIZES or { 6, 14, 30 }
         local anchors = {}
-        for i = 1, 3 do
-            local ux, uz = x0 - 50 + (i - 1) * 50, z0
+        for i = 1, table.getn(sizes) do
+            local ux, uz = x0 - 50 + (i - 1) * 24, z0
             local u = CreateUnitHPR('ueb1101', brainA.Name, ux, GetTerrainHeight(ux, uz), uz, 0, 0, 0)
             table.insert(anchors, u)
         end
         for round = 1, 20 do
-            for i = 1, 3 do
+            for i = 1, table.getn(sizes) do
                 if anchors[i] and not anchors[i].Dead then
                     CreateLightParticle(anchors[i], -1, brainA:GetArmyIndex(), sizes[i], 150, 'glow_03', 'ramp_flare_02')
                 end

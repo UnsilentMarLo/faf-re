@@ -48,9 +48,12 @@ namespace
     // 4096 map (81 km): 128 cells of 32
     GridLayout b = GridLayout::ForMap(4096.0f, 4096.0f);
     GCHECK(b.cellsX == 128 && b.cellsZ == 128 && b.cellSize == 32.0f);
-    // 256 map (5 km): the cell does not go below 8, so 32 cells
+    // 256 map (5 km): the cell does not go below 4, so 64 cells
     GridLayout c = GridLayout::ForMap(256.0f, 256.0f);
-    GCHECK(c.cellsX == 32 && c.cellsZ == 32 && c.cellSize == 8.0f);
+    GCHECK(c.cellsX == 64 && c.cellsZ == 64 && c.cellSize == 4.0f);
+    // 512 map (10 km): 128 cells of 4
+    GridLayout c2 = GridLayout::ForMap(512.0f, 512.0f);
+    GCHECK(c2.cellsX == 128 && c2.cellsZ == 128 && c2.cellSize == 4.0f);
     // non-square: the longer side sets the cell size
     GridLayout d = GridLayout::ForMap(1024.0f, 512.0f);
     GCHECK(d.cellsX == 128 && d.cellsZ == 64 && d.cellSize == 8.0f);
@@ -141,12 +144,12 @@ namespace
   {
     // Eight strong lights that only graze the cell at (128, 128) come first in the ranking; a weak one right on top of the cell comes last.
     // The cell keeps what adds the most at its middle, so the weak one stays and the weakest graze (the last of the strong ones) goes.
-    const GridLayout layout = GridLayout::ForMap(256.0f, 256.0f); // 8 unit cells: the cell [128,136) has its middle at 132
+    const GridLayout layout = GridLayout::ForMap(256.0f, 256.0f); // 4 unit cells: the cell [132,136) has its middle at 134
     std::vector<Light> lights;
     for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {
-      lights.push_back(MakeLight(141.5f, 0.0f, 132.0f, 10.0f, 100.0f - static_cast<float>(i)));
+      lights.push_back(MakeLight(143.5f, 0.0f, 134.0f, 10.0f, 100.0f - static_cast<float>(i)));
     }
-    Light weak = MakeLight(132.0f, 0.0f, 132.0f, 10.0f, 1.0f);
+    Light weak = MakeLight(134.0f, 0.0f, 134.0f, 10.0f, 1.0f);
     weak.rgb[0] = 0.3f;
     weak.rgb[1] = 0.15f;
     weak.rgb[2] = 0.07f;
@@ -155,7 +158,7 @@ namespace
     BuildLightGrid(lights, layout, image);
 
     std::uint32_t idx[kLightsPerCell];
-    GCHECK(image.CellLights(132.0f, 132.0f, idx) == kLightsPerCell);
+    GCHECK(image.CellLights(134.0f, 134.0f, idx) == kLightsPerCell);
     bool hasWeak = false;
     bool hasLastStrong = false;
     for (std::uint32_t i = 0; i < kLightsPerCell; ++i) {

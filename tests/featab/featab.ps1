@@ -11,6 +11,7 @@ Remove-Item $dump -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory $dump -Force | Out-Null
 foreach ($f in 'dynlights_test.lua', 'dynlights_camera.lua') { if (Test-Path "$test\$f") { Copy-Item "$test\$f" "$test\$f.bak_featab" -Force } }
 $sceneHeader = "AB_SCENE = '$Scene'`nAB_TX = $Tx`nAB_TZ = $Tz`n"
+if ($env:FEATAB_SIZES) { $sceneHeader += "AB_SIZES = { $($env:FEATAB_SIZES) }`n" }
 Set-Content "$test\dynlights_test.lua" ($sceneHeader + (Get-Content "$here\featab_scene.lua" -Raw)) -Encoding ascii
 $camHeader = "AB_START = $Start`nAB_HOLD = $Hold`nAB_TX = $Tx`nAB_TY = $Ty`nAB_TZ = $Tz`nAB_PAUSE_AT = $PauseAt`nAB_FOCUS = $Focus`nAB_SELECT = $($Select -ne 0 ? 'true' : 'false')`n"
 if ($Scene -eq 'scan') { $camHeader += "AB_STEPS = {}`nAB_PRESETS = {}`n"; $stepsText = '' } else { $stepsText = Get-Content "$here\$Steps" -Raw }
@@ -18,6 +19,7 @@ Set-Content "$test\dynlights_camera.lua" ($camHeader + $stepsText + "`n" + (Get-
 $env:FAF_CRASH_NO_DIALOG = '1'
 $env:FAF_GAL_DUMP_DIR = $dump
 $env:FAF_GAL_DUMP_SECONDS = $(if ($env:FEATAB_DUMP) { $env:FEATAB_DUMP } else { '1' })
+if ($env:FEATAB_DUMP_MS) { $env:FAF_GAL_DUMP_MS = $env:FEATAB_DUMP_MS } else { $env:FAF_GAL_DUMP_MS = $null }
 $log = "$logs\featab_${Tag}_$Api.log"
 Remove-Item $log -ErrorAction SilentlyContinue
 $p = Start-Process -FilePath "$bin\$Exe.exe" -WorkingDirectory $bin -PassThru -ArgumentList @(
@@ -44,7 +46,7 @@ while ((Get-Date) -lt $deadline) {
   }
 }
 if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
-foreach ($f in 'dynlights_test.lua', 'dynlights_camera.lua') { if (Test-Path "$test\$f.bak_featab") { Move-Item "$test\$f.bak_featab" "$test\$f" -Force } }
+foreach ($f in 'dynlights_test.lua', 'dynlights_camera.lua') { if (Test-Path "$test\$f.bak_featab") { Move-Item "$test\$f.bak_featab" "$test\$f" -Force } else { Remove-Item "$test\$f" -Force -ErrorAction SilentlyContinue } }
 Set-Content "$dump\steps.csv" $csv
 "$Tag $Api -> $state, $((Get-ChildItem $dump -Filter *.bmp).Count) frames"
 Get-Content $log | Select-String 'FEATAB: \[' | ForEach-Object { $_.Line }

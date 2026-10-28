@@ -318,7 +318,11 @@ float ShadowLookup(float4 coords)
     float sun;
     if (@COND@)
     {
-        sun = ShadowFilterLookup(coords);
+        // Both terrain vertex shaders move the shadow depth 0.01 towards the light ("put epsilon in vs": mShadow.z -= 0.01f), which the shipped
+        // lookup never read (it takes the blurred G channel). The filtered lookup compares depths, so with it a ground point had to be 0.01
+        // behind a caster to count as shadowed: a lit gap between every foot, wall and tower and the start of its shadow. The epsilon is put
+        // back, leaving 0.0005 so that a caster standing on the ground does not speckle along the line where it touches it.
+        sun = ShadowFilterLookup(float4(coords.xy, coords.z + 0.0095, coords.w));
     }
     else
     {
