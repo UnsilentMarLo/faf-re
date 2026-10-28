@@ -14,6 +14,7 @@
 //   ed_stratum_shader([name])                  -> terrain technique name; 'TTerrain' blends strata 0..3 only, 'TTerrainXP' all eight
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -21,6 +22,10 @@
 #include "lua/LuaRuntimeTypes.h"
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/render/textures/CD3DDynamicTextureSheet.h"
+#include "moho/render/d3d/CD3DDevice.h"
+#include "moho/render/d3d/RD3DTextureResource.h"
+#include "moho/misc/ID3DDeviceResources.h"
+#include "moho/terrain/StratumMaskSize.h"
 #include "moho/lua/CScrLuaInitForm.h"
 #include "moho/editor/EdStrata.h"
 #include "moho/editor/EditorDocument.h"
@@ -363,6 +368,201 @@ namespace
     return 1;
   }
 
+  // ---- the size of the masks ----------------------------------------------------------------------------------------------------------------------
+  // A mask keeps the resolution it is given: the size rule is StratumMaskSize.h (docs/RENDERER_BACKENDS.md, "Stratum mask resolution"): never less than half the map's size, at most
+  // max(2048, 2 x the map's size in cells), 8192 at the very most. The shipped exe resamples every mask to half the map's size when it loads a map, so a bigger mask only shows in an exe
+  // that keeps it; the editor draws and saves what it is given.
+  struct MaskRange
+  {
+    int minW = 0, minH = 0, maxW = 0, maxH = 0;
+  };
+
+  bool MaskRangeOf(moho::IWldTerrainRes* const res, MaskRange& r)
+  {
+    if (res == nullptr || res->mMap == nullptr || res->mMap->mHeightField.get() == nullptr) {
+      return false;
+    }
+    const int cellsX = res->mMap->mHeightField->width - 1;
+    const int cellsY = res->mMap->mHeightField->height - 1;
+    r.minW = cellsX >> 1;
+    r.minH = cellsY >> 1;
+    r.maxW = moho::StratumMaskExtent(moho::kStratumMaskCeiling, r.minW, cellsX);
+    r.maxH = moho::StratumMaskExtent(moho::kStratumMaskCeiling, r.minH, cellsY);
+    return r.minW > 0 && r.minH > 0;
+  }
+
+  // One axis of a resample: the source taps of every destination texel. Growing: linear between the two nearest texel centres. Shrinking: the area the destination texel covers.
+  struct AxisTaps
+  {
+    std::vector<int> first;          // first source index of each destination texel
+    std::vector<int> count;
+    std::vector<float> weight;       // count weights per destination texel, back to back
+    std::vector<std::size_t> start;  // offset of the weights of each destination texel
+  };
+
+  AxisTaps MakeTaps(const int src, const int dst)
+  {
+    AxisTaps t;
+    t.first.resize(static_cast<std::size_t>(dst));
+    t.count.resize(static_cast<std::size_t>(dst));
+    t.start.resize(static_cast<std::size_t>(dst));
+    const double scale = static_cast<double>(src) / static_cast<double>(dst);
+    for (int i = 0; i < dst; ++i) {
+      t.start[static_cast<std::size_t>(i)] = t.weight.size();
+      if (dst >= src) {
+        const double p = (static_cast<double>(i) + 0.5) * scale - 0.5;
+        const int i0 = static_cast<int>(std::floor(p));
+        const float f = static_cast<float>(p - static_cast<double>(i0));
+        const int a = std::max(0, std::min(src - 1, i0));
+        const int b = std::max(0, std::min(src - 1, i0 + 1));
+        t.first[static_cast<std::size_t>(i)] = a;
+        t.count[static_cast<std::size_t>(i)] = b - a + 1;
+        if (b == a) {
+          t.weight.push_back(1.0f);
+        } else {
+          t.weight.push_back(1.0f - f);
+          t.weight.push_back(f);
+        }
+      } else {
+        const double lo = static_cast<double>(i) * scale;
+        const double hi = lo + scale;
+        const int a = static_cast<int>(std::floor(lo));
+        const int b = std::min(src - 1, static_cast<int>(std::ceil(hi)) - 1);
+        t.first[static_cast<std::size_t>(i)] = a;
+        t.count[static_cast<std::size_t>(i)] = b - a + 1;
+        for (int s = a; s <= b; ++s) {
+          const double overlap = std::min(hi, static_cast<double>(s + 1)) - std::max(lo, static_cast<double>(s));
+          t.weight.push_back(static_cast<float>(overlap / scale));
+        }
+      }
+    }
+    return t;
+  }
+
+  std::vector<std::uint8_t> ResampleMask(const std::vector<std::uint8_t>& src, const int sw, const int sh, const AxisTaps& tx, const AxisTaps& tz, const int dw, const int dh)
+  {
+    std::vector<float> mid(static_cast<std::size_t>(dw) * static_cast<std::size_t>(sh));
+    for (int y = 0; y < sh; ++y) {
+      const std::uint8_t* const row = src.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(sw);
+      float* const out = mid.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(dw);
+      for (int x = 0; x < dw; ++x) {
+        const float* wt = tx.weight.data() + tx.start[static_cast<std::size_t>(x)];
+        float sum = 0.0f;
+        for (int k = 0, a = tx.first[static_cast<std::size_t>(x)], n = tx.count[static_cast<std::size_t>(x)]; k < n; ++k) {
+          sum += wt[k] * static_cast<float>(row[a + k]);
+        }
+        out[x] = sum;
+      }
+    }
+    std::vector<std::uint8_t> dst(static_cast<std::size_t>(dw) * static_cast<std::size_t>(dh));
+    for (int y = 0; y < dh; ++y) {
+      const float* wt = tz.weight.data() + tz.start[static_cast<std::size_t>(y)];
+      const int a = tz.first[static_cast<std::size_t>(y)];
+      const int n = tz.count[static_cast<std::size_t>(y)];
+      std::uint8_t* const out = dst.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(dw);
+      for (int x = 0; x < dw; ++x) {
+        float sum = 0.0f;
+        for (int k = 0; k < n; ++k) {
+          sum += wt[k] * mid[static_cast<std::size_t>(a + k) * static_cast<std::size_t>(dw) + static_cast<std::size_t>(x)];
+        }
+        out[x] = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, sum + 0.5f)));
+      }
+    }
+    return dst;
+  }
+
+  void AdoptMaskSheet(boost::SharedPtrRaw<moho::RD3DTextureResource>& mask, const boost::shared_ptr<moho::CD3DDynamicTextureSheet>& sheet)
+  {
+    const boost::SharedPtrRaw<moho::CD3DDynamicTextureSheet> borrow = boost::SharedPtrRawFromSharedBorrow(sheet);
+    boost::SharedPtrRaw<moho::RD3DTextureResource> reinterpreted{};
+    reinterpreted.px = reinterpret_cast<moho::RD3DTextureResource*>(borrow.px);
+    reinterpreted.pi = borrow.pi;
+    mask.assign_retain(reinterpreted);
+  }
+
+  // ed_stratum_limits() -> minW, minH, maxW, maxH   the sizes the masks may have on this map (nil without a map)
+  int __cdecl cfunc_EdStratumLimits(lua_State* const L)
+  {
+    MaskRange r;
+    if (!MaskRangeOf(Terrain(), r)) {
+      lua_pushnil(L);
+      return 1;
+    }
+    lua_pushnumber(L, static_cast<lua_Number>(r.minW));
+    lua_pushnumber(L, static_cast<lua_Number>(r.minH));
+    lua_pushnumber(L, static_cast<lua_Number>(r.maxW));
+    lua_pushnumber(L, static_cast<lua_Number>(r.maxH));
+    return 4;
+  }
+
+  // ed_stratum_set_size(w[, h]) -> true | nil, message   gives the eight masks another resolution (growing: linear, shrinking: area average); the paint is kept
+  int __cdecl cfunc_EdStratumSetSize(lua_State* const L)
+  {
+    moho::IWldTerrainRes* const res = Terrain();
+    MaskRange r;
+    const int w = static_cast<int>(luaL_checknumber(L, 1));
+    const int h = lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2)) : w;
+    const auto fail = [L](const char* text) {
+      lua_pushnil(L);
+      lua_pushstring(L, text);
+      return 2;
+    };
+    if (!MaskRangeOf(res, r)) {
+      return fail("no map");
+    }
+    if (w < r.minW || h < r.minH) {
+      return fail("a mask is not smaller than half the map's size (the exe raises it to that when it loads the map)");
+    }
+    if (w > r.maxW || h > r.maxH) {
+      return fail("a mask is not bigger than two texels per world unit (and 2048 on any map, 8192 at the most): a map does not use more");
+    }
+    moho::StratumMaterial& m = res->GetStratumMaterial();
+    const int sw = static_cast<int>(m.mStratumMaskWidth);
+    const int sh = static_cast<int>(m.mStratumMaskHeight);
+    if (sw == w && sh == h) {
+      lua_pushboolean(L, 1);
+      return 1;
+    }
+    if (sw <= 0 || sh <= 0 || !EnsureShadow(res, 0) || !EnsureShadow(res, 1)) {
+      return fail("the map has no paint masks");
+    }
+    moho::CD3DDevice* const device = moho::D3D_GetDevice();
+    if (device == nullptr) {
+      return fail("no device");
+    }
+    boost::shared_ptr<moho::CD3DDynamicTextureSheet> sheet0;
+    boost::shared_ptr<moho::CD3DDynamicTextureSheet> sheet1;
+    device->GetResources()->NewDynamicTextureSheet(sheet0, w, h, 2);
+    device->GetResources()->NewDynamicTextureSheet(sheet1, w, h, 2);
+    if (sheet0.get() == nullptr || sheet1.get() == nullptr) {
+      return fail("the texture could not be made (out of memory?)");
+    }
+    const AxisTaps tx = MakeTaps(sw, w);
+    const AxisTaps tz = MakeTaps(sh, h);
+    std::vector<std::uint8_t> lanes[8];
+    for (int i = 0; i < 8; ++i) {
+      lanes[i] = ResampleMask(gShadow.lane[i], sw, sh, tx, tz, w, h);
+    }
+    AdoptMaskSheet(m.mStratumMask0, sheet0);
+    AdoptMaskSheet(m.mStratumMask1, sheet1);
+    m.mStratumMaskWidth = static_cast<std::uint32_t>(w);
+    m.mStratumMaskHeight = static_cast<std::uint32_t>(h);
+    gShadow = MaskShadow{};
+    gShadow.terrain = res;
+    gShadow.w = w;
+    gShadow.h = h;
+    for (int i = 0; i < 8; ++i) {
+      gShadow.lane[i] = std::move(lanes[i]);
+    }
+    gShadow.sheet[0] = MaskSheet(m, 0);
+    gShadow.sheet[1] = MaskSheet(m, 1);
+    gShadow.loaded[0] = gShadow.loaded[1] = true;
+    UploadShadow(res, 0);
+    UploadShadow(res, 1);
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+
   [[nodiscard]] moho::CScrLuaInitFormSet& UserLuaInitSet()
   {
     if (moho::CScrLuaInitFormSet* const set = moho::SCR_FindLuaInitFormSet("User"); set != nullptr) {
@@ -390,6 +590,10 @@ namespace
       (void)new moho::CScrLuaBinder(set, "ed_stratum_flush", &cfunc_EdStratumFlush, nullptr, "<global>", "ed_stratum_flush() -> uploads deferred mask writes");
       (void)new moho::CScrLuaBinder(set, "ed_stratum_write", &cfunc_EdStratumWrite, nullptr, "<global>",
                                     "ed_stratum_write(stratum, x0, z0, x1, z1, values) -> cells written");
+      (void)new moho::CScrLuaBinder(set, "ed_stratum_limits", &cfunc_EdStratumLimits, nullptr, "<global>",
+                                    "ed_stratum_limits() -> minW, minH, maxW, maxH (the sizes the masks may have)");
+      (void)new moho::CScrLuaBinder(set, "ed_stratum_set_size", &cfunc_EdStratumSetSize, nullptr, "<global>",
+                                    "ed_stratum_set_size(w[, h]) -> true | nil, message (the eight masks get another resolution, the paint is resampled)");
     }
   };
 
