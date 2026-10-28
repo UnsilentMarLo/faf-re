@@ -1688,7 +1688,10 @@ namespace moho
               params.th = lod::Thresholds{lod::kGridRefinePx, lod::kGridMergePx};
               // The leaf budget follows the screen: leaves are 7-20 px across, so a 2560x1600 view needs more than the 20,000 a 1080p view does. A grid that runs out of
               // leaves keeps the far ground coarse, and where that border lies moves with every camera change (the grid "switched resolution").
-              const float budgetScale = std::max(1.0f, vw * vh / (1920.0f * 1080.0f));
+              // A flat view from above needs area / 100 leaves at the moment every block crosses the 20 px refine threshold together (all cells 10 px), and the budget was
+              // area / 104 (20,000 at 1080p): measured at 2066 x 1294 on the NVIDIA laptop, a zoom in small steps ran into the cap (25,783 of 25,800 leaves) and the far strip of
+              // the view stayed 16-32 cells per block. The scale is twice that now (area / 52); a frame that does not need it does not pay for it (the cap only stops the cutting).
+              const float budgetScale = 2.0f * std::max(1.0f, vw * vh / (1920.0f * 1080.0f));
               params.maxLeaves = static_cast<int>(static_cast<float>(lod::kGridMaxLeaves) * budgetScale);
               static lod::Tree tree;
               const auto probe = [&](const lod::Key& k) { return ProbeBlock(ctx, table, k, gPerf.buildGridNodesProjected); };
