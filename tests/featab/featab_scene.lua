@@ -39,6 +39,10 @@ ForkThread(function()
         return
     end
 
+    if AB_SCENE == 'none' then
+        Say(string.format('ground height %.2f', GetTerrainHeight(x0, z0)))
+        return
+    end
     brainA:GiveResource('Energy', 100000)
     brainA:GiveResource('Mass', 100000)
     if AB_SCENE == 'static' then

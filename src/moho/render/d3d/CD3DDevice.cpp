@@ -34,6 +34,7 @@
 #include "moho/misc/StatItem.h"
 #include "moho/misc/Stats.h"
 #include "moho/particles/CWorldParticles.h"
+#include "moho/render/FrameLimiter.h"
 #include "moho/render/RenderInfo.h"
 #include "moho/render/d3d/CD3DDeviceResources.h"
 #include "moho/render/d3d/CD3DEffectTechnique.h"
@@ -1752,6 +1753,7 @@ namespace moho
       device->Present();
       sPresentSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - presentStart).count();
       (void)AddToStatCounter(EnsureEngineIntStat(sEngineStatRenderPresentCount, "Render_PresentCount"), 1);
+      FrameLimiterWait(); // FAF addition: the frame rate limit (Options > Video, /maxfps)
 
       if (mClearEnabled != 0) {
         Clear();
