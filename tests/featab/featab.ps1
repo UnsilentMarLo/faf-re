@@ -11,6 +11,7 @@ Remove-Item $dump -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory $dump -Force | Out-Null
 foreach ($f in 'dynlights_test.lua', 'dynlights_camera.lua') { if (Test-Path "$test\$f") { Copy-Item "$test\$f" "$test\$f.bak_featab" -Force } }
 $sceneHeader = "AB_SCENE = '$Scene'`nAB_TX = $Tx`nAB_TZ = $Tz`n"
+if ($env:FEATAB_SHOOTER) { $sceneHeader += "AB_SHOOTER = '$($env:FEATAB_SHOOTER)'`n" }
 if ($env:FEATAB_SIZES) { $sceneHeader += "AB_SIZES = { $($env:FEATAB_SIZES) }`n" }
 Set-Content "$test\dynlights_test.lua" ($sceneHeader + (Get-Content "$here\featab_scene.lua" -Raw)) -Encoding ascii
 $camHeader = "AB_START = $Start`nAB_HOLD = $Hold`nAB_TX = $Tx`nAB_TY = $Ty`nAB_TZ = $Tz`nAB_PAUSE_AT = $PauseAt`nAB_FOCUS = $Focus`nAB_SELECT = $($Select -ne 0 ? 'true' : 'false')`n"

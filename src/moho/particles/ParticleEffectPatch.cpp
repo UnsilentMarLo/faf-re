@@ -1,6 +1,8 @@
 #include "moho/particles/ParticleEffectPatch.h"
 
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,6 +20,7 @@ float4 LRView = float4(0, 0, 1, 1);        // the viewport in the scene target: 
 float4 LRScene = float4(1, 1, 1, 1);       // the scene target: width, height, 1/width, 1/height
 float4 LRRatio = float4(2, 2, 2, 0);       // xy: viewport pixels per low-resolution pixel, z: the integer scale
 float4 LRQuad = float4(1, 1, 1, 1);        // the output target of the full-screen passes: width, height, 1/width, 1/height
+float4 FlashParams = float4(@FLASHPULL@, 2.5, 0.6, 0);   // flash depth pull: x the pull as a fraction of the quad half size (0: off), y the largest half size and z the longest lifetime (s) of a particle that gets it
 float4 SoftParams = float4(0, 0, 0, 0);    // soft particles: x the soft-edge distance in world units along the view axis (0: off, the scene depth is not bound)
 
 texture LRAccumTexture;
@@ -489,6 +492,8 @@ technique LRComposite
       const std::size_t at = patched.find(kBillboard);
       patched.insert(
         at,
+        "if( !inFlat && FlashParams.x > 0 && lifetime < FlashParams.z && (Size.x + (Size.y * t)) < FlashParams.y )\n"
+        "\t\t\tpos += normalize(InverseViewMatrix[3].xyz - pos) * ((Size.x + (Size.y * t)) * FlashParams.x);\n\n\t\t"
         "if( LRParams.x != 0 && LRCull(Size.x + (Size.y * t), mul(float4(pos, 1), WorldToProjection).w) )\n"
         "\t\t\treturn Out;\n\n\t\t"
       );
@@ -501,8 +506,18 @@ technique LRComposite
       );
     }
     {
+      // Muzzle flashes (small, short-lived billboards) are pulled toward the camera by a fraction of their size, so the barrel they sit in does
+      // not cut them in half and the soft-particle fade does not take them where they touch the unit. FAF_FLASH_PULL overrides the fraction (0: off).
+      std::string declarations(kDeclarations);
+      double pull = 0.9;
+      if (const char* const env = std::getenv("FAF_FLASH_PULL")) {
+        pull = std::strtod(env, nullptr);
+      }
+      char number[32];
+      std::snprintf(number, sizeof(number), "%.3f", pull < 0.0 ? 0.0 : pull);
+      declarations.replace(declarations.find("@FLASHPULL@"), 11U, number);
       const std::size_t at = patched.find(kStruct);
-      patched.insert(at, std::string(kDeclarations));
+      patched.insert(at, declarations);
     }
 
     {

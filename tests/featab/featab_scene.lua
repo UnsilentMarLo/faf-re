@@ -194,6 +194,18 @@ ForkThread(function()
         Say('SLOT end')
         return
     end
+    if AB_SCENE == 'colossus' then
+        -- one big walker (AB_SHOOTER from FEATAB_SHOOTER, default the Galactic Colossus) shooting at an immortal building 24 units away
+        WaitUntil(4)
+        local id = rawget(_G, 'AB_SHOOTER') or 'ual0401'
+        local s = CreateUnitHPR(id, brainA.Name, x0 - 12, GetTerrainHeight(x0 - 12, z0), z0, 0, math.pi * 0.5, 0)
+        local t = CreateUnitHPR('ueb1103', brainB.Name, x0 + 12, GetTerrainHeight(x0 + 12, z0), z0, 0, 0, 0)
+        if t then t:SetCanTakeDamage(false) end
+        if s and t then IssueAttack({ s }, t) end
+        Say(string.format('colossus scene: %s %s ground %.2f', id, tostring(s ~= nil), GetTerrainHeight(x0, z0)))
+        WaitSeconds(300)
+        return
+    end
     if AB_SCENE == 'shadow' then
         -- a steady light 3 units above the ground, with a heavy unit, a building and two tanks around it: what they shade is what the test shows
         WaitUntil(3)
