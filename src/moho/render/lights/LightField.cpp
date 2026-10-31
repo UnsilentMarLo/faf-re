@@ -29,6 +29,13 @@ namespace moho::lights
   );
 
   int ren_DynLightsFieldShadows = 1;
+  int ren_DynLightsSunShadows = 1;
+
+  static TConVar<int> gTConVar_ren_DynLightsSunShadows(
+    "ren_DynLightsSunShadows",
+    "The terrain's shadow of the sun (ridges shade valleys, units and water) from the irradiance field (ren_DynLightsMode 1): 1 (the default) on, 0 off.",
+    &ren_DynLightsSunShadows
+  );
 
   static TConVar<int> gTConVar_ren_DynLightsFieldShadows(
     "ren_DynLightsFieldShadows",
@@ -53,6 +60,7 @@ namespace moho::lights
       float layerH[4];
       float map[4];    // unused, unused, water elevation, water on
       float absorb[4]; // light absorbed per world unit of water, per colour channel
+      float sun[4];    // unit vector towards the sun, 1 when it is above the horizon
       float misc[4]; // frame seed, occluder count, temporal blend of the visibility (1: history not usable), shadows on
       float hist[4]; // window shift in cells since the previous frame (x, z), 1 when the history is usable
     };
@@ -66,6 +74,7 @@ cbuffer FieldConstants : register(b0)
     float4 gLayerH;
     float4 gMap;      // unused, unused, water elevation, water on
     float4 gAbsorb;   // absorption per world unit of water, per channel
+    float4 gSun;      // towards the sun, 1 when it is up
     float4 gMisc;     // frame seed, caster count, visibility blend, shadows on
     float4 gHist;     // window shift in cells (x, z), history usable
 };
@@ -173,6 +182,26 @@ float3 WaterTransmit(float3 p, float3 q)
         below = dp < 0.0 ? (-dp) / (dq - dp) : (-dq) / (dp - dq);
     }
     return exp(-gAbsorb.xyz * (length(q - p) * below));
+}
+
+// How much of the sun reaches p: the terrain between p and the sun, marched along the sun's direction with steps that grow with the distance
+// (long shadows of a low sun), and a penumbra that widens with it.
+float SunVis(float3 p)
+{
+    float vis = 1.0;
+    [loop] for (int i = 0; i < 40; ++i)
+    {
+        float u = ((float)i + 0.5) / 40.0;
+        float t = 0.3 + 500.0 * u * u;
+        float3 q = p + gSun.xyz * t;
+        float clearance = q.y - GroundAt(q.xz) - 0.15;
+        vis = min(vis, saturate(clearance / (0.3 + 0.012 * t)));
+        if (vis <= 0.0)
+        {
+            break;
+        }
+    }
+    return vis;
 }
 
 // The ridges between the receiver and a light: the ray is marched over the terrain; the visibility falls off as it passes close to the
@@ -376,9 +405,15 @@ void FieldCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : 
         vis = lerp(prev, vis, gMisc.z);
     }
     VisCur[cellId] = vis;
-    uint at = cellId * 2;
+    uint at = cellId * 3;
     Field[at] = float4(E * vis, layer == 0 ? ground : (layer == 1 ? surface : 0.0));
     Field[at + 1] = float4(D * vis, W * vis);
+    float sunVis = 1.0;
+    if (gSun.w > 0.5 && layer < 2)
+    {
+        sunVis = gSun.w > 2.5 ? 0.0 : (gSun.w > 1.5 ? (((gid.x + gid.y) & 1u) != 0u ? 0.2 : 1.0) : SunVis(p)); // 2: checker, 3: no sun anywhere (debug)
+    }
+    Field[at + 2] = float4(sunVis, 0.0, 0.0, 0.0);
 }
 
 StructuredBuffer<float4> FieldIn : register(t0);
@@ -397,7 +432,7 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     uint cx = p.x - layer * cells;
     uint part = p.y / cells;
     uint cy = p.y - part * cells;
-    return FieldIn[((layer * cells + cy) * cells + cx) * 2 + part];
+    return FieldIn[((layer * cells + cy) * cells + cx) * 3 + part];
 }
 )HLSL";
 
@@ -426,6 +461,7 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
       float heightCell = 0.0f;
       std::uint32_t heightAge = 1000U;
       std::uint64_t heightRevision = ~0ULL;
+      bool sunActive = false;
       std::uint32_t heightWidth = 0U;
       std::uint32_t heightHeight = 0U;
     };
@@ -476,7 +512,7 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
         GpuBufferDesc field;
         field.name = "LightFieldCells";
         field.stride = 16U;
-        field.capacity = kCells * kCells * kLayers * 2U;
+        field.capacity = kCells * kCells * kLayers * 3U;
         field.shaderWrite = true;
         s.fieldBuffer = device.CreateGpuBuffer(field);
         GpuBufferDesc casters;
@@ -499,14 +535,14 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
         }
       }
       if (s.frame.atlas == nullptr) {
-        const RenderTargetContext context(kCells * kLayers, kCells * 2U, kAtlasFormat);
+        const RenderTargetContext context(kCells * kLayers, kCells * 3U, kAtlasFormat);
         s.frame.atlas = device.CreateRenderTarget(&context);
         if (s.frame.atlas == nullptr) {
-          gpg::Warnf("Light field disabled: no %ux%u RGBA16F render target", kCells * kLayers, kCells * 2U);
+          gpg::Warnf("Light field disabled: no %ux%u RGBA16F render target", kCells * kLayers, kCells * 3U);
           s.failed = true;
           return false;
         }
-        gpg::Logf("Light field: %ux%u RGBA16F atlas, %u cells x %u layers, %zu light slots", kCells * kLayers, kCells * 2U, kCells, kLayers, kMaxGridLights);
+        gpg::Logf("Light field: %ux%u RGBA16F atlas, %u cells x %u layers, %zu light slots", kCells * kLayers, kCells * 3U, kCells, kLayers, kMaxGridLights);
       }
       return true;
     }
@@ -561,7 +597,8 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     State& s = GetState();
     s.frame.params2[0] = 0.0f;
     s.frame.valid = false;
-    if (ren_DynLightsMode != 1 || image.lightCount == 0 || terrain.context == nullptr || terrain.elevation == nullptr ||
+    const bool sunOnly = image.lightCount == 0 && ren_DynLightsSunShadows != 0 && terrain.sunValid; // no light: the field still carries the sun's shadow
+    if (ren_DynLightsMode != 1 || (image.lightCount == 0 && !sunOnly) || terrain.context == nullptr || terrain.elevation == nullptr ||
         terrain.sample == nullptr || terrain.width < 2U || terrain.height < 2U) {
       s.historyValid = false; // the visibility buffers go stale while the field is not run
       return false;
@@ -630,6 +667,7 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
         }
       }
       device->UpdateGpuBuffer(*s.heightBuffer, 0U, words, packed.data());
+      gpg::Logf("Light field: sun direction (%.3f, %.3f, %.3f), %s", terrain.sunDirection[0], terrain.sunDirection[1], terrain.sunDirection[2], terrain.sunValid ? "valid" : "not valid");
       s.heightRevision = terrain.revision;
       s.heightWidth = terrain.width;
       s.heightHeight = terrain.height;
@@ -640,7 +678,9 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     }
 
     const std::uint32_t lightCount = std::min<std::uint32_t>(image.lightCount, static_cast<std::uint32_t>(kMaxGridLights));
-    device->UpdateGpuBuffer(*s.lightBuffer, 0U, lightCount * static_cast<std::uint32_t>(kTexelsPerLight), image.data.data());
+    if (lightCount > 0U) {
+      device->UpdateGpuBuffer(*s.lightBuffer, 0U, lightCount * static_cast<std::uint32_t>(kTexelsPerLight), image.data.data());
+    }
 
     // the casters of the frame (the box of each unit and building in view)
     const std::uint32_t casterCount =
@@ -677,6 +717,10 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     constants.absorb[0] = 0.25f; // per world unit: red is gone in a few units, blue goes on
     constants.absorb[1] = 0.06f;
     constants.absorb[2] = 0.03f;
+    constants.sun[0] = terrain.sunDirection[0];
+    constants.sun[1] = terrain.sunDirection[1];
+    constants.sun[2] = terrain.sunDirection[2];
+    constants.sun[3] = (ren_DynLightsSunShadows != 0 && terrain.sunValid && terrain.sunDirection[1] > 0.02f) ? (ren_DynLightsSunShadows >= 2 ? static_cast<float>(ren_DynLightsSunShadows) : 1.0f) : 0.0f; // 2: a checker, to see that the sun term reaches the shaders
 
     OutputContext saved;
     device->GetContext(&saved);
@@ -704,7 +748,7 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
       device->ClearTarget(&target);
       D3DVIEWPORT9 viewport{};
       viewport.Width = kCells * kLayers;
-      viewport.Height = kCells * 2U;
+      viewport.Height = kCells * 3U;
       viewport.MaxZ = 1.0f;
       device->SetViewport(&viewport);
       GpuDrawCall call;
@@ -731,8 +775,9 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     f.params2[0] = 1.0f;
     f.params2[1] = static_cast<float>(kLayers);
     f.params2[2] = 1.0f / static_cast<float>(kCells * kLayers);
-    f.params2[3] = 1.0f / static_cast<float>(kCells * 2U);
+    f.params2[3] = 1.0f / static_cast<float>(kCells * 3U);
     f.valid = true;
+    s.sunActive = constants.sun[3] > 0.5f;
     ++s.stats.frames;
     s.stats.cellSize = cellSize;
     s.stats.cells = kCells;
@@ -743,6 +788,12 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
   const FieldFrame& CurrentField()
   {
     return GetState().frame;
+  }
+
+  bool SunShadowActive()
+  {
+    const State& s = GetState();
+    return s.frame.valid && s.sunActive;
   }
 
   void ReleaseField()

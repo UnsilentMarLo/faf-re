@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gpg/gal/Matrix.h"
 #include "moho/render/lights/LightField.h"
 #include "moho/render/lights/LightGrid.h"
 
@@ -23,6 +24,10 @@ namespace moho::lights
 
   // Binds (or, when `frame` is not valid, switches off) the irradiance field the shaders sample: docs/LIGHTING_V2.md.
   void BindField(const FieldFrame& frame);
+
+  // The inverse of the sun's shadow matrix (the shadow camera's inverse view projection): the shaders rebuild the world position of a pixel from
+  // its shadow coordinates with it, to ask the field how much sun reaches that position.
+  void SetSunShadowCamera(const gpg::gal::Matrix& inverseViewProjection, bool valid);
 
   // World position of the camera of the view that is about to draw; the mesh pixel shaders rebuild their world position from it.
   void SetCameraPosition(float x, float y, float z);

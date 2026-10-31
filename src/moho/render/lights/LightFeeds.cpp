@@ -14,7 +14,9 @@
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/lights/LightBinding.h"
 #include "moho/render/lights/LightCensus.h"
+#include "moho/render/WRenViewport.h"
 #include "moho/render/lights/LightField.h"
+#include "moho/sim/CWldMap.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
 
@@ -275,6 +277,16 @@ namespace moho::lights
         terrain.revision = HeightFieldRevision();
         terrain.waterEnabled = map->IsWaterEnabled();
         terrain.waterElevation = map->GetWaterElevation();
+        if (const IWldTerrainRes* const terrainRes = REN_GetTerrainRes()) {
+          const Wm3::Vector3f sun = terrainRes->GetSunDirection();
+          const float length = std::sqrt(sun.x * sun.x + sun.y * sun.y + sun.z * sun.z);
+          if (length > 0.0001f) {
+            terrain.sunDirection[0] = sun.x / length;
+            terrain.sunDirection[1] = sun.y / length;
+            terrain.sunDirection[2] = sun.z / length;
+            terrain.sunValid = true;
+          }
+        }
       }
       (void)UpdateField(camera, gFrameImage, terrain);
       BindField(CurrentField());

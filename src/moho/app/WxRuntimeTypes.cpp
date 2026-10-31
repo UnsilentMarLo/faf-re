@@ -26,6 +26,7 @@
 #include "moho/mesh/Mesh.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/particles/CWorldParticles.h"
+#include "moho/render/lights/LightBinding.h"
 #include "moho/render/lights/LightFeeds.h"
 #include "moho/render/lights/LightDebugView.h"
 #include "moho/render/AmbientOcclusion.h"
@@ -4076,6 +4077,9 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
         mShadowRenderer.RenderFrameShadows(
           terrain, *mCam, worldView->mView->CameraGetTargetZoom());
       }
+
+      // The sun's shadow camera for the light field: the shaders rebuild a pixel's world position from its shadow coordinates (docs/LIGHTING_V2.md).
+      moho::lights::SetSunShadowCamera(mShadowRenderer.mCamera.inverseViewProjection, mShadowRenderer.mShadowCameraValid);
 
       // Dynamic lights: evaluate the pool for this frame before anything is lit (docs/DYNAMIC_LIGHTS.md).
       moho::lights::BeginFrame(moho::REN_GetGameTick(), moho::REN_GetSimDeltaSeconds());

@@ -245,6 +245,26 @@ void DynFieldSample(float3 p, out float3 E, out float4 DW)
     }
 }
 
+// How much of the sun reaches a world position (part 3 of the atlas, layers 0 and 1): the terrain between it and the sun.
+float DynFieldSun(float3 p)
+{
+    float vis = 1.0;
+    float cells = dynFieldParams.w;
+    float2 c = (p.xz - dynFieldParams.xy) * dynFieldParams.z;
+    if (dynFieldParams2.x > 0.5 && c.x > -1.0 && c.y > -1.0 && c.x < cells + 1.0 && c.y < cells + 1.0)
+    {
+        c = clamp(c, 0.5, cells - 0.5);
+        float ground = DynFieldFetch(c, 0.0, 0.0).a;
+        float surface = DynFieldFetch(c, 1.0, 0.0).a;
+        vis = DynFieldFetch(c, 1.0, 2.0).x;
+        if (p.y <= surface + 0.3 && surface - ground > 0.1)
+        {
+            vis = lerp(DynFieldFetch(c, 0.0, 2.0).x, vis, saturate((p.y - (ground + 0.5)) / max(surface + 0.3 - ground - 0.5, 0.05)));
+        }
+    }
+    return vis;
+}
+
 // The wrapped diffuse term of a surface with normal n: the grid path sums colour x atten x saturate((n.l + 0.5) / 1.5) per light, which is
 // linear in n.l between -0.5 and 1, so the sum is E / 3 + 2 / 3 x E x dot(n, D) / W.
 float3 DynFieldDiffuse(float3 E, float4 DW, float3 n)
@@ -259,6 +279,7 @@ float3 DynFieldTerrain(float3 worldPos, float3 normal)
     DynFieldSample(worldPos, E, DW);
     return DynFieldDiffuse(E, DW, normal);
 }
+// ---- end FAF light field ----
 )HLSL";
 
     // The field as light of the water surface: glints of the combined light on the wave normal and the light scattered back out of the water.
@@ -290,6 +311,48 @@ float3 FafWaterLights(float3 worldPos, float3 N, float3 V, float depth)
         total = total / (1.0 + 0.2 * top);
     }
     return total;
+}
+)HLSL";
+
+    // The sun's shadow of the terrain, into the shadow term both effects already use: the shadow coordinates of a pixel come from its world
+    // position through the sun's shadow matrix, so the inverse matrix gives the world position back and the field says how much sun reaches it.
+    constexpr const char* kSunDecl = R"HLSL(
+float4x4 dynShadowInv;   // inverse of the sun shadow matrix
+float4 dynSunInfo;       // x: 1 when the sun shadow camera is valid
+
+float FieldSunVisibility(float4 clip)
+{
+    float vis = 1.0;
+    if (dynFieldParams2.x > 0.5 && dynSunInfo.x > 0.5)
+    {
+        float4 w = mul(clip, dynShadowInv);
+        vis = DynFieldSun(w.xyz / w.w);
+    }
+    return vis;
+}
+
+// The terrain effect's shadow coordinates (x, y mapped to texture space, z lowered by 0.01) back to the clip position.
+float FieldSunVisTerrain(float4 c)
+{
+    return FieldSunVisibility(float4(2.0 * c.x - c.w, c.w - 2.0 * c.y, c.z + 0.01, c.w));
+}
+
+)HLSL";
+
+    constexpr const char* kSunWrapperMesh = R"HLSL(
+float ComputeShadow( float4 shadowCoords, uniform bool hiDefFiltering )
+{
+    float shadow = ComputeShadowBase( shadowCoords, hiDefFiltering );
+    // ComputeShadowTexcoord mapped the clip position to texture space: undo it
+    float4 clip = float4( 2.0 * shadowCoords.x - shadowCoords.w, shadowCoords.w - 2.0 * shadowCoords.y, shadowCoords.z * shadowCoords.w, shadowCoords.w );
+    return shadow * FieldSunVisibility( clip );
+}
+)HLSL";
+
+    constexpr const char* kSunWrapperTerrain = R"HLSL(
+float ComputeShadow( float4 vShadowCoord )
+{
+    return ComputeShadowBase( vShadowCoord ) * FieldSunVisTerrain( vShadowCoord );
 }
 )HLSL";
 
@@ -817,6 +880,84 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
     return PatchedEffect::None;
   }
 
+  // Best effort, after the lights patch: moves the field block ahead of ComputeShadow and wraps that function so the terrain's sun shadow
+  // (the field's third part) multiplies the shadow term. A source that does not look as expected is left alone.
+  static int AddSunShadow(std::string& s, const bool mesh, const bool pbrReads = true)
+  {
+    if (!mesh) {
+      // The terrain shaders know their world position (mTexWT = x, z, height): the sun's shadow of the field multiplies every read of the shadow
+      // map, the ones of the PBR shaders (tex2D(ShadowSampler, X.mShadow.xy).g) and CalculateLighting's.
+      int patched = 0;
+      const std::string key = "tex2D(ShadowSampler, ";
+      const std::string tail = ".mShadow.xy).g";
+      size_t at = pbrReads ? 0 : std::string::npos;
+      while (at != std::string::npos && (at = s.find(key, at)) != std::string::npos) {
+        const size_t first = at + key.size();
+        size_t last = first;
+        while (last < s.size() && IsIdentChar(s[last])) {
+          ++last;
+        }
+        if (last > first && s.compare(last, tail.size(), tail) == 0) {
+          const size_t end = last + tail.size();
+          const std::string var = s.substr(first, last - first);
+          const std::string replacement = "(" + s.substr(at, end - at) + " * DynFieldSun(" + var + ".mTexWT.xzy))";
+          s.replace(at, end - at, replacement);
+          at += replacement.size();
+          ++patched;
+        } else {
+          at += key.size();
+        }
+      }
+      // the same reads after the shadow filter patch (ShadowEffectPatch.cpp): ShadowLookup(X.mShadow)
+      const std::string filterKey = "ShadowLookup(";
+      const std::string filterTail = ".mShadow)";
+      at = pbrReads ? 0 : std::string::npos;
+      while (at != std::string::npos && (at = s.find(filterKey, at)) != std::string::npos) {
+        const size_t first = at + filterKey.size();
+        size_t last = first;
+        while (last < s.size() && IsIdentChar(s[last])) {
+          ++last;
+        }
+        if (last > first && s.compare(last, filterTail.size(), filterTail) == 0) {
+          const size_t end = last + filterTail.size();
+          const std::string var = s.substr(first, last - first);
+          const std::string replacement = "(" + s.substr(at, end - at) + " * DynFieldSun(" + var + ".mTexWT.xzy))";
+          s.replace(at, end - at, replacement);
+          at += replacement.size();
+          ++patched;
+        } else {
+          at += filterKey.size();
+        }
+      }
+      const std::string line = "    float shadow = ( inShadows && ( 1 == ShadowsEnabled ) ) ? ComputeShadow(shadowCoords) : 1;\n";
+      if (CountOccurrences(s, line) == 1) {
+        s.insert(s.find(line) + line.size(), "    shadow *= DynFieldSun(worldTerrain.xzy);\n");
+        ++patched;
+      }
+      return patched;
+    }
+    const std::string startMark = "// ---- FAF light field (LightField.cpp";
+    const std::string endMark = "// ---- end FAF light field ----\n";
+    const size_t fs = s.find(startMark);
+    const size_t fe = fs == std::string::npos ? std::string::npos : s.find(endMark, fs);
+    const std::string sig = mesh ? "float ComputeShadow( float4 shadowCoords, uniform bool hiDefFiltering )" : "float ComputeShadow( float4 vShadowCoord )";
+    if (fs == std::string::npos || fe == std::string::npos || CountOccurrences(s, sig) != 1) {
+      return 0;
+    }
+    const size_t sigAt = s.find(sig);
+    const size_t fnEnd = FunctionEnd(s, sigAt);
+    if (fnEnd == std::string::npos || sigAt > fs || fnEnd > fs) {
+      return 0;
+    }
+    const size_t blockEnd = fe + endMark.size();
+    const std::string block = s.substr(fs, blockEnd - fs);
+    s.erase(fs, blockEnd - fs);
+    s.insert(fnEnd, mesh ? kSunWrapperMesh : kSunWrapperTerrain);
+    s.replace(sigAt, std::string("float ComputeShadow").size(), "float ComputeShadowBase");
+    s.insert(sigAt, block + kSunDecl);
+    return 1;
+  }
+
   EffectPatchResult PatchMeshEffect(std::string& source, const int flood)
   {
     EffectPatchResult result;
@@ -942,12 +1083,14 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
     }
     out.append(s, pos, npos);
 
+    result.sunShadowSites = AddSunShadow(out, true);
+    result.sunShadow = result.sunShadowSites > 0;
     source = std::move(out);
     result.patched = true;
     return result;
   }
 
-  EffectPatchResult PatchTerrainEffect(std::string& source, const int flood)
+  EffectPatchResult PatchTerrainEffect(std::string& source, const int flood, const bool sunReads)
   {
     EffectPatchResult result;
     string s = source;
@@ -1055,6 +1198,8 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
     }
     out.append(s, pos, npos);
 
+    result.sunShadowSites = AddSunShadow(out, false, sunReads);
+    result.sunShadow = result.sunShadowSites > 0;
     source = std::move(out);
     result.patched = true;
     return result;
@@ -1077,6 +1222,12 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
     string text = source;
     const size_t crest = text.find(kCrest);
     text.insert(crest + kCrest.size(), "\n    water += FafWaterLights(ViewPosition - inV.mViewVec, N, viewVector, waterDepth);");
+    // the terrain's shadow on the water: the sun reflection is cut where the shore blocks the sun
+    constexpr string_view kSunLine = "sunReflection *= waterTexture.r;";
+    if (CountOccurrences(text, kSunLine) == 1) {
+      text.insert(text.find(kSunLine) + kSunLine.size(),
+                  "\n    sunReflection *= DynFieldSun(float3(ViewPosition.x - inV.mViewVec.x, WaterElevation, ViewPosition.z - inV.mViewVec.z));");
+    }
     text.insert(text.find(kShader), string(kFieldDecl) + kWaterLightCode + "\n");
     source = std::move(text);
     result.patched = true;

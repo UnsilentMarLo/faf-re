@@ -24,13 +24,17 @@ namespace moho::lights
   {
     bool patched = false;
     int techniques = 0; // techniques that got the light pass
+    bool sunShadow = false; // the sun shadow term of the effect also takes the terrain's shadow from the light field
+    int sunShadowSites = 0; // how many shadow reads were wrapped
     std::string error;  // why nothing was patched, when `patched` is false
   };
 
   // `flood` is a diagnostic (/dynlightsflood = 1): the light passes paint every pixel magenta; 2 (/dynlightsflood2) paints what the terrain pass finds: red = the light parameters arrived, green = the grid cell has a light, blue = the light data texture holds a light. Otherwise it only paints magenta instead of reading the lights, which shows
   // whether the passes run at all, apart from whether the light data is right.
   EffectPatchResult PatchMeshEffect(std::string& source, int flood = 0);
-  EffectPatchResult PatchTerrainEffect(std::string& source, int flood = 0);
+  // `sunReads` = false leaves the PBR shaders' shadow reads alone (each such read samples the light field: on a shader model with 16 samplers a
+  // technique that already uses 15 cannot take it); the effect builder asks for it when the first compile fails.
+  EffectPatchResult PatchTerrainEffect(std::string& source, int flood = 0, bool sunReads = true);
 
   // water2.fx: the light field as light of the water surface (glints, scatter); declares the field variables (docs/LIGHTING_V2.md).
   EffectPatchResult PatchWaterEffect(std::string& source);

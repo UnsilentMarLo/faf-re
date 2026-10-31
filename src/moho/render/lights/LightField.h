@@ -20,8 +20,9 @@ namespace moho
 // RGBA16F atlas that the terrain and mesh shaders sample once at their world position instead of looping over the lights of a grid cell.
 // The cost depends on the size of the field, not on the number of lights or of the passes that read it.
 //
-// Atlas layout (width = cells * layers, height = 2 * cells): layer l, cell (x, y) is at pixel (l * cells + x, y) for the first half and
-// (l * cells + x, cells + y) for the second:
+// Atlas layout (width = cells * layers, height = 3 * cells): layer l, cell (x, y) is at pixel (l * cells + x, y) for the first part,
+// (l * cells + x, cells + y) for the second and (l * cells + x, 2 * cells + y) for the third (x = how much of the sun reaches the cell: the
+// terrain between the cell and the sun, layers 0 and 1 only):
 //   first half   rgb = sum of colour x attenuation of the lights (irradiance without a normal); alpha of layer 0 = the terrain height at
 //                the cell, of layer 1 = the surface height (the water surface over water, else the terrain)
 // Layers: 0 the terrain 0.5 above it (the sea bed under water), 1 to 4 the surface 0.3, 3, 10 and 30 above it. Over water the lights are
@@ -52,6 +53,8 @@ namespace moho::lights
     std::uint64_t revision = 0; // changes when the heights do (HeightFieldRevision)
     float waterElevation = 0.0f;
     bool waterEnabled = false;
+    float sunDirection[3] = {0.0f, 1.0f, 0.0f}; // unit vector towards the sun
+    bool sunValid = false;
   };
 
   struct FieldFrame
@@ -68,6 +71,9 @@ namespace moho::lights
   bool UpdateField(const GeomCamera3& camera, const LightGridImage& image, const FieldTerrain& terrain);
 
   const FieldFrame& CurrentField();
+
+  // True while the field of this frame carries the sun's shadow of the terrain (the terrain and mesh shaders then multiply it into their shadow term).
+  bool SunShadowActive();
 
   // Frees the buffers, programs and the atlas (a device reset, shutdown).
   void ReleaseField();

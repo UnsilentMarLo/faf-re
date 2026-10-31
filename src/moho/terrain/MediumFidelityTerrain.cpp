@@ -36,6 +36,7 @@
 #include "moho/render/d3d/CD3DRenderTarget.h"
 #include "moho/render/d3d/CD3DPrimBatcher.h"
 #include "moho/render/Shadow.h"
+#include "moho/render/lights/LightField.h"
 
 namespace
 {
@@ -581,8 +582,9 @@ namespace moho
 
     if (shadowContext != nullptr) {
       // The binary zero-extends the raw shadow-enabled byte into a 4-byte blob.
+      // FAF: also on while the light field carries the terrain's sun shadow (the shadow map is then cleared to lit when it has no casters)
       const std::uint32_t shadowsEnabledBlob =
-        static_cast<std::uint32_t>(static_cast<std::uint8_t>(shadowContext->mShadowCameraValid));
+        (shadowContext->mShadowCameraValid || (lights::SunShadowActive() && shadowContext->GetShadowTexture() != nullptr)) ? 1U : 0U;
       SetShaderVarPtr(shaderVars.shadowsEnabled, &shadowsEnabledBlob, 4U);
 
       if (shaderVars.shadowMatrix.Exists()) {

@@ -89,3 +89,19 @@ Built:
 Measured: 100v100, D3D12: GPU 6.47 ms, LightField pass 0.41 ms (0.34 before the terrain march). A lit lake (hover tanks with light particles, `-Scene waterlight`) lights the water, the sea bed and the shore; not yet compared against the old path by eye in a deep-water map (the test map's lake is 2.5 units deep).
 
 Next: sun shadows of the terrain onto terrain, units and water (a part-2 plane in the atlas), per-pixel water depth from a full-resolution height texture, a height-field wave simulation feeding the water normals (units, projectiles and impacts as sources), then displaced water geometry.
+
+## Stage 5: the terrain's shadow of the sun (2026-11-01)
+
+The sun's light is marched over the same raw heights as the light rays: for each cell of layers 0 and 1 (the terrain and the surface), 40 samples along the direction to the sun with steps that grow with the distance (up to 500 units, long shadows of a low sun) and a penumbra that widens along the ray. The result is part 3 of the atlas (the atlas is now `3 * cells` high); `DynFieldSun(p)` reads it (a point under the surface blends the sea bed and surface values).
+
+Consumers, all best effort and falling back to the unpatched text:
+
+- **Terrain:** every read of the shadow map (`tex2D(ShadowSampler, X.mShadow.xy).g`, or `ShadowLookup(X.mShadow)` after the shadow filter patch) is multiplied by `DynFieldSun(X.mTexWT.xzy)`; `CalculateLighting`'s shadow too (decals and splats). The terrain knows its world position, so no matrix is needed. The terrain shaders only read the shadow map while `ShadowsEnabled` is set, which was `mShadowCameraValid`: it is now also set while the field carries the sun shadow (`lights::SunShadowActive()`), the map being cleared to lit when it has no casters.
+- **Meshes:** `ComputeShadow` is wrapped (`ComputeShadowBase` keeps the old body); the pixel's shadow coordinates are mapped back to a clip position, and the inverse of the sun's shadow matrix (`dynShadowInv`, bound from `WRenViewport` after the shadow pass) gives the world position.
+- **Water:** the sun reflection is multiplied by `DynFieldSun` at the water surface (a ridge or a shore wall cuts the glint).
+
+Switch: `ren_DynLightsSunShadows` (default 1; 0 off; 2 a checker and 3 "no sun anywhere", both debug views to see that the term reaches the shaders). The field also runs when no light is on, for the sun shadow alone, while Dynamic Lights is not Off (the effect patches belong to that option).
+
+Shader model limit: ps_4_1 allows 16 samplers and some terrain PBR techniques already use 15, so the extra field read does not compile on D3D11; the effect builder retries without the PBR reads (`PatchTerrainEffect(..., sunReads = false)`), keeping the sun shadow in `CalculateLighting` (decals, splats). D3D12 and Vulkan keep all seven terrain reads.
+
+Measured (100v100, 2,500 lights): D3D12 GPU 6.69 ms (LightField 0.55 ms; it was 0.41 ms with ridge shadows for lights only), Vulkan 7.06 ms, D3D11 4.26 ms. Lake crater test (`steps_sun5.lua`): sun shadows on vs off differ by 0.66 (mean pixel difference), the difference is a shadow band from the crater rim and cut glints on the lake; the debug "no sun" view changes the image by 22.

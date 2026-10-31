@@ -33,6 +33,8 @@ namespace moho::lights
       ShaderVar fieldParams{};
       ShaderVar fieldParams2{};
       ShaderVar fieldLayerH{};
+      ShaderVar shadowInv{};
+      ShaderVar sunInfo{};
 
       explicit EffectVars(const char* effectFile)
       {
@@ -46,6 +48,8 @@ namespace moho::lights
         RegisterShaderVar("dynFieldParams", &fieldParams, effectFile);
         RegisterShaderVar("dynFieldParams2", &fieldParams2, effectFile);
         RegisterShaderVar("dynFieldLayerH", &fieldLayerH, effectFile);
+        RegisterShaderVar("dynShadowInv", &shadowInv, effectFile);
+        RegisterShaderVar("dynSunInfo", &sunInfo, effectFile);
       }
     };
 
@@ -65,6 +69,8 @@ namespace moho::lights
       bool everUploaded = false;
       bool texturesFresh = false; // textures were (re)created: bind them again
       BindingStats stats;
+      gpg::gal::Matrix sunShadowInverse{};
+      bool sunShadowValid = false;
     };
 
     State& GetState()
@@ -250,6 +256,13 @@ namespace moho::lights
           vars->fieldParams.mEffectVariable->SetVector(frame.params);
         }
         vars->fieldParams2.mEffectVariable->SetVector(frame.params2);
+        if (vars->shadowInv.Exists()) {
+          vars->shadowInv.SetMatrix4x4(&s.sunShadowInverse);
+        }
+        if (vars->sunInfo.Exists()) {
+          const float info[4] = {s.sunShadowValid ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+          vars->sunInfo.mEffectVariable->SetVector(info);
+        }
         if (vars->fieldLayerH.Exists()) {
           vars->fieldLayerH.mEffectVariable->SetVector(frame.layerHeights);
         }
@@ -257,6 +270,13 @@ namespace moho::lights
         vars->fieldParams2.mEffectVariable->SetVector(off);
       }
     }
+  }
+
+  void SetSunShadowCamera(const gpg::gal::Matrix& inverseViewProjection, const bool valid)
+  {
+    State& s = GetState();
+    s.sunShadowInverse = inverseViewProjection;
+    s.sunShadowValid = valid;
   }
 
   void SetCameraPosition(const float x, const float y, const float z)

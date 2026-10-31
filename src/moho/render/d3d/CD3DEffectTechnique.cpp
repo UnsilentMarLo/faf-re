@@ -486,6 +486,7 @@ namespace moho
       // The cache name carries a tag per patch that was applied, so every combination compiles to its own cached effect.
       bool dynLights = false;
       bool shadowFilter = false;
+      bool sunReads = true; // the terrain's PBR shadow reads sample the light field; dropped when that does not compile (sampler limit)
       const auto assembleSource = [&](const bool withShadowFilter) {
         mergedBuffer = gpg::AllocMemBuffer(compatByteCount + effectByteCount);
         if (compatByteCount > 0U) {
@@ -525,11 +526,11 @@ namespace moho
           const int flood = CFG_GetArgOption("/dynlightsflood2", 0U, nullptr) ? 2 : (CFG_GetArgOption("/dynlightsflood", 0U, nullptr) ? 1 : 0);
           std::string lit = text;
           const lights::EffectPatchResult patch =
-            which == lights::PatchedEffect::Mesh ? lights::PatchMeshEffect(lit, flood) : lights::PatchTerrainEffect(lit, flood);
+            which == lights::PatchedEffect::Mesh ? lights::PatchMeshEffect(lit, flood) : lights::PatchTerrainEffect(lit, flood, sunReads);
           if (patch.patched) {
             text = std::move(lit);
             dynLights = true;
-            gpg::Logf("DynLights: %s patched, %d techniques have the light pass", effectBaseName.c_str(), patch.techniques);
+            gpg::Logf("DynLights: %s patched, %d techniques have the light pass, terrain sun shadow: %d reads", effectBaseName.c_str(), patch.techniques, patch.sunShadowSites);
           } else {
             gpg::Warnf("DynLights: %s not patched: %s", effectBaseName.c_str(), patch.error.c_str());
           }
@@ -674,6 +675,20 @@ namespace moho
           try {
             createEffect(false);
           } catch (const std::exception& exception) {
+            bool recovered = false;
+            if (dynLights && sunReads && std::string(effectBaseName.c_str()) == "terrain") {
+              gpg::Warnf("%s: %s; building it without the sun shadow reads of the PBR shaders", effectFilePath, exception.what());
+              sunReads = false;
+              mEffect.reset();
+              assembleSource(true);
+              try {
+                createEffect(false);
+                recovered = true;
+              } catch (const std::exception&) {
+                mEffect.reset();
+              }
+            }
+            if (!recovered) {
             if (!shadowFilter) {
               throw;
             }
@@ -683,6 +698,7 @@ namespace moho
             assembleSource(false);
             shadowfilter::NoteEffectPatched(std::string(effectBaseName.c_str()) == "terrain", false);
             createEffect(false);
+            }
           }
         }
       }
