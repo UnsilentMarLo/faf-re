@@ -28,6 +28,7 @@
 #include "moho/particles/CWorldParticles.h"
 #include "moho/render/lights/LightBinding.h"
 #include "moho/render/lights/LightFeeds.h"
+#include "moho/terrain/water/WaterSimulation.h"
 #include "moho/render/lights/LightDebugView.h"
 #include "moho/render/AmbientOcclusion.h"
 #include "moho/render/RenderScale.h"
@@ -4141,6 +4142,7 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
       );
     }
     moho::lights::FeedMeshes(static_cast<float>(moho::REN_GetGameTick()) + moho::REN_GetSimDeltaSeconds());
+    moho::water::StepWaterSimulation(*mCam); // the wave simulation of the water, before RenderWater reads it
 
     {
       const gpg::gal::RenderProfileScope profileReflections("Reflections");

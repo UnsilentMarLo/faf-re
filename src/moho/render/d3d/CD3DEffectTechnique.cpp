@@ -29,6 +29,7 @@
 #include "moho/misc/StartupHelpers.h"
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/terrain/water/WaterEffectPatch.h"
+#include "moho/terrain/water/WaterSimulation.h"
 #include "moho/terrain/water/WaterQuality.h"
 #include "moho/render/ID3DTextureSheet.h"
 
@@ -574,11 +575,13 @@ namespace moho
       // A source the patch does not recognise, or a patched source the backend compiler rejects, falls back to the unpatched effect.
       bool waterFilter = false;
       bool waterLights = false;
+      bool waterSim = false;
       if (deviceContext != nullptr && effectByteCount > 0U && std::string_view(effectBaseName.c_str()) == "water2") {
         const bool wantsFilter = water::EffectPatchWanted(deviceContext->mDeviceType);
         const bool wantsWaterLights = gpg::gal::UsesD3D10EffectDialect(deviceContext->mDeviceType) &&
                                       (CFG_GetArgOption("/dynlights", 0U, nullptr) || lights::LightsWanted(deviceContext->mDeviceType));
-        if (wantsFilter || wantsWaterLights) {
+        const bool wantsWaterSim = gpg::gal::UsesD3D10EffectDialect(deviceContext->mDeviceType) && water::SimWanted();
+        if (wantsFilter || wantsWaterLights || wantsWaterSim) {
           const std::string original(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);
           std::string text = original;
           if (wantsWaterLights) {
@@ -593,6 +596,17 @@ namespace moho
               gpg::Warnf("DynLights: %s not patched: %s", effectBaseName.c_str(), lightPatch.error.c_str());
             }
           }
+          if (wantsWaterSim) {
+            std::string simmed = text;
+            const water::SimPatchResult simPatch = water::PatchWaterSimulation(simmed);
+            if (simPatch.patched) {
+              text = std::move(simmed);
+              waterSim = true;
+              gpg::Logf("Water: %s patched, the water follows the wave simulation", effectBaseName.c_str());
+            } else {
+              gpg::Warnf("Water: %s not patched with the wave simulation: %s", effectBaseName.c_str(), simPatch.error.c_str());
+            }
+          }
           if (wantsFilter) {
             std::string filtered = text;
             const water::EffectPatchResult patch = water::PatchWaterEffect(filtered);
@@ -604,7 +618,7 @@ namespace moho
               gpg::Warnf("Water: %s not patched: %s", effectBaseName.c_str(), patch.error.c_str());
             }
           }
-          if (waterFilter || waterLights) {
+          if (waterFilter || waterLights || waterSim) {
             mergedBuffer = gpg::AllocMemBuffer(compatByteCount + text.size());
             if (compatByteCount > 0U) {
               std::copy_n(compatStateBuffer.GetPtr(0U, 0U), compatByteCount, mergedBuffer.GetPtr(0U, 0U));
@@ -620,7 +634,7 @@ namespace moho
       // into different shaders, so it is cached under a name of its own.
       const auto createEffect = [&](const bool boneTexture) {
         const msvc8::string cachePath =
-          cacheDirectory + "/" + mName + (dynLights ? ".dynlights" : "") + (shadowFilter ? ".shadowf" : "") + (waterFilter ? ".waterq1" : "") + (waterLights ? ".waterl1" : "") +
+          cacheDirectory + "/" + mName + (dynLights ? ".dynlights" : "") + (shadowFilter ? ".shadowf" : "") + (waterFilter ? ".waterq1" : "") + (waterLights ? ".waterl1" : "") + (waterSim ? ".watersim1" : "") +
           (lowResParticles ? ".lowres" : "") + (boneTexture ? ".bonetex." : ".") + engineVersion;
         SDiskFileInfo cacheInfo{};
         bool useCachePayload = false;
@@ -660,7 +674,7 @@ namespace moho
             mergedBuffer = unpatchedBuffer;
             createEffect(false);
           }
-        } else if (waterFilter || waterLights) {
+        } else if (waterFilter || waterLights || waterSim) {
           try {
             createEffect(false);
           } catch (const std::exception& exception) {
@@ -668,6 +682,7 @@ namespace moho
             mEffect.reset();
             waterFilter = false;
             waterLights = false;
+            waterSim = false;
             mergedBuffer = unpatchedBuffer;
             createEffect(false);
           }

@@ -255,8 +255,9 @@ namespace moho::lights
     const Wm3::Vec3f& eye = camera.tranform.pos_;
     SetCameraPosition(eye.x, eye.y, eye.z);
 
-    // The irradiance field (docs/LIGHTING_V2.md): lit once for the view; the shaders fall back to the grid when it is off or has no lights.
-    {
+    // The irradiance field (docs/LIGHTING_V2.md): lit once for the view; the shaders fall back to the grid when it is off or has no lights. Only the
+    // big world view builds it: the minimap and the other small views render too, and each would move the field to its own camera.
+    if (camera.viewport.r[3].z * camera.viewport.r[3].w >= 200000.0f) {
       CWldSession* const session = WLD_GetActiveSession();
       const STIMap* const map = session != nullptr ? session->GetSTIMap() : nullptr;
       const CHeightField* const heightField = map != nullptr ? map->GetHeightField() : nullptr;

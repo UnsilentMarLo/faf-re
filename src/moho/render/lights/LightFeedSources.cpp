@@ -15,6 +15,7 @@
 #include "moho/particles/SWorldParticle.h"
 #include "moho/particles/SWorldTrail.h"
 #include "moho/render/lights/LightCensus.h"
+#include "moho/terrain/water/WaterSimulation.h"
 #include "moho/render/lights/LightFeeds.h"
 #include "moho/render/lights/LightTexture.h"
 #include "moho/render/lights/LightTextureCache.h"
@@ -27,6 +28,16 @@ namespace moho::lights
 {
   namespace
   {
+    // A flash or a glow sprite at the water surface is an impact or an explosion there: it throws a ring (docs/LIGHTING_V2.md, water simulation).
+    void NoteWaterImpact(const float x, const float y, const float z, const float size)
+    {
+      float waterElevation = 0.0f;
+      if (!(size >= 1.2f) || !water::SimWaterLevel(waterElevation) || std::fabs(y - waterElevation) > 3.5f) {
+        return;
+      }
+      water::SimAddSource(x, z, std::min(size * 0.6f, 14.0f), std::min(size, 16.0f) * 9.0f);
+    }
+
     constexpr float kHoldTicks = 3.0f;       // a tracked light fades out this long after its last refresh
     constexpr float kMergeCell = 3.0f;       // glow sprites born in the same beat inside one cell of this size, with the same texture and similar life, are one light
     constexpr float kGlowPeakMin = 0.20f;    // a texture whose brightest alpha x luminance is below this does not glow (smoke, dust); the census showed fire at 0.25
@@ -306,6 +317,7 @@ namespace moho::lights
         e.size1 = particle.mEndSize;
         FillColour(e, texture, ramp, particle.mRampSelection);
         const bool stored = collector.Add(e);
+        NoteWaterImpact(e.pos[0], e.pos[1], e.pos[2], peakSize);
         if (census) {
           CensusNote("particle", censusKey, stored ? "ok:flash" : "no:flash refused (quality gate or invalid)", peakSize, censusColour);
         }
@@ -403,6 +415,7 @@ namespace moho::lights
       const float total = std::min(kGlowEnergyCap, c.energySum); // the light of sprites in one place adds up (it was the root of the sum of squares: a fireball of 100 sprites lit like 10)
       e.gain = total / std::max(1.0e-4f, model::GlowEnergy(c.peakSize));
       (void)collector.Add(e);
+      NoteWaterImpact(e.pos[0], e.pos[1], e.pos[2], c.peakSize);
     }
 
     // ---- trails: a segment per tick; one light per cell of the head, refreshed while the trail grows there

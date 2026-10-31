@@ -83,6 +83,31 @@ ForkThread(function()
         return
     end
 
+    if AB_SCENE == 'wake' then
+        -- hover tanks patrolling a lake: their wakes should show in the water
+        WaitUntil(4)
+        local tanks = {}
+        for i = 1, 4 do
+            local ux, uz = AB_TX - 12 + i * 5, AB_TZ
+            local u = CreateUnitHPR('uel0203', brainA.Name, ux, GetSurfaceHeight(ux, uz), uz, 0, 0, 0)
+            if u then
+                u:SetCanTakeDamage(false)
+                table.insert(tanks, u)
+            end
+        end
+        Say(string.format('wake scene: %d tanks', table.getn(tanks)))
+        for round = 1, 30 do
+            for i, u in ipairs(tanks) do
+                if u and not u.Dead then
+                    IssueClearCommands({ u })
+                    local side = math.mod(round + i, 2) == 0 and 1 or -1
+                    IssueMove({ u }, { AB_TX + side * 10, GetSurfaceHeight(AB_TX + side * 10, AB_TZ + (i - 2.5) * 3), AB_TZ + (i - 2.5) * 3 })
+                end
+            end
+            WaitSeconds(6)
+        end
+        return
+    end
     if AB_SCENE == 'none' then
         Say(string.format('ground height %.2f', GetTerrainHeight(x0, z0)))
         return

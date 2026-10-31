@@ -18,6 +18,7 @@
 #include "moho/terrain/water/CWaterShaderProperties.h"
 #include "moho/terrain/water/WaterQuality.h"
 #include "moho/terrain/water/WaterShaderVars.h"
+#include "moho/terrain/water/WaterSimulation.h"
 
 namespace
 {
@@ -46,6 +47,12 @@ namespace moho
     constexpr int kFresnelLookupTextureSize = 128;
     constexpr int kFresnelLookupTextureFormatToken = 17;
     constexpr float kFresnelLookupInvDimensionMinusOne = 1.0f / 127.0f;
+
+    // The projected grid of the wave simulation (WaterSimulation.h): vertices that only carry their screen position (u, v), 180 x 180 of them so the
+    // 16-bit indices reach every one.
+    constexpr int kGridSide = 180;
+    CD3DVertexSheet* gGridVertexSheet = nullptr;
+    CD3DIndexSheet* gGridIndexSheet = nullptr;
 
     struct HighFidelityWaterVertex
     {
@@ -167,6 +174,60 @@ namespace moho
    * What it does:
    * Initializes high-fidelity water runtime lanes to an empty state.
    */
+  namespace
+  {
+    // Builds the projected grid once (and again after a device reset released it). A vertex's position is (u, 0, v) and its uv (u, v): the water
+    // vertex shader reads the uv as the place on the screen.
+    bool EnsureWaterGrid()
+    {
+      if (gGridVertexSheet != nullptr && gGridIndexSheet != nullptr) {
+        return true;
+      }
+      ID3DDeviceResources* const resources = D3D_GetDevice()->GetResources();
+      CD3DVertexFormat* const vertexFormat = resources->GetVertexFormat(kHighFidelityWaterVertexFormatToken);
+      if (vertexFormat == nullptr) {
+        return false;
+      }
+      DeleteOwned(gGridVertexSheet);
+      DeleteOwned(gGridIndexSheet);
+      gGridVertexSheet = resources->NewVertexSheet(kVertexSheetUsageToken, kGridSide * kGridSide, vertexFormat);
+      gGridIndexSheet = resources->CreateIndexSheet(false, (kGridSide - 1) * (kGridSide - 1) * 6);
+      if (gGridVertexSheet == nullptr || gGridIndexSheet == nullptr) {
+        DeleteOwned(gGridVertexSheet);
+        DeleteOwned(gGridIndexSheet);
+        return false;
+      }
+      ID3DVertexStream* const stream = gGridVertexSheet->GetVertStream(0U);
+      auto* const vertices = static_cast<HighFidelityWaterVertex*>(stream->Lock(0, kGridSide * kGridSide, false, false));
+      for (int z = 0; z < kGridSide; ++z) {
+        for (int x = 0; x < kGridSide; ++x) {
+          const float u = static_cast<float>(x) / static_cast<float>(kGridSide - 1);
+          const float v = static_cast<float>(z) / static_cast<float>(kGridSide - 1);
+          vertices[z * kGridSide + x] = {u, 0.0f, v, u, v};
+        }
+      }
+      stream->Unlock();
+      std::int16_t* const indices = gGridIndexSheet->Lock(0U, gGridIndexSheet->GetSize(), true, false);
+      int at = 0;
+      for (int z = 0; z + 1 < kGridSide; ++z) {
+        for (int x = 0; x + 1 < kGridSide; ++x) {
+          const auto i0 = static_cast<std::int16_t>(z * kGridSide + x);
+          const auto i1 = static_cast<std::int16_t>(z * kGridSide + x + 1);
+          const auto i2 = static_cast<std::int16_t>((z + 1) * kGridSide + x);
+          const auto i3 = static_cast<std::int16_t>((z + 1) * kGridSide + x + 1);
+          indices[at++] = i0;
+          indices[at++] = i2;
+          indices[at++] = i1;
+          indices[at++] = i1;
+          indices[at++] = i2;
+          indices[at++] = i3;
+        }
+      }
+      gGridIndexSheet->Unlock();
+      return true;
+    }
+  } // namespace
+
   HighFidelityWater::HighFidelityWater() = default;
 
   /**
@@ -244,6 +305,8 @@ namespace moho
   void HighFidelityWater::Destroy()
   {
     mFresnelLookupTexture.release();
+    DeleteOwned(gGridVertexSheet);
+    DeleteOwned(gGridIndexSheet);
     DeleteOwned(mVertexSheet);
     DeleteOwned(mIndexSheet);
     mWaterMapTexture.release();
@@ -378,6 +441,11 @@ namespace moho
     (void)SetWater2TerrainScaleShaderVarData(terrainScale);
 
     std::int32_t primitiveType = kTriangleListPrimitiveToken;
+    // FAF: with the wave simulation the surface is the projected grid (the waves lift its vertices)
+    const WaterExtents2D gridExtents = GetWaterMapExtents(*mTerrainRes);
+    if (water::BindWaterGrid(*camera, gridExtents.x, gridExtents.z) && EnsureWaterGrid()) {
+      return device->DrawIndexedSheetPrimitive(gGridVertexSheet, gGridIndexSheet, &primitiveType);
+    }
     return device->DrawIndexedSheetPrimitive(mVertexSheet, mIndexSheet, &primitiveType);
   }
 

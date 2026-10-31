@@ -9,6 +9,7 @@
 #include "gpg/core/utils/Logging.h"
 #include "moho/mesh/Mesh.h"
 #include "moho/mesh/MeshBatchKey.h"
+#include "moho/terrain/water/WaterSimulation.h"
 #include "moho/render/lights/LightCensus.h"
 #include "moho/render/lights/LightFeeds.h"
 #include "moho/render/lights/LightMeshEmission.h"
@@ -204,8 +205,58 @@ namespace moho::lights
     }
   } // namespace
 
+  namespace
+  {
+    // Units standing in the water leave a wake: a disc at the unit that pushes the water in proportion to how fast it moves (docs/LIGHTING_V2.md).
+    void AddWaterSource(const MeshInstance& instance, const float waterElevation)
+    {
+      if (instance.isHidden != 0) {
+        return;
+      }
+      const float radius = instance.sphere.Radius;
+      const float cy = instance.sphere.Center.y;
+      if (!std::isfinite(radius) || !(radius > 0.4f) || radius > 40.0f || !std::isfinite(cy) || !std::isfinite(instance.sphere.Center.x) ||
+          !std::isfinite(instance.sphere.Center.z)) {
+        return;
+      }
+      if (!(cy - radius * 0.6f < waterElevation + 0.4f && cy + radius * 0.6f > waterElevation - 1.5f)) {
+        return; // not in the water surface
+      }
+      const float dx = instance.endTransform.pos_.x - instance.startTransform.pos_.x;
+      const float dz = instance.endTransform.pos_.z - instance.startTransform.pos_.z;
+      const float speed = std::sqrt(dx * dx + dz * dz) * 10.0f; // per tick, ten ticks a second
+      if (!std::isfinite(speed) || speed < 0.4f) {
+        return;
+      }
+      water::SimAddSource(instance.sphere.Center.x, instance.sphere.Center.z, radius * 1.1f, std::min(speed, 14.0f) * (0.5f + 0.2f * radius));
+    }
+
+    void FeedWaterSources(MeshRenderer& renderer)
+    {
+      float waterElevation = 0.0f;
+      if (!water::SimWaterLevel(waterElevation)) {
+        return;
+      }
+      for (const MeshBatchBucket& bucket : renderer.meshes) {
+        MeshLOD* const lod = bucket.first.mLod;
+        const auto lodValue = reinterpret_cast<std::uintptr_t>(lod);
+        if (lodValue < 0x10000u || lodValue == ~static_cast<std::uintptr_t>(0) || !CastsShadows(*lod) || IsWreckage(*lod)) {
+          continue; // units and buildings: what casts a shadow is a body in the water
+        }
+        for (const MeshInstance* const instance : bucket.second) {
+          if (instance != nullptr) {
+            AddWaterSource(*instance, waterElevation);
+          }
+        }
+      }
+    }
+  } // namespace
+
   void FeedMeshes(const float nowTick)
   {
+    if (MeshRenderer* const waterRenderer = MeshRenderer::GetInstance()) {
+      FeedWaterSources(*waterRenderer);
+    }
     SyncQuality();
     LightCollector& collector = Collector();
     if (collector.Quality() == model::kOff) {
