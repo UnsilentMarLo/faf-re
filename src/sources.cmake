@@ -225,6 +225,7 @@ set(FAF_ENGINE_SOURCES
   moho/misc/CountermeasureExtractor.cpp
   moho/particles/CWorldParticles.cpp
   moho/render/lights/LightCollector.cpp
+  moho/render/lights/LightField.cpp
   moho/render/lights/LightGrid.cpp
   moho/render/lights/LightEffectPatch.cpp
   moho/render/lights/LightBinding.cpp

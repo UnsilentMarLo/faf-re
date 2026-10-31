@@ -1,5 +1,6 @@
 #pragma once
 
+#include "moho/render/lights/LightField.h"
 #include "moho/render/lights/LightGrid.h"
 
 // Owns the two dynamic light textures, fills them from a LightGridImage and binds them, with their parameters, to the effects that
@@ -19,6 +20,9 @@ namespace moho::lights
 {
   // Uploads `image` (skipped while it is empty and was empty) and binds the textures and parameters.
   void UpdateBinding(const LightGridImage& image);
+
+  // Binds (or, when `frame` is not valid, switches off) the irradiance field the shaders sample: docs/LIGHTING_V2.md.
+  void BindField(const FieldFrame& frame);
 
   // World position of the camera of the view that is about to draw; the mesh pixel shaders rebuild their world position from it.
   void SetCameraPosition(float x, float y, float z);

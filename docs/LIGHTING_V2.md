@@ -46,3 +46,15 @@ The first draft (depth + normal pre-pass, screen-space irradiance) was dropped a
 - Render targets: single colour + depth per pass; formats of `kRenderTargetFormats` (`gpg/gal/backends/dxgi/DxgiFormats.cpp:55`) are R10G10B10A2, BGRA8, BGRX8, 5551, 565, R16G16_UNORM; float formats exist for textures only.
 - A GPU program (`CreateGpuProgram`, `DrawGpuProgram`) reads up to four structured buffers (t0..t3), two textures or depth or render targets (t4, t5) and one constant block; compute writes only `GpuBuffer`s (u0..u1): compute output reaches a texture through a pixel-program draw that reads the buffer.
 - Effects bind a render target with `ShaderVar::SetRenderTargetTexture` (water does); translated pixel shaders get the pixel position as `SV_Position` for both `POSITION` and `VPOS`.
+
+## Stage 1 and 2 result (2026-10-31, no shadows yet)
+
+Built: RGBA16F render target token 9 (`DxgiFormats.cpp`), `LightField.{h,cpp}` (compute: one 8x8x1 thread group per tile and layer, the lights culled against the tile in chunks of 1024 into group shared memory, so no list is ever cut; a fullscreen draw copies the field buffer into the atlas), `BindField` (`LightBinding.cpp`), `DynFieldSample` / `DynFieldDiffuse` / `DynFieldBRDF` in the injected HLSL (`LightEffectPatch.cpp`; the terrain composite, decal / splat layers and mesh light pass branch on `dynFieldParams2.x`). Switch: `ren_DynLightsMode 1` (default 0 = the old grid path).
+
+Measured, same scene as the baseline (100v100, 2,500 lights, D3D12, 1600x900, `FAF_GPU_PROFILE=300`; lights off 4.6 ms; old path with shadows 132.8 ms; without shadows 14.2 ms):
+
+| | GPU per frame | Terrain | Meshes | LightField |
+|---|---|---|---|---|
+| field (mode 1), no shadows | 6.3 ms | 0.29 ms | 0.21 ms | 0.27 ms |
+
+The lights cost 1.7 ms over lights off, with every light of the frame in the sum (no cap, no cell borders). Pictures: the same fight, old path and field, light the ground alike. Open: shadows (stage 3), a light-only packer instead of the CPU grid build (`BuildLightGrid` still runs; its `image.data` feeds the compute), more than 4096 lights, D3D11 / Vulkan runs.

@@ -11,7 +11,9 @@
 #include "gpg/gal/EffectVariable.hpp"
 #include "gpg/gal/Texture.hpp"
 #include "gpg/gal/TextureContext.h"
+#include "gpg/gal/RenderTarget.hpp"
 #include "moho/render/d3d/ShaderVar.h"
+#include "moho/render/lights/LightField.h"
 
 namespace moho::lights
 {
@@ -27,6 +29,10 @@ namespace moho::lights
       ShaderVar gridSize{};
       ShaderVar dataSize{};
       ShaderVar camera{};
+      ShaderVar field{};
+      ShaderVar fieldParams{};
+      ShaderVar fieldParams2{};
+      ShaderVar fieldLayerH{};
 
       explicit EffectVars(const char* effectFile)
       {
@@ -36,6 +42,10 @@ namespace moho::lights
         RegisterShaderVar("dynLightGridSize", &gridSize, effectFile);
         RegisterShaderVar("dynLightDataSize", &dataSize, effectFile);
         RegisterShaderVar("dynLightCamera", &camera, effectFile);
+        RegisterShaderVar("dynField", &field, effectFile);
+        RegisterShaderVar("dynFieldParams", &fieldParams, effectFile);
+        RegisterShaderVar("dynFieldParams2", &fieldParams2, effectFile);
+        RegisterShaderVar("dynFieldLayerH", &fieldLayerH, effectFile);
       }
     };
 
@@ -221,6 +231,33 @@ namespace moho::lights
     }
   }
 
+  void BindField(const FieldFrame& frame)
+  {
+    State& s = GetState();
+    // mode 0 (no field this frame): the shaders take the grid path; the atlas is dropped so the effect does not keep a stale target
+    const float off[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    for (EffectVars* vars : {&s.mesh, &s.terrain}) {
+      if (!vars->fieldParams2.Exists()) {
+        continue;
+      }
+      if (frame.valid) {
+        // a variable the effect does not use is compiled away: each one may be missing on its own
+        if (vars->field.Exists()) {
+          vars->field.mEffectVariable->SetRenderTarget(frame.atlas);
+        }
+        if (vars->fieldParams.Exists()) {
+          vars->fieldParams.mEffectVariable->SetVector(frame.params);
+        }
+        vars->fieldParams2.mEffectVariable->SetVector(frame.params2);
+        if (vars->fieldLayerH.Exists()) {
+          vars->fieldLayerH.mEffectVariable->SetVector(frame.layerHeights);
+        }
+      } else {
+        vars->fieldParams2.mEffectVariable->SetVector(off);
+      }
+    }
+  }
+
   void SetCameraPosition(const float x, const float y, const float z)
   {
     const float position[4] = {x, y, z, 0.0f};
@@ -241,6 +278,12 @@ namespace moho::lights
         vars->grid.mEffectVariable->SetTexture(none);
       }
     }
+    for (EffectVars* vars : {&s.mesh, &s.terrain}) {
+      if (vars->field.mEffectVariable && vars->field.Exists()) {
+        vars->field.mEffectVariable->SetRenderTarget(boost::shared_ptr<gpg::gal::RenderTarget>());
+      }
+    }
+    ReleaseField();
     s.dataTexture.reset();
     s.gridTexture.reset();
     s.dataRows = s.gridWidth = s.gridHeight = 0;

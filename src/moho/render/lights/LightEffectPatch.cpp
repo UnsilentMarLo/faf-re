@@ -175,6 +175,73 @@ float DynLightAt(float entry, float3 worldPos, float2 occ, out float3 toLight, o
     }
     return atten;
 }
+
+// ---- FAF light field (LightField.cpp, docs/LIGHTING_V2.md): the lights summed once per cell of a world-fixed field, sampled here ----
+texture dynField;
+sampler2D dynFieldSampler = sampler_state
+{
+    Texture   = (dynField);
+    MipFilter = NONE;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    AddressU  = CLAMP;
+    AddressV  = CLAMP;
+};
+float4 dynFieldParams;    // originX, originZ, 1 / cellSize, cells
+float4 dynFieldParams2;   // x: 1 = sample the field (0 = the grid path), layers, 1 / atlas width, 1 / atlas height
+float4 dynFieldLayerH;    // height of each layer above the terrain
+
+float4 DynFieldFetch(float2 c, float layer, float part)
+{
+    float cells = dynFieldParams.w;
+    return tex2Dlod(dynFieldSampler, float4((layer * cells + c.x) * dynFieldParams2.z, (part * cells + c.y) * dynFieldParams2.w, 0, 0));
+}
+
+// E: colour x attenuation of all lights; DW: xyz the sum of luminance x attenuation x direction to the light, w the sum of luminance x attenuation.
+void DynFieldSample(float3 p, out float3 E, out float4 DW)
+{
+    E = float3(0, 0, 0);
+    DW = float4(0, 0, 0, 0);
+    float cells = dynFieldParams.w;
+    float2 c = (p.xz - dynFieldParams.xy) * dynFieldParams.z;
+    if (c.x > -1.0 && c.y > -1.0 && c.x < cells + 1.0 && c.y < cells + 1.0)
+    {
+        c = clamp(c, 0.5, cells - 0.5);
+        float h = p.y - DynFieldFetch(c, 0.0, 0.0).a;
+        float l0 = 0.0;
+        float l1 = 0.0;
+        float w = 0.0;
+        if (h > dynFieldLayerH.z)
+        {
+            l0 = 2.0; l1 = 3.0; w = saturate((h - dynFieldLayerH.z) / (dynFieldLayerH.w - dynFieldLayerH.z));
+        }
+        else if (h > dynFieldLayerH.y)
+        {
+            l0 = 1.0; l1 = 2.0; w = (h - dynFieldLayerH.y) / (dynFieldLayerH.z - dynFieldLayerH.y);
+        }
+        else if (h > dynFieldLayerH.x)
+        {
+            l0 = 0.0; l1 = 1.0; w = (h - dynFieldLayerH.x) / (dynFieldLayerH.y - dynFieldLayerH.x);
+        }
+        E = lerp(DynFieldFetch(c, l0, 0.0).rgb, DynFieldFetch(c, l1, 0.0).rgb, w);
+        DW = lerp(DynFieldFetch(c, l0, 1.0), DynFieldFetch(c, l1, 1.0), w);
+    }
+}
+
+// The wrapped diffuse term of a surface with normal n: the grid path sums colour x atten x saturate((n.l + 0.5) / 1.5) per light, which is
+// linear in n.l between -0.5 and 1, so the sum is E / 3 + 2 / 3 x E x dot(n, D) / W.
+float3 DynFieldDiffuse(float3 E, float4 DW, float3 n)
+{
+    return max(E * (1.0 / 3.0) + E * ((2.0 / 3.0) * dot(n, DW.xyz) / max(DW.w, 0.0001)), 0.0);
+}
+
+float3 DynFieldTerrain(float3 worldPos, float3 normal)
+{
+    float3 E;
+    float4 DW;
+    DynFieldSample(worldPos, E, DW);
+    return DynFieldDiffuse(E, DW, normal);
+}
 )HLSL";
 
     constexpr const char* kMeshLightCode = R"HLSL(
@@ -208,8 +275,36 @@ void DynLightsBRDFQuad(float4 e, float3 worldPos, float2 occ, float3 n, float3 v
     if (e.w > 0.5) { DynLightsBRDFOne(e.w, worldPos, occ, n, v, nDotV, F0, albedo, metallic, roughness, total); }
 }
 
+// The field path of the mesh light: the lights of the position as one light (their summed colour from their mean direction; the
+// directional share of the sum decides how much of it is specular), diffuse from the linear wrap of the field.
+float3 DynFieldBRDF(float3 worldPos, float3 n, float3 v, float3 albedo, float metallic, float roughness)
+{
+    float3 E;
+    float4 DW;
+    DynFieldSample(worldPos, E, DW);
+    float nDotV = abs(dot(n, v)) + 0.001;
+    float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
+    float lenD = length(DW.xyz);
+    float3 l = DW.xyz / max(lenD, 0.0001);
+    float dirness = saturate(lenD / max(DW.w, 0.0001));
+    float3 h = normalize(v + l);
+    float nDotL = max(dot(n, l), 0.0);
+    float3 F = FresnelSchlick(max(dot(h, v), 0.0), F0);
+    float NDF = NormalDistribution(n, h, roughness);
+    float G = GeometrySmith(n, nDotV, l, roughness);
+    float3 reflected = PI * NDF * G * F / (4.0 * nDotV * nDotL + 0.0001);
+    float3 refracted = (float3(1, 1, 1) - F) * (1.0 - metallic) * albedo;
+    float3 total = refracted * DynFieldDiffuse(E, DW, n) + reflected * nDotL * E * dirness;
+    float top = max(total.x, max(total.y, total.z));
+    return total / (1.0 + 0.2 * top);
+}
+
 float3 DynLightsBRDF(float3 worldPos, float3 n, float3 v, float3 albedo, float metallic, float roughness)
 {
+    if (dynFieldParams2.x > 0.5)
+    {
+        return DynFieldBRDF(worldPos, n, v, albedo, metallic, roughness);
+    }
     float first;
     float texels;
     float2 occ;
@@ -285,6 +380,10 @@ void DynLightTerrainQuad(float4 e, float3 worldPos, float2 occ, float3 normal, i
 // All the lights of the cell (the composite light pass).
 float3 DynLightTerrain(float3 worldPos, float3 normal)
 {
+    if (dynFieldParams2.x > 0.5)
+    {
+        return DynFieldTerrain(worldPos, normal);
+    }
     float first;
     float texels;
     float2 occ;
@@ -306,6 +405,10 @@ float3 DynLightTerrain(float3 worldPos, float3 normal)
 // than that, and the lit ground then jumps at the cell borders (squares).
 float3 DynLightTerrainFew(float3 worldPos, float3 normal)
 {
+    if (dynFieldParams2.x > 0.5)
+    {
+        return DynFieldTerrain(worldPos, normal);
+    }
     float first;
     float texels;
     float2 occ;

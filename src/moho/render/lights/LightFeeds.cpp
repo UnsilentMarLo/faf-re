@@ -14,6 +14,7 @@
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/lights/LightBinding.h"
 #include "moho/render/lights/LightCensus.h"
+#include "moho/render/lights/LightField.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
 
@@ -251,6 +252,23 @@ namespace moho::lights
     }
     const Wm3::Vec3f& eye = camera.tranform.pos_;
     SetCameraPosition(eye.x, eye.y, eye.z);
+
+    // The irradiance field (docs/LIGHTING_V2.md): lit once for the view; the shaders fall back to the grid when it is off or has no lights.
+    {
+      CWldSession* const session = WLD_GetActiveSession();
+      const STIMap* const map = session != nullptr ? session->GetSTIMap() : nullptr;
+      const CHeightField* const heightField = map != nullptr ? map->GetHeightField() : nullptr;
+      (void)UpdateField(
+        camera, gFrameImage, heightField,
+        [](const void* context, const float x, const float z) {
+          const auto* const field = static_cast<const CHeightField*>(context);
+          const float cx = std::min(std::max(x, 0.0f), static_cast<float>(field->Width() - 1));
+          const float cz = std::min(std::max(z, 0.0f), static_cast<float>(field->Height() - 1));
+          return field->GetElevation(cx, cz);
+        }
+      );
+      BindField(CurrentField());
+    }
 
     // test light: the point where the ray through the middle of the view meets the ground
     static int sLastTestTick = -1;
