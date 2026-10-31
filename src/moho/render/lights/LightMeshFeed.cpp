@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cctype>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -40,6 +41,29 @@ namespace moho::lights
     // The material of a bucket draws into the sun shadow map: the render stage has the depth bit and a depth technique is defined, the gate of
     // MeshRenderer::RenderDepth. Both are cached on the material the first time it is drawn, so a material nobody has drawn yet is no caster.
     std::uint32_t gCasterReasons[5] = {}; // diagnostics: buckets that cast, no render stage yet, no depth bit, depth technique not resolved, no depth technique
+
+    bool ReadNames(const RMeshBlueprintLOD& lod, char (&albedo)[260], char (&specular)[260], char (&shader)[64]);
+
+    // Wreckage is a crowd of small low boxes after a fight: it shades nothing worth the room in the cells' caster lists (a full list is cut
+    // differently in each cell and draws lit squares).
+    bool IsWreckage(const MeshLOD& lod)
+    {
+      const RMeshBlueprintLOD* const blueprintLod = lod.lodBlueprintCopy.get();
+      const auto value = reinterpret_cast<std::uintptr_t>(blueprintLod);
+      if (value < 0x10000u || value == ~static_cast<std::uintptr_t>(0)) {
+        return false;
+      }
+      char albedo[260] = {};
+      char specular[260] = {};
+      char shader[64] = {};
+      if (!ReadNames(*blueprintLod, albedo, specular, shader)) {
+        return false;
+      }
+      for (char* c = shader; *c != 0; ++c) {
+        *c = static_cast<char>(std::tolower(static_cast<unsigned char>(*c)));
+      }
+      return std::strstr(shader, "wreck") != nullptr;
+    }
 
     bool CastsShadows(const MeshLOD& lod)
     {
@@ -210,7 +234,7 @@ namespace moho::lights
       if (lodValue < 0x10000u || lodValue == ~static_cast<std::uintptr_t>(0)) {
         continue;
       }
-      if (shadows && CastsShadows(*lod)) {
+      if (shadows && CastsShadows(*lod) && !IsWreckage(*lod)) {
         for (const MeshInstance* const instance : bucket.second) {
           if (instance != nullptr) {
             AddOccluder(*instance);

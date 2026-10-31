@@ -79,7 +79,7 @@ void DynLightCell(float3 worldPos, out float first, out float texels, out float2
     }
 }
 
-// Soft shadow of the shadow casters of the cell (oriented boxes, four texels each in the data texture from texel 12288 on: centre, then the
+// Soft shadow of the shadow casters of the cell (oriented boxes standing in for the units, shaded as ellipsoids; four texels each in the data texture from texel 12288 on: centre, then the
 // three half-extent vectors with 1 / length squared in w). The ray from the pixel `p` to the light (`d` = pixel to light) is cut against each
 // box in the box's own frame; the length of the ray inside a box, over 0.8 units, is how much of the light it takes (a box the ray only
 // grazes shades a little: a soft edge). A box the pixel is on (its own unit) and a light inside a box (a muzzle flash at the barrel) are skipped.
@@ -91,7 +91,7 @@ float DynLightShadow(float3 p, float3 d, float2 occ)
     {
         return 1.0;
     }
-    for (int t = 0; t < 4; ++t)
+    for (int t = 0; t < 8; ++t)
     {
         if ((float)t >= occ.y)
         {
@@ -111,22 +111,32 @@ float DynLightShadow(float3 p, float3 d, float2 occ)
                 float3 rel = p - c.xyz;
                 float3 x = float3(dot(rel, a0.xyz) * a0.w, dot(rel, a1.xyz) * a1.w, dot(rel, a2.xyz) * a2.w);
                 float3 dd = float3(dot(d, a0.xyz) * a0.w, dot(d, a1.xyz) * a1.w, dot(d, a2.xyz) * a2.w);
-                float3 l = x + dd;
-                float xTop = max(abs(x.x), max(abs(x.y), abs(x.z)));
-                float lTop = max(abs(l.x), max(abs(l.y), abs(l.z)));
-                if (xTop > 1.12 && lTop > 1.25)
+                // The box is a stand-in for the unit: its shadow as a box was a hard square the size of the unit's footprint. The caster is the
+                // ellipsoid inside the box (0.8 of its half extents: the engine's box is already grown by a quarter), so the shadow is a soft rounded blob: the ray's length inside the
+                // unit sphere of the normalised frame, 0 at the silhouette and growing smoothly towards the middle.
+                float3 xs = x * 1.25;
+                float3 ds = dd * 1.25;
+                float3 ls = xs + ds;
+                if (dot(xs, xs) > 1.0 && dot(ls, ls) > 1.0)
                 {
-                    float3 s = float3((abs(dd.x) < 0.00001) ? 0.00001 : dd.x, (abs(dd.y) < 0.00001) ? 0.00001 : dd.y, (abs(dd.z) < 0.00001) ? 0.00001 : dd.z);
-                    float3 t0 = (float3(-1, -1, -1) - x) / s;
-                    float3 t1 = (float3(1, 1, 1) - x) / s;
-                    float3 tmin = min(t0, t1);
-                    float3 tmax = max(t0, t1);
-                    float tEnter = max(max(tmin.x, tmin.y), max(tmin.z, 0.0));
-                    float tExit = min(min(tmax.x, tmax.y), min(tmax.z, 1.0));
-                    float chord = max(tExit - tEnter, 0.0) * len;
-                    // a light is not a point: the shadow gets lighter the further the pixel is behind the box (a penumbra that grows)
-                    float behind = saturate(tEnter * len / 10.0);
-                    shadow *= 1.0 - 0.8 * saturate(chord / 0.8) * (1.0 - 0.6 * behind);
+                    float a2s = dot(ds, ds);
+                    float bs = dot(xs, ds);
+                    float cs = dot(xs, xs) - 1.0;
+                    float disc = bs * bs - a2s * cs;
+                    if (disc > 0.0 && a2s > 0.00000001)
+                    {
+                        float root = sqrt(disc);
+                        float tEnter = max((-bs - root) / a2s, 0.0);
+                        float tExit = min((-bs + root) / a2s, 1.0);
+                        if (tExit > tEnter)
+                        {
+                            float thick = saturate((tExit - tEnter) * sqrt(a2s));   // 0 .. 2 across the ellipsoid, 1 is half its width
+                            thick = thick * thick * (3.0 - 2.0 * thick);
+                            // a light is not a point: the shadow gets lighter the further the pixel is behind the caster (a penumbra that grows)
+                            float behind = saturate(tEnter * len / 10.0);
+                            shadow *= 1.0 - 0.6 * thick * (1.0 - 0.6 * behind);
+                        }
+                    }
                 }
             }
         }
@@ -291,8 +301,9 @@ float3 DynLightTerrain(float3 worldPos, float3 normal)
     return total;
 }
 
-// The sixteen strongest lights of the cell: every decal and splat layer lights itself through CalculateLighting, so this one runs several
-// times per pixel where the composite pass runs once.
+// Every decal and splat layer lights itself through CalculateLighting, so this one runs several times per pixel where the composite pass
+// runs once. It reads the whole list of the cell: a cut list (the 16 strongest) differs from cell to cell wherever a base has more lights
+// than that, and the lit ground then jumps at the cell borders (squares).
 float3 DynLightTerrainFew(float3 worldPos, float3 normal)
 {
     float first;
@@ -300,7 +311,7 @@ float3 DynLightTerrainFew(float3 worldPos, float3 normal)
     float2 occ;
     DynLightCell(worldPos, first, texels, occ);
     float3 total = float3(0, 0, 0);
-    for (int t = 0; t < 4; ++t)
+    for (int t = 0; t < 64; ++t)
     {
         if ((float)t >= texels)
         {

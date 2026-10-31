@@ -44,7 +44,7 @@ namespace moho::lights
   constexpr std::uint32_t kOccluderTexels = 4;
   constexpr std::size_t kMaxOccluders = 1024;      // 4096 texels = 4 rows
   constexpr std::uint32_t kOccluderRows = 4;
-  constexpr std::uint32_t kMaxOccludersPerCell = 16;
+  constexpr std::uint32_t kMaxOccludersPerCell = 32; // a fight has many units in a cell: a cut list differs from cell to cell and draws squares
   constexpr float kShadowReach = 16.0f;            // how far past an occluder (and past its light) a shadow is followed, world units
   constexpr float kMaxShadowLightRadius = 40.0f;   // bigger lights (explosions that light a screen) cast no shadows
 
