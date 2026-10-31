@@ -28,6 +28,7 @@
 #include "moho/particles/CWorldParticles.h"
 #include "moho/render/lights/LightBinding.h"
 #include "moho/render/lights/LightFeeds.h"
+#include "moho/terrain/water/WaterReflections.h"
 #include "moho/terrain/water/WaterSimulation.h"
 #include "moho/render/lights/LightDebugView.h"
 #include "moho/render/AmbientOcclusion.h"
@@ -4794,6 +4795,8 @@ void moho::WRenViewport::RenderWater(TerrainCommon* const terrain)
   const moho::water::ReflectionTarget scaledReflection = moho::water::AcquireReflectionTarget(
     head, device->GetHeadWidth(static_cast<unsigned int>(head)), device->GetHeadHeight(static_cast<unsigned int>(head))
   );
+  // FAF: the scene depth for the screen-space reflections of the water (docs/LIGHTING_V2.md)
+  moho::water::BindWaterReflections(device->GetGalDevice(), *mCam);
   terrain->DrawWaterTerrain(
     moho::REN_GetGameTick(),
     moho::REN_GetSimDeltaSeconds(),
