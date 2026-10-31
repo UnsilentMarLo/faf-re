@@ -127,6 +127,11 @@ namespace moho::lights
     };
     std::vector<CellLight> pairs;
     pairs.reserve(requested * 16u);
+    // How many lights each cell lists so far. The lights come strongest first; a light that would take a cell past kMaxLightsPerCell is left
+    // out *everywhere* (a whole light that is missing is a faint change over its whole footprint). Cutting each cell's own list instead
+    // dropped a different set of lights in each cell of a crowded fight (a hundred units, a thousand glow lights in a few cells), and the lighting
+    // jumped at the borders of those cells: big lit squares.
+    std::vector<std::uint16_t> listed(static_cast<std::size_t>(layout.cellsX) * layout.cellsZ, 0);
 
     const float invCell = 1.0f / layout.cellSize;
     const float spanX = static_cast<float>(layout.cellsX) * layout.cellSize;
@@ -186,6 +191,7 @@ namespace moho::lights
         std::min(static_cast<float>(layout.cellsZ - 1), std::floor(maxZ * invCell))
       );
 
+      const std::size_t firstPair = pairs.size();
       const float r2 = l.radius * l.radius;
       const float segX = ex - l.pos[0];
       const float segZ = ez - l.pos[2];
@@ -223,6 +229,18 @@ namespace moho::lights
           const float falloff = std::max(0.0f, 1.0f - (qx * qx + qz * qz) / r2);
           const float peak = std::max(l.rgb[0], std::max(l.rgb[1], l.rgb[2]));
           pairs.push_back(CellLight{static_cast<std::uint32_t>(cz) * layout.cellsX + cx, peak * falloff, index});
+        }
+      }
+      bool crowded = false;
+      for (std::size_t k = firstPair; k < pairs.size() && !crowded; ++k) {
+        crowded = listed[pairs[k].cell] >= kMaxLightsPerCell;
+      }
+      if (crowded) {
+        image.overflow += static_cast<std::uint32_t>(pairs.size() - firstPair);
+        pairs.resize(firstPair);
+      } else {
+        for (std::size_t k = firstPair; k < pairs.size(); ++k) {
+          ++listed[pairs[k].cell];
         }
       }
     }

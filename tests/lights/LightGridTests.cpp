@@ -141,6 +141,33 @@ namespace
     GCHECK(image.lightCount == kMaxLightsPerCell + 16); // all lights are in the data texture, only the cell list is limited
   }
 
+  void TestCrowdedCellRejectsWholeLights()
+  {
+    // A cell full of lights must not cut its own list: a weaker light that reaches the full cell and an empty one is left out of both
+    // (otherwise the two cells disagree about it and the lighting steps at their border: the lit squares of a big fight).
+    const GridLayout layout = GridLayout::ForMap(256.0f, 256.0f); // cells of 4
+    std::vector<Light> lights;
+    for (std::uint32_t i = 0; i < kMaxLightsPerCell; ++i) {
+      lights.push_back(MakeLight(130.0f, 0.0f, 130.0f, 1.0f, 1000.0f - static_cast<float>(i)));
+    }
+    lights.push_back(MakeLight(134.0f, 0.0f, 130.0f, 10.0f, 1.0f)); // the weak one, index kMaxLightsPerCell
+    LightGridImage image;
+    BuildLightGrid(lights, layout, image);
+    std::uint32_t idx[kMaxLightsPerCell];
+    const std::uint32_t full = image.CellLights(130.0f, 130.0f, idx);
+    GCHECK(full == kMaxLightsPerCell);
+    bool weakInFull = false;
+    for (std::uint32_t i = 0; i < full; ++i) {
+      weakInFull = weakInFull || idx[i] == kMaxLightsPerCell;
+    }
+    GCHECK(!weakInFull);
+    const std::uint32_t near = image.CellLights(140.0f, 130.0f, idx);
+    for (std::uint32_t i = 0; i < near; ++i) {
+      GCHECK(idx[i] != kMaxLightsPerCell); // left out of the neighbour too
+    }
+    GCHECK(image.overflow > 0);
+  }
+
   void TestCellListsAreComplete()
   {
     // Twenty lights reach the same cells (more than the 8 and 16 entries of the earlier layouts): every one of them is listed in every
@@ -428,6 +455,7 @@ int RunGridTests(int& checks)
   TestDataTextureLayout();
   TestMembership();
   TestOrderAndOverflow();
+  TestCrowdedCellRejectsWholeLights();
   TestCellListsAreComplete();
   TestStrongestAtTheMiddleFirst();
   TestOccluders();

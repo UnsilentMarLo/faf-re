@@ -145,6 +145,36 @@ ForkThread(function()
         Say(string.format('beam scene: shooter %s target %s ground %.2f', tostring(shooter and shooter:GetBlueprint().BlueprintId), tostring(target ~= nil), GetTerrainHeight(x0, z0)))
         return
     end
+    if AB_SCENE == 'battle' or AB_SCENE == 'battlestill' then
+        local still = AB_SCENE == 'battlestill'   -- all immortal, nobody moves: the units keep their places, so frames of different settings compare
+        local gap = still and 8 or 18
+        -- 40 against 40 mobile units, 30 units apart, attack-moving into each other: tanks, T3 units and experimentals of all factions, half of
+        -- them immortal so the fight lasts and the wreckage of the other half builds up
+        local ids = { 'uel0201', 'url0202', 'ual0201', 'xsl0201', 'uel0303', 'url0303', 'ual0303', 'xsl0303',
+                      'uel0202', 'url0107', 'ual0106', 'xsl0202', 'uel0401', 'url0402', 'ual0401', 'xsl0401' }
+        local blue, red = {}, {}
+        for i = 1, 40 do
+            local row, col = math.floor((i - 1) / 8), math.mod(i - 1, 8)
+            local ax, az = x0 - gap - row * 4, z0 - 16 + col * 4.5
+            local bx, bz = x0 + gap + row * 4, z0 - 16 + col * 4.5
+            local a = CreateUnitHPR(ids[math.mod(i - 1, 16) + 1], brainA.Name, ax, GetTerrainHeight(ax, az), az, 0, math.pi * 0.5, 0)
+            local b = CreateUnitHPR(ids[math.mod(i + 4, 16) + 1], brainB.Name, bx, GetTerrainHeight(bx, bz), bz, 0, -math.pi * 0.5, 0)
+            if a then
+                if still or math.mod(i, 2) == 0 then a:SetCanTakeDamage(false) end
+                table.insert(blue, a)
+            end
+            if b then
+                if still or math.mod(i, 2) == 1 then b:SetCanTakeDamage(false) end
+                table.insert(red, b)
+            end
+        end
+        if not still then
+            IssueAggressiveMove(blue, Vector(x0 + 30, GetTerrainHeight(x0 + 30, z0), z0))
+            IssueAggressiveMove(red, Vector(x0 - 30, GetTerrainHeight(x0 - 30, z0), z0))
+        end
+        Say(string.format('battle scene: %d against %d', table.getn(blue), table.getn(red)))
+        return
+    end
     if AB_SCENE == 'ring' then
         -- twelve spider bots around one immortal tank, all firing at it: the beams meet in one impact
         local ux, uz = x0, z0
