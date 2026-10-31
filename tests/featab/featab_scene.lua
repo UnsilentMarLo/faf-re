@@ -153,7 +153,8 @@ ForkThread(function()
         local ids = { 'uel0201', 'url0202', 'ual0201', 'xsl0201', 'uel0303', 'url0303', 'ual0303', 'xsl0303',
                       'uel0202', 'url0107', 'ual0106', 'xsl0202', 'uel0401', 'url0402', 'ual0401', 'xsl0401' }
         local blue, red = {}, {}
-        for i = 1, 40 do
+        local count = rawget(_G, 'AB_COUNT') or 40
+        for i = 1, count do
             local row, col = math.floor((i - 1) / 8), math.mod(i - 1, 8)
             local ax, az = x0 - gap - row * 4, z0 - 16 + col * 4.5
             local bx, bz = x0 + gap + row * 4, z0 - 16 + col * 4.5

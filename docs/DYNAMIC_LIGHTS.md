@@ -266,3 +266,17 @@ A census scene with structures of all four factions, engineers building, shield 
 - **Cause:** a cell lists at most `kMaxLightsPerCell` (256) lights, strongest at its middle first, and each over-full cell cut *its own* list: a weak light kept in the neighbouring cell and dropped here steps at the border, hundreds of them make a block.
 - **Now:** `BuildLightGrid` keeps a count per cell (`listed[]`); a light that would take any of its cells past the cap is left out of all of them (counted in `overflow`). A whole missing light changes the lighting smoothly over its footprint. Host test `TestCrowdedCellRejectsWholeLights`. The occluder lists (`kMaxOccludersPerCell`) have the same per-cell cut and are unchanged.
 - **Not seen by eye in faf-re:** the `battle` scene (40 v 40 mixed units) came over with the fix; steps in `tests/featab/steps_squares3.lua`.
+
+### Measured: 100v100 (2026-10-31, `FEATAB_COUNT=100`, `-Scene battle`, D3D12, 1600x900, `FAF_GPU_PROFILE=300`)
+
+About 2,500 lights on screen, 400 to 500 grid cells, 100 shadow casters. GPU time per frame:
+
+| Build | Total | Terrain | Meshes |
+|---|---|---|---|
+| lights off | 4.6 ms | 0.3 ms | n/a |
+| lights on, no shadows (`ren_DynLightsShadows 0`), HEAD 19934e84 | 14.2 ms | 5.2 ms | 2.8 ms |
+| lights on, shadows, before the steam-re port (`7623bbda`) | 38.5 ms | 18.7 ms | 13.7 ms |
+| lights on, shadows, HEAD 19934e84 (deployed as `main_x64.exe` on 2026-10-31) | 132.8 ms | 107.8 ms | 17.5 ms |
+
+- **The shadows are the cost:** every light in a pixel's list runs an occluder loop (up to 8 casters), so a pixel pays lights x casters. The steam-re port raised the ground read to the whole cell list, which multiplied it (38 to 133 ms). The lights alone cost about 10 ms.
+- **Verdict:** the per-pixel lights-by-casters design cannot scale; it needs replacing, not tuning.
