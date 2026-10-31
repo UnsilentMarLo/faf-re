@@ -41,11 +41,9 @@ namespace moho::lights
     using namespace gpg::gal;
 
     constexpr std::uint32_t kCells = 512;       // cells of the field per side
-    constexpr std::uint32_t kLayers = 4;        // heights above the terrain
+    constexpr std::uint32_t kLayers = 5;        // sea bed, then four heights above the surface
     constexpr std::uint32_t kTile = 8;          // cells per side of a thread group
-    constexpr std::uint32_t kHeightSamples = 129; // terrain height samples per side (bilinear in the shader)
     constexpr std::uint32_t kAtlasFormat = 9U;  // gal render target format: RGBA16F (DxgiFormats.cpp)
-    constexpr float kLayerHeights[kLayers] = {0.5f, 3.0f, 10.0f, 30.0f};
     constexpr float kCellLadder[] = {0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f};
 
     struct FieldConstants
@@ -53,6 +51,8 @@ namespace moho::lights
       float origin[4]; // originX, originZ, cellSize, lightCount
       float dims[4];   // cells, layers, height samples per side, world units per height sample
       float layerH[4];
+      float map[4];    // unused, unused, water elevation, water on
+      float absorb[4]; // light absorbed per world unit of water, per colour channel
       float misc[4]; // frame seed, occluder count, temporal blend of the visibility (1: history not usable), shadows on
       float hist[4]; // window shift in cells since the previous frame (x, z), 1 when the history is usable
     };
@@ -62,14 +62,16 @@ namespace moho::lights
 cbuffer FieldConstants : register(b0)
 {
     float4 gOrigin;   // originX, originZ, cellSize, lightCount
-    float4 gDims;     // cells, layers, height samples per side, world units per height sample
+    float4 gDims;     // cells, layers, height samples in x, height samples in z
     float4 gLayerH;
+    float4 gMap;      // unused, unused, water elevation, water on
+    float4 gAbsorb;   // absorption per world unit of water, per channel
     float4 gMisc;     // frame seed, caster count, visibility blend, shadows on
     float4 gHist;     // window shift in cells (x, z), history usable
 };
 
 StructuredBuffer<float4> Lights : register(t0);   // three float4 per light, the data layout of LightGrid.h
-StructuredBuffer<float> Heights : register(t1);
+StructuredBuffer<uint> Heights : register(t1);    // the map's raw uint16 heights, two to a word
 StructuredBuffer<float4> Casters : register(t2);  // four float4 per shadow caster: centre, then three axes with 1 / length squared in w
 StructuredBuffer<float> VisPrev : register(t3);
 RWStructuredBuffer<float4> Field : register(u0);
@@ -130,18 +132,62 @@ float CasterShadow(float3 p, float3 d, float len, uint ci)
     return shadow;
 }
 
+static const float kLH[5] = {0.5, 0.3, 3.0, 10.0, 30.0};
+
+float HeightAt(uint x, uint z)
+{
+    uint idx = z * (uint)gDims.z + x;
+    uint word = Heights[idx >> 1];
+    return (float)((idx & 1u) != 0u ? (word >> 16) : (word & 0xFFFFu)) * 0.0078125;
+}
+
+// The terrain at a world position, bilinear in the engine's own samples (one sample per world unit).
 float GroundAt(float2 xz)
 {
-    float n = gDims.z;
-    float2 g = clamp((xz - gOrigin.xy) / gDims.w, 0.0, n - 1.001);
+    float2 g = clamp(xz, float2(0.0, 0.0), float2(gDims.z - 1.001, gDims.w - 1.001));
     uint2 i = (uint2)g;
     float2 f = g - (float2)i;
-    uint w = (uint)n;
-    float h00 = Heights[i.y * w + i.x];
-    float h10 = Heights[i.y * w + i.x + 1];
-    float h01 = Heights[(i.y + 1) * w + i.x];
-    float h11 = Heights[(i.y + 1) * w + i.x + 1];
+    float h00 = HeightAt(i.x, i.y);
+    float h10 = HeightAt(i.x + 1, i.y);
+    float h01 = HeightAt(i.x, i.y + 1);
+    float h11 = HeightAt(i.x + 1, i.y + 1);
     return lerp(lerp(h00, h10, f.x), lerp(h01, h11, f.x), f.y);
+}
+
+// What the water between the receiver p and the light point q lets through (red goes first); 1 where the segment is above the surface.
+float3 WaterTransmit(float3 p, float3 q)
+{
+    if (gMap.w < 0.5)
+    {
+        return float3(1, 1, 1);
+    }
+    float dp = p.y - gMap.z;
+    float dq = q.y - gMap.z;
+    if (dp >= 0.0 && dq >= 0.0)
+    {
+        return float3(1, 1, 1);
+    }
+    float below = 1.0;
+    if (dp > 0.0 || dq > 0.0)
+    {
+        below = dp < 0.0 ? (-dp) / (dq - dp) : (-dq) / (dp - dq);
+    }
+    return exp(-gAbsorb.xyz * (length(q - p) * below));
+}
+
+// The ridges between the receiver and a light: the ray is marched over the terrain; the visibility falls off as it passes close to the
+// ground, with a penumbra that widens along the ray.
+float TerrainVis(float3 p, float3 d, float len)
+{
+    float vis = 1.0;
+    [unroll] for (int i = 0; i < 12; ++i)
+    {
+        float t = ((float)i + 0.5) / 12.0;
+        float3 q = p + d * t;
+        float clearance = q.y - GroundAt(q.xz) - 0.25;
+        vis = min(vis, saturate(clearance / (0.5 + 0.12 * t * len)));
+    }
+    return vis;
 }
 
 [numthreads(8, 8, 1)]
@@ -153,7 +199,8 @@ void FieldCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : 
     float cs = gOrigin.z;
     float2 xz = gOrigin.xy + ((float2)cell + 0.5) * cs;
     float ground = GroundAt(xz);
-    float3 p = float3(xz.x, ground + gLayerH[layer], xz.y);
+    float surface = gMap.w > 0.5 ? max(ground, gMap.z) : ground;
+    float3 p = float3(xz.x, layer == 0 ? ground + kLH[0] : surface + kLH[layer], xz.y);
     float2 tileMin = gOrigin.xy + (float2)(gid.xy * 8) * cs;
     float2 tileMax = tileMin + 8.0 * cs;
 
@@ -161,7 +208,7 @@ void FieldCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : 
     float3 D = float3(0, 0, 0);
     float W = 0.0;
     uint cellId = (layer * cells + cell.y) * cells + cell.x;
-    bool shadows = gMisc.w > 0.5 && gMisc.y > 0.5;
+    bool shadows = gMisc.w > 0.5;
     // SAMPLES reservoirs: each ends up holding one light, chosen with probability (luminance x attenuation) / sum: the shadow rays go to those
     uint sel[SAMPLES];
     float wsum = 0.0;
@@ -217,7 +264,7 @@ void FieldCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : 
             }
             if (atten > 0.002)
             {
-                float3 colour = b.rgb * atten;
+                float3 colour = b.rgb * atten * WaterTransmit(p, a.xyz + seg * t);
                 float lum = dot(colour, float3(0.3, 0.59, 0.11));
                 float len = length(toLight);
                 E += colour;
@@ -301,6 +348,13 @@ void FieldCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : 
             }
             GroupMemoryBarrierWithGroupSync();
         }
+        [unroll] for (uint j5 = 0; j5 < SAMPLES; ++j5)
+        {
+            if (len[j5] > 0.05)
+            {
+                trans[j5] *= TerrainVis(p, pToLight[j5], len[j5]);
+            }
+        }
         float sum = 0.0;
         float used = 0.0;
         [unroll] for (uint j4 = 0; j4 < SAMPLES; ++j4)
@@ -323,7 +377,7 @@ void FieldCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : 
     }
     VisCur[cellId] = vis;
     uint at = cellId * 2;
-    Field[at] = float4(E * vis, ground);
+    Field[at] = float4(E * vis, layer == 0 ? ground : (layer == 1 ? surface : 0.0));
     Field[at + 1] = float4(D * vis, W * vis);
 }
 
@@ -371,6 +425,9 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
       float heightOriginZ = 0.0f;
       float heightCell = 0.0f;
       std::uint32_t heightAge = 1000U;
+      std::uint64_t heightRevision = ~0ULL;
+      std::uint32_t heightWidth = 0U;
+      std::uint32_t heightHeight = 0U;
     };
 
     State& GetState()
@@ -416,11 +473,6 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
         lights.stride = 16U;
         lights.capacity = static_cast<std::uint32_t>(kMaxGridLights * kTexelsPerLight);
         s.lightBuffer = device.CreateGpuBuffer(lights);
-        GpuBufferDesc heights;
-        heights.name = "LightFieldHeights";
-        heights.stride = 4U;
-        heights.capacity = kHeightSamples * kHeightSamples;
-        s.heightBuffer = device.CreateGpuBuffer(heights);
         GpuBufferDesc field;
         field.name = "LightFieldCells";
         field.stride = 16U;
@@ -439,7 +491,7 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
         vis.shaderWrite = true;
         s.visBuffer[0] = device.CreateGpuBuffer(vis);
         s.visBuffer[1] = device.CreateGpuBuffer(vis);
-        if (s.lightBuffer == nullptr || s.heightBuffer == nullptr || s.fieldBuffer == nullptr || s.casterBuffer == nullptr ||
+        if (s.lightBuffer == nullptr || s.fieldBuffer == nullptr || s.casterBuffer == nullptr ||
             s.visBuffer[0] == nullptr || s.visBuffer[1] == nullptr) {
           gpg::Warnf("Light field disabled: its GPU buffers could not be created");
           s.failed = true;
@@ -504,12 +556,13 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     }
   } // namespace
 
-  bool UpdateField(const GeomCamera3& camera, const LightGridImage& image, const void* terrain, const ElevationFunction elevation)
+  bool UpdateField(const GeomCamera3& camera, const LightGridImage& image, const FieldTerrain& terrain)
   {
     State& s = GetState();
     s.frame.params2[0] = 0.0f;
     s.frame.valid = false;
-    if (ren_DynLightsMode != 1 || image.lightCount == 0 || terrain == nullptr || elevation == nullptr) {
+    if (ren_DynLightsMode != 1 || image.lightCount == 0 || terrain.context == nullptr || terrain.elevation == nullptr ||
+        terrain.sample == nullptr || terrain.width < 2U || terrain.height < 2U) {
       s.historyValid = false; // the visibility buffers go stale while the field is not run
       return false;
     }
@@ -534,7 +587,7 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
 
     float minXZ[2];
     float maxXZ[2];
-    if (!ViewGround(camera, terrain, elevation, minXZ, maxXZ)) {
+    if (!ViewGround(camera, terrain.context, terrain.elevation, minXZ, maxXZ)) {
       return false;
     }
     // The cell size from a ladder (the field does not shimmer when the zoom changes a little); the origin snaps to whole thread groups.
@@ -553,21 +606,37 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     const float originX = std::floor((centreX - 0.5f * static_cast<float>(kCells) * cellSize) / tileSpan) * tileSpan;
     const float originZ = std::floor((centreZ - 0.5f * static_cast<float>(kCells) * cellSize) / tileSpan) * tileSpan;
 
-    // Terrain heights of the window, on a coarse lattice (the lights sit above a smooth surface; the shader interpolates).
-    const float heightStep = static_cast<float>(kCells) * cellSize / static_cast<float>(kHeightSamples - 1U);
-    if (originX != s.heightOriginX || originZ != s.heightOriginZ || cellSize != s.heightCell || ++s.heightAge > 180U) {
-      std::vector<float> heights(static_cast<std::size_t>(kHeightSamples) * kHeightSamples);
-      for (std::uint32_t z = 0; z < kHeightSamples; ++z) {
-        for (std::uint32_t x = 0; x < kHeightSamples; ++x) {
-          heights[static_cast<std::size_t>(z) * kHeightSamples + x] =
-            elevation(terrain, originX + static_cast<float>(x) * heightStep, originZ + static_cast<float>(z) * heightStep);
+    // The terrain: the map's raw heights go to the GPU once (and again when they change), two samples to a word.
+    if (s.heightBuffer == nullptr || terrain.revision != s.heightRevision || terrain.width != s.heightWidth || terrain.height != s.heightHeight) {
+      const std::size_t samples = static_cast<std::size_t>(terrain.width) * terrain.height;
+      const std::uint32_t words = static_cast<std::uint32_t>((samples + 1U) / 2U);
+      if (s.heightBuffer == nullptr || s.heightBuffer->Desc().capacity != words) {
+        GpuBufferDesc heights;
+        heights.name = "LightFieldHeights";
+        heights.stride = 4U;
+        heights.capacity = words;
+        s.heightBuffer = device->CreateGpuBuffer(heights);
+        if (s.heightBuffer == nullptr) {
+          s.failed = true;
+          return refuse("no GPU buffer for the terrain heights");
         }
       }
-      device->UpdateGpuBuffer(*s.heightBuffer, 0U, kHeightSamples * kHeightSamples, heights.data());
-      s.heightOriginX = originX;
-      s.heightOriginZ = originZ;
-      s.heightCell = cellSize;
-      s.heightAge = 0U;
+      std::vector<std::uint32_t> packed(words, 0U);
+      for (std::uint32_t z = 0; z < terrain.height; ++z) {
+        for (std::uint32_t x = 0; x < terrain.width; ++x) {
+          const std::size_t index = static_cast<std::size_t>(z) * terrain.width + x;
+          packed[index >> 1U] |= static_cast<std::uint32_t>(terrain.sample(terrain.context, static_cast<std::int32_t>(x), static_cast<std::int32_t>(z)))
+                                 << ((index & 1U) * 16U);
+        }
+      }
+      device->UpdateGpuBuffer(*s.heightBuffer, 0U, words, packed.data());
+      s.heightRevision = terrain.revision;
+      s.heightWidth = terrain.width;
+      s.heightHeight = terrain.height;
+      // a check of the unit: the raw sample against the engine's own elevation
+      gpg::Logf("Light field: terrain %ux%u samples uploaded; sample (200,200) = %.3f, engine elevation %.3f; water %s at %.2f", terrain.width, terrain.height,
+                static_cast<float>(terrain.sample(terrain.context, 200, 200)) * 0.0078125f, terrain.elevation(terrain.context, 200.0f, 200.0f),
+                terrain.waterEnabled ? "on" : "off", terrain.waterElevation);
     }
 
     const std::uint32_t lightCount = std::min<std::uint32_t>(image.lightCount, static_cast<std::uint32_t>(kMaxGridLights));
@@ -601,9 +670,13 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     constants.origin[3] = static_cast<float>(lightCount);
     constants.dims[0] = static_cast<float>(kCells);
     constants.dims[1] = static_cast<float>(kLayers);
-    constants.dims[2] = static_cast<float>(kHeightSamples);
-    constants.dims[3] = heightStep;
-    std::memcpy(constants.layerH, kLayerHeights, sizeof(constants.layerH));
+    constants.dims[2] = static_cast<float>(terrain.width);
+    constants.dims[3] = static_cast<float>(terrain.height);
+    constants.map[2] = terrain.waterElevation;
+    constants.map[3] = terrain.waterEnabled ? 1.0f : 0.0f;
+    constants.absorb[0] = 0.25f; // per world unit: red is gone in a few units, blue goes on
+    constants.absorb[1] = 0.06f;
+    constants.absorb[2] = 0.03f;
 
     OutputContext saved;
     device->GetContext(&saved);
@@ -659,7 +732,6 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     f.params2[1] = static_cast<float>(kLayers);
     f.params2[2] = 1.0f / static_cast<float>(kCells * kLayers);
     f.params2[3] = 1.0f / static_cast<float>(kCells * 2U);
-    std::memcpy(f.layerHeights, kLayerHeights, sizeof(f.layerHeights));
     f.valid = true;
     ++s.stats.frames;
     s.stats.cellSize = cellSize;

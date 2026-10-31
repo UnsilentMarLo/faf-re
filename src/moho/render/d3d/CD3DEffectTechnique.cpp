@@ -572,20 +572,44 @@ namespace moho
       // backends. The filter is off until the Water Quality level asks for it, so the patched effect looks like the shipped one at level 0.
       // A source the patch does not recognise, or a patched source the backend compiler rejects, falls back to the unpatched effect.
       bool waterFilter = false;
-      if (deviceContext != nullptr && effectByteCount > 0U && std::string_view(effectBaseName.c_str()) == "water2" &&
-          water::EffectPatchWanted(deviceContext->mDeviceType)) {
-        std::string text(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);
-        const water::EffectPatchResult patch = water::PatchWaterEffect(text);
-        if (patch.patched) {
-          mergedBuffer = gpg::AllocMemBuffer(compatByteCount + text.size());
-          if (compatByteCount > 0U) {
-            std::copy_n(compatStateBuffer.GetPtr(0U, 0U), compatByteCount, mergedBuffer.GetPtr(0U, 0U));
+      bool waterLights = false;
+      if (deviceContext != nullptr && effectByteCount > 0U && std::string_view(effectBaseName.c_str()) == "water2") {
+        const bool wantsFilter = water::EffectPatchWanted(deviceContext->mDeviceType);
+        const bool wantsWaterLights = gpg::gal::UsesD3D10EffectDialect(deviceContext->mDeviceType) &&
+                                      (CFG_GetArgOption("/dynlights", 0U, nullptr) || lights::LightsWanted(deviceContext->mDeviceType));
+        if (wantsFilter || wantsWaterLights) {
+          const std::string original(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);
+          std::string text = original;
+          if (wantsWaterLights) {
+            // first: the light patch anchors on lines the water filter leaves alone, the filter's anchors are untouched by it
+            std::string lit = text;
+            const lights::EffectPatchResult lightPatch = lights::PatchWaterEffect(lit);
+            if (lightPatch.patched) {
+              text = std::move(lit);
+              waterLights = true;
+              gpg::Logf("DynLights: %s patched, the water is lit by the light field", effectBaseName.c_str());
+            } else {
+              gpg::Warnf("DynLights: %s not patched: %s", effectBaseName.c_str(), lightPatch.error.c_str());
+            }
           }
-          std::copy_n(text.data(), text.size(), mergedBuffer.GetPtr(compatByteCount, 0U));
-          waterFilter = true;
-          gpg::Logf("Water: %s patched with the filtered reflection and refraction lookups", effectBaseName.c_str());
-        } else {
-          gpg::Warnf("Water: %s not patched: %s", effectBaseName.c_str(), patch.error.c_str());
+          if (wantsFilter) {
+            std::string filtered = text;
+            const water::EffectPatchResult patch = water::PatchWaterEffect(filtered);
+            if (patch.patched) {
+              text = std::move(filtered);
+              waterFilter = true;
+              gpg::Logf("Water: %s patched with the filtered reflection and refraction lookups", effectBaseName.c_str());
+            } else {
+              gpg::Warnf("Water: %s not patched: %s", effectBaseName.c_str(), patch.error.c_str());
+            }
+          }
+          if (waterFilter || waterLights) {
+            mergedBuffer = gpg::AllocMemBuffer(compatByteCount + text.size());
+            if (compatByteCount > 0U) {
+              std::copy_n(compatStateBuffer.GetPtr(0U, 0U), compatByteCount, mergedBuffer.GetPtr(0U, 0U));
+            }
+            std::copy_n(text.data(), text.size(), mergedBuffer.GetPtr(compatByteCount, 0U));
+          }
         }
       }
 
@@ -595,7 +619,7 @@ namespace moho
       // into different shaders, so it is cached under a name of its own.
       const auto createEffect = [&](const bool boneTexture) {
         const msvc8::string cachePath =
-          cacheDirectory + "/" + mName + (dynLights ? ".dynlights" : "") + (shadowFilter ? ".shadowf" : "") + (waterFilter ? ".waterq1" : "") +
+          cacheDirectory + "/" + mName + (dynLights ? ".dynlights" : "") + (shadowFilter ? ".shadowf" : "") + (waterFilter ? ".waterq1" : "") + (waterLights ? ".waterl1" : "") +
           (lowResParticles ? ".lowres" : "") + (boneTexture ? ".bonetex." : ".") + engineVersion;
         SDiskFileInfo cacheInfo{};
         bool useCachePayload = false;
@@ -635,13 +659,14 @@ namespace moho
             mergedBuffer = unpatchedBuffer;
             createEffect(false);
           }
-        } else if (waterFilter) {
+        } else if (waterFilter || waterLights) {
           try {
             createEffect(false);
           } catch (const std::exception& exception) {
-            gpg::Warnf("%s: %s; building it without the water filter", effectFilePath, exception.what());
+            gpg::Warnf("%s: %s; building it without the water filter and the water lights", effectFilePath, exception.what());
             mEffect.reset();
             waterFilter = false;
+            waterLights = false;
             mergedBuffer = unpatchedBuffer;
             createEffect(false);
           }

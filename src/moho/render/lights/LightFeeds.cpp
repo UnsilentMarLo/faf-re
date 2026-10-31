@@ -258,15 +258,25 @@ namespace moho::lights
       CWldSession* const session = WLD_GetActiveSession();
       const STIMap* const map = session != nullptr ? session->GetSTIMap() : nullptr;
       const CHeightField* const heightField = map != nullptr ? map->GetHeightField() : nullptr;
-      (void)UpdateField(
-        camera, gFrameImage, heightField,
-        [](const void* context, const float x, const float z) {
+      FieldTerrain terrain;
+      if (heightField != nullptr) {
+        terrain.context = heightField;
+        terrain.elevation = [](const void* context, const float x, const float z) {
           const auto* const field = static_cast<const CHeightField*>(context);
           const float cx = std::min(std::max(x, 0.0f), static_cast<float>(field->Width() - 1));
           const float cz = std::min(std::max(z, 0.0f), static_cast<float>(field->Height() - 1));
           return field->GetElevation(cx, cz);
-        }
-      );
+        };
+        terrain.sample = [](const void* context, const std::int32_t x, const std::int32_t z) {
+          return static_cast<const CHeightField*>(context)->GetHeightAt(x, z);
+        };
+        terrain.width = static_cast<std::uint32_t>(heightField->Width());
+        terrain.height = static_cast<std::uint32_t>(heightField->Height());
+        terrain.revision = HeightFieldRevision();
+        terrain.waterEnabled = map->IsWaterEnabled();
+        terrain.waterElevation = map->GetWaterElevation();
+      }
+      (void)UpdateField(camera, gFrameImage, terrain);
       BindField(CurrentField());
     }
 

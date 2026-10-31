@@ -73,3 +73,19 @@ The compute pass also shades: per cell, four reservoirs pick lights with probabi
 | field with shadows, Vulkan | 6.8 ms total | 0.38 ms |
 
 Shadow scene (`steps_fshadow.lua`): shadows on vs off differ by 1.03 (mean pixel difference), two runs with shadows on differ by 0.009 (no flicker). Open: terrain height-field shadows (lights behind ridges), more than 4,096 lights and 1,024 casters (the CPU packer limits), real unit silhouettes (the casters are ellipsoids), directional specular quality, the cost of a zoomed-in view (cells of 0.5), a light-only packer without the CPU grid.
+
+## Stage 4: terrain and water in the field (2026-11-01)
+
+Survey facts (water2.fx, `WaterEffectPatch`, `STIMap`): the water is one quad at `WaterElevation` drawn by `HighFidelityPS` after the scene copy; its depth term is a baked half-resolution map (`UtilitySamplerC.g`); terrain and meshes tint by depth through `ApplyWaterColor` / the mesh equivalent; terrain is not in the sun shadow map; `CHeightField` gives raw uint16 samples at 1/128 unit; `STIMap` has `IsWaterEnabled()` / `GetWaterElevation()`.
+
+Built:
+
+- **Full-resolution terrain in the compute pass.** The map's raw height samples go to the GPU once (again when `HeightFieldRevision()` changes), two to a word; the pass reads them bilinear (it used a 129x129 lattice before). A log line checks the unit against `GetElevation` at start (19.000 against 19.000 on Adaptive Acid Lakes).
+- **Ridge shadows for lights.** Each shadow sample marches its ray over the terrain (12 steps, soft penumbra widening along the ray) next to the caster test; a light behind a ridge no longer lights the ground behind it.
+- **Water in the field.** Layers are now: 0 the terrain 0.5 above it (the sea bed under water), 1 to 4 the surface (water or terrain) 0.3, 3, 10, 30 above it; the alpha of layers 0 and 1 holds the terrain and the surface height. The shaders sample by height: a point under the surface blends the sea bed and surface layers, one above uses the layers above the surface.
+- **Underwater lights and water depth.** Every light is weakened by the length of its path inside the water (`WaterTransmit`, Beer-Lambert, absorption 0.25 / 0.06 / 0.03 per unit for red / green / blue), for lights below the surface and for lights above it that reach a submerged point.
+- **Lit water.** `lights::PatchWaterEffect` (chained with the water quality patch in `CD3DEffectTechnique.cpp`, cache tag `.waterl1`) adds `FafWaterLights` to `HighFidelityPS`: GGX glints of the combined light on the wave normal, and the light scattered back out of the water in the water colour. The field variables are bound to `water2` like to `mesh` and `terrain`.
+
+Measured: 100v100, D3D12: GPU 6.47 ms, LightField pass 0.41 ms (0.34 before the terrain march). A lit lake (hover tanks with light particles, `-Scene waterlight`) lights the water, the sea bed and the shore; not yet compared against the old path by eye in a deep-water map (the test map's lake is 2.5 units deep).
+
+Next: sun shadows of the terrain onto terrain, units and water (a part-2 plane in the atlas), per-pixel water depth from a full-resolution height texture, a height-field wave simulation feeding the water normals (units, projectiles and impacts as sources), then displaced water geometry.

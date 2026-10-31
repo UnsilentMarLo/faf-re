@@ -53,6 +53,7 @@ namespace moho::lights
     {
       EffectVars mesh{"mesh"};
       EffectVars terrain{"terrain"};
+      EffectVars water{"water2"};
 
       boost::shared_ptr<gpg::gal::Texture> dataTexture;
       boost::shared_ptr<gpg::gal::Texture> gridTexture;
@@ -236,7 +237,7 @@ namespace moho::lights
     State& s = GetState();
     // mode 0 (no field this frame): the shaders take the grid path; the atlas is dropped so the effect does not keep a stale target
     const float off[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    for (EffectVars* vars : {&s.mesh, &s.terrain}) {
+    for (EffectVars* vars : {&s.mesh, &s.terrain, &s.water}) {
       if (!vars->fieldParams2.Exists()) {
         continue;
       }
@@ -270,7 +271,7 @@ namespace moho::lights
     State& s = GetState();
     // The effects hold references of their own: unbind first.
     const boost::shared_ptr<gpg::gal::Texture> none;
-    for (EffectVars* vars : {&s.mesh, &s.terrain}) {
+    for (EffectVars* vars : {&s.mesh, &s.terrain, &s.water}) {
       if (vars->data.mEffectVariable && vars->data.Exists()) {
         vars->data.mEffectVariable->SetTexture(none);
       }
@@ -278,7 +279,7 @@ namespace moho::lights
         vars->grid.mEffectVariable->SetTexture(none);
       }
     }
-    for (EffectVars* vars : {&s.mesh, &s.terrain}) {
+    for (EffectVars* vars : {&s.mesh, &s.terrain, &s.water}) {
       if (vars->field.mEffectVariable && vars->field.Exists()) {
         vars->field.mEffectVariable->SetRenderTarget(boost::shared_ptr<gpg::gal::RenderTarget>());
       }

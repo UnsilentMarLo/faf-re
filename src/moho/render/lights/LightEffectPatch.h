@@ -32,6 +32,9 @@ namespace moho::lights
   EffectPatchResult PatchMeshEffect(std::string& source, int flood = 0);
   EffectPatchResult PatchTerrainEffect(std::string& source, int flood = 0);
 
+  // water2.fx: the light field as light of the water surface (glints, scatter); declares the field variables (docs/LIGHTING_V2.md).
+  EffectPatchResult PatchWaterEffect(std::string& source);
+
   // Which patch an effect file wants, from its base name ("mesh", "terrain"); nullptr-like false for the others.
   enum class PatchedEffect
   {

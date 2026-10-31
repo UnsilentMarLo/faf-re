@@ -22,7 +22,10 @@ namespace moho
 //
 // Atlas layout (width = cells * layers, height = 2 * cells): layer l, cell (x, y) is at pixel (l * cells + x, y) for the first half and
 // (l * cells + x, cells + y) for the second:
-//   first half   rgb = sum of colour x attenuation of the lights (irradiance without a normal), a = terrain height at the cell
+//   first half   rgb = sum of colour x attenuation of the lights (irradiance without a normal); alpha of layer 0 = the terrain height at
+//                the cell, of layer 1 = the surface height (the water surface over water, else the terrain)
+// Layers: 0 the terrain 0.5 above it (the sea bed under water), 1 to 4 the surface 0.3, 3, 10 and 30 above it. Over water the lights are
+// weakened by the water between them and the point (red first): docs/LIGHTING_V2.md.
 //   second half  xyz = sum of luminance x attenuation x direction to the light, w = sum of luminance x attenuation
 // A surface with normal n then receives E * (1/3) + E * (2/3) * dot(n, D) / W, which is the wrapped diffuse term the grid path sums per light,
 // exact for lights in the linear range of the wrap.
@@ -35,6 +38,21 @@ namespace moho::lights
 
   // Elevation of the terrain at x, z; `context` is whatever the caller needs (the height field).
   using ElevationFunction = float (*)(const void* context, float x, float z);
+  // One raw height sample (the engine's uint16, 1 / 128 world unit), clamped to the map.
+  using HeightSampleFunction = std::uint16_t (*)(const void* context, std::int32_t x, std::int32_t z);
+
+  // What the field needs to know about the map: the terrain and the water.
+  struct FieldTerrain
+  {
+    const void* context = nullptr;
+    ElevationFunction elevation = nullptr;
+    HeightSampleFunction sample = nullptr;
+    std::uint32_t width = 0;  // height samples (the map is width - 1 units wide)
+    std::uint32_t height = 0;
+    std::uint64_t revision = 0; // changes when the heights do (HeightFieldRevision)
+    float waterElevation = 0.0f;
+    bool waterEnabled = false;
+  };
 
   struct FieldFrame
   {
@@ -47,7 +65,7 @@ namespace moho::lights
 
   // Fits the field to the camera's view of the ground, uploads the lights of `image` and runs the compute and the copy into the atlas.
   // False (with `CurrentField().valid` false) when the field is off, unavailable on this API or has no light: the shaders then use the grid.
-  bool UpdateField(const GeomCamera3& camera, const LightGridImage& image, const void* terrain, ElevationFunction elevation);
+  bool UpdateField(const GeomCamera3& camera, const LightGridImage& image, const FieldTerrain& terrain);
 
   const FieldFrame& CurrentField();
 

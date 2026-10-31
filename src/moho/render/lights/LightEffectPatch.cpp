@@ -175,7 +175,9 @@ float DynLightAt(float entry, float3 worldPos, float2 occ, out float3 toLight, o
     }
     return atten;
 }
+)HLSL";
 
+    constexpr const char* kFieldDecl = R"HLSL(
 // ---- FAF light field (LightField.cpp, docs/LIGHTING_V2.md): the lights summed once per cell of a world-fixed field, sampled here ----
 texture dynField;
 sampler2D dynFieldSampler = sampler_state
@@ -198,6 +200,8 @@ float4 DynFieldFetch(float2 c, float layer, float part)
 }
 
 // E: colour x attenuation of all lights; DW: xyz the sum of luminance x attenuation x direction to the light, w the sum of luminance x attenuation.
+// Layers: 0 the terrain 0.5 above it (the sea bed under water), 1 to 4 the surface (water or terrain) 0.3, 3, 10 and 30 above it. The alpha of
+// layer 0 is the terrain height, of layer 1 the surface height: a point under the surface blends the sea bed layer with the surface layer.
 void DynFieldSample(float3 p, out float3 E, out float4 DW)
 {
     E = float3(0, 0, 0);
@@ -207,21 +211,34 @@ void DynFieldSample(float3 p, out float3 E, out float4 DW)
     if (c.x > -1.0 && c.y > -1.0 && c.x < cells + 1.0 && c.y < cells + 1.0)
     {
         c = clamp(c, 0.5, cells - 0.5);
-        float h = p.y - DynFieldFetch(c, 0.0, 0.0).a;
-        float l0 = 0.0;
-        float l1 = 0.0;
+        float ground = DynFieldFetch(c, 0.0, 0.0).a;
+        float surface = DynFieldFetch(c, 1.0, 0.0).a;
+        float l0 = 1.0;
+        float l1 = 1.0;
         float w = 0.0;
-        if (h > dynFieldLayerH.z)
+        if (p.y <= surface + 0.3)
         {
-            l0 = 2.0; l1 = 3.0; w = saturate((h - dynFieldLayerH.z) / (dynFieldLayerH.w - dynFieldLayerH.z));
+            if (surface - ground > 0.1)
+            {
+                l0 = 0.0;
+                w = saturate((p.y - (ground + 0.5)) / max(surface + 0.3 - ground - 0.5, 0.05));
+            }
         }
-        else if (h > dynFieldLayerH.y)
+        else
         {
-            l0 = 1.0; l1 = 2.0; w = (h - dynFieldLayerH.y) / (dynFieldLayerH.z - dynFieldLayerH.y);
-        }
-        else if (h > dynFieldLayerH.x)
-        {
-            l0 = 0.0; l1 = 1.0; w = (h - dynFieldLayerH.x) / (dynFieldLayerH.y - dynFieldLayerH.x);
+            float h = p.y - surface;
+            if (h > 10.0)
+            {
+                l0 = 3.0; l1 = 4.0; w = saturate((h - 10.0) / 20.0);
+            }
+            else if (h > 3.0)
+            {
+                l0 = 2.0; l1 = 3.0; w = (h - 3.0) / 7.0;
+            }
+            else
+            {
+                l0 = 1.0; l1 = 2.0; w = saturate((h - 0.3) / 2.7);
+            }
         }
         E = lerp(DynFieldFetch(c, l0, 0.0).rgb, DynFieldFetch(c, l1, 0.0).rgb, w);
         DW = lerp(DynFieldFetch(c, l0, 1.0), DynFieldFetch(c, l1, 1.0), w);
@@ -241,6 +258,38 @@ float3 DynFieldTerrain(float3 worldPos, float3 normal)
     float4 DW;
     DynFieldSample(worldPos, E, DW);
     return DynFieldDiffuse(E, DW, normal);
+}
+)HLSL";
+
+    // The field as light of the water surface: glints of the combined light on the wave normal and the light scattered back out of the water.
+    constexpr const char* kWaterLightCode = R"HLSL(
+// ---- FAF dynamic lights on the water (LightEffectPatch): the light field at the water surface ----
+float3 FafWaterLights(float3 worldPos, float3 N, float3 V, float depth)
+{
+    float3 total = float3(0, 0, 0);
+    if (dynFieldParams2.x > 0.5)
+    {
+        float3 E;
+        float4 DW;
+        DynFieldSample(float3(worldPos.x, WaterElevation + 0.3, worldPos.z), E, DW);
+        float lenD = length(DW.xyz);
+        float3 l = DW.xyz / max(lenD, 0.0001);
+        float dirness = saturate(lenD / max(DW.w, 0.0001));
+        float roughness = 1.0 / SunShininess;
+        float nDotL = max(dot(N, l), 0.0);
+        float nDotV = abs(dot(N, V)) + 0.001;
+        float3 h = normalize(V + l);
+        float NDF = NormalDistribution(N, h, roughness);
+        float G = GeometrySmith(N, nDotV, l, roughness);
+        float F = FresnelSchlick(max(dot(h, V), 0.0), 0.02);
+        float3 glint = (PI * NDF * G * F / (4.0 * nDotV * nDotL + 0.0001)) * nDotL * E * dirness;
+        // the light that enters the water and comes back out: the colour of the water, more of it over deep water
+        float3 scatter = DynFieldDiffuse(E, DW, float3(0, 1, 0)) * waterColor * (0.35 * saturate(0.25 + depth * 2.0));
+        total = glint + scatter;
+        float top = max(total.x, max(total.y, total.z));
+        total = total / (1.0 + 0.2 * top);
+    }
+    return total;
 }
 )HLSL";
 
@@ -807,7 +856,7 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
       return result;
     }
     {
-      string code = string(kCommonDecl) + kMeshLightCode;
+      string code = string(kCommonDecl) + kFieldDecl + kMeshLightCode;
       if (flood != 0) {
         for (const char* const ret : {"    return float4(lit * (1 - saturate(mirrored)), albedoTex.a);   // alpha: the alpha test of the technique still applies",
                                       "    return float4(lit * (1 - saturate(mirrored)), albedoTex.a);"}) {
@@ -932,7 +981,7 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
     }
     {
       const size_t p = s.find(anchor);
-      s.insert(p, string(kCommonDecl) + kTerrainLightFunction + "\n");
+      s.insert(p, string(kCommonDecl) + kFieldDecl + kTerrainLightFunction + "\n");
     }
 
     // the pixel shader of the composite pass goes ahead of the first technique
@@ -1007,6 +1056,29 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
     out.append(s, pos, npos);
 
     source = std::move(out);
+    result.patched = true;
+    return result;
+  }
+
+  EffectPatchResult PatchWaterEffect(std::string& source)
+  {
+    EffectPatchResult result;
+    constexpr string_view kShader = "float4 HighFidelityPS(";
+    constexpr string_view kCrest = "water = lerp(water, waveCrestColor, (1 - waterTexture.a) * (1 - waterTexture.b) * waveCrest);";
+    if (CountOccurrences(source, kShader) != 1 || CountOccurrences(source, kCrest) != 1 || source.find("FafWaterLights") != npos) {
+      result.error = "HighFidelityPS or its wave crest line not found exactly once";
+      return result;
+    }
+    const size_t shader = source.find(kShader);
+    if (source.find("float3 calculateSunReflection") == npos || source.find("float3 calculateSunReflection") > shader) {
+      result.error = "calculateSunReflection (the BRDF helpers) not defined before HighFidelityPS";
+      return result;
+    }
+    string text = source;
+    const size_t crest = text.find(kCrest);
+    text.insert(crest + kCrest.size(), "\n    water += FafWaterLights(ViewPosition - inV.mViewVec, N, viewVector, waterDepth);");
+    text.insert(text.find(kShader), string(kFieldDecl) + kWaterLightCode + "\n");
+    source = std::move(text);
     result.patched = true;
     return result;
   }

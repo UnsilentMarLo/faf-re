@@ -47,6 +47,42 @@ ForkThread(function()
         return
     end
 
+    if AB_SCENE == 'deepscan' then
+        -- the deepest water within 150 units of the start position
+        local bx, bz, bd = 0, 0, 0
+        for r = 0, 150, 5 do
+            for i = 0, 35 do
+                local ang = i * math.pi / 18
+                local x, z = x0 + r * math.cos(ang), z0 + r * math.sin(ang)
+                local d = GetSurfaceHeight(x, z) - GetTerrainHeight(x, z)
+                if d > bd then bx, bz, bd = x, z, d end
+            end
+        end
+        Say(string.format('deepest water at %.1f %.1f depth %.2f', bx, bz, bd))
+        return
+    end
+    if AB_SCENE == 'waterlight' then
+        -- a lit lake: hover tanks on the water at (AB_TX, AB_TZ) carry long-lived light particles of three sizes
+        WaitUntil(4)
+        local sizes = rawget(_G, 'AB_SIZES') or { 6, 14, 30 }
+        local anchors = {}
+        for i = 1, table.getn(sizes) do
+            local ux, uz = AB_TX - 24 + (i - 1) * 24, AB_TZ
+            local u = CreateUnitHPR('uel0203', brainA.Name, ux, GetSurfaceHeight(ux, uz), uz, 0, 0, 0)
+            table.insert(anchors, u)
+            Say(string.format('waterlight unit %d at %.1f %.1f: %s', i, ux, uz, tostring(u ~= nil)))
+        end
+        for round = 1, 20 do
+            for i = 1, table.getn(sizes) do
+                if anchors[i] and not anchors[i].Dead then
+                    CreateLightParticle(anchors[i], -1, brainA:GetArmyIndex(), sizes[i], 150, 'glow_03', 'ramp_flare_02')
+                end
+            end
+            WaitSeconds(14)
+        end
+        return
+    end
+
     if AB_SCENE == 'none' then
         Say(string.format('ground height %.2f', GetTerrainHeight(x0, z0)))
         return
