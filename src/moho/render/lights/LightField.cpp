@@ -19,13 +19,21 @@
 
 namespace moho::lights
 {
-  int ren_DynLightsMode = 0;
+  int ren_DynLightsMode = 1;
 
   static TConVar<int> gTConVar_ren_DynLightsMode(
     "ren_DynLightsMode",
-    "How the dynamic lights reach the shaders: 0 the light grid (every pixel loops over the lights of its cell), 1 the irradiance field "
-    "(a compute pass lights a world-fixed field once, the terrain and mesh shaders sample it). docs/LIGHTING_V2.md.",
+    "How the dynamic lights reach the shaders: 1 (the default) the irradiance field, 0 the light grid (every pixel loops over the lights of its cell). The field: "
+    "a compute pass lights a world-fixed field once, the terrain and mesh shaders sample it. docs/LIGHTING_V2.md.",
     &ren_DynLightsMode
+  );
+
+  int ren_DynLightsFieldShadows = 1;
+
+  static TConVar<int> gTConVar_ren_DynLightsFieldShadows(
+    "ren_DynLightsFieldShadows",
+    "Shadows of the units and buildings in the irradiance field (ren_DynLightsMode 1): 1 (the default) on, 0 off.",
+    &ren_DynLightsFieldShadows
   );
 
   namespace
@@ -45,7 +53,8 @@ namespace moho::lights
       float origin[4]; // originX, originZ, cellSize, lightCount
       float dims[4];   // cells, layers, height samples per side, world units per height sample
       float layerH[4];
-      float misc[4];
+      float misc[4]; // frame seed, occluder count, temporal blend of the visibility (1: history not usable), shadows on
+      float hist[4]; // window shift in cells since the previous frame (x, z), 1 when the history is usable
     };
 
     // One source for the three programs: the compute pass, the fullscreen vertex shader and the copy into the atlas.
@@ -55,16 +64,71 @@ cbuffer FieldConstants : register(b0)
     float4 gOrigin;   // originX, originZ, cellSize, lightCount
     float4 gDims;     // cells, layers, height samples per side, world units per height sample
     float4 gLayerH;
-    float4 gMisc;
+    float4 gMisc;     // frame seed, caster count, visibility blend, shadows on
+    float4 gHist;     // window shift in cells (x, z), history usable
 };
 
-StructuredBuffer<float4> Lights : register(t0);   // three float4 per light: LightGrid.h's data layout
+StructuredBuffer<float4> Lights : register(t0);   // three float4 per light, the data layout of LightGrid.h
 StructuredBuffer<float> Heights : register(t1);
+StructuredBuffer<float4> Casters : register(t2);  // four float4 per shadow caster: centre, then three axes with 1 / length squared in w
+StructuredBuffer<float> VisPrev : register(t3);
 RWStructuredBuffer<float4> Field : register(u0);
+RWStructuredBuffer<float> VisCur : register(u1);
 
 #define CHUNK 1024
 groupshared uint sList[CHUNK];
 groupshared uint sCount;
+
+#define SAMPLES 4
+
+uint Hash(uint v)
+{
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float Rand(uint seed)
+{
+    return (float)(Hash(seed) & 0xFFFFFFu) * (1.0 / 16777216.0);
+}
+
+// How much of the light a caster (the ellipsoid in its box) takes from the cell: the length of the ray inside it, soft.
+float CasterShadow(float3 p, float3 d, float len, uint ci)
+{
+    float4 c = Casters[ci * 4];
+    float4 a0 = Casters[ci * 4 + 1];
+    float4 a1 = Casters[ci * 4 + 2];
+    float4 a2 = Casters[ci * 4 + 3];
+    float3 rel = p - c.xyz;
+    float3 x = float3(dot(rel, a0.xyz) * a0.w, dot(rel, a1.xyz) * a1.w, dot(rel, a2.xyz) * a2.w);
+    float3 dd = float3(dot(d, a0.xyz) * a0.w, dot(d, a1.xyz) * a1.w, dot(d, a2.xyz) * a2.w);
+    float3 xs = x * 1.25;
+    float3 ds = dd * 1.25;
+    float3 ls = xs + ds;
+    float shadow = 1.0;
+    if (dot(xs, xs) > 1.0 && dot(ls, ls) > 1.0)
+    {
+        float a2s = dot(ds, ds);
+        float bs = dot(xs, ds);
+        float cs = dot(xs, xs) - 1.0;
+        float disc = bs * bs - a2s * cs;
+        if (disc > 0.0 && a2s > 0.00000001)
+        {
+            float root = sqrt(disc);
+            float tEnter = max((-bs - root) / a2s, 0.0);
+            float tExit = min((-bs + root) / a2s, 1.0);
+            if (tExit > tEnter)
+            {
+                float thick = saturate((tExit - tEnter) * sqrt(a2s));
+                thick = thick * thick * (3.0 - 2.0 * thick);
+                float behind = saturate(tEnter * len / 10.0);
+                shadow = 1.0 - 0.6 * thick * (1.0 - 0.6 * behind);
+            }
+        }
+    }
+    return shadow;
+}
 
 float GroundAt(float2 xz)
 {
@@ -96,6 +160,16 @@ void FieldCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : 
     float3 E = float3(0, 0, 0);
     float3 D = float3(0, 0, 0);
     float W = 0.0;
+    uint cellId = (layer * cells + cell.y) * cells + cell.x;
+    bool shadows = gMisc.w > 0.5 && gMisc.y > 0.5;
+    // SAMPLES reservoirs: each ends up holding one light, chosen with probability (luminance x attenuation) / sum: the shadow rays go to those
+    uint sel[SAMPLES];
+    float wsum = 0.0;
+    uint seed = Hash(cellId * 2654435761u + (uint)gMisc.x * 40503u);
+    [unroll] for (uint j0 = 0; j0 < SAMPLES; ++j0)
+    {
+        sel[j0] = 0xFFFFFFFFu;
+    }
     uint total = (uint)gOrigin.w;
     for (uint basis = 0; basis < total; basis += CHUNK)
     {
@@ -149,13 +223,108 @@ void FieldCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : 
                 E += colour;
                 D += toLight * (lum / max(len, 0.001));
                 W += lum;
+                if (shadows && lum > 0.0)
+                {
+                    wsum += lum;
+                    [unroll] for (uint j1 = 0; j1 < SAMPLES; ++j1)
+                    {
+                        if (Rand(seed + li * 977u + j1 * 7919u) * wsum < lum)
+                        {
+                            sel[j1] = li;
+                        }
+                    }
+                }
             }
         }
         GroupMemoryBarrierWithGroupSync();
     }
-    uint at = ((layer * cells + cell.y) * cells + cell.x) * 2;
-    Field[at] = float4(E, ground);
-    Field[at + 1] = float4(D, W);
+
+    // Shadows: each reservoir's light is tested against the casters near the tile (in chunks, so no list is cut); the mean transmittance of the
+    // samples estimates how much of the light of the cell the casters take (importance sampled: the lights come with probability ~ their light).
+    float vis = 1.0;
+    if (shadows)
+    {
+        float3 pToLight[SAMPLES];
+        float len[SAMPLES];
+        float trans[SAMPLES];
+        [unroll] for (uint j2 = 0; j2 < SAMPLES; ++j2)
+        {
+            trans[j2] = 1.0;
+            pToLight[j2] = float3(0, 0, 0);
+            len[j2] = 0.0;
+            if (sel[j2] != 0xFFFFFFFFu)
+            {
+                float4 a = Lights[sel[j2] * 3];
+                float4 c = Lights[sel[j2] * 3 + 2];
+                bool spot = a.w < 0.0;
+                float3 seg = spot ? float3(0, 0, 0) : c.xyz - a.xyz;
+                float t = saturate(dot(p - a.xyz, seg) / max(dot(seg, seg), 0.0001));
+                pToLight[j2] = a.xyz + seg * t - p;
+                len[j2] = length(pToLight[j2]);
+            }
+        }
+        uint casters = (uint)gMisc.y;
+        for (uint cb = 0; cb < casters; cb += CHUNK)
+        {
+            if (index == 0)
+            {
+                sCount = 0;
+            }
+            GroupMemoryBarrierWithGroupSync();
+            uint clast = min(cb + CHUNK, casters);
+            for (uint ci = cb + index; ci < clast; ci += 64)
+            {
+                float4 cc = Casters[ci * 4];
+                float4 b0 = Casters[ci * 4 + 1];
+                float4 b1 = Casters[ci * 4 + 2];
+                float4 b2 = Casters[ci * 4 + 3];
+                // the sphere around the box (its three half extents are the axes: lengths are 1 / sqrt(w))
+                float reach = max(max(rsqrt(b0.w), rsqrt(b1.w)), rsqrt(b2.w)) * 1.8 + 16.0;
+                if (cc.x + reach >= tileMin.x && cc.x - reach <= tileMax.x && cc.z + reach >= tileMin.y && cc.z - reach <= tileMax.y)
+                {
+                    uint slot;
+                    InterlockedAdd(sCount, 1, slot);
+                    sList[slot] = ci;
+                }
+            }
+            GroupMemoryBarrierWithGroupSync();
+            uint ccount = sCount;
+            for (uint k = 0; k < ccount; ++k)
+            {
+                [unroll] for (uint j3 = 0; j3 < SAMPLES; ++j3)
+                {
+                    if (len[j3] > 0.05)
+                    {
+                        trans[j3] *= CasterShadow(p, pToLight[j3], len[j3], sList[k]);
+                    }
+                }
+            }
+            GroupMemoryBarrierWithGroupSync();
+        }
+        float sum = 0.0;
+        float used = 0.0;
+        [unroll] for (uint j4 = 0; j4 < SAMPLES; ++j4)
+        {
+            if (sel[j4] != 0xFFFFFFFFu)
+            {
+                sum += trans[j4];
+                used += 1.0;
+            }
+        }
+        vis = used > 0.0 ? sum / used : 1.0;
+        // the shadow, not the light, is averaged over time: the lights of the cell are exact every frame
+        float prev = vis;
+        int2 old = (int2)cell + (int2)gHist.xy;
+        if (gHist.z > 0.5 && old.x >= 0 && old.y >= 0 && old.x < (int)cells && old.y < (int)cells)
+        {
+            prev = VisPrev[(layer * cells + (uint)old.y) * cells + (uint)old.x];
+        }
+        vis = lerp(prev, vis, gMisc.z);
+    }
+    VisCur[cellId] = vis;
+    uint at = cellId * 2;
+    Field[at] = float4(E * vis, ground);
+    Field[at + 1] = float4(D * vis, W * vis);
 }
 
 StructuredBuffer<float4> FieldIn : register(t0);
@@ -185,6 +354,13 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
       boost::shared_ptr<GpuBuffer> lightBuffer;
       boost::shared_ptr<GpuBuffer> heightBuffer;
       boost::shared_ptr<GpuBuffer> fieldBuffer;
+      boost::shared_ptr<GpuBuffer> casterBuffer;
+      boost::shared_ptr<GpuBuffer> visBuffer[2]; // the visibility of the previous frame and of this one
+      std::uint32_t frameIndex = 0U;
+      float lastOriginX = 0.0f;
+      float lastOriginZ = 0.0f;
+      float lastCellSize = 0.0f;
+      bool historyValid = false;
       boost::shared_ptr<GpuProgram> compute;
       boost::shared_ptr<GpuProgram> copy;
       Device* device = nullptr;
@@ -251,7 +427,20 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
         field.capacity = kCells * kCells * kLayers * 2U;
         field.shaderWrite = true;
         s.fieldBuffer = device.CreateGpuBuffer(field);
-        if (s.lightBuffer == nullptr || s.heightBuffer == nullptr || s.fieldBuffer == nullptr) {
+        GpuBufferDesc casters;
+        casters.name = "LightFieldCasters";
+        casters.stride = 16U;
+        casters.capacity = static_cast<std::uint32_t>(kMaxOccluders * kOccluderTexels);
+        s.casterBuffer = device.CreateGpuBuffer(casters);
+        GpuBufferDesc vis;
+        vis.name = "LightFieldVisibility";
+        vis.stride = 4U;
+        vis.capacity = kCells * kCells * kLayers;
+        vis.shaderWrite = true;
+        s.visBuffer[0] = device.CreateGpuBuffer(vis);
+        s.visBuffer[1] = device.CreateGpuBuffer(vis);
+        if (s.lightBuffer == nullptr || s.heightBuffer == nullptr || s.fieldBuffer == nullptr || s.casterBuffer == nullptr ||
+            s.visBuffer[0] == nullptr || s.visBuffer[1] == nullptr) {
           gpg::Warnf("Light field disabled: its GPU buffers could not be created");
           s.failed = true;
           return false;
@@ -321,6 +510,7 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     s.frame.params2[0] = 0.0f;
     s.frame.valid = false;
     if (ren_DynLightsMode != 1 || image.lightCount == 0 || terrain == nullptr || elevation == nullptr) {
+      s.historyValid = false; // the visibility buffers go stale while the field is not run
       return false;
     }
     Device* const device = Device::GetInstance();
@@ -383,7 +573,28 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     const std::uint32_t lightCount = std::min<std::uint32_t>(image.lightCount, static_cast<std::uint32_t>(kMaxGridLights));
     device->UpdateGpuBuffer(*s.lightBuffer, 0U, lightCount * static_cast<std::uint32_t>(kTexelsPerLight), image.data.data());
 
+    // the casters of the frame (the box of each unit and building in view)
+    const std::uint32_t casterCount =
+      ren_DynLightsFieldShadows != 0 ? std::min<std::uint32_t>(image.occluderCount, static_cast<std::uint32_t>(kMaxOccluders)) : 0U;
+    if (casterCount > 0U) {
+      device->UpdateGpuBuffer(*s.casterBuffer, 0U, casterCount * static_cast<std::uint32_t>(kOccluderTexels), image.occluders.data());
+    }
+    // the visibility history: the window moves in whole thread groups, so a cell of this frame is a cell of the last frame (shifted)
+    const bool sameScale = s.historyValid && cellSize == s.lastCellSize;
+    const float shiftX = sameScale ? std::round((originX - s.lastOriginX) / cellSize) : 0.0f;
+    const float shiftZ = sameScale ? std::round((originZ - s.lastOriginZ) / cellSize) : 0.0f;
+    const bool usable = sameScale && std::fabs(shiftX) < static_cast<float>(kCells) && std::fabs(shiftZ) < static_cast<float>(kCells);
+    ++s.frameIndex;
+    const std::uint32_t cur = s.frameIndex & 1U;
+
     FieldConstants constants{};
+    constants.misc[0] = static_cast<float>(s.frameIndex);
+    constants.misc[1] = static_cast<float>(casterCount);
+    constants.misc[2] = usable ? 0.25f : 1.0f;
+    constants.misc[3] = casterCount > 0U ? 1.0f : 0.0f;
+    constants.hist[0] = shiftX;
+    constants.hist[1] = shiftZ;
+    constants.hist[2] = usable ? 1.0f : 0.0f;
     constants.origin[0] = originX;
     constants.origin[1] = originZ;
     constants.origin[2] = cellSize;
@@ -406,7 +617,10 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
       dispatch.bindings.constantBytes = sizeof(constants);
       dispatch.bindings.readBuffers[0] = s.lightBuffer.get();
       dispatch.bindings.readBuffers[1] = s.heightBuffer.get();
+      dispatch.bindings.readBuffers[2] = s.casterBuffer.get();
+      dispatch.bindings.readBuffers[3] = s.visBuffer[cur ^ 1U].get();
       dispatch.bindings.writeBuffers[0] = s.fieldBuffer.get();
+      dispatch.bindings.writeBuffers[1] = s.visBuffer[cur].get();
       dispatch.groupsX = kCells / kTile;
       dispatch.groupsY = kCells / kTile;
       dispatch.groupsZ = kLayers;
@@ -432,6 +646,10 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     device->ClearTarget(&saved);
     device->SetViewport(&savedViewport);
 
+    s.lastOriginX = originX;
+    s.lastOriginZ = originZ;
+    s.lastCellSize = cellSize;
+    s.historyValid = true;
     FieldFrame& f = s.frame;
     f.params[0] = originX;
     f.params[1] = originZ;

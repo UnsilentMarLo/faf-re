@@ -30,7 +30,7 @@ namespace moho
 // Render thread only.
 namespace moho::lights
 {
-  // 0 (the default while the field is tested): the light grid and the shader loops of docs/DYNAMIC_LIGHTS.md; 1: the irradiance field.
+  // 1 (the default): the irradiance field; 0: the light grid and the shader loops of docs/DYNAMIC_LIGHTS.md.
   extern int ren_DynLightsMode;
 
   // Elevation of the terrain at x, z; `context` is whatever the caller needs (the height field).

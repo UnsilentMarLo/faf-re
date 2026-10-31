@@ -58,3 +58,18 @@ Measured, same scene as the baseline (100v100, 2,500 lights, D3D12, 1600x900, `F
 | field (mode 1), no shadows | 6.3 ms | 0.29 ms | 0.21 ms | 0.27 ms |
 
 The lights cost 1.7 ms over lights off, with every light of the frame in the sum (no cap, no cell borders). Pictures: the same fight, old path and field, light the ground alike. Open: shadows (stage 3), a light-only packer instead of the CPU grid build (`BuildLightGrid` still runs; its `image.data` feeds the compute), more than 4096 lights, D3D11 / Vulkan runs.
+
+## Stage 3 result (2026-10-31): shadows in the field, default on
+
+The compute pass also shades: per cell, four reservoirs pick lights with probability proportional to their light (weighted reservoir sampling over the chunked light stream, so no list is cut), each picked light is tested against the casters near the tile (also chunked), and the mean transmittance of the samples is the cell's visibility. Only the visibility is averaged over time (blend 0.25, history shifted with the window; the lights of the cell are exact every frame, so a flash is not delayed). Casters are the engine's boxes as ellipsoids at 0.8 of their half extents, the soft shape the steam-re session calibrated (60 % at most). Switch `ren_DynLightsFieldShadows` (default 1). `ren_DynLightsMode 1` is now the default; `0` brings back the grid path.
+
+| 100v100, 2,500 lights, ~100 casters, 1600x900 | GPU per frame | LightField pass |
+|---|---|---|
+| lights off | 4.6 ms (D3D12) | |
+| old path, shadows (before this work) | 132.8 ms | |
+| field, no shadows, D3D12 | 6.3 ms | 0.27 ms |
+| **field with shadows, D3D12** | **6.5 ms** | 0.34 ms |
+| field with shadows, D3D11 | 4.1 ms total | 0.42 ms |
+| field with shadows, Vulkan | 6.8 ms total | 0.38 ms |
+
+Shadow scene (`steps_fshadow.lua`): shadows on vs off differ by 1.03 (mean pixel difference), two runs with shadows on differ by 0.009 (no flicker). Open: terrain height-field shadows (lights behind ridges), more than 4,096 lights and 1,024 casters (the CPU packer limits), real unit silhouettes (the casters are ellipsoids), directional specular quality, the cost of a zoomed-in view (cells of 0.5), a light-only packer without the CPU grid.
