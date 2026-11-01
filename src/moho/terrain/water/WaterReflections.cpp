@@ -13,6 +13,8 @@
 #include "gpg/gal/RenderProfiler.h"
 #include "moho/console/CConCommand.h"
 #include "moho/render/camera/GeomCamera3.h"
+#include "moho/render/Shadow.h"
+#include "moho/render/d3d/CD3DRenderTarget.h"
 #include "moho/render/d3d/ShaderVar.h"
 
 namespace moho::water
@@ -23,6 +25,8 @@ namespace moho::water
   static int ren_WaterSSRDistance = 800;
   static int ren_WaterAbsorb = 1;
   static int ren_WaterAbsorbDepth = 10;
+  static int ren_WaterCaustics = 50;
+  static int ren_WaterUnitShadows = 45;
 
   static TConVar<int> gTConVar_ren_WaterSSR(
     "ren_WaterSSR",
@@ -48,8 +52,20 @@ namespace moho::water
     "The water thickness, in world units, at which the real-depth tint is 63 percent of the way to the map's deep colour (default 10; smaller is murkier).",
     &ren_WaterAbsorbDepth
   );
+  static TConVar<int> gTConVar_ren_WaterCaustics(
+    "ren_WaterCaustics",
+    "Caustics on the sea bed seen through shallow water, in percent (0 off, default 50): the light the animated wave normals focus, fading with the water's "
+    "thickness. Needs ren_WaterAbsorb. Takes effect at the next map load for the shader patch; Direct3D 11, 12 and Vulkan.",
+    &ren_WaterCaustics
+  );
+  static TConVar<int> gTConVar_ren_WaterUnitShadows(
+    "ren_WaterUnitShadows",
+    "How much the sun shadow map (units, buildings, trees) darkens the water it falls on, in percent (0 off, default 45); the sun glint is cut there as well. "
+    "Takes effect at the next map load for the shader patch; Direct3D 11, 12 and Vulkan.",
+    &ren_WaterUnitShadows
+  );
   static TConVar<int> gTConVar_ren_WaterSSRDebug(
-    "ren_WaterSSRDebug", "1: the water shows where the screen-space march found a hit (red) and where it did not (blue). 0 (the default) normal.", &ren_WaterSSRDebug
+    "ren_WaterSSRDebug", "1: the water shows where the screen-space march found a hit (red) and where it did not (blue); 2: the unit sun shadow on the water (white lit, black shade, yellow no shadow map). 0 (the default) normal.", &ren_WaterSSRDebug
   );
 
   namespace
@@ -62,8 +78,14 @@ namespace moho::water
       ShaderVar params{};
       ShaderVar params2{};
       ShaderVar absorb{};
+      ShaderVar shadowMatrix{};
+      ShaderVar shadowTexture{};
+      ShaderVar shadowParams{};
       EffectVars()
       {
+        RegisterShaderVar("waterShadowMatrix", &shadowMatrix, "water2");
+        RegisterShaderVar("waterShadowTexture", &shadowTexture, "water2");
+        RegisterShaderVar("waterShadowParams", &shadowParams, "water2");
         RegisterShaderVar("waterAbsorbParams", &absorb, "water2");
         RegisterShaderVar("waterSceneDepth", &depth, "water2");
         RegisterShaderVar("waterSsrParams", &params, "water2");
@@ -96,6 +118,9 @@ namespace moho::water
       }
       if (s.vars.absorb.Exists()) {
         s.vars.absorb.mEffectVariable->SetVector(off);
+      }
+      if (s.vars.shadowParams.Exists()) {
+        s.vars.shadowParams.mEffectVariable->SetVector(off);
       }
     }
 
@@ -172,6 +197,55 @@ float FafWaterSceneZ(float2 uv)
 }
 
 float4 waterAbsorbParams; // x: 0 = the baked depth map, 1 = the real depth, 2 = the real depth and colour extinction, y: the depth in world units of 63 percent tint
+
+// The sun shadow map of the units, buildings and trees (the one the terrain and the meshes read), on the water plane. 1 = lit.
+float4x4 waterShadowMatrix;
+texture waterShadowTexture;
+sampler2D waterShadowSampler = sampler_state
+{
+    Texture   = (waterShadowTexture);
+    MipFilter = LINEAR;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    AddressU  = BORDER;
+    AddressV  = BORDER;
+    BorderColor = float4(1, 1, 1, 1);
+};
+float4 waterShadowParams; // x: how much the shade darkens the water (0: off)
+
+float FafWaterShadow(float3 position)
+{
+    if (waterShadowParams.x <= 0.0)
+    {
+        return 1.0;
+    }
+    float4 coord = mul(float4(position, 1.0), waterShadowMatrix);
+    coord.xy /= coord.w;
+    return tex2Dlod(waterShadowSampler, float4(coord.xy, 0.0, 0.0)).g;
+}
+
+// The slope of the small wave layers at a world position (the same normal maps and movement the surface uses).
+float2 FafCausticSlope(float2 xz)
+{
+    float4 a = tex2Dlod(NormalSampler2, float4((xz + normal3Movement * Time) * normalRepeatRate.z, 0.0, 0.0));
+    float4 b = tex2Dlod(NormalSampler3, float4((xz + normal4Movement * Time) * normalRepeatRate.w, 0.0, 0.0));
+    float3 n = 2.0 * (a.xyz + b.xyz) - 2.0;
+    return n.xy / max(n.z, 0.3);
+}
+
+// The light the surface waves focus on the sea bed at a world position under `depth` units of water: the divergence of the slope field decides
+// whether the rays that enter there gather (above 1) or spread (below 1); it averages about 1.
+float FafCaustic(float2 xz, float depth)
+{
+    const float e = 0.35;
+    float2 sx0 = FafCausticSlope(xz - float2(e, 0.0));
+    float2 sx1 = FafCausticSlope(xz + float2(e, 0.0));
+    float2 sz0 = FafCausticSlope(xz - float2(0.0, e));
+    float2 sz1 = FafCausticSlope(xz + float2(0.0, e));
+    float divergence = ((sx1.x - sx0.x) + (sz1.y - sz0.y)) / (2.0 * e);
+    float focus = 1.0 - depth * divergence * 1.5;
+    return clamp(0.6 * pow(1.0 / max(focus, 0.2), 1.6), 0.25, 4.0);
+}
 
 // The distance the view ray travels through the water before it meets what the scene drew at uv (0 when the scene is in front of the water).
 float FafWaterPath(float2 uv, float surfaceZ, float eyeDistance)
@@ -263,7 +337,7 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
 
   bool SsrWanted()
   {
-    return ren_WaterSSR > 0 || ren_WaterAbsorb > 0;
+    return ren_WaterSSR > 0 || ren_WaterAbsorb > 0 || ren_WaterCaustics > 0 || ren_WaterUnitShadows > 0;
   }
 
   SsrPatchResult PatchWaterReflections(std::string& source)
@@ -282,7 +356,8 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
     const std::string sunAdd = "water += sunReflection;";
     const std::string refractOffset = "refractionPos -= sqrt(waterDepth) * refractionScale * N.xz * OneOverW;";
     const std::string tintLine = "refractedPixels.rgb = lerp(refractedPixels.rgb, waterColor, factor);";
-    if (count(shader) != 1 || count(mixLine) != 1 || count(unitSun) != 1 || count(sunAdd) != 1 || count(refractOffset) != 1 || count(tintLine) != 1 ||
+    const std::string waterMix = "float3 water = lerp(refractedPixels, reflections, saturate(fresnel * skyreflectionAmount));";
+    if (count(waterMix) != 1 || count(shader) != 1 || count(mixLine) != 1 || count(unitSun) != 1 || count(sunAdd) != 1 || count(refractOffset) != 1 || count(tintLine) != 1 ||
         source.find("FafWaterSSR") != std::string::npos) {
       result.error = "HighFidelityPS, the reflection mix lines or the refraction lines not found exactly once";
       return result;
@@ -298,19 +373,31 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
     const std::size_t tintAt = text.find(tintLine);
     text.insert(
       tintAt,
-      "if (waterAbsorbParams.x > 1.5) { refractedPixels.rgb *= exp(-float3(1.0, 0.4, 0.15) * fafPath / (waterAbsorbParams.y * 4.0)); }\n    "
+      "if (waterAbsorbParams.x > 1.5) { refractedPixels.rgb *= exp(-float3(1.0, 0.4, 0.15) * fafPath / (waterAbsorbParams.y * 4.0)); }"
+      "\n    if (waterAbsorbParams.x > 0.5 && waterAbsorbParams.z > 0.0 && fafPath > 0.0)"
+      "\n    {"
+      "\n        float fafVerticalDepth = fafPath * abs(viewVector.y);"
+      "\n        float3 fafBed = ViewPosition - inV.mViewVec - viewVector * fafPath;"
+      "\n        float fafFade = exp(-fafVerticalDepth / (waterAbsorbParams.y * 0.5));"
+      "\n        refractedPixels.rgb *= 1.0 + waterAbsorbParams.z * fafFade * waterTexture.r * (FafCaustic(fafBed.xz, fafVerticalDepth) - 1.0);"
+      "\n    }"
+      "\n    "
     );
     // the sun glint is not seen where a scene hit is reflected: first the later line, so the earlier anchor stays valid
     const std::size_t sunAddAt = text.find(sunAdd);
     text.insert(
       sunAddAt + sunAdd.size(),
-      "\n    if (waterSsrParams2.y > 0.5) { water = lerp(float3(0.0, 0.0, 0.4), float3(1.0, 0.0, 0.0), ssrHit.a); }"
+      "\n    if (waterSsrParams2.y > 0.5 && waterSsrParams2.y < 1.5) { water = lerp(float3(0.0, 0.0, 0.4), float3(1.0, 0.0, 0.0), ssrHit.a); }"
+      "\n    if (waterSsrParams2.y > 1.5) { water = float3(fafShadow, fafShadow, waterShadowParams.x > 0.0 ? fafShadow : 0.0); }"
     );
     const std::size_t unitSunAt = text.find(unitSun);
-    text.insert(unitSunAt + unitSun.size(), "\n\tsunReflection *= (1.0 - saturate(ssrHit.a * waterSsrParams2.x));");
+    text.insert(unitSunAt + unitSun.size(), "\n\tsunReflection *= (1.0 - saturate(ssrHit.a * waterSsrParams2.x));\n\tsunReflection *= fafShadow;");
+    // the transmitted light is darker where a unit, a building or a tree shades the surface
+    text.insert(text.find(waterMix), "refractedPixels.rgb *= lerp(1.0 - waterShadowParams.x, 1.0, fafShadow);\n    ");
     const std::size_t mixAt = text.find(mixLine);
     text.insert(
       mixAt + mixLine.size(),
+      "\n    float fafShadow = FafWaterShadow(ViewPosition - inV.mViewVec);"
       "\n    float4 ssrHit = FafWaterSSR(ViewPosition - inV.mViewVec, R, screenPos * waterSsrParams.zw);"
       "\n    reflections = lerp(reflections, ssrHit.rgb, saturate(ssrHit.a * waterSsrParams2.x));"
     );
@@ -345,7 +432,7 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
     return result;
   }
 
-  void BindWaterReflections(Device* const device, const GeomCamera3& camera)
+  void BindWaterReflections(Device* const device, const GeomCamera3& camera, const moho::Shadow* const shadow)
   {
     State& s = GetState();
     if (!s.vars.params.Exists() || !s.vars.depth.Exists()) {
@@ -370,12 +457,29 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
     s.vars.params.mEffectVariable->SetVector(params);
     if (s.vars.absorb.Exists()) {
       const float absorb[4] = {
-        ren_WaterAbsorb <= 0 ? 0.0f : (ren_WaterAbsorb >= 2 ? 2.0f : 1.0f), static_cast<float>(ren_WaterAbsorbDepth < 1 ? 1 : ren_WaterAbsorbDepth), 0.0f, 0.0f
+        ren_WaterAbsorb <= 0 ? 0.0f : (ren_WaterAbsorb >= 2 ? 2.0f : 1.0f), static_cast<float>(ren_WaterAbsorbDepth < 1 ? 1 : ren_WaterAbsorbDepth),
+        0.005f * static_cast<float>(ren_WaterCaustics < 0 ? 0 : ren_WaterCaustics), 0.0f
       };
       s.vars.absorb.mEffectVariable->SetVector(absorb);
     }
+    // the sun shadow map of the units (the terrain pass binds the same one); off where the shadow pass did not run this frame
+    if (s.vars.shadowParams.Exists()) {
+      boost::shared_ptr<CD3DRenderTarget> shadowTexture;
+      if (shadow != nullptr && shadow->mShadowCameraValid && ren_WaterUnitShadows > 0) {
+        shadowTexture = shadow->GetShadowTexture();
+      }
+      if (shadowTexture != nullptr && s.vars.shadowMatrix.Exists() && s.vars.shadowTexture.Exists()) {
+        s.vars.shadowMatrix.SetMatrix4x4(&shadow->mCamera.viewProjection);
+        s.vars.shadowTexture.SetRenderTargetTexture(shadowTexture);
+        const float shade[4] = {0.01f * static_cast<float>(ren_WaterUnitShadows > 100 ? 100 : ren_WaterUnitShadows), 0.0f, 0.0f, 0.0f};
+        s.vars.shadowParams.mEffectVariable->SetVector(shade);
+      } else {
+        const float off[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        s.vars.shadowParams.mEffectVariable->SetVector(off);
+      }
+    }
     if (s.vars.params2.Exists()) {
-      const float params2[4] = {0.01f * static_cast<float>(ren_WaterSSRStrength), ren_WaterSSRDebug != 0 ? 1.0f : 0.0f, 0.0f, 0.0f};
+      const float params2[4] = {0.01f * static_cast<float>(ren_WaterSSRStrength), static_cast<float>(ren_WaterSSRDebug), 0.0f, 0.0f};
       s.vars.params2.mEffectVariable->SetVector(params2);
     }
   }

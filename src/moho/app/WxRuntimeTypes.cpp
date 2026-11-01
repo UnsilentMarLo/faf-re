@@ -4796,7 +4796,9 @@ void moho::WRenViewport::RenderWater(TerrainCommon* const terrain)
     head, device->GetHeadWidth(static_cast<unsigned int>(head)), device->GetHeadHeight(static_cast<unsigned int>(head))
   );
   // FAF: the scene depth for the screen-space reflections of the water (docs/LIGHTING_V2.md)
-  moho::water::BindWaterReflections(device->GetGalDevice(), *mCam);
+  moho::water::BindWaterReflections(
+    device->GetGalDevice(), *mCam, mShadowRenderer.mShadowFidelity != 0 && !ShadowsDisabledByEnv() ? &mShadowRenderer : nullptr
+  );
   terrain->DrawWaterTerrain(
     moho::REN_GetGameTick(),
     moho::REN_GetSimDeltaSeconds(),

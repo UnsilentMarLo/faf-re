@@ -116,7 +116,7 @@ Measured (100v100, 2,500 lights): D3D12 GPU 6.69 ms (LightField 0.55 ms; it was 
 - **Checked:** D3D12, D3D11 and Vulkan build and draw the patched water; the test ring appears in the normals, the foam and the geometry; the flat quad and the grid give the same picture without waves. **Not checked:** wakes of moving units (the hover tanks of the test scene never stayed on the lake; the unit filter was never seen to fire), impacts in a real fight, the cost at 100v100 on a map with a big sea, the strength of rings from many impacts.
 - **Also:** the field (and so the lights and sun shadows) is now only built for the big world view (the minimap's render pass used to move it).
 
-Next (after stages 7 and 8): the sun shadow map of units on the water, caustics.
+Next (after stages 7 to 9): wave-simulation caustics, wakes and impacts seen in a real fight.
 
 ## Stage 7: the water reflects the scene (2026-11-01)
 
@@ -137,4 +137,13 @@ Same file and patch as stage 7 (`WaterReflections.cpp`; the depth copy is shared
 - **Fallbacks.** With the depth copy unavailable (orthographic view, depth not sampled, backend cannot copy) the parameters bind "off" and the shipped depth map is used.
 - **Checked** (Acid Lakes lake, `tests/featab/steps_abs.lua`): compiles and renders on D3D12, D3D11 and Vulkan; on the lake the sea bed shows through more in the shallows and the colour follows the real thickness (4 to 10 percent of the frame changes with the default and with a murky depth of 3). Cost on D3D12 (same lake view): the water pass reads 0.131-0.152 ms with the option off or on at either level, within the noise of the level-1 reflections of stage 7; it reuses the depth copy of stage 7 (0.018 ms). Results on D3D11 and Vulkan match D3D12 (the same 13.9 percent of the cropped lake changes at level 2). **Not checked:** a large sea, shorelines with buildings, split-screen, unit wakes under real depth.
 
-Next: the sun shadow map of units on the water, caustics.
+## Stage 9: unit shadows on the water and caustics (2026-11-01)
+
+Same file and patch again (`WaterReflections.cpp`, cache tag `.waterssr11`).
+
+- **Unit sun shadows.** `ren_WaterUnitShadows` (percent, default 45, 0 off). `BindWaterReflections` now takes the viewport's `Shadow` renderer and binds the sun shadow map the terrain and the meshes already read (`waterShadowTexture`, `waterShadowMatrix = Shadow::mCamera.viewProjection`, bound only when `mShadowCameraValid`). `HighFidelityPS` reads it at the water pixel's world position (`FafWaterShadow`, linear filter, border = lit), darkens the transmitted light by the strength where it is in shade and cuts the sun glint fully. The terrain's ridge shadow stays with the light field (stage 5). `ren_WaterSSRDebug 2` shows the shadow value (white lit, black shade, yellow = no map bound; note the water's own blend alpha scales the picture, so shallow rims look grey).
+- **Caustics.** `ren_WaterCaustics` (percent, default 50, 0 off; needs `ren_WaterAbsorb`). For the sea bed seen through the water (the bed point is rebuilt from the real thickness of stage 8) `FafCaustic` takes the slope of the two small wave normal layers at that world position (same maps and movement the surface uses, so the pattern moves with the waves), the divergence of that slope field by finite differences, and turns it into focused light: `0.6 * (1 / max(1 - depth * divergence * 1.5, 0.2))^1.6`, clamped 0.25..4, mean about 1. It is applied as `1 + strength * fade * baked sun shadow * (caustic - 1)` to the refracted picture before the tint, fading with `exp(-depth / (0.5 * ren_WaterAbsorbDepth))`, so deep water and shadowed bed get none.
+- **Checked** (Acid Lakes, `tests/featab/steps_wsc.lua`, `steps_wsh.lua`, `steps_wsp.lua`): compiles and renders on D3D12, D3D11 and Vulkan (the same 23 percent of the lake view changes with everything on). The shadow binding follows the cvar and the shadow map (debug view; the hover tank's own shade shows black on the lake); caustics read as a moving dappled web on the lake floor. Cost on D3D12 (lake about a quarter of the screen): water pass about 0.135 ms with stages 8 and 9 off, 0.145-0.15 ms with everything on.
+- **Not checked / open.** Unit shadows were only seen under a hover tank (small); a large unit or building next to the shore is the real test. Caustics are procedural from the normal maps (not from the wave simulation, so wakes and impact rings do not focus light yet), have no colour dispersion, and at 100 percent look busy; 50 is the default. Large sea, split-screen, 100v100, wakes under real depth.
+
+Next: feed the wave simulation's slope into the caustics and the shadow, wakes and impacts in a real fight.

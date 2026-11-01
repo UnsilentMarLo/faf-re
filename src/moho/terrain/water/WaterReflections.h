@@ -10,6 +10,7 @@ namespace gpg::gal
 namespace moho
 {
   struct GeomCamera3;
+  class Shadow;
 }
 
 // Screen-space reflections for the water (docs/LIGHTING_V2.md, "Water shader"): the water pixel shader marches the reflected view ray through a
@@ -36,7 +37,8 @@ namespace moho::water
 
   // Once per frame right before the water is drawn, with the world's colour and depth targets bound: copies the depth, binds it and the march
   // parameters to the water effect. Binds "off" when the view cannot use it (orthographic, no sampled depth).
-  void BindWaterReflections(gpg::gal::Device* device, const moho::GeomCamera3& camera);
+  // `shadow`: the viewport's shadow renderer (the sun shadow map of the units for the water), null for none.
+  void BindWaterReflections(gpg::gal::Device* device, const moho::GeomCamera3& camera, const moho::Shadow* shadow);
 
   // Frees the GPU resources (a device reset, shutdown).
   void ReleaseWaterReflections();
