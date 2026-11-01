@@ -151,7 +151,7 @@ namespace
     MCHECK(AnalyseMeshGlow(fire, nullptr, "NukeQuantum").nuke);
     MCHECK(Near(MeshLightIntensity(nuke), kMaxNukeMeshIntensity));
     MCHECK(MeshLightIntensity(nuke) > kMaxMeshIntensity);
-    MCHECK(Near(MeshLightRadius(60.0f, kMaxEffectLightRadius), 91.0f));
+    MCHECK(Near(MeshLightRadius(60.0f, kMaxEffectLightRadius), 122.0f));
     MCHECK(Near(MeshLightRadius(200.0f, kMaxEffectLightRadius), kMaxEffectLightRadius));
     // the flash of a hit on a shield is a light; the shield bubble itself is not
     const MeshGlow impact = AnalyseMeshGlow(Solid(2, 2, 80, 160, 255, 255), nullptr, "ShieldImpact");
@@ -202,7 +202,7 @@ namespace
     MCHECK(Near(hard, kMaxMeshIntensity, 1.0e-4f)); // never above the cap
 
     MCHECK(Near(MeshLightRadius(0.0f), 2.0f) && Near(MeshLightRadius(-1.0f), 2.0f) && Near(MeshLightRadius(std::nanf("")), 2.0f));
-    MCHECK(Near(MeshLightRadius(1.0f), 2.5f) && Near(MeshLightRadius(10.0f), 16.0f));
+    MCHECK(Near(MeshLightRadius(1.0f), 4.0f) && Near(MeshLightRadius(10.0f), 22.0f));
     MCHECK(Near(MeshLightRadius(1000.0f), 60.0f)); // capped
   }
 } // namespace

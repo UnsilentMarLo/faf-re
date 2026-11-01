@@ -65,7 +65,9 @@ namespace
     CHECK(model::ClassOfPower(power(kNukeSize)) == model::kHuge);
     CHECK(model::ClassOfPower(power(kT3Size)) == model::kLarge);
     CHECK(model::ClassOfPower(power(kT2Size)) == model::kNormal);
-    CHECK(model::ClassOfPower(power(kSparkSize)) == model::kMinor);
+    // the smallest flash (radius 3, intensity 0.8, power 7) is Normal since the limit fell from 9 to 4; Minor is what is below that
+    CHECK(model::ClassOfPower(power(kSparkSize)) == model::kNormal);
+    CHECK(model::ClassOfPower(3.0f) == model::kMinor);
 
     // each level admits its class and everything above it, nothing below
     for (const float size : {kNukeSize, kT3Size, kT2Size, kSparkSize}) {
@@ -102,7 +104,7 @@ namespace
     const struct { int quality; bool nuke, t3, t2, spark; } rows[] = {
       {model::kLow, true, false, false, false},
       {model::kMedium, true, true, false, false},
-      {model::kHigh, true, true, true, false},
+      {model::kHigh, true, true, true, true},
       {model::kUltra, true, true, true, true},
     };
     for (const auto& r : rows) {
