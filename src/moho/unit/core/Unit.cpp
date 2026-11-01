@@ -107,6 +107,7 @@
 #include "moho/unit/core/UnitWeapon.h"
 #include "moho/unit/tasks/CUnitAssistMoveTask.h"
 #include "moho/unit/core/UserUnit.h"
+#include "moho/terrain/water/WaterSimulation.h"
 
 #include "gpg/core/reflection/StaticInitPhase.h"
 
@@ -16339,6 +16340,12 @@ void Unit::Kill(Entity* const instigator, const gpg::StrArg reason, float excess
   if (IsBeingBuilt()) {
     massValue *= mVarDat.mFractionComplete;
     energyValue *= mVarDat.mFractionComplete;
+  }
+
+  // The sea feels a hull going down (render only: the water simulation reads it, nothing feeds back).
+  if (blueprint != nullptr && !IsBeingBuilt()) {
+    const Wm3::Vec3f& deathPosition = GetPositionWm3();
+    water::SimUnitDeath(deathPosition.x, deathPosition.y, deathPosition.z, blueprint->Economy.BuildCostMass);
   }
 
   if (ArmyRef != nullptr) {

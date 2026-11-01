@@ -52,7 +52,8 @@ namespace moho::lights
       }
       sRecent[key] = now;
       // a shell or an explosion: a hump that spreads as a ring and a burst of foam
-      water::SimAddSource(x, z, std::min(size * 0.6f, 14.0f), std::min(size, 16.0f) * 0.9f * water::SimImpactScale(), std::min(size, 16.0f) * 0.02f);
+      // Sized by what lands (Projectile::Impact) or sinks (Unit::Kill): water::SimImpact. The size of a sprite says nothing about either.
+      (void)size;
     }
 
     constexpr float kHoldTicks = 3.0f;       // a tracked light fades out this long after its last refresh

@@ -454,6 +454,41 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     s.pending.push_back(Source{x, z, std::min(radius, 40.0f), strength, foam, 0.0f, 0.0f, 0.0f});
   }
 
+  void SimImpact(const float x, const float z, const float size, const float scale)
+  {
+    const float s = std::max(size, 0.5f);
+    if (ren_WaterSimLog > 0) {
+      gpg::Logf("WaterSim impact: at (%.1f %.1f), size %.2f, scale %.2f", x, z, s, scale);
+    }
+    const float radius = std::min(std::max(0.7f * s, 0.8f), 18.0f);
+    const float hump = std::min(std::max(0.07f * s, 0.06f), 1.2f) * scale * SimImpactScale();
+    const float foam = std::min(0.1f + 0.04f * s, 0.6f);
+    // The push of one frame is added to the height of the step, which leaves the water with a velocity that the (slow) waves hardly stop: a hump of
+    // H grows to many times H before it spreads out. Measured (docs/LIGHTING_V2.md): about a twentieth of H gives the wanted height of the ring.
+    SimAddSource(x, z, radius, hump * 90.0f * 0.05f, foam);
+  }
+
+  void SimUnitDeath(const float x, const float y, const float z, const float mass)
+  {
+    float elevation = 0.0f;
+    if (ren_WaterSimLog > 0) {
+      gpg::Logf("WaterSim death: at (%.1f %.1f %.1f), cost %.0f", x, y, z, mass);
+    }
+    if (!SimWaterLevel(elevation) || y - elevation > 3.0f || !(mass > 0.0f)) {
+      return;
+    }
+    // a hull below the surface (a submarine) is felt less
+    // The size follows the square root of the cost, on the scale of a shell's (the cube root of its damage): a hull of cost 300 sinks like a shell of
+    // 15 damage, 2,250 like one of 300, a battleship of 10,000 like one of 2,700.
+    const float size = 0.14f * std::sqrt(std::max(mass, 20.0f));
+    SimImpact(x, z, size, y < elevation - 3.0f ? 0.5f : 1.0f);
+  }
+
+  bool SimDiagnostics()
+  {
+    return ren_WaterSimLog > 0;
+  }
+
   float SimWakeScale()
   {
     return 0.01f * static_cast<float>(std::max(ren_WaterSimWake, 0));

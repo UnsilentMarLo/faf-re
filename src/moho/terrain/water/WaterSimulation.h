@@ -27,7 +27,14 @@ namespace moho::water
 
   // How strongly the wakes of ships and the splashes of impacts push the water, as factors (1 = the tuned default): ren_WaterSimWake and
   // ren_WaterSimImpact in percent.
+  // A landing on or under the sea: `size` is the cube root of the energy (a shell of 100 damage: 4.6, a nuke: 20) and sets the radius, the hump and
+  // the foam of the splash; `scale` is 1 on the surface, less below it. Render only: nothing feeds back into the sim.
+  void SimImpact(float x, float z, float size, float scale);
+  // A hull going down: `mass` is its build cost in mass. Airborne wrecks and wrecks ashore move nothing.
+  void SimUnitDeath(float x, float y, float z, float mass);
+
   float SimWakeScale();
+  bool SimDiagnostics(); // ren_WaterSimLog is on: the feeds log what they see
   float SimImpactScale();
 
   // The water of the active map (what the sources are compared with); false when the map has no water or the simulation is off.

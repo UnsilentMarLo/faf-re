@@ -155,6 +155,53 @@ ForkThread(function()
         end
         return
     end
+    if AB_SCENE == 'shipsq' then
+        -- one unit after the other sails the bay (the markers say which): a hover tank, a frigate, a destroyer, a cruiser, a battleship, the amphibious experimental
+        WaitUntil(4)
+        local ids = { 'uel0203', 'ues0103', 'ues0201', 'ues0202', 'ues0302', 'uel0401' }
+        for _, id in ipairs(ids) do
+            local u = CreateUnitHPR(id, brainA.Name, AB_TX - 35, GetSurfaceHeight(AB_TX - 35, AB_TZ), AB_TZ, 0, 0, 0)
+            Say(string.format('SHIPSQ start %s: %s', id, tostring(u ~= nil)))
+            if u then
+                u:SetCanTakeDamage(false)
+                IssueMove({ u }, { AB_TX + 65, GetSurfaceHeight(AB_TX + 65, AB_TZ), AB_TZ })
+            end
+            WaitSeconds(24)
+            Say(string.format('SHIPSQ end %s', id))
+            if u and not u.Dead then u:Destroy() end
+            WaitSeconds(9)
+        end
+        return
+    end
+    if AB_SCENE == 'splash' then
+        -- shells of growing damage land in the bay (the markers say which), then ships of growing size sink
+        WaitUntil(4)
+        local host = CreateUnitHPR('ues0201', brainA.Name, AB_TX + 35, GetSurfaceHeight(AB_TX + 35, AB_TZ), AB_TZ, 0, 0, 0)
+        if host then host:SetCanTakeDamage(false) end
+        for _, damage in ipairs({ 20, 100, 500, 3000, 20000 }) do
+            Say(string.format('SPLASH start damage %d', damage))
+            for i = 1, 3 do
+                if host and not host.Dead then
+                    local proj = host:CreateProjectile('/projectiles/TDFGauss01/TDFGauss01_proj.bp', -40 + i * 12, 6, 0, 0, -1, 0)
+                    if proj then
+                        proj:PassDamageData({ DamageAmount = damage, DamageRadius = 0, DamageType = 'Normal', DamageFriendly = false, DamageSelf = false })
+                    end
+                end
+                WaitSeconds(1)
+            end
+            WaitSeconds(7)
+        end
+        for _, id in ipairs({ 'uel0203', 'ues0103', 'ues0201', 'ues0302' }) do
+            local ux, uz = AB_TX - 15, AB_TZ
+            Say(string.format('SPLASH death place depth %.1f', GetSurfaceHeight(ux, uz) - GetTerrainHeight(ux, uz)))
+            local u = CreateUnitHPR(id, brainA.Name, ux, GetSurfaceHeight(ux, uz), uz, 0, 0, 0)
+            Say(string.format('SPLASH death %s: %s', id, tostring(u ~= nil)))
+            WaitSeconds(3)
+            if u and not u.Dead then u:Kill() end
+            WaitSeconds(10)
+        end
+        return
+    end
     if AB_SCENE == 'none' then
         Say(string.format('ground height %.2f', GetTerrainHeight(x0, z0)))
         return

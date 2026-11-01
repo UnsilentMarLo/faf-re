@@ -29,6 +29,7 @@
 #include "moho/render/camera/VTransform.h"
 #include "moho/resource/blueprints/RProjectileBlueprint.h"
 #include "moho/resource/blueprints/RUnitBlueprint.h"
+#include "moho/terrain/water/WaterSimulation.h"
 #include "moho/collision/CColPrimitiveBase.h"
 #include "moho/sim/CArmyImpl.h"
 #include "moho/sim/CArmyStats.h"
@@ -1060,6 +1061,26 @@ namespace moho
    */
   void Projectile::Impact()
   {
+    // The sea feels a shell, a bomb or a torpedo landing on or under the water (render only: the water simulation reads it, nothing feeds back).
+    if (mImpactType == IMPACT_Water || mImpactType == IMPACT_Underwater || mImpactType == IMPACT_ProjectileUnderwater ||
+        mImpactType == IMPACT_UnitUnderwater) {
+      float damage = mDamage;
+      if (!(damage >= 1.0f)) {
+        const LuaPlus::LuaObject damageData = mLuaObj.GetByName("DamageData");
+        if (damageData.IsTable()) {
+          const LuaPlus::LuaObject amount = damageData.GetByName("DamageAmount");
+          if (amount.IsNumber()) {
+            damage = static_cast<float>(amount.GetNumber());
+          }
+        }
+      }
+      const bool below = mImpactType != IMPACT_Water;
+      // debris and sparks (a dying ship throws dozens, none with damage) are not shells
+      if (damage >= 12.0f) {
+        water::SimImpact(mImpactPosition.x, mImpactPosition.z, std::cbrt(damage), below ? 0.5f : 1.0f);
+      }
+    }
+
 
     // Resolve the launcher entity (asm 0x0069DEE0-0069DEF8).
     Entity* const launcherEntity = mLauncherWeak.GetObjectPtr();

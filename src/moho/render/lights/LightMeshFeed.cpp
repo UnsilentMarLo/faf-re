@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "gpg/core/utils/Logging.h"
 #include "moho/mesh/Mesh.h"
@@ -212,39 +213,52 @@ namespace moho::lights
       }
       const float radius = instance.sphere.Radius;
       const float cy = instance.sphere.Center.y;
-      if (!std::isfinite(radius) || !(radius > 0.4f) || radius > 40.0f || !std::isfinite(cy) || !std::isfinite(instance.sphere.Center.x) ||
-          !std::isfinite(instance.sphere.Center.z)) {
-        return;
-      }
-      if (!(cy - radius * 0.6f < waterElevation + 0.4f && cy > waterElevation - 0.25f * radius - 0.3f)) {
-        return; // not in the water surface: a body whose middle is under water (a submarine, an amphibious unit on the sea bed) moves no waves
-      }
+      const bool log = water::SimDiagnostics();
       const float dx = instance.endTransform.pos_.x - instance.startTransform.pos_.x;
       const float dz = instance.endTransform.pos_.z - instance.startTransform.pos_.z;
       const float speed = std::sqrt(dx * dx + dz * dz) * 10.0f; // per tick, ten ticks a second
+      const auto note = [&](const char* const verdict) {
+        static int sBudget = 300;
+        static std::unordered_set<int> sSeen;
+        const int key = static_cast<int>(radius * 4.0f) * 4096 + static_cast<int>(std::min(speed, 60.0f) * 4.0f) * 4 + (verdict[0] == 's' ? 1 : 0);
+        if (log && sBudget > 0 && std::isfinite(speed) && speed >= 0.4f && sSeen.insert(key).second) {
+          --sBudget;
+          gpg::Logf("WaterSim wake mesh: radius %.2f, centre %.2f above the water, speed %.2f: %s", radius, cy - waterElevation, speed, verdict);
+        }
+      };
+      if (!std::isfinite(radius) || !(radius > 0.4f) || radius > 40.0f || !std::isfinite(cy) || !std::isfinite(instance.sphere.Center.x) ||
+          !std::isfinite(instance.sphere.Center.z)) {
+        note("rejected: radius or centre");
+        return;
+      }
+      if (!(cy - radius * 0.6f < waterElevation + 0.4f && cy > waterElevation - 0.25f * radius - 0.3f)) {
+        note("rejected: not at the surface"); // a body whose middle is under water (a submarine, an amphibious unit on the sea bed) moves no waves
+        return;
+      }
       if (!std::isfinite(speed) || speed < 0.4f) {
         return;
       }
-      // A hull pushes the water up at its bow and leaves a trough behind it: a pair of discs of opposite sign along the heading (a single push
-      // piles a mound that follows the ship). The strength is set from the height the disc should hold at full speed: a steady push of `a` on a
-      // disc of radius R settles at about a R^2 / (4 c^2) (the simulation's wave speed term c^2 is 0.22).
+      note("source");
+      // A hull pushes the water up at its bow and leaves a trough behind it: a pair of discs of opposite sign along the heading (a single push piles
+      // a mound that follows the ship), and the wash of the propellers behind. The size follows the hull: the height of the waves grows with its
+      // radius (0.45 units at a radius of 8: a battleship; 0.13 at 2.6: a frigate; next to nothing for a hover tank) and with its speed, the discs
+      // widen with it. The push for that height comes from the measured response of the simulation: a disc of R cells raises the water by about
+      // (2.5 + 0.8 R) times its push (ships of radius 0.6, 2.6, 3.4 and 8 sailing the test bay; docs/LIGHTING_V2.md).
       const float length = std::sqrt(dx * dx + dz * dz);
       const float hx = dx / length;
       const float hz = dz / length;
-      const float discRadius = std::min(std::max(radius * 0.35f, 0.9f), 4.0f);
-      const float fast = std::min(speed / 8.0f, 1.0f);
-      // the push for a height of `height` at full speed: a steady push a on a disc of R cells settles at about a R^2 / (4 c^2), c^2 = 0.0031, and a
-      // frame of the sources is one in 1.5 steps of an eighteenth of a second
+      const float discRadius = std::min(std::max(radius * 0.4f, 0.8f), 7.0f);
+      const float fast = std::max(std::min(speed / 4.5f, 1.3f), 0.8f); // a slow big hull still pushes
+      const float height = std::min(std::max(0.45f * std::pow(radius / 8.0f, 1.1f), 0.02f), 0.7f) * fast;
       const float cells = discRadius / 0.5f;
-      const float height = std::min(0.15f + 0.03f * radius, 0.6f) * fast;
-      const float strength = height * 4.0f * 0.0031f / (cells * cells) * 135.0f * 3.0f * water::SimWakeScale();
+      const float strength = height / (2.5f + 0.8f * cells) * water::SimWakeScale();
+      const float body = std::min(radius / 3.0f, 2.0f);
       const float offset = radius * 0.6f;
       const float cx = instance.sphere.Center.x;
       const float cz = instance.sphere.Center.z;
-      // bow: a push and the foam of the bow wave; stern: the trough, and the wash of the propellers (the noisy band)
-      water::SimAddSource(cx + hx * offset, cz + hz * offset, discRadius, strength, 0.0015f * fast);
-      water::SimAddSource(cx - hx * offset, cz - hz * offset, discRadius, -strength, 0.003f * fast);
-      water::SimAddSource(cx - hx * offset * 1.9f, cz - hz * offset * 1.9f, discRadius * 0.9f, 0.0f, 0.0025f * fast);
+      water::SimAddSource(cx + hx * offset, cz + hz * offset, discRadius, strength, 0.0015f * fast * body);
+      water::SimAddSource(cx - hx * offset, cz - hz * offset, discRadius, -strength, 0.003f * fast * body);
+      water::SimAddSource(cx - hx * offset * 1.9f, cz - hz * offset * 1.9f, discRadius * 0.9f, 0.0f, 0.0025f * fast * body);
     }
 
     void FeedWaterSources(MeshRenderer& renderer)
