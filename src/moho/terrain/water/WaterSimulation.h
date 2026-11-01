@@ -22,7 +22,8 @@ namespace moho::water
 
   // A source of waves for the next steps: a disc of `radius` world units at (x, z) that pushes the water by `strength` (world units per second;
   // negative pulls it down). Collected over the frame, applied by the next step.
-  void SimAddSource(float x, float z, float radius, float strength);
+  // `foam` is how much foam it throws per frame (0 none; a wash of 0.005 to 0.01 is a steady band).
+  void SimAddSource(float x, float z, float radius, float strength, float foam = 0.0f);
 
   // How strongly the wakes of ships and the splashes of impacts push the water, as factors (1 = the tuned default): ren_WaterSimWake and
   // ren_WaterSimImpact in percent.

@@ -231,12 +231,20 @@ namespace moho::lights
       const float length = std::sqrt(dx * dx + dz * dz);
       const float hx = dx / length;
       const float hz = dz / length;
-      const float discRadius = std::min(std::max(radius * 0.6f, 1.2f), 7.0f);
-      const float height = std::min(0.12f + 0.025f * radius, 0.45f) * std::min(speed / 10.0f, 1.0f);
-      const float strength = height * 120.0f / (discRadius * discRadius) * water::SimWakeScale();
-      const float offset = radius * 0.45f;
-      water::SimAddSource(instance.sphere.Center.x + hx * offset, instance.sphere.Center.z + hz * offset, discRadius, strength);
-      water::SimAddSource(instance.sphere.Center.x - hx * offset, instance.sphere.Center.z - hz * offset, discRadius, -strength);
+      const float discRadius = std::min(std::max(radius * 0.35f, 0.9f), 4.0f);
+      const float fast = std::min(speed / 8.0f, 1.0f);
+      // the push for a height of `height` at full speed: a steady push a on a disc of R cells settles at about a R^2 / (4 c^2), c^2 = 0.0031, and a
+      // frame of the sources is one in 1.5 steps of an eighteenth of a second
+      const float cells = discRadius / 0.5f;
+      const float height = std::min(0.15f + 0.03f * radius, 0.6f) * fast;
+      const float strength = height * 4.0f * 0.0031f / (cells * cells) * 135.0f * 3.0f * water::SimWakeScale();
+      const float offset = radius * 0.6f;
+      const float cx = instance.sphere.Center.x;
+      const float cz = instance.sphere.Center.z;
+      // bow: a push and the foam of the bow wave; stern: the trough, and the wash of the propellers (the noisy band)
+      water::SimAddSource(cx + hx * offset, cz + hz * offset, discRadius, strength, 0.0015f * fast);
+      water::SimAddSource(cx - hx * offset, cz - hz * offset, discRadius, -strength, 0.003f * fast);
+      water::SimAddSource(cx - hx * offset * 1.9f, cz - hz * offset * 1.9f, discRadius * 0.9f, 0.0f, 0.0025f * fast);
     }
 
     void FeedWaterSources(MeshRenderer& renderer)

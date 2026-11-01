@@ -127,11 +127,31 @@ ForkThread(function()
                 local u, uz = entry[1], entry[2]
                 if u and not u.Dead then
                     IssueClearCommands({ u })
-                    local x = AB_TX + (math.mod(round, 2) == 0 and -60 or 60)
+                    local x = AB_TX + (math.mod(round, 2) == 0 and -35 or 65)
                     IssueMove({ u }, { x, GetSurfaceHeight(x, uz), uz })
                 end
             end
             WaitSeconds(12)
+        end
+        return
+    end
+    if AB_SCENE == 'ship1' then
+        -- one destroyer sails a straight line through (AB_TX, AB_TZ) along x, back and forth: the camera looks at the middle of the line
+        WaitUntil(4)
+        for dx = -90, 90, 15 do
+            local x = AB_TX + dx
+            Say(string.format('depth at dx %d: %.1f', dx, GetSurfaceHeight(x, AB_TZ) - GetTerrainHeight(x, AB_TZ)))
+        end
+        local id = rawget(_G, 'AB_SHIP') or 'ues0201'
+        local u = CreateUnitHPR(id, brainA.Name, AB_TX - 35, GetSurfaceHeight(AB_TX - 35, AB_TZ), AB_TZ, 0, 0, 0)
+        if u then u:SetCanTakeDamage(false) end
+        for round = 1, 60 do
+            if u and not u.Dead then
+                IssueClearCommands({ u })
+                local x = AB_TX + (math.mod(round, 2) == 0 and -35 or 65)
+                IssueMove({ u }, { x, GetSurfaceHeight(x, AB_TZ), AB_TZ })
+            end
+            WaitSeconds(16)
         end
         return
     end

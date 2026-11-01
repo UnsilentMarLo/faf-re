@@ -29,6 +29,8 @@ namespace moho::water
   static int ren_WaterDisplace = 100;
   static int ren_WaterSimTest = 0;
   static int ren_WaterSimLog = 0;
+  static int ren_WaterSwell = 100;
+  static int ren_WaterSolid = 25;
   static int ren_WaterSimWake = 100;
   static int ren_WaterSimImpact = 100;
 
@@ -52,6 +54,12 @@ namespace moho::water
   static TConVar<int> gTConVar_ren_WaterSimImpact(
     "ren_WaterSimImpact", "How strongly impacts and explosions push the water, in percent of the tuned splash (default 100).", &ren_WaterSimImpact
   );
+  static TConVar<int> gTConVar_ren_WaterSwell(
+    "ren_WaterSwell", "The wind sea: height of the constant swell that lifts the water and breaks on the beaches, in percent (default 100, 0 off).", &ren_WaterSwell
+  );
+  static TConVar<int> gTConVar_ren_WaterSolid(
+    "ren_WaterSolid", "How much of the colour of the water covers the sea bed, at least, in percent: more is a more solid sea, less see-through (default 25).", &ren_WaterSolid
+  );
   static TConVar<int> gTConVar_ren_WaterGrid(
     "ren_WaterGrid", "Draw the water as a projected grid whose vertices the wave simulation lifts (needs ren_WaterSim): 1 (the default) on, 0 the flat quad of the shipped game.",
     &ren_WaterGrid
@@ -68,7 +76,7 @@ namespace moho::water
     using namespace gpg::gal;
 
     constexpr std::uint32_t kN = 1024;            // cells per side
-    constexpr float kCell = 1.0f;                 // world units per cell
+    constexpr float kCell = 0.5f;                 // world units per cell
     constexpr std::uint32_t kTile = 8;
     constexpr std::uint32_t kMaxSources = 1024;
     constexpr float kLandMargin = 0.1f;           // ground within this of the water level counts as land
@@ -78,7 +86,8 @@ namespace moho::water
 
     struct Source
     {
-      float x, z, radius, strength;
+      float x, z, radius, strength; // the push (see SimAddSource)
+      float foam, a, b, c;          // foam thrown per frame, unused
     };
 
     struct SimConstants
@@ -88,6 +97,7 @@ namespace moho::water
       float c[4]; // wave speed term, damping per step, centre x, z (world)
       float d[4]; // half extent (world), unused
       float e[4]; // map height samples x, z, water level in raw height units, 1 when the land mask is on
+      float f[4]; // time (s), swell scale, foam kept per step, shore surf
     };
 
     constexpr char kSource[] = R"HLSL(
@@ -98,15 +108,51 @@ cbuffer SimConstants : register(b0)
     float4 sC;
     float4 sD;
     float4 sE;
+    float4 sF;   // time (s), swell scale, foam kept per step, shore surf
 };
 
-StructuredBuffer<float2> Cur : register(t0);
-StructuredBuffer<float4> Src : register(t1);
-StructuredBuffer<uint> Heights : register(t2);   // the map's raw uint16 heights, two to a word (the land mask)
-RWStructuredBuffer<float2> Nxt : register(u0);
+StructuredBuffer<float4> Cur : register(t0);     // height, last height, foam, 1 on land
+StructuredBuffer<float4> Src : register(t1);     // two float4 per source: x, z, radius, push; foam, 0, 0, 0
+StructuredBuffer<uint> Heights : register(t2);   // the raw uint16 heights of the map, two to a word (the land mask)
+RWStructuredBuffer<float4> Nxt : register(u0);
 
 groupshared uint sList[256];
 groupshared uint sCount;
+
+static const float4 kSwellWave[8] = { float4(0.955, 0.296, 1.047, 0.0477), float4(0.814, 0.581, 1.396, 0.0358), float4(0.989, -0.149, 1.745, 0.0286), float4(0.582, 0.813, 2.094, 0.0239), float4(0.999, 0.050, 2.618, 0.0191), float4(0.697, 0.717, 3.142, 0.0159), float4(0.900, -0.435, 3.927, 0.0127), float4(0.362, 0.932, 4.833, 0.0103) };
+static const float kSwellSpeed[8] = { 1.36, 1.68, 1.92, 2.09, 2.49, 2.83, 3.34, 3.87 };   // rad / s: phase speeds of about one unit a second
+
+// the wind sea: eight short travelling waves (direction x, z, wave number, height) with sharp crests (1.273 - 2 |sin(theta / 2)| has a cusp at
+// the crest, flat troughs and no mean). It bends the normals and drives the surf; it does not lift the mesh (a coarse grid shows it as facets).
+float FafSwellHeight(float2 p, float t)
+{
+    float h = 0.0;
+    [unroll] for (int i = 0; i < 8; ++i)
+    {
+        float4 w = kSwellWave[i];
+        h += w.w * (1.273 - 2.0 * abs(sin(0.5 * (dot(w.xy, p) * w.z - kSwellSpeed[i] * t + (float)i * 1.7))));
+    }
+    return h;
+}
+
+float2 FafSwellSlope(float2 p, float t)
+{
+    float2 s = float2(0.0, 0.0);
+    [unroll] for (int i = 0; i < 8; ++i)
+    {
+        float4 w = kSwellWave[i];
+        float th = 0.5 * (dot(w.xy, p) * w.z - kSwellSpeed[i] * t + (float)i * 1.7);
+        s += w.xy * (-w.w * w.z * cos(th) * (sin(th) >= 0.0 ? 1.0 : -1.0));
+    }
+    return s;
+}
+
+uint Hash(uint v)
+{
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
 
 [numthreads(8, 8, 1)]
 void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV_GroupIndex)
@@ -125,6 +171,7 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float2 tileMax = tileMin + 8.0 * sB.x;
 
     float add = 0.0;
+    float foamAdd = 0.0;
     uint total = (uint)sB.z;
     for (uint basis = 0; basis < total; basis += 256)
     {
@@ -136,7 +183,7 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
         uint last = min(basis + 256, total);
         for (uint i = basis + index; i < last; i += 64)
         {
-            float4 s = Src[i];
+            float4 s = Src[i * 2];
             if (s.x + s.z >= tileMin.x && s.x - s.z <= tileMax.x && s.y + s.z >= tileMin.y && s.y - s.z <= tileMax.y)
             {
                 uint slot;
@@ -148,12 +195,14 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
         uint count = sCount;
         for (uint k = 0; k < count; ++k)
         {
-            float4 s = Src[sList[k]];
+            float4 s = Src[sList[k] * 2];
+            float4 s1 = Src[sList[k] * 2 + 1];
             float2 d = wpos - s.xy;
             float f = 1.0 - dot(d, d) / (s.z * s.z);
             if (f > 0.0)
             {
                 add += s.w * sB.w * f * f;
+                foamAdd += s1.x * f;
             }
         }
         GroupMemoryBarrierWithGroupSync();
@@ -163,30 +212,52 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     if (sE.w > 0.5)
     {
         // land is a wall: a cell whose ground is above the water holds no wave, so nothing that happens ashore moves the sea and a wave dies at the beach
-        int2 sc = clamp(w, int2(0, 0), int2(sE.xy) - 1);
+        int2 sc = clamp((int2)floor(wpos), int2(0, 0), int2(sE.xy) - 1);
         uint hi = (uint)sc.y * (uint)sE.x + (uint)sc.x;
         uint raw = (Heights[hi >> 1] >> ((hi & 1) * 16)) & 0xFFFF;
         if ((float)raw > sE.z)
         {
-            Nxt[idx] = float2(0.0, 0.0);
+            Nxt[idx] = float4(0.0, 0.0, 0.0, 1.0);
             return;
         }
     }
-    float2 cur = Cur[idx];
+    float4 cur = Cur[idx];
     if (w.x != wp.x || w.y != wp.y)
     {
-        cur = float2(0.0, 0.0);   // a cell the window has just moved onto holds what the other side of the window left: start it calm
+        cur = float4(0.0, 0.0, 0.0, 0.0);   // a cell the window has just moved onto holds what the other side of the window left: start it calm
     }
-    float hl = Cur[cell.y * n + (cell.x + n - 1) % n].x;
-    float hr = Cur[cell.y * n + (cell.x + 1) % n].x;
-    float hu = Cur[((cell.y + n - 1) % n) * n + cell.x].x;
-    float hd = Cur[((cell.y + 1) % n) * n + cell.x].x;
+    float4 L = Cur[cell.y * n + (cell.x + n - 1) % n];
+    float4 R = Cur[cell.y * n + (cell.x + 1) % n];
+    float4 U = Cur[((cell.y + n - 1) % n) * n + cell.x];
+    float4 D = Cur[((cell.y + 1) % n) * n + cell.x];
+    // land reflects: a neighbour on land counts as the height of this cell
+    float hl = L.w > 0.5 ? cur.x : L.x;
+    float hr = R.w > 0.5 ? cur.x : R.x;
+    float hu = U.w > 0.5 ? cur.x : U.x;
+    float hd = D.w > 0.5 ? cur.x : D.x;
     float lap = hl + hr + hu + hd - 4.0 * cur.x;
     float dmax = max(abs(wpos.x - sC.z), abs(wpos.y - sC.w)) / sD.x;
     float edge = smoothstep(0.8, 1.0, dmax);   // the waves are absorbed at the border of the window
     float hn = (2.0 * cur.x - cur.y + sC.x * lap) * sC.y * (1.0 - 0.3 * edge) + add;
     hn = clamp(hn, -1.5, 1.5);
-    Nxt[idx] = float2(hn, cur.x);
+
+    // foam: spreads a little, fades, is thrown by the sources (noisy: a propeller wash is not a smooth band) and by the surf at the beach
+    float fl = L.w > 0.5 ? cur.z : L.z;
+    float fr = R.w > 0.5 ? cur.z : R.z;
+    float fu = U.w > 0.5 ? cur.z : U.z;
+    float fd = D.w > 0.5 ? cur.z : D.z;
+    float foam = lerp(cur.z, 0.25 * (fl + fr + fu + fd), 0.12) * sF.z;
+    uint seed = Hash((uint)cell.y * 2654435761u + (uint)cell.x * 40503u + (uint)(sF.x * 90.0) * 9973u);
+    float noise = 0.3 + 1.4 * (float)(seed & 0xFFFFu) * (1.0 / 65536.0);
+    foam += foamAdd * noise;
+    float ring2 = max(max(Cur[cell.y * n + (cell.x + n - 2) % n].w, Cur[cell.y * n + (cell.x + 2) % n].w),
+                      max(Cur[((cell.y + n - 2) % n) * n + cell.x].w, Cur[((cell.y + 2) % n) * n + cell.x].w));
+    float shore = max(max(max(L.w, R.w), max(U.w, D.w)), 0.6 * ring2);
+    float crest = saturate(FafSwellHeight(wpos, sF.x) * sF.y * 6.0 + 0.1);
+    foam += shore * (saturate(abs(hn) * 5.0 - 0.1) * 0.10 + crest * crest * 0.035 * sF.w);
+    foam += saturate(abs(hn) * 6.0 - 0.9) * 0.004;
+    foam = clamp(foam, 0.0, 1.5);
+    Nxt[idx] = float4(hn, cur.x, foam, 0.0);
 }
 
 float4 SimVS(uint id : SV_VertexID) : SV_Position
@@ -195,17 +266,17 @@ float4 SimVS(uint id : SV_VertexID) : SV_Position
     return float4(uv * 2.0 - 1.0, 0.0, 1.0);
 }
 
-// slope (x, z) and height of the surface, for the water pixel shader
+// slope (x, z), height and foam of the surface, for the water pixel shader
 float4 SimCopyPS(float4 position : SV_Position) : SV_Target
 {
     int n = (int)sB.y;
     int2 c = int2(position.xy);
-    float h = Cur[c.y * n + c.x].x;
+    float4 here = Cur[c.y * n + c.x];
     float hl = Cur[c.y * n + (c.x + n - 1) % n].x;
     float hr = Cur[c.y * n + (c.x + 1) % n].x;
     float hu = Cur[((c.y + n - 1) % n) * n + c.x].x;
     float hd = Cur[((c.y + 1) % n) * n + c.x].x;
-    return float4((hr - hl) * 0.5 / sB.x, (hd - hu) * 0.5 / sB.x, h, 0.0);
+    return float4((hr - hl) * 0.5 / sB.x, (hd - hu) * 0.5 / sB.x, here.x, here.z);
 }
 )HLSL";
 
@@ -258,6 +329,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       bool haveLast = false;
       float waterElevation = 0.0f;
       bool waterEnabled = false;
+      float time = 0.0f;
     };
 
     State& GetState()
@@ -331,7 +403,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       if (s.state[0] == nullptr) {
         GpuBufferDesc buffer;
         buffer.name = "WaterSimState";
-        buffer.stride = 8U;
+        buffer.stride = 16U;
         buffer.capacity = kN * kN;
         buffer.shaderWrite = true;
         s.state[0] = device.CreateGpuBuffer(buffer);
@@ -339,14 +411,14 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
         GpuBufferDesc sources;
         sources.name = "WaterSimSources";
         sources.stride = 16U;
-        sources.capacity = kMaxSources;
+        sources.capacity = kMaxSources * 2U; // two float4 a source
         s.sources = device.CreateGpuBuffer(sources);
         if (s.state[0] == nullptr || s.state[1] == nullptr || s.sources == nullptr) {
           gpg::Warnf("Water simulation disabled: its GPU buffers could not be created");
           s.failed = true;
           return false;
         }
-        const std::vector<float> zeros(static_cast<std::size_t>(kN) * kN * 2U, 0.0f);
+        const std::vector<float> zeros(static_cast<std::size_t>(kN) * kN * 4U, 0.0f);
         device.UpdateGpuBuffer(*s.state[0], 0U, kN * kN, zeros.data());
         device.UpdateGpuBuffer(*s.state[1], 0U, kN * kN, zeros.data());
         s.hasHistory = false;
@@ -365,7 +437,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     }
   } // namespace
 
-  void SimAddSource(const float x, const float z, const float radius, const float strength)
+  void SimAddSource(const float x, const float z, const float radius, const float strength, const float foam)
   {
     State& s = GetState();
     if (ren_WaterSim == 0 || !(radius > 0.05f) || !std::isfinite(x) || !std::isfinite(z) || !std::isfinite(strength) || s.pending.size() >= kMaxSources) {
@@ -379,7 +451,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
         return;
       }
     }
-    s.pending.push_back(Source{x, z, std::min(radius, 40.0f), strength});
+    s.pending.push_back(Source{x, z, std::min(radius, 40.0f), strength, foam, 0.0f, 0.0f, 0.0f});
   }
 
   float SimWakeScale()
@@ -503,6 +575,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     s.last = now;
     s.haveLast = true;
     dt = std::min(std::max(dt, 0.0f), 0.1f);
+    s.time += dt;
 
     // the window follows the point of the water the middle of the view looks at
     const float w = camera.viewport.r[3].z;
@@ -555,8 +628,14 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       constants.b[0] = kCell;
       constants.b[1] = static_cast<float>(kN);
       constants.b[3] = kStepSeconds;
-      constants.c[0] = 0.22f; // wave speed term: sqrt(0.22) cells a step, about 40 units a second
-      constants.c[1] = 0.985f; // a ring is gone within a few dozen units, not across the map
+      // The waves of a hull travel at about 2.5 units a second (the term is (speed x step / cell)^2); a wake is a few dozen units long and fades in
+      // seven seconds.
+      constants.c[0] = 0.0031f;
+      constants.c[1] = 0.998f;
+      constants.f[0] = s.time;
+      constants.f[1] = 0.01f * static_cast<float>(ren_WaterSwell);
+      constants.f[2] = 0.994f;  // foam kept per step: gone in a couple of seconds
+      constants.f[3] = 1.0f;    // surf at the beach
       constants.e[0] = static_cast<float>(s.heightWidth);
       constants.e[1] = static_cast<float>(s.heightHeight);
       constants.e[2] = (elevation - kLandMargin) * 128.0f; // raw height units (1 / 128 world unit)
@@ -567,7 +646,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       for (int step = 0; step < steps; ++step) {
         const std::uint32_t sourceCount = step == 0 ? static_cast<std::uint32_t>(s.pending.size()) : 0U;
         if (sourceCount > 0U) {
-          device->UpdateGpuBuffer(*s.sources, 0U, sourceCount, s.pending.data());
+          device->UpdateGpuBuffer(*s.sources, 0U, sourceCount * 2U, s.pending.data());
         }
         constants.a[0] = static_cast<float>(originX);
         constants.a[1] = static_cast<float>(originZ);
@@ -599,20 +678,25 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
 
       static int sSimLogCounter = 0;
       if (ren_WaterSimLog > 0 && (++sSimLogCounter % ren_WaterSimLog) == 0) {
-        std::vector<float> state(static_cast<std::size_t>(kN) * kN * 2U);
+        std::vector<float> state(static_cast<std::size_t>(kN) * kN * 4U);
         if (device->ReadGpuBuffer(*s.state[s.current], 0U, kN * kN, state.data())) {
           float hi = 0.0f;
           float lo = 0.0f;
+          float foamMax = 0.0f;
+          std::size_t foamy = 0;
           double sum = 0.0;
           std::size_t moving = 0;
           for (std::size_t i = 0; i < static_cast<std::size_t>(kN) * kN; ++i) {
-            const float v = state[i * 2U];
+            const float v = state[i * 4U];
+            foamMax = std::max(foamMax, state[i * 4U + 2U]);
+            foamy += state[i * 4U + 2U] > 0.2f ? 1U : 0U;
             hi = std::max(hi, v);
             lo = std::min(lo, v);
             sum += std::fabs(v);
             moving += std::fabs(v) > 0.02f ? 1U : 0U;
           }
-          gpg::Logf("Water simulation: wave height %.3f .. %.3f, mean |h| %.5f, %u cells above 0.02", lo, hi, sum / (static_cast<double>(kN) * kN), static_cast<unsigned>(moving));
+          gpg::Logf("Water simulation: wave height %.3f .. %.3f, mean |h| %.5f, %u cells above 0.02, foam up to %.2f, %u cells above 0.2", lo, hi, sum / (static_cast<double>(kN) * kN),
+                    static_cast<unsigned>(moving), foamMax, static_cast<unsigned>(foamy));
         }
       }
 
@@ -642,9 +726,9 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     s.pending.clear();
 
     if (s.vars.params2.Exists()) {
-      const float strength = 0.01f * static_cast<float>(ren_WaterSimStrength);
+      const float strength = 0.04f * static_cast<float>(ren_WaterSimStrength); // the slope of a hull wave is small: bend the normal hard
       const float params[4] = {1.0f / (static_cast<float>(kN) * kCell), centreX, centreZ, 0.5f * static_cast<float>(kN) * kCell};
-      const float params2[4] = {1.0f, strength, 0.12f, 0.0f};
+      const float params2[4] = {1.0f, strength, 0.12f, 0.01f * static_cast<float>(ren_WaterSolid)};
       if (s.vars.texture.Exists()) {
         s.vars.texture.mEffectVariable->SetRenderTarget(s.texture);
       }
@@ -671,7 +755,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     const float params[4] = {1.0f, 12000.0f, mapExtentX, mapExtentZ};
     s.vars.gridParams.mEffectVariable->SetVector(params);
     if (s.vars.gridParams2.Exists()) {
-      const float params2[4] = {0.01f * static_cast<float>(ren_WaterDisplace), 0.0f, 0.0f, 0.0f};
+      const float params2[4] = {0.01f * static_cast<float>(ren_WaterDisplace), 0.01f * static_cast<float>(ren_WaterSwell), 0.0f, 0.0f};
       s.vars.gridParams2.mEffectVariable->SetVector(params2);
     }
     return true;
@@ -713,7 +797,48 @@ sampler2D waterSimSampler = sampler_state
     AddressV  = WRAP;
 };
 float4 waterSimParams;    // 1 / (cell size x cells), centre x, centre z, half extent
-float4 waterSimParams2;   // x: 1 = on, y: how much the slope bends the normal, z: how much height makes foam
+float4 waterSimParams2;   // x: 1 = on, y: how much the slope bends the normal, z: how much height makes foam, w: the least colour of the water over the bed
+
+static const float4 kSwellWave[8] = { float4(0.955, 0.296, 1.047, 0.0477), float4(0.814, 0.581, 1.396, 0.0358), float4(0.989, -0.149, 1.745, 0.0286), float4(0.582, 0.813, 2.094, 0.0239), float4(0.999, 0.050, 2.618, 0.0191), float4(0.697, 0.717, 3.142, 0.0159), float4(0.900, -0.435, 3.927, 0.0127), float4(0.362, 0.932, 4.833, 0.0103) };
+static const float kSwellSpeed[8] = { 1.36, 1.68, 1.92, 2.09, 2.49, 2.83, 3.34, 3.87 };   // rad / s: phase speeds of about one unit a second
+
+// the wind sea: eight short travelling waves (direction x, z, wave number, height) with sharp crests (1.273 - 2 |sin(theta / 2)| has a cusp at
+// the crest, flat troughs and no mean). It bends the normals and drives the surf; it does not lift the mesh (a coarse grid shows it as facets).
+float FafSwellHeight(float2 p, float t)
+{
+    float h = 0.0;
+    [unroll] for (int i = 0; i < 8; ++i)
+    {
+        float4 w = kSwellWave[i];
+        h += w.w * (1.273 - 2.0 * abs(sin(0.5 * (dot(w.xy, p) * w.z - kSwellSpeed[i] * t + (float)i * 1.7))));
+    }
+    return h;
+}
+
+float2 FafSwellSlope(float2 p, float t)
+{
+    float2 s = float2(0.0, 0.0);
+    [unroll] for (int i = 0; i < 8; ++i)
+    {
+        float4 w = kSwellWave[i];
+        float th = 0.5 * (dot(w.xy, p) * w.z - kSwellSpeed[i] * t + (float)i * 1.7);
+        s += w.xy * (-w.w * w.z * cos(th) * (sin(th) >= 0.0 ? 1.0 : -1.0));
+    }
+    return s;
+}
+
+// the foam of the simulation at a world position (0 outside its window)
+float FafWaterFoam(float2 xz)
+{
+    float f = 0.0;
+    if (waterSimParams2.x > 0.5)
+    {
+        float2 d = abs(xz - waterSimParams.yz);
+        float weight = saturate((waterSimParams.w - max(d.x, d.y)) / (waterSimParams.w * 0.15));
+        f = tex2Dlod(waterSimSampler, float4(xz * waterSimParams.x, 0, 0)).w * weight;
+    }
+    return f;
+}
 
 // slope x, slope z, height, weight (0 outside the window the simulation follows)
 float4 FafWaterRipple(float2 xz)
@@ -733,7 +858,7 @@ float4 FafWaterRipple(float2 xz)
 // the map), lifted by the height of the wave simulation.
 float4x4 waterGridInv;     // inverse view projection of the camera
 float4 waterGridParams;    // x: 1 = projected grid, y: far distance, z, w: extent of the map in x and z
-float4 waterGridParams2;   // x: how much of the simulated height lifts the geometry
+float4 waterGridParams2;   // x: how much of the simulated height lifts the geometry, y: the swell
 
 float3 FafWaterGridPosition(float2 uv, float elevation)
 {
@@ -779,6 +904,13 @@ float3 FafWaterGridPosition(float2 uv, float elevation)
     text.insert(
       normalAt + normal.size(),
       "\n    N = normalize(N + float3(-simRipple.x, 0.0, -simRipple.y) * (simRipple.w * waterSimParams2.y));"
+      "\n    // sharper highlights, and a slow, large scale undulation from two low frequency reads of the shipped normal maps (noise: no lattice)"
+      "\n    N = normalize(float3(N.x * 1.45, N.y, N.z * 1.45));"
+      "\n    float2 fafUv = ViewPosition.xz - inV.mViewVec.xz;"
+      "\n    float4 fafU0 = tex2D(NormalSampler1, (fafUv + normal2Movement * Time * 0.6 + 17.0) * normalRepeatRate.y * 0.4);"
+      "\n    float4 fafU1 = tex2D(NormalSampler2, (fafUv - normal3Movement * Time * 4.0) * normalRepeatRate.z * 0.7);"
+      "\n    float3 fafU = (fafU0.xyz + fafU1.xyz) - 1.0;"
+      "\n    N = normalize(N + float3(fafU.x, 0.0, fafU.y) * waterGridParams2.y * 0.9);"
     );
     const std::size_t crestAt = text.find(crest);
     if (crestAt > normalAt) {
@@ -804,6 +936,23 @@ float3 FafWaterGridPosition(float2 uv, float elevation)
       "\t\tinPos.y = WaterElevation;\n"
       "\t}"
     );
+    // The foam over the colour of the water, and a least colour of the water over the sea bed (a more solid sea). Anchors of the shipped
+    // shader; a shader that has them changed is left as it is.
+    const std::string crestMix = "water = lerp(water, waveCrestColor, (1 - waterTexture.a) * (1 - waterTexture.b) * waveCrest);";
+    if (count(crestMix) == 1) {
+      const std::size_t at = text.find(crestMix) + crestMix.size();
+      text.insert(
+        at,
+        "\n    float fafFoam = FafWaterFoam(ViewPosition.xz - inV.mViewVec.xz);"
+        "\n    float fafFoamAmount = smoothstep(0.25, 0.6, fafFoam * 0.8 + (saturate(sum.a * 0.5) - 0.5) * 0.9);"
+        "\n    float3 fafFoamColor = float3(0.95, 0.98, 1.0) * (0.8 + 0.2 * saturate(dot(N, SunDirection)));"
+        "\n    water = lerp(water, fafFoamColor, fafFoamAmount * 0.92);"
+      );
+    }
+    const std::string colourFactor = "float factor = clamp(waterDepth, waterLerp.x, waterLerp.y);";
+    if (count(colourFactor) == 1) {
+      text.replace(text.find(colourFactor), colourFactor.size(), "float factor = max(clamp(waterDepth, waterLerp.x, waterLerp.y), waterSimParams2.w);");
+    }
     text.insert(text.find(vertexShader), kDeclarations);
     source = std::move(text);
     result.patched = true;
