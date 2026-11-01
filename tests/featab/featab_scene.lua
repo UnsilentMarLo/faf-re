@@ -215,6 +215,36 @@ ForkThread(function()
         end
         return
     end
+    if AB_SCENE == 'build' then
+        -- engineers of four factions build structures near the start position: the build beams (the camera looks at AB_TX, AB_TZ)
+        WaitUntil(4)
+        local engineers = { 'uel0105', 'ual0105', 'url0105', 'xsl0105' }
+        local structures = { 'ueb1101', 'uab1101', 'urb1101', 'xsb1101' }
+        for i, id in ipairs(engineers) do
+            local ux, uz = AB_TX - 18 + (i - 1) * 12, AB_TZ
+            local u = CreateUnitHPR(id, brainA.Name, ux, GetTerrainHeight(ux, uz), uz, 0, 0, 0)
+            Say(string.format('BUILD engineer %s: %s', id, tostring(u ~= nil)))
+            if u then
+                u:SetCanTakeDamage(false)
+                local bx, bz = ux, uz + 8
+                IssueBuildMobile({ u }, { bx, GetTerrainHeight(bx, bz), bz }, structures[i], {})
+            end
+        end
+        WaitSeconds(60)
+        return
+    end
+    if AB_SCENE == 'titan' then
+        -- two UEF assault bots standing near the start position (the camera looks at AB_TX, AB_TZ): the glow of units against the zoom
+        WaitUntil(4)
+        for i, id in ipairs({ 'uel0303', 'uel0202' }) do
+            local ux, uz = AB_TX + (i - 1.5) * 10, AB_TZ
+            local u = CreateUnitHPR(id, brainA.Name, ux, GetTerrainHeight(ux, uz), uz, 0, 0, 0)
+            Say(string.format('TITAN unit %s: %s', id, tostring(u ~= nil)))
+            if u then u:SetCanTakeDamage(false) end
+        end
+        WaitSeconds(120)
+        return
+    end
     if AB_SCENE == 'none' then
         Say(string.format('ground height %.2f', GetTerrainHeight(x0, z0)))
         return

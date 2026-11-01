@@ -277,7 +277,7 @@ void FieldCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : 
             // the light's footprint (its segment grown by the radius) against the tile, in the ground plane
             float4 a = Lights[i * 3];
             float4 c = Lights[i * 3 + 2];
-            float r = abs(a.w);
+            float r = max(abs(a.w), 1.5 * gOrigin.z);   // grown to the cells: see the accumulation below
             float3 e = a.w < 0.0 ? a.xyz : c.xyz;   // a spotlight stores its direction in c: its footprint is the circle around the position
             float2 lo = min(a.xz, e.xz) - r;
             float2 hi = max(a.xz, e.xz) + r;
@@ -298,11 +298,17 @@ void FieldCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : 
             float4 c = Lights[li * 3 + 2];
             bool spot = a.w < 0.0;
             float r = max(abs(a.w), 0.001);
+            // The cells of the field grow with the zoom (0.5 units close up, 4 to 16 over the whole map): a light smaller than a cell fell between the
+            // cell centres and vanished. Its footprint is at least a cell and a half; it keeps the square root of the share of its radius, so a small
+            // glow stays a glow when zoomed out (dimmer and wider) instead of going out.
+            float rEff = max(r, 1.5 * gOrigin.z);
+            float splat = sqrt(r / rEff);
             float3 seg = spot ? float3(0, 0, 0) : c.xyz - a.xyz;
             float t = saturate(dot(p - a.xyz, seg) / max(dot(seg, seg), 0.0001));
             float3 toLight = a.xyz + seg * t - p;
-            float atten = saturate(1.0 - dot(toLight, toLight) / (r * r));
+            float atten = saturate(1.0 - dot(toLight, toLight) / (rEff * rEff));
             atten *= 0.35 + 0.65 * atten;
+            atten *= splat;
             if (spot)
             {
                 float cd = dot(-normalize(toLight), c.xyz);

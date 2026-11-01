@@ -200,7 +200,8 @@ namespace moho::lights
     // A unit whose whole surface glows at full strength (area 1) gets the largest light; a few glowing windows (area 0.02) a faint one.
     // The square root keeps small glows visible without letting a big glowing body white out its surroundings.
     const float cap = glow.nuke ? kMaxNukeMeshIntensity : kMaxMeshIntensity;
-    return std::min(cap, cap * std::sqrt(std::min(1.0f, glow.area)));
+    // (the exponent 0.35, not 0.5: a unit with a few small lamps, area 0.007, made 0.046: at the edge of what is dropped as invisible)
+    return std::min(cap, cap * std::pow(std::min(1.0f, glow.area), 0.35f));
   }
 
   float MeshLightRadius(const float sphereRadius, const float maxRadius)
@@ -208,6 +209,6 @@ namespace moho::lights
     if (!std::isfinite(sphereRadius) || sphereRadius <= 0.0f) {
       return 2.0f;
     }
-    return std::min(maxRadius, std::max(2.0f, 1.5f * sphereRadius + 1.0f));
+    return std::min(maxRadius, std::max(2.5f, 2.0f * sphereRadius + 2.0f));
   }
 } // namespace moho::lights

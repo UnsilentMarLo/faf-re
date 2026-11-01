@@ -34,7 +34,7 @@ namespace moho::lights::model
     kHuge = 3,
     kClassCount = 4
   };
-  constexpr float kPowerNormal = 9.0f;
+  constexpr float kPowerNormal = 4.0f; // it was 9: the build beams (power 7), reclaim rays and the glows of lit units fell into Minor and were dropped at High
   constexpr float kPowerLarge = 580.0f;
   constexpr float kPowerHuge = 11600.0f; // the three limits are the earlier 6 / 400 / 8000 times 1.45, the factor the flash intensity grew by (0.55 to 0.8): the same lights stay in the same class
 
@@ -144,11 +144,11 @@ namespace moho::lights::model
   // A beam is a long bright line (laser, ion blast, a unit's build or reclaim ray): wider than a trail's thread, brighter than a trail.
   constexpr float BeamRadius(const float width)
   {
-    return Clamp(3.5f + 8.0f * width, 3.5f, 12.0f);
+    return Clamp(4.5f + 10.0f * width, 4.5f, 14.0f);
   }
   constexpr float BeamIntensity(const float width) // before the beam's own colour brightness and alpha
   {
-    return Clamp(0.6f + 0.6f * width, 0.6f, 1.0f);
+    return Clamp(1.4f + 0.6f * width, 1.4f, 1.9f);
   }
 
   // ------------------------------------------------------------------------------------------------ level of detail
@@ -170,5 +170,5 @@ namespace moho::lights::model
   // Big lights (a nuke flash covers the screen) cost a pixel evaluation everywhere: only the strongest few are kept.
   constexpr float kBigLightRadius = 80.0f;
   constexpr int kMaxBigLights = 8;
-  constexpr float kMinVisible = 0.035f; // colour x intensity below this adds nothing visible: the light is dropped
+  constexpr float kMinVisible = 0.02f; // colour x intensity below this adds nothing visible: the light is dropped
 } // namespace moho::lights::model

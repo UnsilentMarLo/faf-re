@@ -179,7 +179,23 @@ namespace moho::lights
         return entry;
       }
       const TexEntry* specularTexture = specular.empty() ? nullptr : LoadTexture(specular);
-      entry.glow = AnalyseMeshGlow(albedoTexture->image, specularTexture != nullptr ? &specularTexture->image : nullptr, shader);
+      // A unit whose mesh has a shield-named material (the UEF Titan: PhaseShield) is a unit: the shield bubble draws with an effect texture, not
+      // with the albedo of a unit. The name alone made the Titan lightless.
+      std::string ruleShader = shader;
+      {
+        std::string lowerShader = shader;
+        std::string lowerAlbedo = albedo;
+        for (char& c : lowerShader) {
+          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        for (char& c : lowerAlbedo) {
+          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        if (lowerShader.find("shield") != std::string::npos && lowerAlbedo.rfind("/units/", 0) == 0) {
+          ruleShader = "Unit";
+        }
+      }
+      entry.glow = AnalyseMeshGlow(albedoTexture->image, specularTexture != nullptr ? &specularTexture->image : nullptr, ruleShader);
       entry.intensity = MeshLightIntensity(entry.glow);
       static int sLogBudget = 150;
       if (sLogBudget > 0) {

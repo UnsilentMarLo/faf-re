@@ -37,7 +37,7 @@ namespace moho::lights
   MeshGlow AnalyseMeshGlow(const Rgba8Image& albedo, const Rgba8Image* specular, std::string_view shader);
 
   // The strength of the light a glow of this size makes: how much light the unit puts on its surroundings, 0..kMaxMeshIntensity.
-  constexpr float kMaxMeshIntensity = 0.55f; // was 0.8: a Seraphim structure with bright panels lit a white halo wider than itself
+  constexpr float kMaxMeshIntensity = 0.85f; // was 0.8: a Seraphim structure with bright panels lit a white halo wider than itself
   constexpr float kMaxNukeMeshIntensity = 1.2f; // the fireball of a nuke is the brightest light there is
   constexpr float kMaxUnitLightRadius = 60.0f;
   constexpr float kMaxEffectLightRadius = 150.0f; // a nuke fireball is tens of units across
