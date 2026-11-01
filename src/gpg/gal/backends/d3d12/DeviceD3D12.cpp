@@ -134,6 +134,23 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       return commandLine.find(needle) != std::string::npos;
     }
 
+    /** A file named `name` next to the executable: switches a diagnostic on for launches that carry no command line (the FAF client's). */
+    [[nodiscard]] bool MarkerFileExists(const char* const name)
+    {
+      char path[MAX_PATH]{};
+      const DWORD length = ::GetModuleFileNameA(nullptr, path, static_cast<DWORD>(sizeof(path)));
+      if (length == 0U || length >= sizeof(path)) {
+        return false;
+      }
+      std::string directory(path, length);
+      const std::size_t slash = directory.find_last_of("\\/");
+      if (slash == std::string::npos) {
+        return false;
+      }
+      directory.resize(slash + 1U);
+      return ::GetFileAttributesA((directory + name).c_str()) != INVALID_FILE_ATTRIBUTES;
+    }
+
     /** The command a DRED breadcrumb records, for the device-removed report. */
     [[nodiscard]] const char* BreadcrumbOpName(const D3D12_AUTO_BREADCRUMB_OP op) noexcept
     {
@@ -451,8 +468,8 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     // Device Removed Extended Data: breadcrumbs of the GPU's progress through
     // each command list and the allocation a page fault hit, read back by
     // ReportDeviceRemoved. Costs a few percent, so on with the debug layer or
-    // /d3d12dred only.
-    if ((debugLayer || CommandLineHas("/d3d12dred")) && mLibrary.getDebugInterface != nullptr) {
+    // /d3d12dred or a faf_dred.on file next to the executable only.
+    if ((debugLayer || CommandLineHas("/d3d12dred") || MarkerFileExists("faf_dred.on")) && mLibrary.getDebugInterface != nullptr) {
       ComPtr<ID3D12DeviceRemovedExtendedDataSettings> dred;
       if (SUCCEEDED(mLibrary.getDebugInterface(IID_PPV_ARGS(&dred)))) {
         dred->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);

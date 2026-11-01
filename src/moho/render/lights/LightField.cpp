@@ -644,7 +644,13 @@ float4 FieldCopyPS(float4 position : SV_Position) : SV_Target
     const float originZ = std::floor((centreZ - 0.5f * static_cast<float>(kCells) * cellSize) / tileSpan) * tileSpan;
 
     // The terrain: the map's raw heights go to the GPU once (and again when they change), two samples to a word.
-    if (s.heightBuffer == nullptr || terrain.revision != s.heightRevision || terrain.width != s.heightWidth || terrain.height != s.heightHeight) {
+    // A new revision comes with every building that flattens ground; the whole map goes up at most every 90 frames of the field (the sun's ridge
+    // shadows do not need the last foundation).
+    if (s.heightAge < 1000000U) {
+      ++s.heightAge;
+    }
+    if (s.heightBuffer == nullptr || (terrain.revision != s.heightRevision && s.heightAge >= 90U) || terrain.width != s.heightWidth || terrain.height != s.heightHeight) {
+      s.heightAge = 0U;
       const std::size_t samples = static_cast<std::size_t>(terrain.width) * terrain.height;
       const std::uint32_t words = static_cast<std::uint32_t>((samples + 1U) / 2U);
       if (s.heightBuffer == nullptr || s.heightBuffer->Desc().capacity != words) {

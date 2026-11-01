@@ -888,6 +888,8 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
       // The terrain shaders know their world position (mTexWT = x, z, height): the sun's shadow of the field multiplies every read of the shadow
       // map, the ones of the PBR shaders (tex2D(ShadowSampler, X.mShadow.xy).g) and CalculateLighting's.
       int patched = 0;
+      const std::string anchor = "float ComputeShadow( float4 vShadowCoord )";
+      const bool under = CountOccurrences(s, anchor) == 1; // where the sun-under-water function goes
       const std::string key = "tex2D(ShadowSampler, ";
       const std::string tail = ".mShadow.xy).g";
       size_t at = pbrReads ? 0 : std::string::npos;
@@ -900,7 +902,9 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
         if (last > first && s.compare(last, tail.size(), tail) == 0) {
           const size_t end = last + tail.size();
           const std::string var = s.substr(first, last - first);
-          const std::string replacement = "(" + s.substr(at, end - at) + " * DynFieldSun(" + var + ".mTexWT.xzy))";
+          const std::string replacement = under
+            ? "FafSunUnder(" + s.substr(at, end - at) + " * DynFieldSun(" + var + ".mTexWT.xzy), " + var + ".mTexWT.xzy)"
+            : "(" + s.substr(at, end - at) + " * DynFieldSun(" + var + ".mTexWT.xzy))";
           s.replace(at, end - at, replacement);
           at += replacement.size();
           ++patched;
@@ -921,7 +925,9 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
         if (last > first && s.compare(last, filterTail.size(), filterTail) == 0) {
           const size_t end = last + filterTail.size();
           const std::string var = s.substr(first, last - first);
-          const std::string replacement = "(" + s.substr(at, end - at) + " * DynFieldSun(" + var + ".mTexWT.xzy))";
+          const std::string replacement = under
+            ? "FafSunUnder(" + s.substr(at, end - at) + " * DynFieldSun(" + var + ".mTexWT.xzy), " + var + ".mTexWT.xzy)"
+            : "(" + s.substr(at, end - at) + " * DynFieldSun(" + var + ".mTexWT.xzy))";
           s.replace(at, end - at, replacement);
           at += replacement.size();
           ++patched;
@@ -931,8 +937,24 @@ float4 TerrainLightsPS( VS_OUTPUT inV ) : COLOR
       }
       const std::string line = "    float shadow = ( inShadows && ( 1 == ShadowsEnabled ) ) ? ComputeShadow(shadowCoords) : 1;\n";
       if (CountOccurrences(s, line) == 1) {
-        s.insert(s.find(line) + line.size(), "    shadow *= DynFieldSun(worldTerrain.xzy);\n");
+        s.insert(
+          s.find(line) + line.size(),
+          under ? "    shadow = FafSunUnder(shadow * DynFieldSun(worldTerrain.xzy), worldTerrain.xzy);\n" : "    shadow *= DynFieldSun(worldTerrain.xzy);\n");
         ++patched;
+      }
+      // The sun through water: a sea bed point sees the sun along a path that grows with the depth and the water takes the light out of it, so
+      // the contrast of a shadow fades with the depth. Without it the shadow of a tree on the shore falls on the sea bed far out in the water and is
+      // seen through the clear water as a dark tree shape nowhere near a tree.
+      if (under) {
+        s.insert(
+          s.find(anchor),
+          "// ---- FAF sun under water (LightEffectPatch) ----\n"
+          "float FafSunUnder(float sun, float3 p)\n"
+          "{\n"
+          "    float depth = max(WaterElevation - p.y, 0.0);\n"
+          "    float transmit = exp(-depth * 0.12 / max(SunDirection.y, 0.25));\n"
+          "    return 1.0 - transmit * (1.0 - sun);\n"
+          "}\n\n");
       }
       return patched;
     }

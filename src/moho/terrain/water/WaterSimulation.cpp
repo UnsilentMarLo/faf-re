@@ -224,6 +224,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       boost::shared_ptr<GpuBuffer> sources;
       boost::shared_ptr<GpuBuffer> heights;
       std::uint64_t heightRevision = ~0ull;
+      std::uint32_t heightAge = 1000U; // frames since the land mask went up
       std::uint32_t heightWidth = 0U;
       std::uint32_t heightHeight = 0U;
       const CHeightField* field = nullptr;
@@ -437,7 +438,12 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       const std::uint32_t hw = static_cast<std::uint32_t>(s.field->Width());
       const std::uint32_t hh = static_cast<std::uint32_t>(s.field->Height());
       const std::uint64_t revision = HeightFieldRevision();
-      if (s.heights == nullptr || s.heightRevision != revision || s.heightWidth != hw || s.heightHeight != hh) {
+      // A new revision comes with every building that flattens ground: the land mask is refreshed at most every 90 frames.
+      if (s.heightAge < 1000000U) {
+        ++s.heightAge;
+      }
+      if (s.heights == nullptr || (s.heightRevision != revision && s.heightAge >= 90U) || s.heightWidth != hw || s.heightHeight != hh) {
+        s.heightAge = 0U;
         const std::size_t samples = static_cast<std::size_t>(hw) * hh;
         const std::uint32_t words = static_cast<std::uint32_t>((samples + 1U) / 2U);
         if (s.heights == nullptr || s.heights->Desc().capacity != words) {
