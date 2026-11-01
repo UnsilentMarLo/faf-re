@@ -198,9 +198,6 @@ namespace moho::lights
           entry.intensity
         );
       }
-      if (gGlow.size() > 4096) {
-        gGlow.clear(); // the reference is still used by the caller this frame: it was copied into `entry` before the clear
-      }
       return entry;
     }
   } // namespace
@@ -254,6 +251,9 @@ namespace moho::lights
 
   void FeedMeshes(const float nowTick)
   {
+    if (gGlow.size() > 4096) {
+      gGlow.clear(); // between uses: GlowOf hands out references into the map
+    }
     if (MeshRenderer* const waterRenderer = MeshRenderer::GetInstance()) {
       FeedWaterSources(*waterRenderer);
     }

@@ -16,6 +16,7 @@
 #include "moho/render/lights/LightCensus.h"
 #include "moho/render/WRenViewport.h"
 #include "moho/render/lights/LightField.h"
+#include "moho/render/lights/LightTextureCache.h"
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
@@ -124,6 +125,7 @@ namespace moho::lights
 
   void BeginFrame(const int tick, const float frameAlpha)
   {
+    TrimTextureCache(); // between frames: no feed holds a texture of the cache now
     // A clock that jumped back is a new game: the lights of the old one must not wake up when the new one reaches their birth tick.
     if (gLastTick >= 0 && tick + 20 < gLastTick) {
       gCollector.Clear();

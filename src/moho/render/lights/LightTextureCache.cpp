@@ -23,9 +23,8 @@ const TexEntry* LoadTexture(const std::string& path)
   if (found != gTextures.end()) {
     return found->second.ok ? &found->second : nullptr;
   }
-  if (gTextures.size() >= kTextureCacheMax) {
-    gTextures.clear();
-  }
+  // Never cleared here: the callers hold the pointers of earlier calls (an albedo while the specular map loads); TrimTextureCache does it
+  // between frames.
   TexEntry entry;
   // The engine's own two steps (CD3DEffect::InitEffectFromFile does the same): the virtual path is resolved to the file or archive entry
   // first, the resolved name is what DISK_MemoryMapFile maps.
@@ -70,5 +69,12 @@ const TexEntry* LoadTexture(const std::string& path)
   }
   const auto inserted = gTextures.emplace(path, std::move(entry));
   return inserted.first->second.ok ? &inserted.first->second : nullptr;
+}
+
+void TrimTextureCache()
+{
+  if (gTextures.size() >= kTextureCacheMax) {
+    gTextures.clear();
+  }
 }
 } // namespace moho::lights

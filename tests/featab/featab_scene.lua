@@ -108,6 +108,33 @@ ForkThread(function()
         end
         return
     end
+    if AB_SCENE == 'ships' then
+        -- ships sailing a bay: a destroyer, a cruiser, a frigate and the amphibious experimental, back and forth along x
+        WaitUntil(4)
+        local ids = { 'ues0201', 'ues0202', 'ues0103', 'uel0401' }
+        local ships = {}
+        for i, id in ipairs(ids) do
+            local ux, uz = AB_TX - 60, AB_TZ + (i - 2.5) * 25
+            local u = CreateUnitHPR(id, brainA.Name, ux, GetSurfaceHeight(ux, uz), uz, 0, 0, 0)
+            if u then
+                u:SetCanTakeDamage(false)
+                table.insert(ships, { u, uz })
+            end
+            Say(string.format('ship %s at %.1f %.1f: %s (surface %.2f, ground %.2f)', id, ux, uz, tostring(u ~= nil), GetSurfaceHeight(ux, uz), GetTerrainHeight(ux, uz)))
+        end
+        for round = 1, 40 do
+            for _, entry in ipairs(ships) do
+                local u, uz = entry[1], entry[2]
+                if u and not u.Dead then
+                    IssueClearCommands({ u })
+                    local x = AB_TX + (math.mod(round, 2) == 0 and -60 or 60)
+                    IssueMove({ u }, { x, GetSurfaceHeight(x, uz), uz })
+                end
+            end
+            WaitSeconds(12)
+        end
+        return
+    end
     if AB_SCENE == 'none' then
         Say(string.format('ground height %.2f', GetTerrainHeight(x0, z0)))
         return
