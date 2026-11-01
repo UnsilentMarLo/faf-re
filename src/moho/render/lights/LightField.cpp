@@ -189,21 +189,36 @@ float3 WaterTransmit(float3 p, float3 q)
 float SunVis(float3 p)
 {
     float vis = 1.0;
-    // the edge of a shadow is at least a cell wide: with a sharper one the cells (up to a few units when zoomed out) show as stairs
-    float cellEdge = 0.6 * gOrigin.z;
     [loop] for (int i = 0; i < 40; ++i)
     {
         float u = ((float)i + 0.5) / 40.0;
         float t = 0.3 + 500.0 * u * u;
         float3 q = p + gSun.xyz * t;
         float clearance = q.y - GroundAt(q.xz) - 0.15;
-        vis = min(vis, saturate(clearance / max(0.3 + 0.012 * t, cellEdge)));
-        if (vis <= 0.0)
-        {
-            break;
-        }
+        vis = min(vis, saturate(clearance / (0.3 + 0.012 * t)));
     }
     return vis;
+}
+
+// The sun visibility of a cell: from one point while the cells are small; from four points around the centre once a cell is two units or more
+// (zoomed out), so the edge of a ridge shadow crosses the cell in steps and the filtered field does not show it as stairs.
+float SunVisCell(float3 p)
+{
+    float cs = gOrigin.z;
+    if (cs < 1.9)
+    {
+        return SunVis(p);
+    }
+    float o = 0.25 * cs;
+    float sum = 0.0;
+    [unroll] for (int k = 0; k < 4; ++k)
+    {
+        float2 d = float2((k & 1) != 0 ? o : -o, (k & 2) != 0 ? o : -o);
+        float3 q = float3(p.x + d.x, p.y, p.z + d.y);
+        q.y = max(q.y, GroundAt(q.xz) + 0.3);
+        sum += SunVis(q);
+    }
+    return 0.25 * sum;
 }
 
 // The ridges between the receiver and a light: the ray is marched over the terrain; the visibility falls off as it passes close to the
@@ -413,7 +428,7 @@ void FieldCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : 
     float sunVis = 1.0;
     if (gSun.w > 0.5 && layer < 2)
     {
-        sunVis = gSun.w > 2.5 ? 0.0 : (gSun.w > 1.5 ? (((gid.x + gid.y) & 1u) != 0u ? 0.2 : 1.0) : SunVis(p)); // 2: checker, 3: no sun anywhere (debug)
+        sunVis = gSun.w > 2.5 ? 0.0 : (gSun.w > 1.5 ? (((gid.x + gid.y) & 1u) != 0u ? 0.2 : 1.0) : SunVisCell(p)); // 2: checker, 3: no sun anywhere (debug)
     }
     Field[at + 2] = float4(sunVis, 0.0, 0.0, 0.0);
 }
