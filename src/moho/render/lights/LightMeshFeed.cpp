@@ -247,20 +247,76 @@ namespace moho::lights
       const float length = std::sqrt(dx * dx + dz * dz);
       const float hx = dx / length;
       const float hz = dz / length;
-      const float discRadius = std::min(std::max(radius * 0.4f, 0.8f), 7.0f);
-      // weight beats speed: the height grows with the hull to the power of 1.8 (a battleship of radius 8: 0.45; a destroyer of 3.5: 0.1; a frigate of 2.6:
-      // 0.06), speed only moves it between 0.7 and 1.1 of that
+      // The extents of the hull along and across its heading (the oriented box of the mesh): a round hull is as wide as it is long, a destroyer is
+      // a fifth as wide. The bow wave is an arc of lumps across the beam (one for a slender ship, up to five for a broad one), the trough and the
+      // wash behind it are as wide, and foam runs along the sides.
+      float halfLength = radius * 0.7f;
+      float halfBeam = radius * 0.7f;
+      if (instance.boundsValid != 0) {
+        float along = 0.0f;
+        float across = 0.0f;
+        for (int axis = 0; axis < 3; ++axis) {
+          const float extent = instance.box.Extent[axis];
+          const float ax = instance.box.Axis[axis].x;
+          const float az = instance.box.Axis[axis].z;
+          along += extent * std::fabs(ax * hx + az * hz);
+          across += extent * std::fabs(-ax * hz + az * hx);
+        }
+        if (std::isfinite(along) && std::isfinite(across) && along > 0.3f && across > 0.15f) {
+          halfLength = along;
+          halfBeam = across;
+        }
+      }
       const float fast = 0.7f + 0.3f * std::min(speed / 6.0f, 1.3f);
-      const float height = std::min(std::max(1.0f * std::pow(radius / 8.0f, 1.8f), 0.05f), 0.9f) * fast;
-      const float cells = discRadius / 0.5f;
-      const float strength = height / (2.5f + 0.8f * cells) * water::SimWakeScale();
+      const float height = std::min(std::max(2.4f * std::pow(radius / 8.0f, 1.8f), 0.1f), 1.2f) * fast;
       const float body = std::min(radius / 3.0f, 2.0f);
-      const float offset = radius * 0.6f;
       const float cx = instance.sphere.Center.x;
       const float cz = instance.sphere.Center.z;
-      water::SimAddSource(cx + hx * offset, cz + hz * offset, discRadius, strength, 0.005f * fast * body, true);
-      water::SimAddSource(cx - hx * offset, cz - hz * offset, discRadius, -strength, 0.008f * fast * body, true);
-      water::SimAddSource(cx - hx * offset * 1.9f, cz - hz * offset * 1.9f, discRadius * 0.9f, 0.0f, 0.007f * fast * body, true);
+      const float px = -hz; // across the heading
+      const float pz = hx;
+      const int count = std::min(std::max(static_cast<int>(halfBeam / 1.6f + 0.5f), 1), 5);
+      const float spacing = count > 1 ? 1.6f * halfBeam / static_cast<float>(count - 1) : 0.0f;
+      const float lumpRadius = std::min(std::max(count > 1 ? 0.7f * spacing : 0.5f * halfBeam, 0.8f), 5.0f);
+      const float lumpCells = lumpRadius / 0.5f;
+      const float strength = height / (2.5f + 0.8f * lumpCells) * water::SimWakeScale();
+      // A single steady push makes one straight ridge at the edge of the wake. A hull leaves a train of crests: the push alternates with the place
+      // along the track (a world fixed pattern of the length of about the hull, so the waves behind a moving ship are crests and troughs one hull length
+      // apart), and each lump is a little different (the water is not a ruler). Cheap and local: no state per ship.
+      static std::uint32_t sWakeSeed = 88172645u;
+      const auto jitter = [&]() {
+        sWakeSeed = sWakeSeed * 1664525u + 1013904223u;
+        return static_cast<float>(sWakeSeed >> 8) * (1.0f / 16777216.0f);
+      };
+      const float trainLength = std::max(2.5f, halfLength * 1.1f);
+      const float foamPerLump = fast * body / std::sqrt(static_cast<float>(count));
+      for (int k = 0; k < count; ++k) {
+        const float t = count > 1 ? (static_cast<float>(k) / static_cast<float>(count - 1) * 2.0f - 1.0f) * 0.8f : 0.0f;
+        const float lateral = t * halfBeam;
+        const float ahead = halfLength * (0.5f + 0.4f * std::sqrt(1.0f - t * t)); // an arc: the middle of the bow is the furthest ahead
+        const float behind = halfLength * 0.7f;
+        const float bowX = cx + hx * ahead + px * lateral;
+        const float bowZ = cz + hz * ahead + pz * lateral;
+        const float sternX = cx - hx * behind + px * lateral;
+        const float sternZ = cz - hz * behind + pz * lateral;
+        const float bowPhase = 6.2831853f * (bowX * hx + bowZ * hz) / trainLength;
+        const float sternPhase = 6.2831853f * (sternX * hx + sternZ * hz) / trainLength + 1.9f;
+        const float bowPush = strength * (0.4f + 0.9f * std::sin(bowPhase)) * (0.6f + 0.8f * jitter());
+        const float sternPush = -strength * 0.8f * (0.4f + 0.9f * std::sin(sternPhase)) * (0.6f + 0.8f * jitter());
+        water::SimAddSource(bowX, bowZ, lumpRadius * (0.8f + 0.4f * jitter()), bowPush, 0.005f * foamPerLump, true);
+        water::SimAddSource(sternX, sternZ, lumpRadius * (0.8f + 0.4f * jitter()), sternPush, 0.008f * foamPerLump, true);
+      }
+      // the wash of the propellers: foam only, as wide as the hull
+      const float washRadius = std::min(std::max(halfBeam * 0.8f, 0.8f), 6.0f);
+      water::SimAddSource(cx - hx * halfLength * 1.5f, cz - hz * halfLength * 1.5f, washRadius, 0.0f, 0.007f * fast * body, true);
+      // foam along the two sides of the hull
+      const float sideRadius = std::min(std::max(halfBeam * 0.35f, 0.7f), 3.0f);
+      for (int side = -1; side <= 1; side += 2) {
+        for (int along = 0; along < 3; ++along) {
+          const float where = halfLength * (0.6f - 0.5f * static_cast<float>(along));
+          water::SimAddSource(cx + hx * where + px * halfBeam * 0.95f * static_cast<float>(side), cz + hz * where + pz * halfBeam * 0.95f * static_cast<float>(side),
+                              sideRadius, 0.0f, 0.004f * fast * body, true);
+        }
+      }
     }
 
     void FeedWaterSources(MeshRenderer& renderer)

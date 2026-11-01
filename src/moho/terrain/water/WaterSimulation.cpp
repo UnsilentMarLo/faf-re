@@ -35,7 +35,7 @@ namespace moho::water
   static int ren_WaterSimLog = 0;
   static int ren_WaterSwell = 100;
   static int ren_WaterSolid = 25;
-  static int ren_WaterSimWake = 100;
+  static int ren_WaterSimWake = 200;
   static int ren_WaterSimImpact = 100;
 
   static TConVar<int> gTConVar_ren_WaterSim(
@@ -53,7 +53,7 @@ namespace moho::water
     &ren_WaterSimLog
   );
   static TConVar<int> gTConVar_ren_WaterSimWake(
-    "ren_WaterSimWake", "How strongly ships push the water, in percent of the tuned wake (default 100).", &ren_WaterSimWake
+    "ren_WaterSimWake", "How strongly ships push the water, in percent of the base wake (default 200).", &ren_WaterSimWake
   );
   static TConVar<int> gTConVar_ren_WaterSimImpact(
     "ren_WaterSimImpact", "How strongly impacts and explosions push the water, in percent of the tuned splash (default 100).", &ren_WaterSimImpact
@@ -82,7 +82,7 @@ namespace moho::water
     constexpr std::uint32_t kN = 1024;            // cells per side
     constexpr float kCell = 0.5f;                 // world units per cell
     constexpr std::uint32_t kTile = 8;
-    constexpr std::uint32_t kMaxSources = 1024;
+    constexpr std::uint32_t kMaxSources = 4096;
     constexpr float kLandMargin = 0.1f;           // ground within this of the water level counts as land
     constexpr float kStepSeconds = 1.0f / 90.0f;
     constexpr int kMaxSteps = 6;
@@ -249,7 +249,7 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float lapv = vl + vr + vu + vd - 4.0 * vel;
     float dmax = max(abs(wpos.x - sC.z), abs(wpos.y - sC.w)) / sD.x;
     float edge = smoothstep(0.8, 1.0, dmax);   // the waves are absorbed at the border of the window
-    float hn = (2.0 * cur.x - cur.y + sC.x * lap + 0.16 * lapv) * sC.y * (1.0 - 0.3 * edge) + add;
+    float hn = (2.0 * cur.x - cur.y + sC.x * lap + 0.10 * lapv) * sC.y * (1.0 - 0.3 * edge) + add;
     hn = clamp(hn, -1.5, 1.5);
 
     // foam: spreads a little, fades, is thrown by the sources (noisy: a propeller wash is not a smooth band) and by the surf at the beach
@@ -852,7 +852,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     s.pending.clear();
 
     if (s.vars.params2.Exists()) {
-      const float strength = 0.04f * static_cast<float>(ren_WaterSimStrength); // the slope of a hull wave is small: bend the normal hard
+      const float strength = 0.2f * static_cast<float>(ren_WaterSimStrength); // the slope of a hull wave is small: bend the normal hard
       const float params[4] = {1.0f / (static_cast<float>(kN) * kCell), centreX, centreZ, 0.5f * static_cast<float>(kN) * kCell};
       const float params2[4] = {1.0f, strength, 0.12f, 0.01f * static_cast<float>(ren_WaterSolid)};
       if (s.vars.texture.Exists()) {
