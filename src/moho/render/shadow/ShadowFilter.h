@@ -40,6 +40,7 @@ namespace moho::shadowfilter
   void SetLightVolume(float width, float depthRange);
 
   // Writes the shader parameters of the current level (every frame, before the shadow lookups are drawn). `mapSize` is the size of the map
-  // in use.
-  void UpdateShaderVars(int mapSize);
+  // in use. `cameraValid` is whether the frame has a light camera: without one the terrain keeps the shipped lookup (its depth comparison
+  // would run against a stale light matrix; the light field forces the terrain's shadow path on for the sun term while the camera is invalid).
+  void UpdateShaderVars(int mapSize, bool cameraValid);
 } // namespace moho::shadowfilter

@@ -129,7 +129,7 @@ namespace moho::shadowfilter
     gLightDepthRange = depthRange;
   }
 
-  void UpdateShaderVars(const int mapSize)
+  void UpdateShaderVars(const int mapSize, const bool cameraValid)
   {
     float filter[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float filter2[4] = {ren_ShadowFilterBias, ren_ShadowFilterSlope, 0.0f, 0.0f};
@@ -146,8 +146,11 @@ namespace moho::shadowfilter
     FilterVars& vars = Vars();
     SetShaderVarMem(vars.meshFilter, 4U, filter);
     SetShaderVarMem(vars.meshFilter2, 4U, filter2);
-    SetShaderVarMem(vars.terrainFilter, 4U, filter);
     SetShaderVarMem(vars.terrainFilter2, 4U, filter2);
+    if (!cameraValid) {
+      filter[0] = 0.0f; // the terrain's shipped lookup: the shadow map is cleared to lit, the matrix is from an earlier frame
+    }
+    SetShaderVarMem(vars.terrainFilter, 4U, filter);
     if (Active()) {
       // the blur passes set the terrain's ShadowSize; with the filter on they do not run
       GetTerrainShaderVars().shadowSize.SetFloat(static_cast<float>(mapSize));

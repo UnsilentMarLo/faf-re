@@ -633,7 +633,7 @@ namespace moho
 
     const Wm3::Vector3f sunDirection = terrainRes->GetSunDirection();
     (void)PrepareLightCamera(viewCamera, sunDirection, zoom);
-    shadowfilter::UpdateShaderVars(mShadowSize);
+    shadowfilter::UpdateShaderVars(mShadowSize, mShadowCameraValid);
     RenderShadowMap(terrain, viewCamera);
   }
 

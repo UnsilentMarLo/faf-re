@@ -323,6 +323,11 @@ float ShadowLookup(float4 coords)
         // behind a caster to count as shadowed: a lit gap between every foot, wall and tower and the start of its shadow. The epsilon is put
         // back, leaving 0.0005 so that a caster standing on the ground does not speckle along the line where it touches it.
         sun = ShadowFilterLookup(float4(coords.xy, coords.z + 0.0095, coords.w));
+        // Ground outside the light volume (past the shadow distance, or beyond the depth range of the map's fitted box) has no casters
+        // drawn for it: it is lit. The depth comparison would otherwise read it as behind everything, a dark half-plane with a straight edge.
+        float2 insideUv = step(float2(0.0, 0.0), coords.xy) * step(coords.xy, float2(1.0, 1.0));
+        float insideZ = step(0.0, coords.z) * step(coords.z, 1.0);
+        sun = lerp(1.0, sun, insideUv.x * insideUv.y * insideZ);
     }
     else
     {
