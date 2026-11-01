@@ -2208,7 +2208,7 @@ namespace moho
         // A wreck that falls into the sea (an aircraft shot down) splashes where it lands, by what it cost (render only: nothing feeds back).
         if (unit->mVarDat.mLayerMask != LAYER_Land) {
           if (const RUnitBlueprint* const impactBlueprint = unit->GetBlueprint(); impactBlueprint != nullptr) {
-            water::SimUnitDeath(newPos.x, newPos.y, newPos.z, impactBlueprint->Economy.BuildCostMass);
+            water::SimUnitDeath(newPos.x, newPos.y, newPos.z, impactBlueprint->Economy.BuildCostMass, water::SimIsOwnSide(unit->ArmyRef));
           }
         }
 

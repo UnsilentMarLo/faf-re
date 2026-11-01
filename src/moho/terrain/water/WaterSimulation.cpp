@@ -17,7 +17,11 @@
 #include "gpg/gal/RenderTargetContext.hpp"
 #include "moho/console/CConCommand.h"
 #include "moho/render/camera/GeomCamera3.h"
+#include "gpg/core/containers/FastVector.h"
+#include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/d3d/ShaderVar.h"
+#include "moho/vision/VisionDB.h"
+#include "moho/sim/CArmyImpl.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
 
@@ -236,9 +240,16 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float hu = U.w > 0.5 ? cur.x : U.x;
     float hd = D.w > 0.5 ? cur.x : D.x;
     float lap = hl + hr + hu + hd - 4.0 * cur.x;
+    // viscosity: the laplacian of the velocity (height minus last height) damps the short waves, the ringing of a splash, and leaves the long ones
+    float vel = cur.x - cur.y;
+    float vl = L.w > 0.5 ? vel : L.x - L.y;
+    float vr = R.w > 0.5 ? vel : R.x - R.y;
+    float vu = U.w > 0.5 ? vel : U.x - U.y;
+    float vd = D.w > 0.5 ? vel : D.x - D.y;
+    float lapv = vl + vr + vu + vd - 4.0 * vel;
     float dmax = max(abs(wpos.x - sC.z), abs(wpos.y - sC.w)) / sD.x;
     float edge = smoothstep(0.8, 1.0, dmax);   // the waves are absorbed at the border of the window
-    float hn = (2.0 * cur.x - cur.y + sC.x * lap) * sC.y * (1.0 - 0.3 * edge) + add;
+    float hn = (2.0 * cur.x - cur.y + sC.x * lap + 0.16 * lapv) * sC.y * (1.0 - 0.3 * edge) + add;
     hn = clamp(hn, -1.5, 1.5);
 
     // foam: spreads a little, fades, is thrown by the sources (noisy: a propeller wash is not a smooth band) and by the surf at the beach
@@ -330,12 +341,44 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       float waterElevation = 0.0f;
       bool waterEnabled = false;
       float time = 0.0f;
+      int lastTick = -1;                                   // the game tick of the last frame that saw one come
+      std::chrono::steady_clock::time_point lastTickWall{}; // when
+      bool haveTick = false;
+      float gameSpeed = 1.0f;                              // game ticks over real time, in units of ten a second (smoothed)
     };
 
     State& GetState()
     {
       static State* const state = new State(); // the effect unlinks its shader vars on its own schedule: never destroyed
       return *state;
+    }
+
+    // Whether the local player sees this place now: a circle of the vision of the session's focus army (allies included) holds it. An observer
+    // (no focus army) sees all. What happens in the fog must not move the sea the player looks at: the waves would tell.
+    bool PlayerSees(const float x, const float z)
+    {
+      CWldSession* const session = WLD_GetActiveSession();
+      if (session == nullptr || session->FocusArmy < 0) {
+        return true;
+      }
+      static const Wm3::Vector2f kAxes[2] = {Wm3::Vector2f{1.0f, 0.0f}, Wm3::Vector2f{0.0f, 1.0f}};
+      Wm3::Box2f box;
+      box.Center.x = x;
+      box.Center.y = z;
+      box.Axis[0] = kAxes[0];
+      box.Axis[1] = kAxes[1];
+      box.Extent[0] = 0.5f;
+      box.Extent[1] = 0.5f;
+      gpg::fastvector_n<Wm3::Circle2f, VisionDB::kVisibleCircleInlineCapacity> circles;
+      session->mVisionDb.CollectVisibleCircles(circles, box, std::min(std::max(REN_GetSimDeltaSeconds(), 0.0f), 1.0f));
+      for (std::size_t i = 0; i < circles.size(); ++i) {
+        const float dx = x - circles[i].Center.x;
+        const float dz = z - circles[i].Center.y;
+        if (dx * dx + dz * dz <= circles[i].Radius * circles[i].Radius) {
+          return true;
+        }
+      }
+      return false;
     }
 
     bool ActiveMapWater(float& elevation)
@@ -437,11 +480,17 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     }
   } // namespace
 
-  void SimAddSource(const float x, const float z, const float radius, const float strength, const float foam)
+  void SimAddSource(const float x, const float z, const float radius, const float strength, const float foam, const bool shown)
   {
     State& s = GetState();
     if (ren_WaterSim == 0 || !(radius > 0.05f) || !std::isfinite(x) || !std::isfinite(z) || !std::isfinite(strength) || s.pending.size() >= kMaxSources) {
       return;
+    }
+    if (!shown && !PlayerSees(x, z)) {
+      if (ren_WaterSimLog > 0) {
+        gpg::Logf("WaterSim source in the fog at (%.1f %.1f): dropped", x, z);
+      }
+      return; // fog: no waves for what the player cannot see
     }
     // only over water: a flash, a glow or a unit ashore (at the height of the sea on a low beach) must not move the sea
     if (s.field != nullptr && s.waterEnabled) {
@@ -454,21 +503,43 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     s.pending.push_back(Source{x, z, std::min(radius, 40.0f), strength, foam, 0.0f, 0.0f, 0.0f});
   }
 
-  void SimImpact(const float x, const float z, const float size, const float scale)
+  bool SimIsOwnSide(const CArmyImpl* const army)
+  {
+    CWldSession* const session = WLD_GetActiveSession();
+    if (army == nullptr || session == nullptr || session->FocusArmy < 0) {
+      return false;
+    }
+    return !const_cast<CArmyImpl*>(army)->IsEnemy(static_cast<std::uint32_t>(session->FocusArmy));
+  }
+
+  void SimImpact(const float x, const float z, const float size, const float scale, const bool shown)
   {
     const float s = std::max(size, 0.5f);
     if (ren_WaterSimLog > 0) {
       gpg::Logf("WaterSim impact: at (%.1f %.1f), size %.2f, scale %.2f", x, z, s, scale);
     }
     const float radius = std::min(std::max(0.7f * s, 0.8f), 18.0f);
-    const float hump = std::min(std::max(0.07f * s, 0.06f), 1.2f) * scale * SimImpactScale();
-    const float foam = std::min(0.1f + 0.04f * s, 0.6f);
-    // The push of one frame is added to the height of the step, which leaves the water with a velocity that the (slow) waves hardly stop: a hump of
-    // H grows to many times H before it spreads out. Measured (docs/LIGHTING_V2.md): about a twentieth of H gives the wanted height of the ring.
-    SimAddSource(x, z, radius, hump * 90.0f * 0.05f, foam);
+    const float hump = std::min(std::max(0.03f * s, 0.03f), 0.5f) * scale * SimImpactScale();
+    const float foam = std::min(0.03f + 0.01f * s, 0.15f);
+    // The push of one frame is added to the height of the step, which leaves the water with a velocity that the (slow) waves hardly stop: a
+    // twentieth of the wanted height is pushed (measured; docs/LIGHTING_V2.md). A splash is a cluster of lumps of different size, place and
+    // strength, some pulling down: a ring from one perfect disc looks like a drop in a bath.
+    static std::uint32_t sSeed = 2463534242u;
+    const auto random = [&]() {
+      sSeed = sSeed * 1664525u + 1013904223u;
+      return static_cast<float>(sSeed >> 8) * (1.0f / 16777216.0f);
+    };
+    const int parts = 4 + std::min(static_cast<int>(s / 4.0f), 4);
+    for (int part = 0; part < parts; ++part) {
+      const float angle = random() * 6.2831853f;
+      const float distance = radius * (0.1f + 0.7f * random());
+      const float lump = radius * (0.35f + 0.25f * random());
+      const float push = hump * 90.0f * 0.05f * (0.5f + 0.7f * random()) * (part % 4 == 3 ? -0.6f : 1.0f);
+      SimAddSource(x + std::cos(angle) * distance, z + std::sin(angle) * distance, lump, push, foam * (0.4f + random()) / static_cast<float>(parts) * 2.0f, shown);
+    }
   }
 
-  void SimUnitDeath(const float x, const float y, const float z, const float mass)
+  void SimUnitDeath(const float x, const float y, const float z, const float mass, const bool shown)
   {
     float elevation = 0.0f;
     if (ren_WaterSimLog > 0) {
@@ -481,7 +552,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     // The size follows the square root of the cost, on the scale of a shell's (the cube root of its damage): a hull of cost 300 sinks like a shell of
     // 15 damage, 2,250 like one of 300, a battleship of 10,000 like one of 2,700.
     const float size = 0.14f * std::sqrt(std::max(mass, 20.0f));
-    SimImpact(x, z, size, y < elevation - 3.0f ? 0.5f : 1.0f);
+    SimImpact(x, z, size, y < elevation - 3.0f ? 0.5f : 1.0f, shown);
   }
 
   bool SimDiagnostics()
@@ -610,6 +681,26 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     s.last = now;
     s.haveLast = true;
     dt = std::min(std::max(dt, 0.0f), 0.1f);
+    // The water keeps the time of the game, not the wall: it stops when the game is paused (no tick for a third of a second) and runs as fast as
+    // the game does (the speed from the ticks that came over the real time since the last).
+    {
+      const int tick = REN_GetGameTick();
+      if (!s.haveTick || tick != s.lastTick) {
+        if (s.haveTick && tick > s.lastTick) {
+          const float wall = std::chrono::duration<float>(now - s.lastTickWall).count();
+          if (wall > 0.0005f) {
+            const float rate = std::min(static_cast<float>(tick - s.lastTick) / wall * 0.1f, 8.0f);
+            s.gameSpeed += (rate - s.gameSpeed) * 0.3f;
+          }
+        }
+        s.lastTick = tick;
+        s.lastTickWall = now;
+        s.haveTick = true;
+      }
+      const bool paused = std::chrono::duration<float>(now - s.lastTickWall).count() > 0.35f;
+      dt = paused ? 0.0f : dt * std::min(std::max(s.gameSpeed, 0.1f), 6.0f);
+      dt = std::min(dt, 0.1f);
+    }
     s.time += dt;
 
     // the window follows the point of the water the middle of the view looks at
@@ -666,7 +757,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       // The waves of a hull travel at about 2.5 units a second (the term is (speed x step / cell)^2); a wake is a few dozen units long and fades in
       // seven seconds.
       constants.c[0] = 0.0031f;
-      constants.c[1] = 0.998f;
+      constants.c[1] = 0.997f;
       constants.f[0] = s.time;
       constants.f[1] = 0.01f * static_cast<float>(ren_WaterSwell);
       constants.f[2] = 0.994f;  // foam kept per step: gone in a couple of seconds

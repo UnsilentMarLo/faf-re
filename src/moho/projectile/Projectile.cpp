@@ -1077,7 +1077,10 @@ namespace moho
       const bool below = mImpactType != IMPACT_Water;
       // debris and sparks (a dying ship throws dozens, none with damage) are not shells
       if (damage >= 12.0f) {
-        water::SimImpact(mImpactPosition.x, mImpactPosition.z, std::cbrt(damage), below ? 0.5f : 1.0f);
+        // a shell of the player's own side or an ally's is shown where it lands; an enemy's only where the player sees
+        const Entity* const waterLauncher = mLauncherWeak.GetObjectPtr();
+        water::SimImpact(mImpactPosition.x, mImpactPosition.z, std::cbrt(damage), below ? 0.5f : 1.0f,
+                         water::SimIsOwnSide(waterLauncher != nullptr ? waterLauncher->ArmyRef : nullptr));
       }
     }
 

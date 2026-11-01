@@ -248,17 +248,19 @@ namespace moho::lights
       const float hx = dx / length;
       const float hz = dz / length;
       const float discRadius = std::min(std::max(radius * 0.4f, 0.8f), 7.0f);
-      const float fast = std::max(std::min(speed / 4.5f, 1.3f), 0.8f); // a slow big hull still pushes
-      const float height = std::min(std::max(0.45f * std::pow(radius / 8.0f, 1.1f), 0.02f), 0.7f) * fast;
+      // weight beats speed: the height grows with the hull to the power of 1.8 (a battleship of radius 8: 0.45; a destroyer of 3.5: 0.1; a frigate of 2.6:
+      // 0.06), speed only moves it between 0.7 and 1.1 of that
+      const float fast = 0.7f + 0.3f * std::min(speed / 6.0f, 1.3f);
+      const float height = std::min(std::max(1.0f * std::pow(radius / 8.0f, 1.8f), 0.05f), 0.9f) * fast;
       const float cells = discRadius / 0.5f;
       const float strength = height / (2.5f + 0.8f * cells) * water::SimWakeScale();
       const float body = std::min(radius / 3.0f, 2.0f);
       const float offset = radius * 0.6f;
       const float cx = instance.sphere.Center.x;
       const float cz = instance.sphere.Center.z;
-      water::SimAddSource(cx + hx * offset, cz + hz * offset, discRadius, strength, 0.0015f * fast * body);
-      water::SimAddSource(cx - hx * offset, cz - hz * offset, discRadius, -strength, 0.003f * fast * body);
-      water::SimAddSource(cx - hx * offset * 1.9f, cz - hz * offset * 1.9f, discRadius * 0.9f, 0.0f, 0.0025f * fast * body);
+      water::SimAddSource(cx + hx * offset, cz + hz * offset, discRadius, strength, 0.005f * fast * body, true);
+      water::SimAddSource(cx - hx * offset, cz - hz * offset, discRadius, -strength, 0.008f * fast * body, true);
+      water::SimAddSource(cx - hx * offset * 1.9f, cz - hz * offset * 1.9f, discRadius * 0.9f, 0.0f, 0.007f * fast * body, true);
     }
 
     void FeedWaterSources(MeshRenderer& renderer)

@@ -15,23 +15,34 @@ namespace moho
 //
 // Render only: the simulation never sees any of it (replays stay in step), and nothing here feeds back to the units. Cost: one compute
 // dispatch of 1024 x 1024 cells per step (at most 6 steps a frame, 90 a second) and one copy draw.
+namespace moho
+{
+  class CArmyImpl;
+}
+
 namespace moho::water
 {
+  // Whether an event of this army is the local player's own or an ally's (it is then shown where it happens, in the fog too: a dying unit takes its
+  // own vision with it). False for an enemy, a neutral or no army.
+  bool SimIsOwnSide(const CArmyImpl* army);
+
   // 1 (the default): the simulation runs and the water shader reads it; 0: the shipped water.
   extern int ren_WaterSim;
 
   // A source of waves for the next steps: a disc of `radius` world units at (x, z) that pushes the water by `strength` (world units per second;
   // negative pulls it down). Collected over the frame, applied by the next step.
   // `foam` is how much foam it throws per frame (0 none; a wash of 0.005 to 0.01 is a steady band).
-  void SimAddSource(float x, float z, float radius, float strength, float foam = 0.0f);
+  // `shown`: the place is known to be in view (a mesh that is being drawn, an event of the player's own or an ally's); otherwise a place the player
+  // cannot see (fog) takes no wave: the waves would tell what happens there.
+  void SimAddSource(float x, float z, float radius, float strength, float foam = 0.0f, bool shown = false);
 
   // How strongly the wakes of ships and the splashes of impacts push the water, as factors (1 = the tuned default): ren_WaterSimWake and
   // ren_WaterSimImpact in percent.
   // A landing on or under the sea: `size` is the cube root of the energy (a shell of 100 damage: 4.6, a nuke: 20) and sets the radius, the hump and
   // the foam of the splash; `scale` is 1 on the surface, less below it. Render only: nothing feeds back into the sim.
-  void SimImpact(float x, float z, float size, float scale);
+  void SimImpact(float x, float z, float size, float scale, bool shown = false);
   // A hull going down: `mass` is its build cost in mass. Airborne wrecks and wrecks ashore move nothing.
-  void SimUnitDeath(float x, float y, float z, float mass);
+  void SimUnitDeath(float x, float y, float z, float mass, bool shown = false);
 
   float SimWakeScale();
   bool SimDiagnostics(); // ren_WaterSimLog is on: the feeds log what they see
