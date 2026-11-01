@@ -58,6 +58,7 @@ namespace moho::water
     constexpr float kCell = 1.0f;                 // world units per cell
     constexpr std::uint32_t kTile = 8;
     constexpr std::uint32_t kMaxSources = 1024;
+    constexpr float kLandMargin = 0.1f;           // ground within this of the water level counts as land
     constexpr float kStepSeconds = 1.0f / 90.0f;
     constexpr int kMaxSteps = 6;
     constexpr std::uint32_t kFormat = 9U;         // RGBA16F render target (DxgiFormats.cpp)
@@ -73,6 +74,7 @@ namespace moho::water
       float b[4]; // cell size, cells, source count, step seconds
       float c[4]; // wave speed term, damping per step, centre x, z (world)
       float d[4]; // half extent (world), unused
+      float e[4]; // map height samples x, z, water level in raw height units, 1 when the land mask is on
     };
 
     constexpr char kSource[] = R"HLSL(
@@ -82,10 +84,12 @@ cbuffer SimConstants : register(b0)
     float4 sB;
     float4 sC;
     float4 sD;
+    float4 sE;
 };
 
 StructuredBuffer<float2> Cur : register(t0);
 StructuredBuffer<float4> Src : register(t1);
+StructuredBuffer<uint> Heights : register(t2);   // the map's raw uint16 heights, two to a word (the land mask)
 RWStructuredBuffer<float2> Nxt : register(u0);
 
 groupshared uint sList[256];
@@ -143,6 +147,18 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     }
 
     uint idx = (uint)(cell.y * n + cell.x);
+    if (sE.w > 0.5)
+    {
+        // land is a wall: a cell whose ground is above the water holds no wave, so nothing that happens ashore moves the sea and a wave dies at the beach
+        int2 sc = clamp(w, int2(0, 0), int2(sE.xy) - 1);
+        uint hi = (uint)sc.y * (uint)sE.x + (uint)sc.x;
+        uint raw = (Heights[hi >> 1] >> ((hi & 1) * 16)) & 0xFFFF;
+        if ((float)raw > sE.z)
+        {
+            Nxt[idx] = float2(0.0, 0.0);
+            return;
+        }
+    }
     float2 cur = Cur[idx];
     if (w.x != wp.x || w.y != wp.y)
     {
@@ -206,6 +222,11 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       Device* device = nullptr;
       boost::shared_ptr<GpuBuffer> state[2];
       boost::shared_ptr<GpuBuffer> sources;
+      boost::shared_ptr<GpuBuffer> heights;
+      std::uint64_t heightRevision = ~0ull;
+      std::uint32_t heightWidth = 0U;
+      std::uint32_t heightHeight = 0U;
+      const CHeightField* field = nullptr;
       boost::shared_ptr<GpuProgram> step;
       boost::shared_ptr<GpuProgram> copy;
       boost::shared_ptr<RenderTarget> texture;
@@ -259,6 +280,8 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
         s.state[0].reset();
         s.state[1].reset();
         s.sources.reset();
+        s.heights.reset();
+        s.heightRevision = ~0ull;
         s.step.reset();
         s.copy.reset();
         s.texture.reset();
@@ -334,6 +357,14 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     if (ren_WaterSim == 0 || !(radius > 0.05f) || !std::isfinite(x) || !std::isfinite(z) || !std::isfinite(strength) || s.pending.size() >= kMaxSources) {
       return;
     }
+    // only over water: a flash, a glow or a unit ashore (at the height of the sea on a low beach) must not move the sea
+    if (s.field != nullptr && s.waterEnabled) {
+      const float cx = std::min(std::max(x, 0.0f), static_cast<float>(s.field->Width() - 1));
+      const float cz = std::min(std::max(z, 0.0f), static_cast<float>(s.field->Height() - 1));
+      if (s.field->GetElevation(cx, cz) > s.waterElevation - kLandMargin) {
+        return;
+      }
+    }
     s.pending.push_back(Source{x, z, std::min(radius, 40.0f), strength});
   }
 
@@ -358,6 +389,11 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     float elevation = 0.0f;
     s.waterEnabled = ren_WaterSim != 0 && ActiveMapWater(elevation);
     s.waterElevation = elevation;
+    {
+      CWldSession* const session = WLD_GetActiveSession();
+      const STIMap* const map = session != nullptr ? session->GetSTIMap() : nullptr;
+      s.field = map != nullptr ? map->GetHeightField() : nullptr;
+    }
     if (!s.waterEnabled) {
       s.pending.clear();
       BindOff(s);
@@ -393,6 +429,40 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       if (!(viewWidth * viewHeight >= 200000.0f)) {
         return; // keeps the binding of the last frame
       }
+    }
+
+    // the land mask: the map's raw heights go to the GPU once (and again when they change), two samples to a word
+    bool landMask = false;
+    if (s.field != nullptr && s.field->Width() >= 2 && s.field->Height() >= 2) {
+      const std::uint32_t hw = static_cast<std::uint32_t>(s.field->Width());
+      const std::uint32_t hh = static_cast<std::uint32_t>(s.field->Height());
+      const std::uint64_t revision = HeightFieldRevision();
+      if (s.heights == nullptr || s.heightRevision != revision || s.heightWidth != hw || s.heightHeight != hh) {
+        const std::size_t samples = static_cast<std::size_t>(hw) * hh;
+        const std::uint32_t words = static_cast<std::uint32_t>((samples + 1U) / 2U);
+        if (s.heights == nullptr || s.heights->Desc().capacity != words) {
+          GpuBufferDesc desc;
+          desc.name = "WaterSimHeights";
+          desc.stride = 4U;
+          desc.capacity = words;
+          s.heights = device->CreateGpuBuffer(desc);
+        }
+        if (s.heights != nullptr) {
+          std::vector<std::uint32_t> packed(words, 0U);
+          for (std::uint32_t z = 0; z < hh; ++z) {
+            for (std::uint32_t x = 0; x < hw; ++x) {
+              const std::size_t index = static_cast<std::size_t>(z) * hw + x;
+              packed[index >> 1U] |= static_cast<std::uint32_t>(s.field->GetHeightAt(static_cast<std::int32_t>(x), static_cast<std::int32_t>(z))) << ((index & 1U) * 16U);
+            }
+          }
+          device->UpdateGpuBuffer(*s.heights, 0U, words, packed.data());
+          s.heightRevision = revision;
+          s.heightWidth = hw;
+          s.heightHeight = hh;
+          gpg::Logf("Water simulation: land mask of %ux%u height samples uploaded", hw, hh);
+        }
+      }
+      landMask = s.heights != nullptr && s.heightWidth == hw && s.heightHeight == hh;
     }
 
     // real time between frames, for the fixed steps
@@ -457,7 +527,11 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       constants.b[1] = static_cast<float>(kN);
       constants.b[3] = kStepSeconds;
       constants.c[0] = 0.22f; // wave speed term: sqrt(0.22) cells a step, about 40 units a second
-      constants.c[1] = 0.995f;
+      constants.c[1] = 0.99f; // a ring is gone within a few dozen units, not across the map
+      constants.e[0] = static_cast<float>(s.heightWidth);
+      constants.e[1] = static_cast<float>(s.heightHeight);
+      constants.e[2] = (elevation - kLandMargin) * 128.0f; // raw height units (1 / 128 world unit)
+      constants.e[3] = landMask ? 1.0f : 0.0f;
       constants.c[2] = centreX;
       constants.c[3] = centreZ;
       constants.d[0] = 0.5f * static_cast<float>(kN) * kCell;
@@ -477,6 +551,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
         dispatch.bindings.constantBytes = sizeof(constants);
         dispatch.bindings.readBuffers[0] = s.state[s.current].get();
         dispatch.bindings.readBuffers[1] = s.sources.get();
+        dispatch.bindings.readBuffers[2] = landMask ? s.heights.get() : s.sources.get();
         dispatch.bindings.writeBuffers[0] = s.state[s.current ^ 1U].get();
         dispatch.groupsX = kN / kTile;
         dispatch.groupsY = kN / kTile;
@@ -563,6 +638,9 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     s.state[0].reset();
     s.state[1].reset();
     s.sources.reset();
+    s.heights.reset();
+    s.heightRevision = ~0ull;
+    s.field = nullptr;
     s.step.reset();
     s.copy.reset();
     s.texture.reset();

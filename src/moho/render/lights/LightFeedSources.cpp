@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -29,13 +30,28 @@ namespace moho::lights
   namespace
   {
     // A flash or a glow sprite at the water surface is an impact or an explosion there: it throws a ring (docs/LIGHTING_V2.md, water simulation).
+    // A ring is thrown once per place and moment: the effect records are read every frame while they live, and a ring per read would pump the
+    // water for as long as the fire burns. Ashore it is dropped by the simulation itself (SimAddSource looks at the ground).
     void NoteWaterImpact(const float x, const float y, const float z, const float size)
     {
       float waterElevation = 0.0f;
       if (!(size >= 1.2f) || !water::SimWaterLevel(waterElevation) || std::fabs(y - waterElevation) > 3.5f) {
         return;
       }
-      water::SimAddSource(x, z, std::min(size * 0.6f, 14.0f), std::min(size, 16.0f) * 9.0f);
+      static std::unordered_map<std::int64_t, std::chrono::steady_clock::time_point> sRecent;
+      const auto now = std::chrono::steady_clock::now();
+      if (sRecent.size() > 512) {
+        for (auto it = sRecent.begin(); it != sRecent.end();) {
+          it = (now - it->second) > std::chrono::seconds(2) ? sRecent.erase(it) : std::next(it);
+        }
+      }
+      const std::int64_t key = (static_cast<std::int64_t>(std::floor(x / 4.0f)) << 32) ^ static_cast<std::int64_t>(static_cast<std::uint32_t>(std::floor(z / 4.0f)));
+      const auto found = sRecent.find(key);
+      if (found != sRecent.end() && (now - found->second) < std::chrono::milliseconds(800)) {
+        return;
+      }
+      sRecent[key] = now;
+      water::SimAddSource(x, z, std::min(size * 0.6f, 14.0f), std::min(size, 16.0f) * 5.0f);
     }
 
     constexpr float kHoldTicks = 3.0f;       // a tracked light fades out this long after its last refresh
@@ -415,7 +431,6 @@ namespace moho::lights
       const float total = std::min(kGlowEnergyCap, c.energySum); // the light of sprites in one place adds up (it was the root of the sum of squares: a fireball of 100 sprites lit like 10)
       e.gain = total / std::max(1.0e-4f, model::GlowEnergy(c.peakSize));
       (void)collector.Add(e);
-      NoteWaterImpact(e.pos[0], e.pos[1], e.pos[2], c.peakSize);
     }
 
     // ---- trails: a segment per tick; one light per cell of the head, refreshed while the trail grows there

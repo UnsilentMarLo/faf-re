@@ -4163,6 +4163,20 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
     }
     FogOff();
 
+    // FAF addition: screen-space ambient occlusion of the opaque world this view has drawn (terrain and opaque meshes). It runs before the water:
+    // the water pass tints and refracts what is under it, so the sea bed and the submerged units must be darkened first (run after the water, the
+    // pass read the depth of the sea bed and darkened the already tinted and refracted colour: halos round the units and streaks on the bed), and the
+    // water surface itself is no geometry for it. It still runs before everything that must stay un-darkened and must not count as geometry: the unit
+    // selection brackets and the other world-space UI (RenUI), the shield bubbles (their ShieldFill pass writes the whole bubble into the depth buffer,
+    // which hid the ground under a bubble from the pass), the explosion and cloud meshes, the particle effects after the water and the refracting
+    // effects. The view's pixel rectangle is the back buffer region it renders into; an orthographic view (the minimap) is skipped inside.
+    if (moho::REN_GetAmbientOcclusionLevel() > 0) {
+      const gpg::gal::RenderProfileScope profileAmbientOcclusion("AmbientOcclusion");
+      moho::REN_ApplyAmbientOcclusion(
+        device->GetGalDevice(), static_cast<std::uint32_t>(mHead), *mCam, mScreenPos.x, mScreenPos.y, mScreenSize.x, mScreenSize.y
+      );
+    }
+
     if (terrain != nullptr) {
       const gpg::gal::RenderProfileScope profileWater("Water");
       RenderWaterMask(terrain);
@@ -4172,18 +4186,6 @@ void moho::WRenViewport::Render(const int head, msvc8::vector<SWorldViewInfo>& w
       // 0x007F94B8..0x007F94C8, it is not a constant.
       FogOn(worldView->mView->CameraGetZoom());
       RenderWater(terrain);
-    }
-
-    // FAF addition: screen-space ambient occlusion of the opaque world this view has drawn (terrain, opaque meshes, water). It runs here, before
-    // everything that must stay un-darkened and must not count as geometry: the unit selection brackets and the other world-space UI (RenUI),
-    // the shield bubbles (their ShieldFill pass writes the whole bubble into the depth buffer, which hid the ground under a bubble from the
-    // pass), the explosion and cloud meshes, the particle effects after the water and the refracting effects. The view's pixel rectangle is
-    // the back buffer region it renders into; an orthographic view (the minimap) is skipped inside.
-    if (moho::REN_GetAmbientOcclusionLevel() > 0) {
-      const gpg::gal::RenderProfileScope profileAmbientOcclusion("AmbientOcclusion");
-      moho::REN_ApplyAmbientOcclusion(
-        device->GetGalDevice(), static_cast<std::uint32_t>(mHead), *mCam, mScreenPos.x, mScreenPos.y, mScreenSize.x, mScreenSize.y
-      );
     }
 
     // The playable-boundary pass and the UI selection pass, in that order,

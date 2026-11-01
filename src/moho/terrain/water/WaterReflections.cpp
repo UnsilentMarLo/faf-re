@@ -211,7 +211,7 @@ sampler2D waterShadowSampler = sampler_state
     AddressV  = BORDER;
     BorderColor = float4(1, 1, 1, 1);
 };
-float4 waterShadowParams; // x: how much the shade darkens the water (0: off)
+float4 waterShadowParams; // x: how much the shade darkens the water (0: off), y: world units per depth unit of the shadow map, z: caster distance that still shades fully, w: distance over which it fades out
 
 float FafWaterShadow(float3 position)
 {
@@ -221,7 +221,13 @@ float FafWaterShadow(float3 position)
     }
     float4 coord = mul(float4(position, 1.0), waterShadowMatrix);
     coord.xy /= coord.w;
-    return tex2Dlod(waterShadowSampler, float4(coord.xy, 0.0, 0.0)).g;
+    float4 texel = tex2Dlod(waterShadowSampler, float4(coord.xy, 0.0, 0.0));
+    // The map stores the depth of the nearest caster (R) and the blurred shade (G) without knowing the receiver. A caster far up the sun ray from the
+    // water (a tree on a hill, a cliff top) is not what shades the water next to it: the terrain, which the map does not hold, does. Only casters
+    // within reach of the surface count, the way the shadow of a tree on the shore or of a unit afloat falls on the water.
+    float gap = (coord.z - texel.r) * waterShadowParams.y;
+    float reach = (gap > 0.0) ? saturate(1.0 - (gap - waterShadowParams.z) / waterShadowParams.w) : 0.0;
+    return lerp(1.0, texel.g, reach);
 }
 
 // The slope of the small wave layers at a world position (the same normal maps and movement the surface uses).
@@ -471,7 +477,10 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
       if (shadowTexture != nullptr && s.vars.shadowMatrix.Exists() && s.vars.shadowTexture.Exists()) {
         s.vars.shadowMatrix.SetMatrix4x4(&shadow->mCamera.viewProjection);
         s.vars.shadowTexture.SetRenderTargetTexture(shadowTexture);
-        const float shade[4] = {0.01f * static_cast<float>(ren_WaterUnitShadows > 100 ? 100 : ren_WaterUnitShadows), 0.0f, 0.0f, 0.0f};
+        const auto& vp = shadow->mCamera.viewProjection;
+        const float depthAxis = std::sqrt(vp.r[0].z * vp.r[0].z + vp.r[1].z * vp.r[1].z + vp.r[2].z * vp.r[2].z);
+        const float worldPerDepth = depthAxis > 1.0e-6f ? 1.0f / depthAxis : 0.0f;
+        const float shade[4] = {0.01f * static_cast<float>(ren_WaterUnitShadows > 100 ? 100 : ren_WaterUnitShadows), worldPerDepth, 20.0f, 25.0f};
         s.vars.shadowParams.mEffectVariable->SetVector(shade);
       } else {
         const float off[4] = {0.0f, 0.0f, 0.0f, 0.0f};
