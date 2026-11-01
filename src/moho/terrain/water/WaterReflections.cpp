@@ -220,7 +220,9 @@ float FafWaterShadow(float3 position)
         return 1.0;
     }
     float4 coord = mul(float4(position, 1.0), waterShadowMatrix);
-    coord.xy /= coord.w;
+    // the matrix gives clip space; the terrain's vertex shaders map it to texture space the same way (x right, y down), so does this
+    coord.xy = float2(coord.x + coord.w, -coord.y + coord.w) * 0.5 / coord.w;
+    coord.z /= coord.w;
     float4 texel = tex2Dlod(waterShadowSampler, float4(coord.xy, 0.0, 0.0));
     // The map stores the depth of the nearest caster (R) and the blurred shade (G) without knowing the receiver. A caster far up the sun ray from the
     // water (a tree on a hill, a cliff top) is not what shades the water next to it: the terrain, which the map does not hold, does. Only casters

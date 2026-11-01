@@ -189,13 +189,15 @@ float3 WaterTransmit(float3 p, float3 q)
 float SunVis(float3 p)
 {
     float vis = 1.0;
+    // the edge of a shadow is at least a cell wide: with a sharper one the cells (up to a few units when zoomed out) show as stairs
+    float cellEdge = 0.6 * gOrigin.z;
     [loop] for (int i = 0; i < 40; ++i)
     {
         float u = ((float)i + 0.5) / 40.0;
         float t = 0.3 + 500.0 * u * u;
         float3 q = p + gSun.xyz * t;
         float clearance = q.y - GroundAt(q.xz) - 0.15;
-        vis = min(vis, saturate(clearance / (0.3 + 0.012 * t)));
+        vis = min(vis, saturate(clearance / max(0.3 + 0.012 * t, cellEdge)));
         if (vis <= 0.0)
         {
             break;
