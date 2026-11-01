@@ -30,7 +30,7 @@ namespace moho::water
 
   static TConVar<int> gTConVar_ren_WaterSSR(
     "ren_WaterSSR",
-    "Screen-space reflections in the water (terrain, buildings and units show in it): 0 off, 1 (the default) 24 steps of the ray march, 2 48 steps. "
+    "Screen-space reflections in the water (terrain, buildings and units show in it): 0 off, 1 (the default) or 2: the ray march (32 steps). "
     "Takes effect at the next map load for the shader patch; Direct3D 11, 12 and Vulkan. docs/LIGHTING_V2.md.",
     &ren_WaterSSR
   );
@@ -299,24 +299,23 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
     {
         return result;
     }
-    int steps = (int)waterSsrParams.x;
+    // A fixed, unrolled march with a latched hit: the dynamic loop with a break that stood here took the GPU down (a device hang with a page fault
+    // in the water draw within a minute or two of play, on Direct3D 12; the same shader with the march skipped ran for good).
     float jitter = frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
     float sPrev = 0.0;
     float hit = -1.0;
-    [loop] for (int i = 0; i < steps; ++i)
+    [unroll] for (int i = 0; i < 32; ++i)
     {
-        float s = smax * (float(i) + jitter) / float(steps);
+        float s = smax * (float(i) + jitter) / 32.0;
         float rayZ = 1.0 / lerp(k0, k1, s);
         float sceneZ = FafWaterSceneZ(lerp(s0, s1, s));
-        float nextZ = 1.0 / lerp(k0, k1, s + smax / float(steps));
+        float nextZ = 1.0 / lerp(k0, k1, s + smax / 32.0);
         float stride = abs(nextZ - rayZ);
         float gap = rayZ - sceneZ;
-        if (gap > 0.0 && gap < stride * 2.0 + 0.3)  // the ray went behind what the scene drew, by less than a step: a hit, not an occluder
-        {
-            hit = s;
-            break;
-        }
-        sPrev = s;
+        bool open = hit < 0.0;
+        bool found = open && gap > 0.0 && gap < stride * 2.0 + 0.3;   // the ray went behind what the scene drew, by less than a step: a hit, not an occluder
+        sPrev = (open && !found) ? s : sPrev;
+        hit = found ? s : hit;
     }
     if (hit < 0.0)
     {
@@ -458,7 +457,7 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
       return;
     }
     s.vars.depth.mEffectVariable->SetDepthStencil(s.copy);
-    const float steps = ren_WaterSSR <= 0 ? 0.0f : (ren_WaterSSR >= 2 ? 48.0f : 24.0f);
+    const float steps = ren_WaterSSR <= 0 ? 0.0f : 32.0f;
     const float params[4] = {steps, static_cast<float>(ren_WaterSSRDistance), static_cast<float>(s.copyWidth), static_cast<float>(s.copyHeight)};
     s.vars.params.mEffectVariable->SetVector(params);
     if (s.vars.absorb.Exists()) {
@@ -480,7 +479,7 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
         const auto& vp = shadow->mCamera.viewProjection;
         const float depthAxis = std::sqrt(vp.r[0].z * vp.r[0].z + vp.r[1].z * vp.r[1].z + vp.r[2].z * vp.r[2].z);
         const float worldPerDepth = depthAxis > 1.0e-6f ? 1.0f / depthAxis : 0.0f;
-        const float shade[4] = {0.01f * static_cast<float>(ren_WaterUnitShadows > 100 ? 100 : ren_WaterUnitShadows), worldPerDepth, 20.0f, 25.0f};
+        const float shade[4] = {0.01f * static_cast<float>(ren_WaterUnitShadows > 100 ? 100 : ren_WaterUnitShadows), worldPerDepth, 8.0f, 8.0f};
         s.vars.shadowParams.mEffectVariable->SetVector(shade);
       } else {
         const float off[4] = {0.0f, 0.0f, 0.0f, 0.0f};
