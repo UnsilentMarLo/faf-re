@@ -202,6 +202,19 @@ ForkThread(function()
         end
         return
     end
+    if AB_SCENE == 'aircrash' then
+        -- aircraft shot down over the bay: a fighter, a gunship, a strategic bomber
+        WaitUntil(4)
+        for _, id in ipairs({ 'uea0102', 'uea0203', 'uea0304' }) do
+            local ux, uz = AB_TX - 10, AB_TZ
+            local u = CreateUnitHPR(id, brainA.Name, ux, GetSurfaceHeight(ux, uz) + 30, uz, 0, 0, 0)
+            Say(string.format('CRASH start %s: %s', id, tostring(u ~= nil)))
+            WaitSeconds(2)
+            if u and not u.Dead then u:Kill() end
+            WaitSeconds(14)
+        end
+        return
+    end
     if AB_SCENE == 'none' then
         Say(string.format('ground height %.2f', GetTerrainHeight(x0, z0)))
         return

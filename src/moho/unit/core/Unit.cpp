@@ -16343,7 +16343,8 @@ void Unit::Kill(Entity* const instigator, const gpg::StrArg reason, float excess
   }
 
   // The sea feels a hull going down (render only: the water simulation reads it, nothing feeds back).
-  if (blueprint != nullptr && !IsBeingBuilt()) {
+  // (an aircraft going down splashes where it lands: CUnitMotion, OnImpact on the water)
+  if (blueprint != nullptr && !IsBeingBuilt() && mVarDat.mLayerMask != LAYER_Air) {
     const Wm3::Vec3f& deathPosition = GetPositionWm3();
     water::SimUnitDeath(deathPosition.x, deathPosition.y, deathPosition.z, blueprint->Economy.BuildCostMass);
   }

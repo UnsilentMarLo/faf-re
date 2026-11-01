@@ -41,6 +41,7 @@
 #include "moho/math/Wm3Segment3FafExtras.h"
 #include "Wm3Box3.h"
 #include "moho/misc/DiagnosticBudget.h"
+#include "moho/terrain/water/WaterSimulation.h"
 
 namespace moho
 {
@@ -2204,6 +2205,12 @@ namespace moho
       } else {
         const char* impactSurface = (unit->mVarDat.mLayerMask == LAYER_Land) ? "Terrain" : "Water";
         unit->CallbackStr("OnImpact", &impactSurface);
+        // A wreck that falls into the sea (an aircraft shot down) splashes where it lands, by what it cost (render only: nothing feeds back).
+        if (unit->mVarDat.mLayerMask != LAYER_Land) {
+          if (const RUnitBlueprint* const impactBlueprint = unit->GetBlueprint(); impactBlueprint != nullptr) {
+            water::SimUnitDeath(newPos.x, newPos.y, newPos.z, impactBlueprint->Economy.BuildCostMass);
+          }
+        }
 
         const EUnitMotionState currentState = mMotionState;
         if (currentState != kUnitMotionStateCrashed) {
