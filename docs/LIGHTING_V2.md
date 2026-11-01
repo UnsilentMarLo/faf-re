@@ -116,7 +116,7 @@ Measured (100v100, 2,500 lights): D3D12 GPU 6.69 ms (LightField 0.55 ms; it was 
 - **Checked:** D3D12, D3D11 and Vulkan build and draw the patched water; the test ring appears in the normals, the foam and the geometry; the flat quad and the grid give the same picture without waves. **Not checked:** wakes of moving units (the hover tanks of the test scene never stayed on the lake; the unit filter was never seen to fire), impacts in a real fight, the cost at 100v100 on a map with a big sea, the strength of rings from many impacts.
 - **Also:** the field (and so the lights and sun shadows) is now only built for the big world view (the minimap's render pass used to move it).
 
-Next (after stage 7): real-depth absorption and refraction, the sun shadow map of units on the water, caustics.
+Next (after stages 7 and 8): the sun shadow map of units on the water, caustics.
 
 ## Stage 7: the water reflects the scene (2026-11-01)
 
@@ -128,4 +128,13 @@ Next (after stage 7): real-depth absorption and refraction, the sun shadow map o
 - **Checked** (Adaptive Acid Lakes, hover tanks on the lake, `tests/featab/steps_ssr.lua`): D3D12, D3D11 and Vulkan compile the fully patched water (lights + simulation + quality filter + reflections) and the debug view shows hits on the crater walls and on the unit in the water, misses where the ray escapes to the sky. Cost on D3D12 with the lake about a quarter of a 1600x900 screen: water pass 0.065 ms with the march off, 0.12-0.14 ms at level 1, 0.155 ms at level 2; the depth copy 0.018 ms. **Not checked:** a large sea with buildings on the shore, 100v100 on a sea map, split-screen / smaller view rectangles (the march clamps to the whole texture), the look at very grazing angles (the test lake is small and shallow, so the camera framing for those was poor).
 - **Why the effect is subtle at steep angles.** The reflection weight is still the shipped Fresnel term (F0 0.08); a steep view keeps about a tenth of the reflection, a grazing view most of it. That is the physical behaviour and the shipped balance, so old maps keep their look; `ren_WaterSSRStrength` only scales the hit part.
 
-Next: real-depth absorption and refraction (the baked half-resolution depth map is still what colours the water), the sun shadow map of units on the water, caustics.
+## Stage 8: the water's thickness from the real scene depth (2026-11-01)
+
+Same file and patch as stage 7 (`WaterReflections.cpp`; the depth copy is shared, the patch is applied when `ren_WaterSSR` or `ren_WaterAbsorb` is on; cache tag now `.waterssr2`). Switch `ren_WaterAbsorb` (0 shipped baked depth map, 1 default, 2 adds colour extinction), `ren_WaterAbsorbDepth` (world units, default 10).
+
+- **What it does.** The baked half-resolution depth map (`UtilitySamplerC.g`, authored with the map and often wrong near units, bridges and after terrain edits) is replaced in `HighFidelityPS` by the distance the view ray really travels through the water: `(sceneZ - waterZ) * |eye| / waterZ`, where `sceneZ` is the sampled scene depth under the refracted lookup and `waterZ` is the water pixel's clip `w`. It is turned into the same 0..1 quantity the shader always used, `1 - exp(-path / ren_WaterAbsorbDepth)`, so the map's `waterLerp` clamp, `waterColor` and `refractionScale` keep their meaning and old maps stay in their authored range.
+- **Refraction.** The first estimate sizes the wave offset; if the refracted lookup lands on something in front of the water plane (a unit, a bridge, the shore) the lookup falls back to the straight view, then the thickness is read where the final lookup lands. Level 2 also multiplies the refracted picture by `exp(-(1, 0.4, 0.15) * path / (4 * depth))`, red absorbed first.
+- **Fallbacks.** With the depth copy unavailable (orthographic view, depth not sampled, backend cannot copy) the parameters bind "off" and the shipped depth map is used.
+- **Checked** (Acid Lakes lake, `tests/featab/steps_abs.lua`): compiles and renders on D3D12, D3D11 and Vulkan; on the lake the sea bed shows through more in the shallows and the colour follows the real thickness (4 to 10 percent of the frame changes with the default and with a murky depth of 3). Cost on D3D12 (same lake view): the water pass reads 0.131-0.152 ms with the option off or on at either level, within the noise of the level-1 reflections of stage 7; it reuses the depth copy of stage 7 (0.018 ms). Results on D3D11 and Vulkan match D3D12 (the same 13.9 percent of the cropped lake changes at level 2). **Not checked:** a large sea, shorelines with buildings, split-screen, unit wakes under real depth.
+
+Next: the sun shadow map of units on the water, caustics.

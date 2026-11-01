@@ -21,6 +21,8 @@ namespace moho::water
   static int ren_WaterSSRDebug = 0;
   static int ren_WaterSSRStrength = 100;
   static int ren_WaterSSRDistance = 800;
+  static int ren_WaterAbsorb = 1;
+  static int ren_WaterAbsorbDepth = 10;
 
   static TConVar<int> gTConVar_ren_WaterSSR(
     "ren_WaterSSR",
@@ -33,6 +35,18 @@ namespace moho::water
   );
   static TConVar<int> gTConVar_ren_WaterSSRDistance(
     "ren_WaterSSRDistance", "The longest reflected ray the march follows, in world units (default 800).", &ren_WaterSSRDistance
+  );
+  static TConVar<int> gTConVar_ren_WaterAbsorb(
+    "ren_WaterAbsorb",
+    "Water thickness from the real scene depth instead of the map's baked depth map: 0 off (the shipped look), 1 (the default) tint and refraction follow the "
+    "water the view ray really crosses, objects in front of the water are not refracted into it, 2 also absorbs red faster than green and blue. "
+    "Takes effect at the next map load for the shader patch; Direct3D 11, 12 and Vulkan. docs/LIGHTING_V2.md.",
+    &ren_WaterAbsorb
+  );
+  static TConVar<int> gTConVar_ren_WaterAbsorbDepth(
+    "ren_WaterAbsorbDepth",
+    "The water thickness, in world units, at which the real-depth tint is 63 percent of the way to the map's deep colour (default 10; smaller is murkier).",
+    &ren_WaterAbsorbDepth
   );
   static TConVar<int> gTConVar_ren_WaterSSRDebug(
     "ren_WaterSSRDebug", "1: the water shows where the screen-space march found a hit (red) and where it did not (blue). 0 (the default) normal.", &ren_WaterSSRDebug
@@ -47,8 +61,10 @@ namespace moho::water
       ShaderVar depth{};
       ShaderVar params{};
       ShaderVar params2{};
+      ShaderVar absorb{};
       EffectVars()
       {
+        RegisterShaderVar("waterAbsorbParams", &absorb, "water2");
         RegisterShaderVar("waterSceneDepth", &depth, "water2");
         RegisterShaderVar("waterSsrParams", &params, "water2");
         RegisterShaderVar("waterSsrParams2", &params2, "water2");
@@ -77,6 +93,9 @@ namespace moho::water
       const float off[4] = {0.0f, 0.0f, 0.0f, 0.0f};
       if (s.vars.params.Exists()) {
         s.vars.params.mEffectVariable->SetVector(off);
+      }
+      if (s.vars.absorb.Exists()) {
+        s.vars.absorb.mEffectVariable->SetVector(off);
       }
     }
 
@@ -150,6 +169,19 @@ float2 FafWaterScreen(float4 clip)
 float FafWaterSceneZ(float2 uv)
 {
     return FafWaterViewZ(tex2Dlod(waterSceneDepthSampler, float4(uv, 0.0, 0.0)).x);
+}
+
+float4 waterAbsorbParams; // x: 0 = the baked depth map, 1 = the real depth, 2 = the real depth and colour extinction, y: the depth in world units of 63 percent tint
+
+// The distance the view ray travels through the water before it meets what the scene drew at uv (0 when the scene is in front of the water).
+float FafWaterPath(float2 uv, float surfaceZ, float eyeDistance)
+{
+    float sceneZ = FafWaterSceneZ(uv);
+    if (!(sceneZ > 0.0))
+    {
+        sceneZ = 100000.0;                          // nothing drawn there: as deep as it gets
+    }
+    return max(sceneZ - surfaceZ, 0.0) * eyeDistance / max(surfaceZ, 0.01);
 }
 
 // rgb: the scene colour the reflected ray meets; a: how sure the hit is (0: nothing, use the sky and the mirrored units)
@@ -231,7 +263,7 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
 
   bool SsrWanted()
   {
-    return ren_WaterSSR > 0;
+    return ren_WaterSSR > 0 || ren_WaterAbsorb > 0;
   }
 
   SsrPatchResult PatchWaterReflections(std::string& source)
@@ -248,16 +280,26 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
     const std::string mixLine = "float3 reflections = lerp(skyReflection.rgb, unitReflections.rgb, saturate(unitReflections.a));";
     const std::string unitSun = "sunReflection *= (1 - saturate(unitReflections.a * 4));";
     const std::string sunAdd = "water += sunReflection;";
-    if (count(shader) != 1 || count(mixLine) != 1 || count(unitSun) != 1 || count(sunAdd) != 1 || source.find("FafWaterSSR") != std::string::npos) {
-      result.error = "HighFidelityPS or the reflection mix lines not found exactly once";
+    const std::string refractOffset = "refractionPos -= sqrt(waterDepth) * refractionScale * N.xz * OneOverW;";
+    const std::string tintLine = "refractedPixels.rgb = lerp(refractedPixels.rgb, waterColor, factor);";
+    if (count(shader) != 1 || count(mixLine) != 1 || count(unitSun) != 1 || count(sunAdd) != 1 || count(refractOffset) != 1 || count(tintLine) != 1 ||
+        source.find("FafWaterSSR") != std::string::npos) {
+      result.error = "HighFidelityPS, the reflection mix lines or the refraction lines not found exactly once";
       return result;
     }
     if (source.find("sampler RefractionSampler") == std::string::npos || source.find("ViewportScaleOffset;") == std::string::npos ||
-        source.find("Projection;") == std::string::npos || source.find("WorldToView;") == std::string::npos) {
-      result.error = "RefractionSampler, ViewportScaleOffset, Projection or WorldToView not declared";
+        source.find("Projection;") == std::string::npos || source.find("WorldToView;") == std::string::npos ||
+        source.find("float waterDepth") == std::string::npos || source.find("mScreenPos") == std::string::npos) {
+      result.error = "RefractionSampler, ViewportScaleOffset, Projection, WorldToView, waterDepth or mScreenPos not declared";
       return result;
     }
     std::string text = source;
+    // the later line first, so the earlier anchors stay valid: the extinction of the colours (before the tint toward the deep colour)
+    const std::size_t tintAt = text.find(tintLine);
+    text.insert(
+      tintAt,
+      "if (waterAbsorbParams.x > 1.5) { refractedPixels.rgb *= exp(-float3(1.0, 0.4, 0.15) * fafPath / (waterAbsorbParams.y * 4.0)); }\n    "
+    );
     // the sun glint is not seen where a scene hit is reflected: first the later line, so the earlier anchor stays valid
     const std::size_t sunAddAt = text.find(sunAdd);
     text.insert(
@@ -271,6 +313,31 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
       mixAt + mixLine.size(),
       "\n    float4 ssrHit = FafWaterSSR(ViewPosition - inV.mViewVec, R, screenPos * waterSsrParams.zw);"
       "\n    reflections = lerp(reflections, ssrHit.rgb, saturate(ssrHit.a * waterSsrParams2.x));"
+    );
+    // The thickness the view ray crosses replaces the baked depth: the map's waterLerp range, the refraction strength and the tint keep their meaning
+    // (the depth stays 0..1). The first pass sizes the refraction offset, the second reads the thickness where the refracted ray lands; a refracted
+    // pixel in front of the water plane (a unit, a bridge, the shore) falls back to the straight view.
+    const std::size_t offsetAt = text.find(refractOffset);
+    text.insert(
+      offsetAt + refractOffset.size(),
+      "\n    if (waterAbsorbParams.x > 0.5)"
+      "\n    {"
+      "\n        if (FafWaterSceneZ(refractionPos) < fafSurfaceZ - 0.05) { refractionPos = screenPos; }"
+      "\n        fafPath = FafWaterPath(refractionPos, fafSurfaceZ, fafEye);"
+      "\n        waterDepth = 1.0 - exp(-fafPath / waterAbsorbParams.y);"
+      "\n    }"
+    );
+    text.insert(
+      offsetAt,
+      "float fafSurfaceZ = inV.mScreenPos.w;"
+      "\n    float fafEye = length(inV.mViewVec);"
+      "\n    float fafPath = 0.0;"
+      "\n    if (waterAbsorbParams.x > 0.5)"
+      "\n    {"
+      "\n        fafPath = FafWaterPath(screenPos, fafSurfaceZ, fafEye);"
+      "\n        waterDepth = 1.0 - exp(-fafPath / waterAbsorbParams.y);"
+      "\n    }"
+      "\n    "
     );
     text.insert(text.find(shader), kDeclarations);
     source = std::move(text);
@@ -286,7 +353,7 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
     }
     const auto& projection = camera.projection;
     const bool perspective = std::fabs(projection.r[2].w) > 0.5f && std::fabs(projection.r[3].w) < 0.5f;
-    if (ren_WaterSSR <= 0 || device == nullptr || !perspective) {
+    if (!SsrWanted() || device == nullptr || !perspective) {
       BindOff(s);
       return;
     }
@@ -298,10 +365,15 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
       return;
     }
     s.vars.depth.mEffectVariable->SetDepthStencil(s.copy);
-    const float params[4] = {
-      ren_WaterSSR >= 2 ? 48.0f : 24.0f, static_cast<float>(ren_WaterSSRDistance), static_cast<float>(s.copyWidth), static_cast<float>(s.copyHeight)
-    };
+    const float steps = ren_WaterSSR <= 0 ? 0.0f : (ren_WaterSSR >= 2 ? 48.0f : 24.0f);
+    const float params[4] = {steps, static_cast<float>(ren_WaterSSRDistance), static_cast<float>(s.copyWidth), static_cast<float>(s.copyHeight)};
     s.vars.params.mEffectVariable->SetVector(params);
+    if (s.vars.absorb.Exists()) {
+      const float absorb[4] = {
+        ren_WaterAbsorb <= 0 ? 0.0f : (ren_WaterAbsorb >= 2 ? 2.0f : 1.0f), static_cast<float>(ren_WaterAbsorbDepth < 1 ? 1 : ren_WaterAbsorbDepth), 0.0f, 0.0f
+      };
+      s.vars.absorb.mEffectVariable->SetVector(absorb);
+    }
     if (s.vars.params2.Exists()) {
       const float params2[4] = {0.01f * static_cast<float>(ren_WaterSSRStrength), ren_WaterSSRDebug != 0 ? 1.0f : 0.0f, 0.0f, 0.0f};
       s.vars.params2.mEffectVariable->SetVector(params2);

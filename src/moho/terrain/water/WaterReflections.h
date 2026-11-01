@@ -21,7 +21,9 @@ namespace moho::water
   // 0 off, 1 (the default) 24 steps, 2 48 steps of the march.
   extern int ren_WaterSSR;
 
-  // Whether the water effect should get the march (the option is on).
+  // Whether the water effect should get the scene-depth patch: the march (ren_WaterSSR) or the real-depth thickness (ren_WaterAbsorb) is on.
+  // The real-depth thickness: the water pixel shader replaces the map's baked half-resolution depth by the distance the view ray travels through the water
+  // before the sampled scene depth, so tint, refraction strength and the "in front of the water" rejection follow what is really there.
   bool SsrWanted();
 
   struct SsrPatchResult
