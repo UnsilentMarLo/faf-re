@@ -25,6 +25,7 @@ namespace moho::lights
 {
   int ren_DynLights = model::kOff;
   static int ren_DynLightsLog = 0;
+  static int ren_DynLightsGain = 100;
   int ren_DynLightsTest = 0;
 
   static TConVar<int> gTConVar_ren_DynLights(
@@ -32,6 +33,13 @@ namespace moho::lights
     "Dynamic lights from explosion flashes, glows, beams, trails and Lua lights: 0 off (the default), 1 only the biggest, 2 large, 3 most, 4 all. "
     "Render only; the simulation never sees them. Normally set by the Dynamic Lights option (Options, Video; the effects are patched at start-up when it is not Off) or /dynlights on the command line (docs/DYNAMIC_LIGHTS.md).",
     &ren_DynLights
+  );
+
+  static TConVar<int> gTConVar_ren_DynLightsGain(
+    "ren_DynLightsGain",
+    "How strong the dynamic lights are, in percent of the tuned strength (default 100; 0 to 1000). Scales every light of the frame: weaker lights show more at 200 or 300. "
+    "Needs ren_DynLights.",
+    &ren_DynLightsGain
   );
 
   static TConVar<int> gTConVar_ren_DynLightsTest(
@@ -150,6 +158,14 @@ namespace moho::lights
 
     FeedBeamsForFrame(tick, frameAlpha);
     gCollector.Update(static_cast<float>(tick) + frameAlpha, kMaxFrameLights, gFrameLights);
+    if (ren_DynLightsGain != 100) {
+      const float gain = 0.01f * static_cast<float>(std::min(std::max(ren_DynLightsGain, 0), 1000));
+      for (Light& l : gFrameLights) {
+        l.rgb[0] *= gain;
+        l.rgb[1] *= gain;
+        l.rgb[2] *= gain;
+      }
+    }
 
     float mapX = 0.0f, mapZ = 0.0f;
     if (ActiveMapSize(mapX, mapZ)) {
