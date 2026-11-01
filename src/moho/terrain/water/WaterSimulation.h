@@ -24,6 +24,11 @@ namespace moho::water
   // negative pulls it down). Collected over the frame, applied by the next step.
   void SimAddSource(float x, float z, float radius, float strength);
 
+  // How strongly the wakes of ships and the splashes of impacts push the water, as factors (1 = the tuned default): ren_WaterSimWake and
+  // ren_WaterSimImpact in percent.
+  float SimWakeScale();
+  float SimImpactScale();
+
   // The water of the active map (what the sources are compared with); false when the map has no water or the simulation is off.
   bool SimWaterLevel(float& elevation);
 

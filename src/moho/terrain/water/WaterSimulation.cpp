@@ -28,6 +28,9 @@ namespace moho::water
   static int ren_WaterGrid = 1;
   static int ren_WaterDisplace = 100;
   static int ren_WaterSimTest = 0;
+  static int ren_WaterSimLog = 0;
+  static int ren_WaterSimWake = 100;
+  static int ren_WaterSimImpact = 100;
 
   static TConVar<int> gTConVar_ren_WaterSim(
     "ren_WaterSim",
@@ -38,6 +41,16 @@ namespace moho::water
   static TConVar<int> gTConVar_ren_WaterSimTest(
     "ren_WaterSimTest", "Test source of the water simulation: every N rendered frames a ring starts at the water the middle of the view looks at; 0 (the default) none.",
     &ren_WaterSimTest
+  );
+  static TConVar<int> gTConVar_ren_WaterSimLog(
+    "ren_WaterSimLog", "Diagnostic: every N rendered frames the highest and lowest wave height of the simulation is read back and logged (stalls the GPU); 0 (the default) off.",
+    &ren_WaterSimLog
+  );
+  static TConVar<int> gTConVar_ren_WaterSimWake(
+    "ren_WaterSimWake", "How strongly ships push the water, in percent of the tuned wake (default 100).", &ren_WaterSimWake
+  );
+  static TConVar<int> gTConVar_ren_WaterSimImpact(
+    "ren_WaterSimImpact", "How strongly impacts and explosions push the water, in percent of the tuned splash (default 100).", &ren_WaterSimImpact
   );
   static TConVar<int> gTConVar_ren_WaterGrid(
     "ren_WaterGrid", "Draw the water as a projected grid whose vertices the wave simulation lifts (needs ren_WaterSim): 1 (the default) on, 0 the flat quad of the shipped game.",
@@ -172,7 +185,7 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float dmax = max(abs(wpos.x - sC.z), abs(wpos.y - sC.w)) / sD.x;
     float edge = smoothstep(0.8, 1.0, dmax);   // the waves are absorbed at the border of the window
     float hn = (2.0 * cur.x - cur.y + sC.x * lap) * sC.y * (1.0 - 0.3 * edge) + add;
-    hn = clamp(hn, -6.0, 6.0);
+    hn = clamp(hn, -1.5, 1.5);
     Nxt[idx] = float2(hn, cur.x);
 }
 
@@ -369,6 +382,16 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     s.pending.push_back(Source{x, z, std::min(radius, 40.0f), strength});
   }
 
+  float SimWakeScale()
+  {
+    return 0.01f * static_cast<float>(std::max(ren_WaterSimWake, 0));
+  }
+
+  float SimImpactScale()
+  {
+    return 0.01f * static_cast<float>(std::max(ren_WaterSimImpact, 0));
+  }
+
   bool SimWaterLevel(float& elevation)
   {
     State& s = GetState();
@@ -533,7 +556,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       constants.b[1] = static_cast<float>(kN);
       constants.b[3] = kStepSeconds;
       constants.c[0] = 0.22f; // wave speed term: sqrt(0.22) cells a step, about 40 units a second
-      constants.c[1] = 0.99f; // a ring is gone within a few dozen units, not across the map
+      constants.c[1] = 0.985f; // a ring is gone within a few dozen units, not across the map
       constants.e[0] = static_cast<float>(s.heightWidth);
       constants.e[1] = static_cast<float>(s.heightHeight);
       constants.e[2] = (elevation - kLandMargin) * 128.0f; // raw height units (1 / 128 world unit)
@@ -572,6 +595,25 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
         s.originX = originX;
         s.originZ = originZ;
         s.hasHistory = true;
+      }
+
+      static int sSimLogCounter = 0;
+      if (ren_WaterSimLog > 0 && (++sSimLogCounter % ren_WaterSimLog) == 0) {
+        std::vector<float> state(static_cast<std::size_t>(kN) * kN * 2U);
+        if (device->ReadGpuBuffer(*s.state[s.current], 0U, kN * kN, state.data())) {
+          float hi = 0.0f;
+          float lo = 0.0f;
+          double sum = 0.0;
+          std::size_t moving = 0;
+          for (std::size_t i = 0; i < static_cast<std::size_t>(kN) * kN; ++i) {
+            const float v = state[i * 2U];
+            hi = std::max(hi, v);
+            lo = std::min(lo, v);
+            sum += std::fabs(v);
+            moving += std::fabs(v) > 0.02f ? 1U : 0U;
+          }
+          gpg::Logf("Water simulation: wave height %.3f .. %.3f, mean |h| %.5f, %u cells above 0.02", lo, hi, sum / (static_cast<double>(kN) * kN), static_cast<unsigned>(moving));
+        }
       }
 
       // the result: slope and height of the current state

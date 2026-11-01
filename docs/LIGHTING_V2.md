@@ -173,3 +173,11 @@ Water unit/tree shadows: reach tightened to casters within 8 + 8 world units of 
 - The sun's shadow on the sea bed fades with the water depth (`FafSunUnder`, `LightEffectPatch.cpp`).
 - The height map re-uploads of the light field and the water land mask (every building that flattens ground bumps `HeightFieldRevision`) run at most every 90 frames.
 - GPU hang on Seton's Clutch (2026-11-01 16:58, 100 s into a real game) after the unrolled SSR march: not reproduced by two 4 min AI games without the debug layer. `faf_dred.on` next to the exe switches DRED on for launches without a command line (the crash report's recent log then has the breadcrumbs).
+
+### Water simulation: ship wakes (2026-11-01 night)
+
+- Cause of the dragged bubble and the shaking sea: a moving hull was one positive disc (radius 1.1 r, strength up to 14 x (0.5 + 0.2 r), 35 for the Fatboy). A steady push on a wave field settles at about a R^2 / (4 c^2) (c^2 = 0.22): tens of units, held by the +-6 clamp. The same went for impacts. Now: the clamp is +-1.5 and the damping 0.985 a step; a hull is a pair of discs along its heading, bow +, stern - (no net volume: nothing piles up and follows the ship), sized for a peak height of 0.12 + 0.025 r (at most 0.45) at full speed; ren_WaterSimWake / ren_WaterSimImpact scale ships and splashes in percent.
+- A body only moves water when its middle is not deeper than a quarter of its radius under the surface (a submarine, an amphibious unit on the sea bed, a submerged Fatboy do not).
+- `ren_WaterSimLog N` logs the highest and lowest wave height every N frames (reads the state back: stalls the GPU, diagnostics only). Measured with the test frigate and the Fatboy sailing: -0.17 .. 0.16, 50 to 150 cells above 0.02 of 1,048,576.
+- The wake particles of the shipped game (the effects of the unit blueprints) are not part of this and are not touched.
+- Crash fixed (2026-11-01 18:23, after 20 game minutes): LoadTexture cleared its cache when it held 512 textures while callers held pointers (AnalyseMeshGlow read the albedo after the specular map had loaded). TrimTextureCache runs between frames; the glow map is trimmed in FeedMeshes.

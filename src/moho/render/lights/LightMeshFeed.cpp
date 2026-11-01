@@ -216,8 +216,8 @@ namespace moho::lights
           !std::isfinite(instance.sphere.Center.z)) {
         return;
       }
-      if (!(cy - radius * 0.6f < waterElevation + 0.4f && cy + radius * 0.6f > waterElevation - 1.5f)) {
-        return; // not in the water surface
+      if (!(cy - radius * 0.6f < waterElevation + 0.4f && cy > waterElevation - 0.25f * radius - 0.3f)) {
+        return; // not in the water surface: a body whose middle is under water (a submarine, an amphibious unit on the sea bed) moves no waves
       }
       const float dx = instance.endTransform.pos_.x - instance.startTransform.pos_.x;
       const float dz = instance.endTransform.pos_.z - instance.startTransform.pos_.z;
@@ -225,7 +225,18 @@ namespace moho::lights
       if (!std::isfinite(speed) || speed < 0.4f) {
         return;
       }
-      water::SimAddSource(instance.sphere.Center.x, instance.sphere.Center.z, radius * 1.1f, std::min(speed, 14.0f) * (0.5f + 0.2f * radius));
+      // A hull pushes the water up at its bow and leaves a trough behind it: a pair of discs of opposite sign along the heading (a single push
+      // piles a mound that follows the ship). The strength is set from the height the disc should hold at full speed: a steady push of `a` on a
+      // disc of radius R settles at about a R^2 / (4 c^2) (the simulation's wave speed term c^2 is 0.22).
+      const float length = std::sqrt(dx * dx + dz * dz);
+      const float hx = dx / length;
+      const float hz = dz / length;
+      const float discRadius = std::min(std::max(radius * 0.6f, 1.2f), 7.0f);
+      const float height = std::min(0.12f + 0.025f * radius, 0.45f) * std::min(speed / 10.0f, 1.0f);
+      const float strength = height * 120.0f / (discRadius * discRadius) * water::SimWakeScale();
+      const float offset = radius * 0.45f;
+      water::SimAddSource(instance.sphere.Center.x + hx * offset, instance.sphere.Center.z + hz * offset, discRadius, strength);
+      water::SimAddSource(instance.sphere.Center.x - hx * offset, instance.sphere.Center.z - hz * offset, discRadius, -strength);
     }
 
     void FeedWaterSources(MeshRenderer& renderer)
