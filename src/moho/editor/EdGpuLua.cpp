@@ -14,6 +14,7 @@
 // Threads: the natives run on the UI thread. The D3D9 adapter lookup is done only there. Log lines of the backend can come from any thread that runs an op: they are queued and
 // written by the UI thread (the engine log is not known to be thread safe).
 #include "moho/editor/EdGpu.h"
+#include "moho/editor/EdD3D9Device.h"
 #include "moho/editor/EdGpuOps.h"
 
 #include <Windows.h>
@@ -80,7 +81,7 @@ namespace moho::editor::gpu
       if (device == nullptr || device->GetGalDevice() == nullptr) {
         return false;
       }
-      IDirect3DDevice9* const dev = static_cast<gpg::gal::DeviceD3D9*>(device->GetGalDevice())->mDevice;
+      IDirect3DDevice9* const dev = moho::editor::D3D9RawDevice(device->GetGalDevice());
       if (dev == nullptr) {
         return false;
       }

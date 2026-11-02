@@ -1,4 +1,5 @@
 #include "moho/editor/EdPopout.h"
+#include "moho/editor/EdD3D9Device.h"
 
 #include <cstdio>
 #include <deque>
@@ -171,7 +172,7 @@ namespace moho
       if (device == nullptr || device->GetGalDevice() == nullptr) {
         return nullptr;
       }
-      return static_cast<gpg::gal::DeviceD3D9*>(device->GetGalDevice())->mDevice;
+      return moho::editor::D3D9RawDevice(device->GetGalDevice());
     }
 
     void ReleaseChain(Popout& p)

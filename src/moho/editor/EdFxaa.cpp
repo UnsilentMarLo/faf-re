@@ -1,5 +1,6 @@
 // EDITOR: post-process FXAA for the world view (see EdFxaa.h and docs/projects/editor/FXAA.md).
 #include "moho/editor/EdFxaa.h"
+#include "moho/editor/EdD3D9Device.h"
 
 #include <d3d9.h>
 
@@ -170,7 +171,7 @@ namespace
 
   IDirect3DDevice9* RawDevice(moho::CD3DDevice* const device)
   {
-    return device != nullptr && device->GetGalDevice() != nullptr ? static_cast<gpg::gal::DeviceD3D9*>(device->GetGalDevice())->mDevice : nullptr;
+    return device != nullptr && device->GetGalDevice() != nullptr ? moho::editor::D3D9RawDevice(device->GetGalDevice()) : nullptr;
   }
 
   // Reads the timestamps of the previous measured frame when they are ready; true when a new measurement may be issued.

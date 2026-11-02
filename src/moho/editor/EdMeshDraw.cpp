@@ -7,6 +7,7 @@
 // wrapped in a state block capture / apply so the engine's state cache stays valid.
 
 #include "moho/editor/EdMeshTerrain.h"
+#include "moho/editor/EdD3D9Device.h"
 
 #include <windows.h>
 
@@ -273,7 +274,7 @@ float4 PS() : COLOR {
         if (device == nullptr || device->GetGalDevice() == nullptr) {
           return nullptr;
         }
-        return static_cast<gpg::gal::DeviceD3D9*>(device->GetGalDevice())->mDevice;
+        return moho::editor::D3D9RawDevice(device->GetGalDevice());
       }
 
       bool Compile(IDirect3DDevice9* dev, const char* source, const char* profile, IDirect3DVertexShader9** vs, IDirect3DPixelShader9** ps)

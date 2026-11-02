@@ -1295,8 +1295,15 @@ namespace
       }
     }
 
+#if defined(FAF_STUDIO_EDITOR)
+    // EDITOR: the FAF client saves graphics_api = d3d12 (or d3d11 / vulkan) in the game preferences the editor reads; the editor natives need Direct3D 9, so only a command-line switch
+    // (above) picks another renderer for an editor build. (Before, the saved option started the editor on Direct3D 12 and the GPU compute adapter match crashed on the foreign device.)
+    const msvc8::string option;
+    gpg::Logf("graphics_api option: ignored in the editor (use /d3d11, /d3d12 or /vulkan on the command line)");
+#else
     const msvc8::string option = moho::OPTIONS_GetString("graphics_api");
     gpg::Logf("graphics_api option: %s", option.empty() ? "(unset)" : option.c_str());
+#endif
     static constexpr std::pair<const char*, DeviceApi> kOptions[] = {
       {"d3d9", DeviceApi::Direct3D9}, {"d3d11", DeviceApi::Direct3D11}, {"d3d12", DeviceApi::Direct3D12}, {"vulkan", DeviceApi::Vulkan},
     };
