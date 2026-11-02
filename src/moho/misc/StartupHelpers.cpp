@@ -34,6 +34,7 @@
 #include <Shlwapi.h>
 
 #include "gpg/core/utils/Global.h"
+#include "moho/editor/EdLaunch.h"
 #include "gpg/core/utils/Logging.h"
 #include "gpg/gal/backends/d3d10/DeviceD3D10.hpp"
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
@@ -5596,12 +5597,22 @@ bool moho::StartCommandLineSession(const gpg::StrArg mapName, const bool isPerfT
     startCommandLineSession(effectiveMapName, isPerfTest);
     return true;
   } catch (const std::exception& exception) {
+    if (moho::editor::launch::Active()) {
+      // Engine addition (editor): no modal box, which stopped the main loop until somebody clicked it (and looked like a freeze); the error is logged, kept for
+      // ed_launch_error() and the start screen opens (moho/editor/EdLaunch.h).
+      moho::editor::launch::ReportFailure(effectiveMapName, exception.what());
+      return false;
+    }
     const msvc8::string message = gpg::STR_Printf(
       "Unable to launch %s:\n%s", effectiveMapName, exception.what() != nullptr ? exception.what() : ""
     );
     WIN_OkBox("Ack!", message.c_str());
     return false;
   } catch (...) {
+    if (moho::editor::launch::Active()) {
+      moho::editor::launch::ReportFailure(effectiveMapName, "unknown error");
+      return false;
+    }
     const msvc8::string message = gpg::STR_Printf("Unable to launch %s:\nunknown error", effectiveMapName);
     WIN_OkBox("Ack!", message.c_str());
     return false;

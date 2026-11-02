@@ -7,6 +7,7 @@ set(FAF_EDITOR_SOURCES
   moho/editor/EdBootstrap.cpp
   moho/editor/EdTextBackend.cpp
   moho/editor/EdPopout.cpp
+  moho/editor/EdLaunch.cpp
   moho/editor/EdOverlay.cpp
   moho/editor/EdStrata.cpp
   moho/editor/EdField.cpp
