@@ -165,6 +165,13 @@ namespace moho
     void DrawScreenQuads(const ScreenQuad* quads, std::size_t quadCount);
 
     /**
+     * Engine addition, not recovered from the binary (editor overlay replay): for each group of four vertices
+     * `DrawQuad(v[4i], v[4i+1], v[4i+2], v[4i+3])` - the same vertices, indices and flushes - written in blocks
+     * instead of calls per quad.
+     */
+    void DrawVertexQuads(const Vertex* vertices, std::size_t quadCount);
+
+    /**
      * Address: 0x00438EA0 (FUN_00438EA0)
      *
      * What it does:

@@ -5,6 +5,7 @@
 #include "moho/editor/EdOverlayDrape.h"
 #include "moho/editor/EdOverlayField.h"
 #include "moho/editor/EdOverlayGeom.h"
+#include "moho/editor/EdOverlayLines.h"
 #include "moho/editor/EdOverlayLod.h"
 #include "moho/editor/EdOverlayNodes.h"
 #include "moho/editor/EdOverlaySlope.h"
@@ -14,10 +15,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "boost/shared_ptr.h"
@@ -39,21 +42,15 @@ namespace moho::editor::field
 
 namespace
 {
-  struct Polyline
-  {
-    std::vector<float> pts;     // x, y, z triples
-    std::uint32_t argb = 0xFFFFFFFFu;
-    float worldWidth = 0.6f;    // ribbon width on the ground in world units
-    float minPx = 2.0f;         // never thinner than this on screen
-    float maxPx = 14.0f;        // never thicker than this on screen
-    bool closed = false;
-    bool halo = true;           // dark underlay for contrast on any terrain
-    bool caps = true;           // squares at the vertices that join the ribbons (off for thin grid lines)
-  };
+  using Polyline = moho::editor::overlaylines::Polyline;
 
-  std::map<std::string, Polyline>& Lines()
+  // Every change of one of the three sets bumps its epoch: the retained geometry and the texture groups (below) are rebuilt when it differs from theirs. Lua writes the same
+  // line again and again (the overlay refresh), so a set with identical data changes nothing, not even the epoch.
+  std::uint32_t gLinesEpoch = 1, gIconsEpoch = 1, gDecalsEpoch = 1;
+
+  std::map<std::string, Polyline, std::less<>>& Lines()
   {
-    static std::map<std::string, Polyline> lines;
+    static std::map<std::string, Polyline, std::less<>> lines;
     return lines;
   }
 
@@ -66,9 +63,9 @@ namespace
     std::string texture;
   };
 
-  std::map<std::string, Icon>& Icons()
+  std::map<std::string, Icon, std::less<>>& Icons()
   {
-    static std::map<std::string, Icon> icons;
+    static std::map<std::string, Icon, std::less<>> icons;
     return icons;
   }
 
@@ -82,9 +79,9 @@ namespace
     std::string texture;
   };
 
-  std::map<std::string, Decal>& Decals()
+  std::map<std::string, Decal, std::less<>>& Decals()
   {
-    static std::map<std::string, Decal> decals;
+    static std::map<std::string, Decal, std::less<>> decals;
     return decals;
   }
 
@@ -673,144 +670,252 @@ namespace
     return (a << 24) | (static_cast<std::uint32_t>(r) << 16) | (static_cast<std::uint32_t>(g) << 8) | static_cast<std::uint32_t>(b);
   }
 
-  struct Pt
+  // ed_overlay_hash([on]): FNV-1a over every quad of the lines and icons the overlay sent to the batcher in the last frame (positions, colours, uvs), so a change of how they are
+  // built can be proven to leave the picture exactly as it was without comparing screenshots (water and clouds move).
+  bool gHashOn = false;
+  std::uint32_t gHashAcc = 2166136261u;
+  std::uint32_t gHashLast = 0u;
+  std::uint32_t gHashQuads = 0u;
+
+  void HashBytes(const void* const data, const std::size_t n)
   {
-    float x, y;
-    float depth;
+    const unsigned char* const p = static_cast<const unsigned char*>(data);
+    std::uint32_t h = gHashAcc;
+    for (std::size_t i = 0; i < n; ++i) {
+      h = (h ^ p[i]) * 16777619u;
+    }
+    gHashAcc = h;
+  }
+
+  void HashQuad(const moho::CD3DPrimBatcher::Vertex& a, const moho::CD3DPrimBatcher::Vertex& b, const moho::CD3DPrimBatcher::Vertex& c, const moho::CD3DPrimBatcher::Vertex& d)
+  {
+    const moho::CD3DPrimBatcher::Vertex v[4] = {a, b, c, d};
+    HashBytes(v, sizeof(v));
+    ++gHashQuads;
+  }
+
+  // The lines and icons are retained as quads (four vertices per quad, in DrawQuad's argument order) and replayed while nothing they depend on changed: the set of lines, the
+  // camera (view-projection matrix) and the viewport. A still camera (the usual state of an editor) then costs no projection at all; a moving one projects every vertex once
+  // and feeds the halo pass and the line pass from the same projection (it was twice, with five vector allocations per line each time).
+  namespace ol = moho::editor::overlaylines;
+  using QuadVertex = moho::CD3DPrimBatcher::Vertex;
+  using QuadList = std::vector<QuadVertex>;
+
+  void DrawQuadList(moho::CD3DPrimBatcher& b, const QuadList& q)
+  {
+    if (gHashOn) {          // checking: hash every quad and send them one DrawQuad at a time, as before the blocks (ed_overlay_hash)
+      for (std::size_t i = 0; i + 3u < q.size(); i += 4u) {
+        HashQuad(q[i], q[i + 1u], q[i + 2u], q[i + 3u]);
+        b.DrawQuad(q[i], q[i + 1u], q[i + 2u], q[i + 3u]);
+      }
+      return;
+    }
+    b.DrawVertexQuads(q.data(), q.size() / 4u);       // the same vertices, indices and flushes as one DrawQuad per quad, written in blocks
+  }
+
+  // The projector of EdOverlayLines.h for the world camera and the viewport.
+  struct CamProjector
+  {
+    const moho::GeomCamera3& cam;
+    float vw, vh;
+    void Screen(const float x, const float y, const float z, float& sx, float& sy) const
+    {
+      const Wm3::Vector2f s = cam.Project(Wm3::Vector3f{x, y, z}, 0.0f, vw, vh, 0.0f);
+      sx = s.x;
+      sy = s.y;
+    }
+    float W(const float x, const float y, const float z) const
+    {
+      return ClipW(cam, Wm3::Vector3f{x, y, z});
+    }
   };
 
-  void Emit(moho::CD3DPrimBatcher& b, float x0, float y0, float h0, float x1, float y1, float h1, std::uint32_t color)
+  ol::LineScratch gLineScratch;
+
+  // The retained quads of all lines for one camera and viewport.
+  struct LineCache
   {
-    float dx = x1 - x0;
-    float dy = y1 - y0;
-    const float len = std::sqrt(dx * dx + dy * dy);
-    if (len < 0.001f) {
-      return;
-    }
-    dx /= len;
-    dy /= len;
-    const float nx = -dy;
-    const float ny = dx;
-    using V = moho::CD3DPrimBatcher::Vertex;
-    const V a{x0 + nx * h0, y0 + ny * h0, 0.0f, color, 0.0f, 0.0f};
-    const V c{x0 - nx * h0, y0 - ny * h0, 0.0f, color, 0.0f, 1.0f};
-    const V d{x1 - nx * h1, y1 - ny * h1, 0.0f, color, 1.0f, 1.0f};
-    const V e{x1 + nx * h1, y1 + ny * h1, 0.0f, color, 1.0f, 0.0f};
-    b.DrawQuad(a, c, d, e);
+    bool valid = false;
+    std::uint32_t epoch = 0;
+    float vp[16] = {};
+    float vw = 0.0f, vh = 0.0f;
+    QuadList halo, line;      // halo quads of every line that has a halo, then the quads of every line
+    bool dbgSet = false;
+    float dbg[8] = {};
+    std::uint32_t builds = 0, replays = 0;
+  };
+  LineCache gLineCache;
+  static_assert(sizeof(moho::VMatrix4) == 16u * sizeof(float), "the camera matrix is compared as 16 floats");
+
+  bool SameCamera(const float* const vp, const moho::GeomCamera3& cam, const float vw, const float vh, const float cvw, const float cvh)
+  {
+    return vw == cvw && vh == cvh && std::memcmp(vp, &cam.viewProjection, sizeof(moho::VMatrix4)) == 0;
   }
 
-  // A ribbon segment from the four screen positions of its ground corners (left / right of each end): a ribbon wider than a line is a rectangle on the GROUND, which on the
-  // screen is a parallelogram, not a rectangle across the screen direction of the spine (that one stood up like a plane when the camera looked along a diagonal).
-  void EmitCorners(moho::CD3DPrimBatcher& b, const Pt& l0, const Pt& r0, const Pt& r1, const Pt& l1, std::uint32_t color)
+  void UpdateLineCache(moho::GeomCamera3& cam, const float vw, const float vh)
   {
-    using V = moho::CD3DPrimBatcher::Vertex;
-    b.DrawQuad(V{l0.x, l0.y, 0.0f, color, 0.0f, 0.0f}, V{r0.x, r0.y, 0.0f, color, 0.0f, 1.0f}, V{r1.x, r1.y, 0.0f, color, 1.0f, 1.0f}, V{l1.x, l1.y, 0.0f, color, 1.0f, 0.0f});
-  }
-
-  void Cap(moho::CD3DPrimBatcher& b, float x, float y, float h, std::uint32_t color)
-  {
-    using V = moho::CD3DPrimBatcher::Vertex;
-    b.DrawQuad(V{x - h, y - h, 0.0f, color, 0.0f, 0.0f}, V{x + h, y - h, 0.0f, color, 1.0f, 0.0f},
-               V{x + h, y + h, 0.0f, color, 1.0f, 1.0f}, V{x - h, y + h, 0.0f, color, 0.0f, 1.0f});
-  }
-
-  void DrawLine(moho::GeomCamera3& cam, moho::CD3DPrimBatcher& b, const Polyline& pl, float vw, float vh, bool halo)
-  {
-    const std::size_t n = pl.pts.size() / 3u;
-    if (n < 2u) {
-      return;
-    }
-    const std::size_t segs = pl.closed ? n : n - 1u;
-
-    // screen position, depth and on-screen half width of every vertex
-    std::vector<Pt> sp(n);
-    std::vector<float> half(n);
-    std::vector<Pt> cl(n), cr(n);          // the projected ground corners left / right of every vertex, already clamped to the pixel limits and grown for the halo
-    std::vector<char> cornersOk(n, 0);
-    for (std::size_t i = 0; i < n; ++i) {
-      const Wm3::Vector3f p{pl.pts[i * 3], pl.pts[i * 3 + 1], pl.pts[i * 3 + 2]};
-      const Wm3::Vector2f s = cam.Project(p, 0.0f, vw, vh, 0.0f);
-      sp[i] = {s.x, s.y, ClipW(cam, p)};
-
-      // width of a horizontal ribbon of `worldWidth` across this vertex, measured on screen
-      const std::size_t a = (i == 0u) ? (pl.closed ? n - 1u : 0u) : i - 1u;
-      const std::size_t c = (i + 1u < n) ? i + 1u : (pl.closed ? 0u : n - 1u);
-      const float dx = pl.pts[c * 3] - pl.pts[a * 3];
-      const float dz = pl.pts[c * 3 + 2] - pl.pts[a * 3 + 2];
-      const float l = std::sqrt(dx * dx + dz * dz);
-      float px = 0.0f;
-      if (l > 0.0001f) {
-        const float hw = pl.worldWidth * 0.5f;
-        const float ox = dz / l * hw;
-        const float oz = -dx / l * hw;
-        const Wm3::Vector2f s1 = cam.Project(Wm3::Vector3f{p.x + ox, p.y, p.z + oz}, 0.0f, vw, vh, 0.0f);
-        const Wm3::Vector2f s2 = cam.Project(Wm3::Vector3f{p.x - ox, p.y, p.z - oz}, 0.0f, vw, vh, 0.0f);
-        px = 0.5f * std::sqrt((s1.x - s2.x) * (s1.x - s2.x) + (s1.y - s2.y) * (s1.y - s2.y));
-        // the corners: from the middle of the vertex to each side, stretched or shrunk to the pixel limits (the halo is a pixel wider on each side)
-        const float want = std::min(pl.maxPx * 0.5f, std::max(pl.minPx * 0.5f, px)) + (halo ? 1.0f : 0.0f);
-        const float ax = 0.5f * (s1.x - s2.x), ay = 0.5f * (s1.y - s2.y);        // half of the way from the right to the left corner
-        const float mx = 0.5f * (s1.x + s2.x), my = 0.5f * (s1.y + s2.y);        // the middle of the ribbon across this vertex on the screen
-        if (px >= pl.minPx * 0.75f && px <= pl.maxPx * 0.5f) {          // a ribbon the pixel limits do not touch is drawn as the ground rectangle it is; a thin line keeps its pixel width across
-          const float k = want / px;
-          cl[i] = {mx + ax * k, my + ay * k, 0.0f};
-          cr[i] = {mx - ax * k, my - ay * k, 0.0f};
-          cornersOk[i] = 1;
+    LineCache& c = gLineCache;
+    if (c.valid && c.epoch == gLinesEpoch && SameCamera(c.vp, cam, vw, vh, c.vw, c.vh)) {
+      ++c.replays;
+    } else {
+      ++c.builds;
+      c.halo.clear();
+      c.line.clear();
+      c.dbgSet = false;
+      for (const auto& entry : Lines()) {
+        const Polyline& pl = entry.second;
+        if (pl.pts.size() / 3u < 2u) {
+          continue;
         }
+        ol::ProjectLine(CamProjector{cam, vw, vh}, pl, gLineScratch.v);
+        if (pl.halo) {
+          ol::EmitLine(pl, gLineScratch, vw, vh, true, c.halo, nullptr);
+        }
+        ol::EmitLine(pl, gLineScratch, vw, vh, false, c.line, c.dbg);
+        c.dbgSet = true;
       }
-      half[i] = std::min(pl.maxPx * 0.5f, std::max(pl.minPx * 0.5f, px)) + (halo ? 1.0f : 0.0f);
+      c.valid = true;
+      c.epoch = gLinesEpoch;
+      c.vw = vw;
+      c.vh = vh;
+      std::memcpy(c.vp, &cam.viewProjection, sizeof(moho::VMatrix4));
     }
+    if (c.dbgSet) {
+      std::memcpy(gDbg, c.dbg, sizeof(gDbg));
+    }
+  }
 
-    if (!halo) {
-      gDbg[0] = sp[0].x; gDbg[1] = sp[0].y; gDbg[2] = sp[0].depth; gDbg[3] = half[0]; gDbg[4] = vw; gDbg[5] = vh;
-      gDbg[6] = 0.0f; gDbg[7] = 0.0f;
+  // ---- retained icon and decal groups -------------------------------------------------------------------------------------------------------
+  // The icons and decals are drawn one texture at a time; the grouping by texture (an ordered map built from scratch every frame before) is kept until the set changes.
+  struct IconGroup
+  {
+    std::string texture;
+    std::vector<const Icon*> icons;
+    QuadList quads;           // their quads for the camera of IconCache; valid when `built`
+    bool built = false;
+  };
+
+  struct IconCache
+  {
+    std::uint32_t groupsEpoch = 0;
+    std::vector<IconGroup> groups;
+    bool keyValid = false;
+    float vp[16] = {};
+    float vw = 0.0f, vh = 0.0f;
+  };
+  IconCache gIconCache;
+
+  std::vector<IconGroup>& IconGroups(const moho::GeomCamera3& cam, const float vw, const float vh)
+  {
+    IconCache& c = gIconCache;
+    if (c.groupsEpoch != gIconsEpoch) {
+      std::map<std::string, std::vector<const Icon*>> byTexture;
+      for (const auto& entry : Icons()) {
+        byTexture[entry.second.texture].push_back(&entry.second);
+      }
+      c.groups.clear();
+      c.groups.reserve(byTexture.size());
+      for (auto& group : byTexture) {
+        IconGroup g;
+        g.texture = group.first;
+        g.icons = std::move(group.second);
+        c.groups.push_back(std::move(g));
+      }
+      c.groupsEpoch = gIconsEpoch;
+      c.keyValid = false;
     }
-    const std::uint32_t color = halo ? 0xB0000000u : pl.argb;
-    for (std::size_t s = 0; s < segs; ++s) {
-      const std::size_t i0 = s;
-      const std::size_t i1 = (s + 1u) % n;
-      const Pt& a = sp[i0];
-      const Pt& c = sp[i1];
-      if (!moho::editor::overlaydrape::InFront(a.depth) || !moho::editor::overlaydrape::InFront(c.depth)) {
-        if (!halo) gDbg[7] += 1.0f;
+    if (!c.keyValid || !SameCamera(c.vp, cam, vw, vh, c.vw, c.vh)) {
+      for (IconGroup& g : c.groups) {
+        g.built = false;
+      }
+      c.vw = vw;
+      c.vh = vh;
+      std::memcpy(c.vp, &cam.viewProjection, sizeof(moho::VMatrix4));
+      c.keyValid = true;
+    }
+    return c.groups;
+  }
+
+  void BuildIconQuads(const moho::GeomCamera3& camera, const float vw, const float vh, IconGroup& g)
+  {
+    g.quads.clear();
+    for (const Icon* const icon : g.icons) {
+      const Wm3::Vector3f p{icon->x, icon->y, icon->z};
+      if (!moho::editor::overlaydrape::InFront(ClipW(camera, p))) {
         continue;
       }
-      if ((a.x < -64.0f && c.x < -64.0f) || (a.x > vw + 64.0f && c.x > vw + 64.0f) ||
-          (a.y < -64.0f && c.y < -64.0f) || (a.y > vh + 64.0f && c.y > vh + 64.0f)) {
+      const Wm3::Vector2f s = camera.Project(p, 0.0f, vw, vh, 0.0f);
+      if (s.x < -64.0f || s.y < -64.0f || s.x > vw + 64.0f || s.y > vh + 64.0f) {
         continue;
       }
-      if (!halo) gDbg[6] += 1.0f;
-      if (cornersOk[i0] && cornersOk[i1]) {
-        EmitCorners(b, cl[i0], cr[i0], cr[i1], cl[i1], color);
-      } else {
-        Emit(b, a.x, a.y, half[i0], c.x, c.y, half[i1], color);
-      }
+      const float h = icon->px * 0.5f;
+      const float cx = std::floor(s.x) + 0.5f;
+      const float cy = std::floor(s.y) + 0.5f;
+      using V = moho::CD3DPrimBatcher::Vertex;
+      ol::PushQuad(g.quads, V{cx - h, cy - h, 0.0f, icon->argb, 0.0f, 0.0f}, V{cx + h, cy - h, 0.0f, icon->argb, 1.0f, 0.0f},
+               V{cx + h, cy + h, 0.0f, icon->argb, 1.0f, 1.0f}, V{cx - h, cy + h, 0.0f, icon->argb, 0.0f, 1.0f});
     }
-    if (pl.caps) {
-      for (std::size_t i = 0; i < n; ++i) {
-        if (moho::editor::overlaydrape::InFront(sp[i].depth)) {
-          Cap(b, sp[i].x, sp[i].y, half[i], color);   // joins the ribbons at the vertices
-        }
+    g.built = true;
+  }
+
+  struct DecalGroup
+  {
+    std::string texture;
+    std::vector<const Decal*> decals;
+  };
+
+  const std::vector<DecalGroup>& DecalGroups()
+  {
+    static std::vector<DecalGroup> groups;
+    static std::uint32_t epoch = 0;
+    if (epoch != gDecalsEpoch) {
+      std::map<std::string, std::vector<const Decal*>> byTexture;
+      for (const auto& entry : Decals()) {
+        byTexture[entry.second.texture].push_back(&entry.second);
       }
+      groups.clear();
+      groups.reserve(byTexture.size());
+      for (auto& group : byTexture) {
+        DecalGroup g;
+        g.texture = group.first;
+        g.decals = std::move(group.second);
+        groups.push_back(std::move(g));
+      }
+      epoch = gDecalsEpoch;
     }
+    return groups;
   }
 
   // ed_overlay_set(id, points, color [, worldWidth, minPx, maxPx, closed, halo])
   //   points: flat array { x, y, z, x, y, z, ... } in world coordinates; color: 'RRGGBB' or 'AARRGGBB' hex string
+  bool SameFloats(const float a, const float b)
+  {
+    return std::memcmp(&a, &b, sizeof(float)) == 0;
+  }
+
+  // The same line as the one stored (points compared bit for bit): the overlay refresh writes every line again, mostly unchanged.
+  bool SamePolyline(const Polyline& a, const Polyline& b, const std::vector<float>& bPts)
+  {
+    return a.argb == b.argb && SameFloats(a.worldWidth, b.worldWidth) && SameFloats(a.minPx, b.minPx) && SameFloats(a.maxPx, b.maxPx) && a.closed == b.closed &&
+           a.halo == b.halo && a.caps == b.caps && a.pts.size() == bPts.size() && (bPts.empty() || std::memcmp(a.pts.data(), bPts.data(), bPts.size() * sizeof(float)) == 0);
+  }
+
   int __cdecl cfunc_EdOverlaySet(lua_State* const L)
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 2) != LUA_TTABLE) {
+      moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_set(id, points, color [, worldWidth, minPx, maxPx, closed, halo])");
       return 2;
     }
-    Polyline pl;
+    Polyline pl;                          // pl.pts stays empty: the points go through a buffer that is kept between calls (no allocation for an unchanged line)
+    static std::vector<float> pts;
+    pts.clear();
     const int count = lua_getn(L, 2);
-    pl.pts.reserve(static_cast<std::size_t>(count));
     for (int i = 1; i + 2 <= count; i += 3) {
       for (int k = 0; k < 3; ++k) {
         lua_rawgeti(L, 2, i + k);
-        pl.pts.push_back(static_cast<float>(lua_tonumber(L, -1)));
+        pts.push_back(static_cast<float>(lua_tonumber(L, -1)));
         lua_settop(L, -2);
       }
     }
@@ -824,7 +929,28 @@ namespace
     pl.closed = lua_toboolean(L, 7) != 0;
     if (lua_type(L, 8) != LUA_TNIL && lua_type(L, 8) != LUA_TNONE) pl.halo = lua_toboolean(L, 8) != 0;
     if (lua_type(L, 9) != LUA_TNIL && lua_type(L, 9) != LUA_TNONE) pl.caps = lua_toboolean(L, 9) != 0;
-    Lines()[lua_tostring(L, 1)] = std::move(pl);
+    const std::string_view id(lua_tostring(L, 1));
+    const auto found = Lines().find(id);
+    if (found != Lines().end()) {
+      Polyline& old = found->second;
+      if (SamePolyline(old, pl, pts)) {
+        lua_pushboolean(L, 1);
+        return 1;
+      }
+      old.pts.assign(pts.begin(), pts.end());
+      old.argb = pl.argb;
+      old.worldWidth = pl.worldWidth;
+      old.minPx = pl.minPx;
+      old.maxPx = pl.maxPx;
+      old.closed = pl.closed;
+      old.halo = pl.halo;
+      old.caps = pl.caps;
+    } else {
+      pl.pts = pts;
+      Lines().emplace(std::string(id), std::move(pl));
+    }
+    ++gLinesEpoch;
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     lua_pushboolean(L, 1);
     return 1;
   }
@@ -832,8 +958,8 @@ namespace
   // ed_overlay_icon(id, x, y, z, texturePath, sizePx [, color])
   int __cdecl cfunc_EdOverlayIcon(lua_State* const L)
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 5) != LUA_TSTRING) {
+      moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_icon(id, x, y, z, texturePath, sizePx [, color])");
       return 2;
@@ -848,7 +974,20 @@ namespace
       const std::uint32_t v = static_cast<std::uint32_t>(std::strtoul(text, nullptr, 16));
       icon.argb = (std::strlen(text) <= 6u) ? (0xFF000000u | v) : v;
     }
-    Icons()[lua_tostring(L, 1)] = std::move(icon);
+    const std::string_view id(lua_tostring(L, 1));
+    const auto found = Icons().find(id);
+    if (found != Icons().end()) {
+      const Icon& old = found->second;
+      if (SameFloats(old.x, icon.x) && SameFloats(old.y, icon.y) && SameFloats(old.z, icon.z) && SameFloats(old.px, icon.px) && old.argb == icon.argb && old.texture == icon.texture) {
+        lua_pushboolean(L, 1);
+        return 1;
+      }
+      found->second = std::move(icon);
+    } else {
+      Icons().emplace(std::string(id), std::move(icon));
+    }
+    ++gIconsEpoch;
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     lua_pushboolean(L, 1);
     return 1;
   }
@@ -856,8 +995,8 @@ namespace
   // ed_overlay_decal(id, x, y, z, texturePath, size [, color, yawRadians])
   int __cdecl cfunc_EdOverlayDecal(lua_State* const L)
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 5) != LUA_TSTRING) {
+      moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw])");
       return 2;
@@ -873,7 +1012,21 @@ namespace
       decal.argb = (std::strlen(text) <= 6u) ? (0xFF000000u | v) : v;
     }
     if (lua_type(L, 8) == LUA_TNUMBER) decal.yaw = static_cast<float>(lua_tonumber(L, 8));
-    Decals()[lua_tostring(L, 1)] = std::move(decal);
+    const std::string_view id(lua_tostring(L, 1));
+    const auto found = Decals().find(id);
+    if (found != Decals().end()) {
+      const Decal& old = found->second;
+      if (SameFloats(old.x, decal.x) && SameFloats(old.y, decal.y) && SameFloats(old.z, decal.z) && SameFloats(old.size, decal.size) && SameFloats(old.yaw, decal.yaw) &&
+          old.argb == decal.argb && old.texture == decal.texture) {
+        lua_pushboolean(L, 1);
+        return 1;
+      }
+      found->second = std::move(decal);
+    } else {
+      Decals().emplace(std::string(id), std::move(decal));
+    }
+    ++gDecalsEpoch;
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     lua_pushboolean(L, 1);
     return 1;
   }
@@ -1195,14 +1348,27 @@ namespace
 
   int __cdecl cfunc_EdOverlayRemove(lua_State* const L)
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     if (const char* const id = lua_tostring(L, 1)) {
-      Lines().erase(id);
-      Icons().erase(id);
-      Decals().erase(id);
+      const std::string_view key(id);
+      const auto lines = Lines().find(key);
+      if (lines != Lines().end()) {
+        Lines().erase(lines);
+        ++gLinesEpoch;
+      }
+      const auto icons = Icons().find(key);
+      if (icons != Icons().end()) {
+        Icons().erase(icons);
+        ++gIconsEpoch;
+      }
+      const auto decals = Decals().find(key);
+      if (decals != Decals().end()) {
+        Decals().erase(decals);
+        ++gDecalsEpoch;
+      }
       NodeGrids().erase(id);
       FieldLayers().erase(id);
     }
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
     return 0;
   }
 
@@ -1212,6 +1378,9 @@ namespace
     Lines().clear();
     Icons().clear();
     Decals().clear();
+    ++gLinesEpoch;
+    ++gIconsEpoch;
+    ++gDecalsEpoch;
     NodeGrids().clear();
     FieldLayers().clear();
     return 0;
@@ -1226,6 +1395,22 @@ namespace
       lua_pushnumber(L, static_cast<lua_Number>(gCam[i]));
     }
     return 24;
+  }
+
+  // ed_overlay_hash([on]) -> "hhhhhhhh", quads, builds, replays: hash and count of the line and icon quads of the last frame (hashing is off until it was switched on), and how often
+  // the retained line quads were rebuilt / replayed
+  int __cdecl cfunc_EdOverlayHash(lua_State* const L)
+  {
+    if (lua_type(L, 1) != LUA_TNIL && lua_type(L, 1) != LUA_TNONE) {
+      gHashOn = lua_toboolean(L, 1) != 0;
+    }
+    char text[16];
+    std::snprintf(text, sizeof(text), "%08x", gHashLast);
+    lua_pushstring(L, text);
+    lua_pushnumber(L, static_cast<lua_Number>(gHashQuads));
+    lua_pushnumber(L, static_cast<lua_Number>(gLineCache.builds));     // how often the line quads were rebuilt, and replayed unchanged, since the start
+    lua_pushnumber(L, static_cast<lua_Number>(gLineCache.replays));
+    return 4;
   }
 
   int __cdecl cfunc_EdOverlayCount(lua_State* const L)
@@ -1275,6 +1460,7 @@ namespace
       (void)new moho::CScrLuaBinder(set, "ed_overlay_remove", &cfunc_EdOverlayRemove, nullptr, "<global>", "ed_overlay_remove(id)");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_clear", &cfunc_EdOverlayClear, nullptr, "<global>", "ed_overlay_clear()");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_stats", &cfunc_EdOverlayStats, nullptr, "<global>", "ed_overlay_stats() -> x, y, depth, half, vw, vh, drawn, culled");
+      (void)new moho::CScrLuaBinder(set, "ed_overlay_hash", &cfunc_EdOverlayHash, nullptr, "<global>", "ed_overlay_hash([on]) -> hash, quads of the line and icon quads of the last frame");
       (void)new moho::CScrLuaBinder(set, "ed_overlay_count", &cfunc_EdOverlayCount, nullptr, "<global>", "ed_overlay_count() -> number of lines");
     }
   };
@@ -1339,17 +1525,13 @@ namespace moho
 
       // ground decals first (splats under everything else), one texture at a time
       {
-        std::map<std::string, std::vector<const Decal*>> decalsByTexture;
-        for (const auto& entry : Decals()) {
-          decalsByTexture[entry.second.texture].push_back(&entry.second);
-        }
-        for (const auto& group : decalsByTexture) {
-          const boost::shared_ptr<CD3DBatchTexture> texture = CD3DBatchTexture::FromFile(group.first.c_str(), 0u);
+        for (const DecalGroup& group : DecalGroups()) {
+          const boost::shared_ptr<CD3DBatchTexture> texture = CD3DBatchTexture::FromFile(group.texture.c_str(), 0u);
           if (!texture) {
             continue;
           }
           batcher->SetTexture(texture);
-          for (const Decal* const d : group.second) {
+          for (const Decal* const d : group.decals) {
             // The corners of the flat square: they decide whether the decal is on screen at all, and how big it is there (how finely it is cut up).
             const float h = d->size * 0.5f;
             const float cs = std::cos(d->yaw);
@@ -1954,45 +2136,27 @@ namespace moho
 
       // dark halos first, then every line on top of all of them (x-ray, no depth test)
       flatPass();
-      for (const auto& entry : Lines()) {
-        if (entry.second.halo) {
-          DrawLine(*camera, *batcher, entry.second, vw, vh, true);
-        }
-      }
-      for (const auto& entry : Lines()) {
-        DrawLine(*camera, *batcher, entry.second, vw, vh, false);
-      }
+      gHashAcc = 2166136261u;
+      gHashQuads = 0u;
+      UpdateLineCache(*camera, vw, vh);
+      DrawQuadList(*batcher, gLineCache.halo);       // dark halos first, then every line on top of all of them
+      DrawQuadList(*batcher, gLineCache.line);
       batcher->Flush();
 
       // icons, one texture at a time
-      std::map<std::string, std::vector<const Icon*>> byTexture;
-      for (const auto& entry : Icons()) {
-        byTexture[entry.second.texture].push_back(&entry.second);
-      }
-      for (const auto& group : byTexture) {
-        const boost::shared_ptr<CD3DBatchTexture> texture = CD3DBatchTexture::FromFile(group.first.c_str(), 0u);
+      for (IconGroup& group : IconGroups(*camera, vw, vh)) {
+        const boost::shared_ptr<CD3DBatchTexture> texture = CD3DBatchTexture::FromFile(group.texture.c_str(), 0u);
         if (!texture) {
           continue;
         }
         batcher->SetTexture(texture);
-        for (const Icon* const icon : group.second) {
-          const Wm3::Vector3f p{icon->x, icon->y, icon->z};
-          if (!moho::editor::overlaydrape::InFront(ClipW(*camera, p))) {
-            continue;
-          }
-          const Wm3::Vector2f s = camera->Project(p, 0.0f, vw, vh, 0.0f);
-          if (s.x < -64.0f || s.y < -64.0f || s.x > vw + 64.0f || s.y > vh + 64.0f) {
-            continue;
-          }
-          const float h = icon->px * 0.5f;
-          const float cx = std::floor(s.x) + 0.5f;
-          const float cy = std::floor(s.y) + 0.5f;
-          using V = CD3DPrimBatcher::Vertex;
-          batcher->DrawQuad(V{cx - h, cy - h, 0.0f, icon->argb, 0.0f, 0.0f}, V{cx + h, cy - h, 0.0f, icon->argb, 1.0f, 0.0f},
-                            V{cx + h, cy + h, 0.0f, icon->argb, 1.0f, 1.0f}, V{cx - h, cy + h, 0.0f, icon->argb, 0.0f, 1.0f});
+        if (!group.built) {
+          BuildIconQuads(*camera, vw, vh, group);
         }
+        DrawQuadList(*batcher, group.quads);
         batcher->Flush();
       }
+      gHashLast = gHashAcc;
     }
   } // namespace edoverlay
 } // namespace moho
