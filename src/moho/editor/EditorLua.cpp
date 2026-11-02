@@ -12,6 +12,8 @@
 // Terrain (the live world; samples are 1 world unit apart, heights are world units = word / 128):
 //   ed_terrain_info()                    -> samplesX, samplesZ
 //   ed_terrain_get(x, z)                 -> world height at one sample
+//   ed_terrain_get_many(coords [, out])  -> out, outside   heights of many samples in one call: coords = { x1, z1, x2, z2, ... }, out[i] = height or false outside
+//                                           the map; `out` (optional) is a table that is filled and returned, so one table can be reused every frame
 //   ed_terrain_raise(cx, cz, r, amount)  -> samples changed  (cosine hill, `amount` world units at the centre)
 //   ed_terrain_set_rect(x0,z0,x1,z1, h)  -> samples changed  (flatten an inclusive sample rectangle to h)
 //   ed_terrain_read_rect(x0,z0,x1,z1)    -> array of height words, row major (x fastest), rect clamped
@@ -278,6 +280,45 @@ namespace
     }
     lua_pushnumber(state, static_cast<lua_Number>(t.view->GetHeightAt(x, z)) / 128.0f);
     return 1;
+  }
+
+  // ed_terrain_get_many(coords [, out]) -> out, outside
+  //   coords: a flat array { x1, z1, x2, z2, ... } of sample coordinates (truncated to integers, like ed_terrain_get); out: a table to fill (entries 1 .. n are written, the
+  //   rest is left alone: one table can be kept and reused every frame) or none (a new table). out[i] is the world height of point i, `false` for a point outside the map
+  //   (ed_terrain_get answers nil there; a hole in the array would not do). `outside` counts those. A value that is not a number reads as 0. One call instead of n:
+  //   the Lua to C++ transition is what costs when a panel or a validator asks for thousands of heights.
+  int __cdecl cfunc_EdTerrainGetMany(lua_State* const state)
+  {
+    luaL_checktype(state, 1, LUA_TTABLE);
+    const TerrainTargets t = ResolveTerrain();
+    const int count = lua_getn(state, 1) / 2;
+    if (lua_type(state, 2) == LUA_TTABLE) {
+      lua_pushvalue(state, 2);
+    } else {
+      lua_newtable(state);
+    }
+    const int out = lua_gettop(state);
+    const int width = (t.view != nullptr) ? t.view->Width() : 0;
+    const int height = (t.view != nullptr) ? t.view->Height() : 0;
+    int outside = 0;
+    for (int i = 1; i <= count; ++i) {
+      lua_rawgeti(state, 1, 2 * i - 1);
+      const int x = static_cast<int>(lua_tonumber(state, -1));
+      lua_settop(state, -2);
+      lua_rawgeti(state, 1, 2 * i);
+      const int z = static_cast<int>(lua_tonumber(state, -1));
+      lua_settop(state, -2);
+      lua_pushnumber(state, static_cast<lua_Number>(i));
+      if (t.view == nullptr || x < 0 || z < 0 || x >= width || z >= height) {
+        lua_pushboolean(state, 0);
+        ++outside;
+      } else {
+        lua_pushnumber(state, static_cast<lua_Number>(t.view->GetHeightAt(x, z)) / 128.0f);
+      }
+      lua_settable(state, out);
+    }
+    lua_pushnumber(state, static_cast<lua_Number>(outside));
+    return 2;
   }
 
   int __cdecl cfunc_EdTerrainRaise(lua_State* const state)
@@ -972,6 +1013,7 @@ namespace
       (void)BindGlobal("ed_write_file", &cfunc_EdWriteFile, "ed_write_file(path, data) -> bool");
       (void)BindGlobal("ed_terrain_info", &cfunc_EdTerrainInfo, "ed_terrain_info() -> samplesX, samplesZ");
       (void)BindGlobal("ed_terrain_get", &cfunc_EdTerrainGet, "ed_terrain_get(x, z) -> world height");
+      (void)BindGlobal("ed_terrain_get_many", &cfunc_EdTerrainGetMany, "ed_terrain_get_many(coords [, out]) -> out, outside: heights of the points { x1, z1, x2, z2, ... }, false outside the map");
       (void)BindGlobal("ed_terrain_raise", &cfunc_EdTerrainRaise, "ed_terrain_raise(cx, cz, radius, amount) -> samples");
       (void)BindGlobal("ed_terrain_set_rect", &cfunc_EdTerrainSetRect, "ed_terrain_set_rect(x0, z0, x1, z1, height) -> samples");
       (void)BindGlobal("ed_terrain_read_rect", &cfunc_EdTerrainReadRect, "ed_terrain_read_rect(x0, z0, x1, z1) -> words, x0, z0, x1, z1");

@@ -3,6 +3,7 @@
 //   ed_camera_info() -> fovRad, eyeDistance, focusX, focusY, focusZ, heading, pitch, targetZoom, viewportX, viewportY, viewportW, viewportH
 //   ed_lod_info([entityId]) -> table: eye position, heading, pitch, zoom, fov, lodScale, the LOD plane (viewport.r[1]), viewport, and for an entity its LOD depth, cutoffs, selected LOD
 //   ed_unit_bones(entityId) -> { { name, parent, x, y, z, fx, fy, fz, ux, uy, uz }, ... } | nil, message
+//   ed_units_snapshot([out]) -> out, n   every unit of the world session in one call, five entries per unit: entity id, x, y, z, blueprint id (see the function)
 //
 // One entry per bone of the entity's mesh instance (the pose is already in world space), in bone order (parent = index of the parent bone, -1 for the root; Lua counts from 1 for the list, the indices
 // are the engine's bone indices counting from 0). (x, y, z) is the world position of the bone, (fx, fy, fz) the world direction of the bone's +z axis (the
@@ -19,6 +20,7 @@
 #include "lua/LuaRuntimeTypes.h"
 #include "moho/animation/CAniPose.h"
 #include "moho/animation/CAniSkel.h"
+#include "moho/entity/REntityBlueprint.h"
 #include "moho/entity/UserEntity.h"
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/lua/CScrLuaInitForm.h"
@@ -109,6 +111,43 @@ namespace
       lua_settable(L, -3);
     }
     return 1;
+  }
+
+  // ed_units_snapshot([out]) -> out, n
+  // Every unit of the world session as one flat array, five entries per unit: entity id, x, y, z (the newest position the sim sent) and the blueprint id
+  // ("uel0001"). `out` (optional) is a table to fill and return: one table can be kept and reused every frame (entries 1 .. 5 n are written, the rest is left alone);
+  // n is the number of units. Units marked for deletion are left out. One call instead of a Lua loop over GetUnits / entity queries.
+  int __cdecl cfunc_EdUnitsSnapshot(lua_State* const L)
+  {
+    if (lua_type(L, 1) == LUA_TTABLE) {
+      lua_pushvalue(L, 1);
+    } else {
+      lua_newtable(L);
+    }
+    const int out = lua_gettop(L);
+    int n = 0;
+    if (moho::CWldSession* const session = moho::WLD_GetActiveSession(); session != nullptr) {
+      for (const auto& [entityId, entity] : session->mEntities) {
+        if (entity == nullptr || entity->mMarkedForDeletion != 0 || entity->IsUserUnit() == nullptr) {
+          continue;
+        }
+        const moho::REntityBlueprint* const blueprint = entity->mParams.mBlueprint;
+        const Wm3::Vec3f position = entity->GetInterpolatedPosition(1.0f);       // the newest pose the sim sent
+        const int base = 5 * n;
+        const lua_Number numbers[4] = {static_cast<lua_Number>(entityId), position.x, position.y, position.z};
+        for (int k = 0; k < 4; ++k) {
+          lua_pushnumber(L, static_cast<lua_Number>(base + k + 1));
+          lua_pushnumber(L, numbers[k]);
+          lua_settable(L, out);
+        }
+        lua_pushnumber(L, static_cast<lua_Number>(base + 5));
+        lua_pushstring(L, blueprint != nullptr ? blueprint->mBlueprintId.c_str() : "");
+        lua_settable(L, out);
+        ++n;
+      }
+    }
+    lua_pushnumber(L, static_cast<lua_Number>(n));
+    return 2;
   }
 
   // ed_camera_info() -> fovRad, eyeDistance, focusX, focusY, focusZ, heading, pitch, targetZoom, viewportX, viewportY, viewportW, viewportH | nil
@@ -233,6 +272,7 @@ namespace
     {
       (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_camera_info", &cfunc_EdCameraInfo, nullptr, "<global>", "ed_camera_info() -> fov, eye, focus x y z, heading, pitch, targetZoom, viewport x y w h");
       (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_lod_info", &cfunc_EdLodInfo, nullptr, "<global>", "ed_lod_info([entityId]) -> table of the camera and LOD numbers (eye, heading, pitch, zoom, fov, LOD row, viewport; with an entity id its depth, cutoffs and selected LOD) | nil");
+      (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_units_snapshot", &cfunc_EdUnitsSnapshot, nullptr, "<global>", "ed_units_snapshot([out]) -> out, n: five entries per unit of the world session: entity id, x, y, z, blueprint id");
       (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_unit_bones", &cfunc_EdUnitBones, nullptr, "<global>", "ed_unit_bones(entityId) -> list of bones | nil, message");
     }
   };
