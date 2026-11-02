@@ -45,6 +45,9 @@ namespace moho::water
   void SimUnitDeath(float x, float y, float z, float mass, bool shown = false);
 
   float SimWakeScale();
+  // The game time of the last frame in steps of the simulation (0 while the game is paused): continuous sources (a hull under way) are weighed with
+  // it so that what they push per second does not depend on the frame rate. One-off events (a shell, a death) are not.
+  float SimSourceWeight();
   bool SimDiagnostics(); // ren_WaterSimLog is on: the feeds log what they see
   float SimImpactScale();
 

@@ -345,6 +345,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       std::chrono::steady_clock::time_point lastTickWall{}; // when
       bool haveTick = false;
       float gameSpeed = 1.0f;                              // game ticks over real time, in units of ten a second (smoothed)
+      float sourceWeight = 1.0f;                           // game time of the last frame over one step of the simulation
     };
 
     State& GetState()
@@ -560,6 +561,11 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     return ren_WaterSimLog > 0;
   }
 
+  float SimSourceWeight()
+  {
+    return GetState().sourceWeight;
+  }
+
   float SimWakeScale()
   {
     return 0.01f * static_cast<float>(std::max(ren_WaterSimWake, 0));
@@ -702,6 +708,10 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       dt = std::min(dt, 0.1f);
     }
     s.time += dt;
+    // What a moving hull pushes in is meant per step of the simulation (90 a second), but the feeds run once per frame: at 200 frames a second the
+    // sources of two frames land in one step and a wake grows to a slab of foam and thick ridges, at 30 it is thin, and while the game is paused the
+    // pending list filled up and burst on the next frame. The feeds weigh their continuous sources with the game time of the last frame.
+    s.sourceWeight = std::min(dt / kStepSeconds, 4.0f);
 
     // the window follows the point of the water the middle of the view looks at
     const float w = camera.viewport.r[3].z;

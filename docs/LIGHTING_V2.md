@@ -227,3 +227,16 @@ User report: a UEF Titan glows only up close, gunfire of a Fatboy is visible, we
 - The Titan (uel0303): its mesh material is `PhaseShield`, and a shader name with "shield" in it was taken for a shield bubble: no light at all. A unit with a shield-named shader and an albedo under `/units/` is a unit now (`GlowOf`). But the specular map of the Titan has no emissive channel in the rule of the UEF units (specular.b): its glow area is 0, so it still lights nothing itself; what the user saw up close is something else (its weapons, the unit's own emissive shading).
 - Census (`ren_DynLightsCensus 240`, 4 factions building): the build beams are `ok:beam` (beam_white_02: 125 of 240 frames; beam_disruptor), so they were lights, but at power 7 below the Normal class. Measured light of the beams (difference of the frame with lights on and off, zooms 40 / 90 / 180, mean over the crop): old 0.057 / 0.016 / 0.033, then 0.051 / 0.028 / 0.023, 0.076 / 0.026 / 0.018 after the intensity change: the weak lights stay faint in absolute terms (the difference needs a tenfold amplification to be seen at zoom 90).
 - `ren_DynLightsGain` (percent, default 100, 0 to 1000): scales the colour x intensity of every light of the frame after the collector (`BeginFrame`), so the grid and the field both see it. Measured on the build scene at zoom 40 (pixels that differ from the frame without lights by more than 2 levels): gain 0: 2,146 (the noise floor), 100: 2,995, 300: 4,228, 1000: 14,863; the mean difference saturates (0.25 / 0.26 / 0.32) because the light shaders soft-limit the sum. Console only; no entry in the options menu.
+
+## Hull sources are per step, not per frame (2026-11-02, from a user screenshot)
+
+The feeds run once per frame, the simulation steps 90 times a second, and the sources were applied at the first step of the frame (and, when a frame
+had no step, stayed in the pending list until one came). So what a moving hull pushed per second was the frame rate: at 200 fps two frames of sources
+landed in each step (foam of the three side sources and the wash added up to an opaque slab with straight edges, ridges along every lump track grew
+thick), at 30 fps a wake was thin, and in a pause the list filled to 4096 and burst on the next frame. All calibration so far ran at 90 fps (one step
+a frame: the featab log says "1 steps").
+
+`water::SimSourceWeight()` = game time of the last frame / one step (0 when paused, 2 at game speed 2, 0.45 at 200 fps), clamped to 4. The hull feed
+multiplies strength and foam by it and returns early at 0; shells and deaths are one-off events and are not weighed. Not yet seen in a game: built as
+`wave19` (not deployed: the user's game was running). Check: the same ship at 60 and 240 fps (`FEATAB` with different `-Width`/vsync, or `ren_WaterSimLog`
+peaks) must leave the same wake.

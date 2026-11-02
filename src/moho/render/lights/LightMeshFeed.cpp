@@ -254,6 +254,10 @@ namespace moho::lights
       if (!std::isfinite(speed) || speed < 0.4f) {
         return;
       }
+      const float weight = water::SimSourceWeight();
+      if (!(weight > 0.0f)) {
+        return; // the game is paused: a hull under way pushes nothing
+      }
       note("source");
       // A hull pushes the water up at its bow and leaves a trough behind it: a pair of discs of opposite sign along the heading (a single push piles
       // a mound that follows the ship), and the wash of the propellers behind. The size follows the hull: the height of the waves grows with its
@@ -294,7 +298,7 @@ namespace moho::lights
       const float spacing = count > 1 ? 1.6f * halfBeam / static_cast<float>(count - 1) : 0.0f;
       const float lumpRadius = std::min(std::max(count > 1 ? 0.7f * spacing : 0.5f * halfBeam, 0.8f), 5.0f);
       const float lumpCells = lumpRadius / 0.5f;
-      const float strength = height / (2.5f + 0.8f * lumpCells) * water::SimWakeScale();
+      const float strength = height / (2.5f + 0.8f * lumpCells) * water::SimWakeScale() * weight;
       // A single steady push makes one straight ridge at the edge of the wake. A hull leaves a train of crests: the push alternates with the place
       // along the track (a world fixed pattern of the length of about the hull, so the waves behind a moving ship are crests and troughs one hull length
       // apart), and each lump is a little different (the water is not a ruler). Cheap and local: no state per ship.
@@ -304,7 +308,7 @@ namespace moho::lights
         return static_cast<float>(sWakeSeed >> 8) * (1.0f / 16777216.0f);
       };
       const float trainLength = std::max(2.5f, halfLength * 1.1f);
-      const float foamPerLump = fast * body / std::sqrt(static_cast<float>(count));
+      const float foamPerLump = fast * body * weight / std::sqrt(static_cast<float>(count));
       for (int k = 0; k < count; ++k) {
         const float t = count > 1 ? (static_cast<float>(k) / static_cast<float>(count - 1) * 2.0f - 1.0f) * 0.8f : 0.0f;
         const float lateral = t * halfBeam;
@@ -323,14 +327,14 @@ namespace moho::lights
       }
       // the wash of the propellers: foam only, as wide as the hull
       const float washRadius = std::min(std::max(halfBeam * 0.8f, 0.8f), 6.0f);
-      water::SimAddSource(cx - hx * halfLength * 1.5f, cz - hz * halfLength * 1.5f, washRadius, 0.0f, 0.007f * fast * body, true);
+      water::SimAddSource(cx - hx * halfLength * 1.5f, cz - hz * halfLength * 1.5f, washRadius, 0.0f, 0.007f * fast * body * weight, true);
       // foam along the two sides of the hull
       const float sideRadius = std::min(std::max(halfBeam * 0.35f, 0.7f), 3.0f);
       for (int side = -1; side <= 1; side += 2) {
         for (int along = 0; along < 3; ++along) {
           const float where = halfLength * (0.6f - 0.5f * static_cast<float>(along));
           water::SimAddSource(cx + hx * where + px * halfBeam * 0.95f * static_cast<float>(side), cz + hz * where + pz * halfBeam * 0.95f * static_cast<float>(side),
-                              sideRadius, 0.0f, 0.004f * fast * body, true);
+                              sideRadius, 0.0f, 0.004f * fast * body * weight, true);
         }
       }
     }
