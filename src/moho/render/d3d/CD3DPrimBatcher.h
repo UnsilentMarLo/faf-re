@@ -311,7 +311,20 @@ namespace moho
      */
     void SetToViewport(int head, const CUIManager& manager);
 
+    /**
+     * Editor addition (moho/editor/EdUiClip.h): every quad drawn through `DrawQuad` (bitmaps, borders, glyphs) is cut to this rectangle (the same space as the vertices: UI
+     * pixels) until `ClearClipRect`. Done on the CPU with the texture coordinates adjusted, the batch is not broken. Triangles, lines and the indexed paths are not clipped.
+     */
+    void SetClipRect(float left, float top, float right, float bottom);
+    void ClearClipRect();
+
   private:
+    /** `DrawQuad` without the clip rectangle. */
+    void DrawQuadRaw(const Vertex& topLeft, const Vertex& topRight, const Vertex& bottomRight, const Vertex& bottomLeft);
+
+    /** True when the quad was handled (cut and drawn, or dropped because nothing of it is inside the clip rectangle); false when it lies inside and goes the normal way. */
+    bool DrawQuadClipped(const Vertex& topLeft, const Vertex& topRight, const Vertex& bottomRight, const Vertex& bottomLeft);
+
     /**
      * Address: 0x00439B60 (?AddVert@CD3DPrimBatcher@Moho@@AAEXABUVertex@12@@Z)
      *
@@ -368,6 +381,9 @@ namespace moho
     CD3DTextureBatcher* mArgbAtlasInUse = nullptr;
     // Editor addition: true while the `TTextLcd` technique is selected for consecutive `ed:` text runs (see EndTextRun).
     bool mLcdTextActive = false;
+    // Editor addition: the clip rectangle of SetClipRect (left, top, right, bottom).
+    bool mClipOn = false;
+    float mClipRect[4]{0.0f, 0.0f, 0.0f, 0.0f};
     CD3DTextureBatcher* mTextureBatcher = nullptr;      // +0x00
     CD3DVertexSheet* mVertexSheets[3]{};                // +0x04
     std::int32_t mCurVertexSheet = 0;                   // +0x10

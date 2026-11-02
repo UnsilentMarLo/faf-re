@@ -76,6 +76,7 @@
 #include "moho/render/d3d/CD3DFont.h"
 #include "moho/render/d3d/CD3DPrimBatcher.h"
 #include "moho/editor/EdRenderStats.h"
+#include "moho/editor/EdUiClip.h"
 #include "moho/editor/EdUiCull.h"
 #include "moho/render/d3d/RD3DTextureResource.h"
 #include "moho/render/IRenderWorldView.h"
@@ -696,6 +697,9 @@ namespace
     "Control:DisableHitTest([recursive]) -- hit testing will be skipped for this control";
   constexpr const char* kCMauiControlEnableHitTestHelpText =
     "Control:EnableHitTest([recursive]) -- hit testing will be checked for this control";
+  constexpr const char* kCMauiControlSetClipChildrenHelpText =
+    "Control:SetClipChildren(bool) -- EDITOR: everything below this control is drawn (and hit) only inside its Left / Top / Right / Bottom";
+  constexpr const char* kCMauiControlGetClipChildrenHelpText = "Control:GetClipChildren() -- EDITOR: true when this control clips its descendants";
   constexpr const char* kCMauiControlIsHitTestDisabledHelpText =
     "Control:IsHitTestDisabled() -- determine if hit testing is disabled";
   constexpr const char* kCMauiControlApplyFunctionHelpText =
@@ -6237,6 +6241,76 @@ int moho::cfunc_CMauiControlIsHitTestDisabled(
 )
 {
   return cfunc_CMauiControlIsHitTestDisabledL(ResolveBindingState(luaContext));
+}
+
+/**
+ * EDITOR: `Control:SetClipChildren(bool)` (moho/editor/EdUiClip.h).
+ */
+int moho::cfunc_CMauiControlSetClipChildren(lua_State* const luaContext)
+{
+  return cfunc_CMauiControlSetClipChildrenL(ResolveBindingState(luaContext));
+}
+
+moho::CScrLuaInitForm* moho::func_CMauiControlSetClipChildren_LuaFuncDef()
+{
+  static CScrLuaBinder binder(
+    UserLuaInitSet(),
+    "SetClipChildren",
+    &moho::cfunc_CMauiControlSetClipChildren,
+    &moho::CScrLuaMetatableFactory<moho::CMauiControl>::Instance(),
+    "CMauiControl",
+    kCMauiControlSetClipChildrenHelpText
+  );
+  return &binder;
+}
+
+int moho::cfunc_CMauiControlSetClipChildrenL(LuaPlus::LuaState* const state)
+{
+  const int argumentCount = lua_gettop(state->m_state);
+  if (argumentCount != 2) {
+    LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kCMauiControlSetClipChildrenHelpText, 2, argumentCount);
+  }
+
+  LuaPlus::LuaObject controlObject(LuaPlus::LuaStackObject(state, 1));
+  CMauiControl* const control = SCR_FromLua_CMauiControl(controlObject, state);
+  LuaPlus::LuaStackObject onArg(state, 2);
+  moho::editor::uiclip::SetClipChildren(control, LuaPlus::LuaStackObject::GetBoolean(&onArg));
+  control->Invalidate();
+  return 0;
+}
+
+/**
+ * EDITOR: `Control:GetClipChildren()`.
+ */
+int moho::cfunc_CMauiControlGetClipChildren(lua_State* const luaContext)
+{
+  return cfunc_CMauiControlGetClipChildrenL(ResolveBindingState(luaContext));
+}
+
+moho::CScrLuaInitForm* moho::func_CMauiControlGetClipChildren_LuaFuncDef()
+{
+  static CScrLuaBinder binder(
+    UserLuaInitSet(),
+    "GetClipChildren",
+    &moho::cfunc_CMauiControlGetClipChildren,
+    &moho::CScrLuaMetatableFactory<moho::CMauiControl>::Instance(),
+    "CMauiControl",
+    kCMauiControlGetClipChildrenHelpText
+  );
+  return &binder;
+}
+
+int moho::cfunc_CMauiControlGetClipChildrenL(LuaPlus::LuaState* const state)
+{
+  const int argumentCount = lua_gettop(state->m_state);
+  if (argumentCount != 1) {
+    LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kCMauiControlGetClipChildrenHelpText, 1, argumentCount);
+  }
+
+  LuaPlus::LuaObject controlObject(LuaPlus::LuaStackObject(state, 1));
+  CMauiControl* const control = SCR_FromLua_CMauiControl(controlObject, state);
+  lua_pushboolean(state->m_state, moho::editor::uiclip::GetClipChildren(control));
+  return 1;
 }
 
 /**
@@ -22104,6 +22178,7 @@ moho::CMauiControl::~CMauiControl()
   // flag (kept in a side table, see SetCustomRender), so a control allocated
   // at the same address later does not inherit it.
   SetCustomRender(false);
+  moho::editor::uiclip::Forget(this);          // EDITOR: the clip flag is kept in a side table (EdUiClip.h)
 
   // And drop any input-capture entry naming this control. The capture stack is
   // the hit-test root - ResolveTopInputCaptureControl feeds GetTopmostControl -
@@ -22519,6 +22594,12 @@ void moho::CMauiFrame::RenderChildControls(
     return;
   }
 
+  // EDITOR: controls below a clipping control (EdUiClip.h) are drawn through the batcher's clip rectangle
+  const bool clipping = moho::editor::uiclip::Any();
+  if (clipping) {
+    moho::editor::uiclip::BeginFrame();
+  }
+
   for (std::uint32_t childIndex = 0;; ++childIndex) {
     CMauiControl* const* const renderedBegin = mRenderedChildren.begin();
     if (renderedBegin == nullptr) {
@@ -22539,7 +22620,28 @@ void moho::CMauiFrame::RenderChildControls(
       continue;
     }
 
+    if (clipping) {
+      moho::editor::uiclip::Rect clip;
+      if (moho::editor::uiclip::EffectiveRect(childControl, clip)) {
+        if (moho::editor::uiclip::Empty(clip)) {
+          continue;          // nothing of it can be seen: not even built
+        }
+        // a control that lies completely outside its clip rectangle (a scrolled-away row; 64 px of margin for borders and shadows) is not built, not queued, its texture not put into the atlas
+        if (moho::editor::uiclip::Outside(clip, CScriptLazyVar_float::GetValue(&childControl->mLeftLV) - 64.0f, CScriptLazyVar_float::GetValue(&childControl->mTopLV) - 64.0f,
+                                          CScriptLazyVar_float::GetValue(&childControl->mRightLV) + 64.0f, CScriptLazyVar_float::GetValue(&childControl->mBottomLV) + 64.0f)) {
+          continue;
+        }
+        primBatcher->SetClipRect(clip.left, clip.top, clip.right, clip.bottom);
+      } else {
+        primBatcher->ClearClipRect();
+      }
+    }
+
     childControl->DoRender(primBatcher, drawMask);
+  }
+
+  if (clipping) {
+    primBatcher->ClearClipRect();
   }
 }
 
@@ -22824,6 +22926,9 @@ moho::CMauiControl* moho::CMauiControl::GetTopmostControl(
        controlCursor = controlCursor->DepthFirstSuccessor(root)) {
     if (controlCursor->IsHidden() || controlCursor->IsHitTestDisabled() || !controlCursor->HitTest(x, y)) {
       continue;
+    }
+    if (!moho::editor::uiclip::PointVisible(controlCursor, x, y)) {
+      continue;          // EDITOR: cut away by a clipping ancestor (EdUiClip.h)
     }
 
     const float controlDepth = controlCursor->mDepth;
@@ -28986,6 +29091,8 @@ namespace
       (void)::moho::func_CMauiControlDisableHitTest_LuaFuncDef();
       (void)::moho::func_CMauiControlEnableHitTest_LuaFuncDef();
       (void)::moho::func_CMauiControlIsHitTestDisabled_LuaFuncDef();
+      (void)::moho::func_CMauiControlSetClipChildren_LuaFuncDef();
+      (void)::moho::func_CMauiControlGetClipChildren_LuaFuncDef();
       (void)::moho::func_CMauiControlHide_LuaFuncDef();
       (void)::moho::func_CMauiControlShow_LuaFuncDef();
       (void)::moho::func_CMauiControlSetHidden_LuaFuncDef();

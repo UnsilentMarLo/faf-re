@@ -4937,6 +4937,14 @@ namespace moho
    */
   int cfunc_CMauiControlDisableHitTestL(LuaPlus::LuaState* state);
 
+  /** EDITOR: `Control:SetClipChildren(bool)` / `Control:GetClipChildren()` (moho/editor/EdUiClip.h). */
+  int cfunc_CMauiControlSetClipChildren(lua_State* luaContext);
+  CScrLuaInitForm* func_CMauiControlSetClipChildren_LuaFuncDef();
+  int cfunc_CMauiControlSetClipChildrenL(LuaPlus::LuaState* state);
+  int cfunc_CMauiControlGetClipChildren(lua_State* luaContext);
+  CScrLuaInitForm* func_CMauiControlGetClipChildren_LuaFuncDef();
+  int cfunc_CMauiControlGetClipChildrenL(LuaPlus::LuaState* state);
+
   /**
    * Address: 0x00788130 (FUN_00788130, cfunc_CMauiControlEnableHitTest)
    *

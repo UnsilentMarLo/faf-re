@@ -12,6 +12,7 @@
 #include "gpg/core/utils/BoostWrappers.h"
 #include "gpg/gal/EffectVariable.hpp"
 #include "moho/editor/EdRenderStats.h"
+#include "moho/editor/EdUiClip.h"
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/ID3DIndexSheet.h"
 #include "moho/render/ID3DTextureSheet.h"
@@ -515,6 +516,92 @@ namespace moho
    * flushes first when primitive mode/capacity lanes would overflow.
    */
   void CD3DPrimBatcher::DrawQuad(
+    const Vertex& topLeft,
+    const Vertex& topRight,
+    const Vertex& bottomRight,
+    const Vertex& bottomLeft
+  )
+  {
+    if (mClipOn && DrawQuadClipped(topLeft, topRight, bottomRight, bottomLeft)) {
+      return;
+    }
+    DrawQuadRaw(topLeft, topRight, bottomRight, bottomLeft);
+  }
+
+  void CD3DPrimBatcher::SetClipRect(const float left, const float top, const float right, const float bottom)
+  {
+    mClipOn = true;
+    mClipRect[0] = left;
+    mClipRect[1] = top;
+    mClipRect[2] = right;
+    mClipRect[3] = bottom;
+  }
+
+  void CD3DPrimBatcher::ClearClipRect()
+  {
+    mClipOn = false;
+  }
+
+  bool CD3DPrimBatcher::DrawQuadClipped(
+    const Vertex& topLeft,
+    const Vertex& topRight,
+    const Vertex& bottomRight,
+    const Vertex& bottomLeft
+  )
+  {
+    const editor::uiclip::Rect clip{mClipRect[0], mClipRect[1], mClipRect[2], mClipRect[3]};
+    if (editor::uiclip::Empty(clip)) {
+      return true;
+    }
+    const Vertex quad[4] = {topLeft, topRight, bottomRight, bottomLeft};
+    float minX = quad[0].mX, maxX = quad[0].mX, minY = quad[0].mY, maxY = quad[0].mY;
+    for (int i = 1; i < 4; ++i) {
+      minX = std::min(minX, quad[i].mX);
+      maxX = std::max(maxX, quad[i].mX);
+      minY = std::min(minY, quad[i].mY);
+      maxY = std::max(maxY, quad[i].mY);
+    }
+    // (a NaN position, a layout not evaluated yet, fails these tests and is drawn like before)
+    if (editor::uiclip::Inside(clip, minX, minY, maxX, maxY)) {
+      return false;
+    }
+    if (editor::uiclip::Outside(clip, minX, minY, maxX, maxY)) {
+      return true;
+    }
+
+    auto lerpChannel = [](const std::uint32_t a, const std::uint32_t b, const float t, const unsigned shift) {
+      const float ca = static_cast<float>((a >> shift) & 0xFFu);
+      const float cb = static_cast<float>((b >> shift) & 0xFFu);
+      return static_cast<std::uint32_t>(ca + (cb - ca) * t + 0.5f) << shift;
+    };
+    auto lerp = [&](const Vertex& a, const Vertex& b, const float t) {
+      Vertex v;
+      v.mX = a.mX + (b.mX - a.mX) * t;
+      v.mY = a.mY + (b.mY - a.mY) * t;
+      v.mZ = a.mZ + (b.mZ - a.mZ) * t;
+      v.mU = a.mU + (b.mU - a.mU) * t;
+      v.mV = a.mV + (b.mV - a.mV) * t;
+      v.mColor = a.mColor == b.mColor ? a.mColor
+                                      : (lerpChannel(a.mColor, b.mColor, t, 24) | lerpChannel(a.mColor, b.mColor, t, 16) | lerpChannel(a.mColor, b.mColor, t, 8) |
+                                         lerpChannel(a.mColor, b.mColor, t, 0));
+      return v;
+    };
+    Vertex out[8];
+    const int n = editor::uiclip::ClipPolygon(quad, 4, clip, out, lerp);
+    if (n < 3) {
+      return true;
+    }
+    if (n == 4) {
+      DrawQuadRaw(out[0], out[1], out[2], out[3]);
+    } else {
+      for (int i = 1; i + 1 < n; ++i) {
+        DrawTri(out[0], out[i], out[i + 1]);
+      }
+    }
+    return true;
+  }
+
+  void CD3DPrimBatcher::DrawQuadRaw(
     const Vertex& topLeft,
     const Vertex& topRight,
     const Vertex& bottomRight,
