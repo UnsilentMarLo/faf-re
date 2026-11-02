@@ -48,6 +48,9 @@ namespace moho::water
   // The game time of the last frame in steps of the simulation (0 while the game is paused): continuous sources (a hull under way) are weighed with
   // it so that what they push per second does not depend on the frame rate. One-off events (a shell, a death) are not.
   float SimSourceWeight();
+  // Recorder (ren_WaterRec, tools/waterrec.py): the feeds report the hulls they push for, the simulation writes what it holds around them.
+  bool SimRecording();
+  void SimRecordHull(float x, float z, float hx, float hz, float speed, float halfLength, float halfBeam, float radius);
   bool SimDiagnostics(); // ren_WaterSimLog is on: the feeds log what they see
   float SimImpactScale();
 

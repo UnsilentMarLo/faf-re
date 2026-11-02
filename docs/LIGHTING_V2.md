@@ -240,3 +240,25 @@ a frame: the featab log says "1 steps").
 multiplies strength and foam by it and returns early at 0; shells and deaths are one-off events and are not weighed. Not yet seen in a game: built as
 `wave19` (not deployed: the user's game was running). Check: the same ship at 60 and 240 fps (`FEATAB` with different `-Width`/vsync, or `ren_WaterSimLog`
 peaks) must leave the same wake.
+
+## Water recorder, and what it found (2026-11-02)
+
+Screenshots of a moving wake say little. `ren_WaterRec N` (+ `ren_WaterRecEvery F`, folder `FAF_WATERREC_DIR`, default `logs/waterrec`) writes N captures of
+the simulation around the first hull under way: a 256 x 256 cell window (128 units) of height, foam and land, the hulls the feeds saw (position, heading,
+speed, half length, half beam) and the sources of the frame. `tools/waterrec.py` reads them: `stats`, `sheet` (false colour height + foam + hull boxes
++ source dots), `profile` (across the track at distances behind the hull, peaks and their angle), `along`, `headings`.
+
+Found with it:
+- **The heading of every hull was mirrored.** `startTransform` of a MeshInstance is the LATER pose (the interpolation runs from `endTransform` to
+  `startTransform`), so `end - start` pointed backwards: the bow wave was built behind the ship, the stern trough and the wash in front of it, the V of
+  the arms opened forward. `waterrec.py headings`: 0 of N agreed before, 122 of 122 after.
+- **The hull size was nearly always the fallback** (a round hull of 0.7 x radius): `boundsValid` is the stale flag of the swept box, not a flag that the
+  oriented box is good. A destroyer (ues0201) is 2.9 x 0.5 half extents (a hull is 12 x 2 cells of the simulation).
+- **Hull sources were per frame, not per step** (see the section above): now weighed by `SimSourceWeight()`.
+- **The tan / red smears around a hull were the normal tilt**: the slope of the waves times 20 (`ren_WaterSimStrength` 100 -> 0.2 x 100) swings the
+  reflection and refraction across the screen; gone with strength 0, still there with displacement 0. The tilt the waves add is now limited to 0.3.
+- Troughs are limited to half of the local depth (the lifted grid dipped below the sea bed in shallows and showed sand in streaks).
+- The bow wave got a wake stamp: two foam arms from the stern at the Kelvin angle (tan 0.35), fading and widening, steady pushes (no sine, no jitter:
+  the alternating pushes made blobs, not crests).
+- Open: the thin dark outline around a hull is the unit shadow term of the water (gone with `ren_WaterUnitShadows 0`, kept with SSR off); a change of
+  `FafWaterShadow` did not remove it and was reverted. A real motion check in a game is still to be done (use the recorder there).

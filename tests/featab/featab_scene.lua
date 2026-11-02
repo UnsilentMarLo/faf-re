@@ -143,12 +143,15 @@ ForkThread(function()
             Say(string.format('depth at dx %d: %.1f', dx, GetSurfaceHeight(x, AB_TZ) - GetTerrainHeight(x, AB_TZ)))
         end
         local id = rawget(_G, 'AB_SHIP') or 'ues0201'
-        local u = CreateUnitHPR(id, brainA.Name, AB_TX - 35, GetSurfaceHeight(AB_TX - 35, AB_TZ), AB_TZ, 0, 0, 0)
+        local span = rawget(_G, 'AB_SPAN') or 0
+        local x0, x1 = AB_TX - 35, AB_TX + 65
+        if span > 0 then x0, x1 = AB_TX - span, AB_TX + span end
+        local u = CreateUnitHPR(id, brainA.Name, x0, GetSurfaceHeight(x0, AB_TZ), AB_TZ, 0, 0, 0)
         if u then u:SetCanTakeDamage(false) end
         for round = 1, 60 do
             if u and not u.Dead then
                 IssueClearCommands({ u })
-                local x = AB_TX + (math.mod(round, 2) == 0 and -35 or 65)
+                local x = (math.mod(round, 2) == 0) and x0 or x1
                 IssueMove({ u }, { x, GetSurfaceHeight(x, AB_TZ), AB_TZ })
             end
             WaitSeconds(16)

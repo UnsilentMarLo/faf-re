@@ -3,7 +3,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <string>
 #include <vector>
 
 #include "boost/shared_ptr.h"
@@ -37,6 +41,8 @@ namespace moho::water
   static int ren_WaterSolid = 25;
   static int ren_WaterSimWake = 200;
   static int ren_WaterSimImpact = 100;
+  static int ren_WaterRec = 0;
+  static int ren_WaterRecEvery = 6;
 
   static TConVar<int> gTConVar_ren_WaterSim(
     "ren_WaterSim",
@@ -54,6 +60,15 @@ namespace moho::water
   );
   static TConVar<int> gTConVar_ren_WaterSimWake(
     "ren_WaterSimWake", "How strongly ships push the water, in percent of the base wake (default 200).", &ren_WaterSimWake
+  );
+  static TConVar<int> gTConVar_ren_WaterRec(
+    "ren_WaterRec",
+    "Recorder: write the next N captures of the wave simulation (height, foam, land, hulls, sources around the action) to the folder of FAF_WATERREC_DIR "
+    "(default logs/waterrec); tools/waterrec.py reads them. 0 (the default) off.",
+    &ren_WaterRec
+  );
+  static TConVar<int> gTConVar_ren_WaterRecEvery(
+    "ren_WaterRecEvery", "Recorder: one capture every N rendered frames (default 6).", &ren_WaterRecEvery
   );
   static TConVar<int> gTConVar_ren_WaterSimImpact(
     "ren_WaterSimImpact", "How strongly impacts and explosions push the water, in percent of the tuned splash (default 100).", &ren_WaterSimImpact
@@ -92,6 +107,11 @@ namespace moho::water
     {
       float x, z, radius, strength; // the push (see SimAddSource)
       float foam, a, b, c;          // foam thrown per frame, unused
+    };
+
+    struct HullRecord
+    {
+      float x, z, hx, hz, speed, halfLength, halfBeam, radius;
     };
 
     struct SimConstants
@@ -213,6 +233,7 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     }
 
     uint idx = (uint)(cell.y * n + cell.x);
+    float groundDepth = 1000.0;
     if (sE.w > 0.5)
     {
         // land is a wall: a cell whose ground is above the water holds no wave, so nothing that happens ashore moves the sea and a wave dies at the beach
@@ -224,6 +245,7 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
             Nxt[idx] = float4(0.0, 0.0, 0.0, 1.0);
             return;
         }
+        groundDepth = ((float)sE.z - (float)raw) / 128.0;   // how deep the water is here (to the margin above the beach)
     }
     float4 cur = Cur[idx];
     if (w.x != wp.x || w.y != wp.y)
@@ -250,7 +272,8 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float dmax = max(abs(wpos.x - sC.z), abs(wpos.y - sC.w)) / sD.x;
     float edge = smoothstep(0.8, 1.0, dmax);   // the waves are absorbed at the border of the window
     float hn = (2.0 * cur.x - cur.y + sC.x * lap + 0.10 * lapv) * sC.y * (1.0 - 0.3 * edge) + add;
-    hn = clamp(hn, -1.5, 1.5);
+    // a trough never goes deeper than half of the water: in the shallows the lifted grid would dip below the sea bed and show the sand in streaks
+    hn = clamp(hn, -min(1.5, 0.5 * groundDepth), 1.5);
 
     // foam: spreads a little, fades, is thrown by the sources (noisy: a propeller wash is not a smooth band) and by the surf at the beach
     float fl = L.w > 0.5 ? cur.z : L.z;
@@ -346,6 +369,12 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       bool haveTick = false;
       float gameSpeed = 1.0f;                              // game ticks over real time, in units of ten a second (smoothed)
       float sourceWeight = 1.0f;                           // game time of the last frame over one step of the simulation
+      std::vector<HullRecord> recHulls;                    // the hulls the feeds saw this frame (recorder)
+      std::vector<Source> recSources;                      // the sources of this frame (recorder)
+      int recFrame = 0;
+      int recIndex = 0;
+      int lastSteps = 0;
+      float lastDt = 0.0f;
     };
 
     State& GetState()
@@ -566,6 +595,18 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     return GetState().sourceWeight;
   }
 
+  bool SimRecording()
+  {
+    return ren_WaterRec > 0;
+  }
+
+  void SimRecordHull(const float x, const float z, const float hx, const float hz, const float speed, const float halfLength, const float halfBeam, const float radius)
+  {
+    if (ren_WaterRec > 0) {
+      GetState().recHulls.push_back(HullRecord{x, z, hx, hz, speed, halfLength, halfBeam, radius});
+    }
+  }
+
   float SimWakeScale()
   {
     return 0.01f * static_cast<float>(std::max(ren_WaterSimWake, 0));
@@ -739,6 +780,9 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       SimAddSource(centreX, centreZ, 5.0f, 40.0f);
     }
 
+    if (ren_WaterRec > 0) {
+      s.recSources = s.pending;
+    }
     s.accumulator += dt;
     int steps = std::min(kMaxSteps, static_cast<int>(s.accumulator / kStepSeconds));
     s.accumulator -= static_cast<float>(steps) * kStepSeconds;
@@ -811,6 +855,68 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
         s.originZ = originZ;
         s.hasHistory = true;
       }
+
+      s.lastSteps = steps;
+      s.lastDt = dt;
+      if (ren_WaterRec > 0 && ++s.recFrame >= std::max(ren_WaterRecEvery, 1)) {
+        s.recFrame = 0;
+        // a window of 256 x 256 cells (128 units) around the first hull of the frame, else around where the view looks
+        constexpr int kCrop = 256;
+        float fx = centreX;
+        float fz = centreZ;
+        if (!s.recHulls.empty()) {
+          fx = s.recHulls[0].x;
+          fz = s.recHulls[0].z;
+        }
+        int cx0 = static_cast<int>(std::floor(fx / kCell)) - kCrop / 2;
+        int cz0 = static_cast<int>(std::floor(fz / kCell)) - kCrop / 2;
+        cx0 = std::min(std::max(cx0, originX), originX + static_cast<int>(kN) - kCrop);
+        cz0 = std::min(std::max(cz0, originZ), originZ + static_cast<int>(kN) - kCrop);
+        std::vector<float> all(static_cast<std::size_t>(kN) * kN * 4U);
+        if (device->ReadGpuBuffer(*s.state[s.current], 0U, kN * kN, all.data())) {
+          const char* const dirEnv = std::getenv("FAF_WATERREC_DIR");
+          const std::string dir = dirEnv != nullptr ? dirEnv : "C:/ProgramData/FAForever/logs/waterrec";
+          std::error_code ec;
+          std::filesystem::create_directories(dir, ec);
+          char name[512];
+          std::snprintf(name, sizeof(name), "%s/rec_%05d.bin", dir.c_str(), s.recIndex++);
+          if (FILE* const f = std::fopen(name, "wb")) {
+            const std::uint32_t header[4] = {0x31435257u /* WRC1 */, static_cast<std::uint32_t>(kCrop), static_cast<std::uint32_t>(s.recHulls.size()),
+                                             static_cast<std::uint32_t>(std::min<std::size_t>(s.recSources.size(), 8192))};
+            const float info[12] = {kCell, static_cast<float>(cx0) * kCell, static_cast<float>(cz0) * kCell, s.time, static_cast<float>(REN_GetGameTick()), s.gameSpeed,
+                                    s.sourceWeight, static_cast<float>(steps), dt, centreX, centreZ, elevation};
+            std::fwrite(header, sizeof(header), 1, f);
+            std::fwrite(info, sizeof(info), 1, f);
+            for (const HullRecord& h : s.recHulls) {
+              std::fwrite(&h, sizeof(h), 1, f);
+            }
+            for (std::size_t i = 0; i < header[3]; ++i) {
+              std::fwrite(&s.recSources[i], sizeof(Source), 1, f);
+            }
+            std::vector<float> height(static_cast<std::size_t>(kCrop) * kCrop);
+            std::vector<float> foam(height.size());
+            std::vector<std::uint8_t> land(height.size());
+            const int n = static_cast<int>(kN);
+            for (int j = 0; j < kCrop; ++j) {
+              for (int i = 0; i < kCrop; ++i) {
+                const int bx = ((cx0 + i) % n + n) % n;
+                const int bz = ((cz0 + j) % n + n) % n;
+                const std::size_t src = (static_cast<std::size_t>(bz) * kN + static_cast<std::size_t>(bx)) * 4U;
+                const std::size_t dst = static_cast<std::size_t>(j) * kCrop + static_cast<std::size_t>(i);
+                height[dst] = all[src];
+                foam[dst] = all[src + 2U];
+                land[dst] = all[src + 3U] > 0.5f ? 1U : 0U;
+              }
+            }
+            std::fwrite(height.data(), sizeof(float), height.size(), f);
+            std::fwrite(foam.data(), sizeof(float), foam.size(), f);
+            std::fwrite(land.data(), 1, land.size(), f);
+            std::fclose(f);
+          }
+        }
+        --ren_WaterRec;
+      }
+      s.recHulls.clear();
 
       static int sSimLogCounter = 0;
       if (ren_WaterSimLog > 0 && (++sSimLogCounter % ren_WaterSimLog) == 0) {
@@ -1039,7 +1145,11 @@ float3 FafWaterGridPosition(float2 uv, float elevation)
     const std::size_t normalAt = text.find(normal);
     text.insert(
       normalAt + normal.size(),
-      "\n    N = normalize(N + float3(-simRipple.x, 0.0, -simRipple.y) * (simRipple.w * waterSimParams2.y));"
+      "\n    // the tilt the waves add to the normal is limited: a steep one (a hull's hump, a splash) swings the reflection and the refraction across the"
+      "\n    // screen and paints the hull's colours around the ship in smears"
+      "\n    float2 fafBend = float2(-simRipple.x, -simRipple.y) * (simRipple.w * waterSimParams2.y);"
+      "\n    fafBend *= min(1.0, 0.3 / max(length(fafBend), 0.0001));"
+      "\n    N = normalize(N + float3(fafBend.x, 0.0, fafBend.y));"
       "\n    // sharper highlights, and a slow, large scale undulation from two low frequency reads of the shipped normal maps (noise: no lattice)"
       "\n    N = normalize(float3(N.x * 1.45, N.y, N.z * 1.45));"
       "\n    float2 fafUv = ViewPosition.xz - inV.mViewVec.xz;"

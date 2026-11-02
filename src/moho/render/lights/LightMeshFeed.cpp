@@ -230,8 +230,10 @@ namespace moho::lights
       const float radius = instance.sphere.Radius;
       const float cy = instance.sphere.Center.y;
       const bool log = water::SimDiagnostics();
-      const float dx = instance.endTransform.pos_.x - instance.startTransform.pos_.x;
-      const float dz = instance.endTransform.pos_.z - instance.startTransform.pos_.z;
+      // (the member called startTransform is the later one, the one called endTransform the earlier: measured with the recorder, tools/waterrec.py
+      // headings, a hull sailing along +x had its heading from end minus start pointing to -x, and the whole wake was mirrored)
+      const float dx = instance.startTransform.pos_.x - instance.endTransform.pos_.x;
+      const float dz = instance.startTransform.pos_.z - instance.endTransform.pos_.z;
       const float speed = std::sqrt(dx * dx + dz * dz) * 10.0f; // per tick, ten ticks a second
       const auto note = [&](const char* const verdict) {
         static int sBudget = 300;
@@ -272,7 +274,8 @@ namespace moho::lights
       // wash behind it are as wide, and foam runs along the sides.
       float halfLength = radius * 0.7f;
       float halfBeam = radius * 0.7f;
-      if (instance.boundsValid != 0) {
+      {
+        // (boundsValid is the stale flag of the swept box, not a flag that the oriented box is good: the box is rebuilt with the interpolated stance)
         float along = 0.0f;
         float across = 0.0f;
         for (int axis = 0; axis < 3; ++axis) {
@@ -287,6 +290,7 @@ namespace moho::lights
           halfBeam = across;
         }
       }
+      water::SimRecordHull(instance.sphere.Center.x, instance.sphere.Center.z, hx, hz, speed, halfLength, halfBeam, radius);
       const float fast = 0.7f + 0.3f * std::min(speed / 6.0f, 1.3f);
       const float height = std::min(std::max(2.4f * std::pow(radius / 8.0f, 1.8f), 0.1f), 1.2f) * fast;
       const float body = std::min(radius / 3.0f, 2.0f);
@@ -299,15 +303,6 @@ namespace moho::lights
       const float lumpRadius = std::min(std::max(count > 1 ? 0.7f * spacing : 0.5f * halfBeam, 0.8f), 5.0f);
       const float lumpCells = lumpRadius / 0.5f;
       const float strength = height / (2.5f + 0.8f * lumpCells) * water::SimWakeScale() * weight;
-      // A single steady push makes one straight ridge at the edge of the wake. A hull leaves a train of crests: the push alternates with the place
-      // along the track (a world fixed pattern of the length of about the hull, so the waves behind a moving ship are crests and troughs one hull length
-      // apart), and each lump is a little different (the water is not a ruler). Cheap and local: no state per ship.
-      static std::uint32_t sWakeSeed = 88172645u;
-      const auto jitter = [&]() {
-        sWakeSeed = sWakeSeed * 1664525u + 1013904223u;
-        return static_cast<float>(sWakeSeed >> 8) * (1.0f / 16777216.0f);
-      };
-      const float trainLength = std::max(2.5f, halfLength * 1.1f);
       const float foamPerLump = fast * body * weight / std::sqrt(static_cast<float>(count));
       for (int k = 0; k < count; ++k) {
         const float t = count > 1 ? (static_cast<float>(k) / static_cast<float>(count - 1) * 2.0f - 1.0f) * 0.8f : 0.0f;
@@ -318,12 +313,31 @@ namespace moho::lights
         const float bowZ = cz + hz * ahead + pz * lateral;
         const float sternX = cx - hx * behind + px * lateral;
         const float sternZ = cz - hz * behind + pz * lateral;
-        const float bowPhase = 6.2831853f * (bowX * hx + bowZ * hz) / trainLength;
-        const float sternPhase = 6.2831853f * (sternX * hx + sternZ * hz) / trainLength + 1.9f;
-        const float bowPush = strength * (0.4f + 0.9f * std::sin(bowPhase)) * (0.6f + 0.8f * jitter());
-        const float sternPush = -strength * 0.8f * (0.4f + 0.9f * std::sin(sternPhase)) * (0.6f + 0.8f * jitter());
-        water::SimAddSource(bowX, bowZ, lumpRadius * (0.8f + 0.4f * jitter()), bowPush, 0.005f * foamPerLump, true);
-        water::SimAddSource(sternX, sternZ, lumpRadius * (0.8f + 0.4f * jitter()), sternPush, 0.008f * foamPerLump, true);
+        // steady pushes: a hull faster than the waves leaves two straight arms (the V of the bow wave) by itself; a push that alternates or
+        // wobbles along the track breaks them into blobs, which is what the first version of the crests did
+        water::SimAddSource(bowX, bowZ, lumpRadius, strength, 0.005f * foamPerLump, true);
+        water::SimAddSource(sternX, sternZ, lumpRadius, -strength * 0.5f, 0.008f * foamPerLump, true);
+      }
+      // The V of the bow wave: the two arms of a hull under way run back from the hull at about the Kelvin angle (19.5 degrees, tan 0.35), each a
+      // line of foam (and a little crest) that fades with the distance and widens. They are stamped every frame from the hull, so they stay attached to
+      // it and straight, whatever the waves of the simulation do; a slow hull leaves short arms, a fast one long ones.
+      {
+        const float arm = std::min(std::max(speed - 1.0f, 0.0f) / 3.0f, 1.0f);
+        const float armLength = std::min(std::max(6.0f * halfLength, 10.0f), 30.0f) * (0.5f + 0.5f * std::min(speed / 5.0f, 1.5f)) * arm;
+        if (armLength > 3.0f) {
+          const float tailX = cx - hx * halfLength * 0.8f;
+          const float tailZ = cz - hz * halfLength * 0.8f;
+          for (int side = -1; side <= 1; side += 2) {
+            float d = 0.0f;
+            while (d < armLength) {
+              const float fade = 1.0f - d / armLength;
+              const float radiusHere = std::min(std::max(0.3f * halfBeam + 0.04f * d, 0.9f), 3.0f);
+              const float lateral = (halfBeam * 0.9f + 0.35f * d) * static_cast<float>(side);
+              water::SimAddSource(tailX - hx * d + px * lateral, tailZ - hz * d + pz * lateral, radiusHere, strength * 0.3f * fade, 0.010f * fast * body * weight * (0.3f + 0.7f * fade), true);
+              d += std::max(1.4f * radiusHere, 1.5f);
+            }
+          }
+        }
       }
       // the wash of the propellers: foam only, as wide as the hull
       const float washRadius = std::min(std::max(halfBeam * 0.8f, 0.8f), 6.0f);

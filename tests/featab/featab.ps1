@@ -13,6 +13,7 @@ foreach ($f in 'dynlights_test.lua', 'dynlights_camera.lua') { if (Test-Path "$t
 $sceneHeader = "AB_SCENE = '$Scene'`nAB_TX = $Tx`nAB_TZ = $Tz`n"
 if ($env:FEATAB_COUNT) { $sceneHeader += "AB_COUNT = $($env:FEATAB_COUNT)`n" }
 if ($env:FEATAB_SHIP) { $sceneHeader += "AB_SHIP = '$($env:FEATAB_SHIP)'`n" }
+if ($env:FEATAB_SPAN) { $sceneHeader += "AB_SPAN = $($env:FEATAB_SPAN)`n" }
 if ($env:FEATAB_SHOOTER) { $sceneHeader += "AB_SHOOTER = '$($env:FEATAB_SHOOTER)'`n" }
 if ($env:FEATAB_SIZES) { $sceneHeader += "AB_SIZES = { $($env:FEATAB_SIZES) }`n" }
 Set-Content "$test\dynlights_test.lua" ($sceneHeader + (Get-Content "$here\featab_scene.lua" -Raw)) -Encoding ascii
