@@ -39,6 +39,7 @@ namespace moho::water
   static int ren_WaterSimLog = 0;
   static int ren_WaterSwell = 100;
   static int ren_WaterSolid = 25;
+  static int ren_WaterShoreWave = 100;
   static int ren_WaterSimWake = 200;
   static int ren_WaterSimImpact = 100;
   static int ren_WaterRec = 0;
@@ -75,6 +76,10 @@ namespace moho::water
   );
   static TConVar<int> gTConVar_ren_WaterSwell(
     "ren_WaterSwell", "The wind sea: height of the constant swell that lifts the water and breaks on the beaches, in percent (default 100, 0 off).", &ren_WaterSwell
+  );
+  static TConVar<int> gTConVar_ren_WaterShoreWave(
+    "ren_WaterShoreWave", "Waves that roll in over the shallows and break on the beach, as height in percent (default 100, 0 off). Needs ren_WaterSim.",
+    &ren_WaterShoreWave
   );
   static TConVar<int> gTConVar_ren_WaterSolid(
     "ren_WaterSolid", "How much of the colour of the water covers the sea bed, at least, in percent: more is a more solid sea, less see-through (default 25).", &ren_WaterSolid
@@ -119,7 +124,7 @@ namespace moho::water
       float a[4]; // origin x, z (cells, a multiple of 8), previous origin x, z
       float b[4]; // cell size, cells, source count, step seconds
       float c[4]; // wave speed term, damping per step, centre x, z (world)
-      float d[4]; // half extent (world), unused
+      float d[4]; // half extent (world), shore wave height factor, unused
       float e[4]; // map height samples x, z, water level in raw height units, 1 when the land mask is on
       float f[4]; // time (s), swell scale, foam kept per step, shore surf
     };
@@ -286,6 +291,29 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float dmax = max(abs(wpos.x - sC.z), abs(wpos.y - sC.w)) / sD.x;
     float edge = smoothstep(0.8, 1.0, dmax);   // the waves are absorbed at the border of the window
     float hn = (2.0 * cur.x - cur.y + sC.x * lap + 0.10 * lapv) * sC.y * (1.0 - 0.3 * edge) + add;
+    // Shore waves: a swell train that runs in over the shallows and breaks on the beach. A wave feels the bottom where the water is a few units
+    // deep; it slows down (the crests close up: the phase is the travel time over the depth, sqrt(depth)), grows (Green's law, depth^-1/4), leans
+    // forward, and breaks where it is higher than about a quarter of the water under it, throwing foam off the crest. The crests follow the lines
+    // of equal depth (waves bend to the beach), a slow warp of the phase makes them wander and a group envelope lets sets of bigger waves come in.
+    // The target is a function of the depth and the time only: no state, nothing to follow the camera.
+    float shoreWaveCrest = 0.0;
+    float shoreWaveBreak = 0.0;
+    float shoreWaveBand = 0.0;
+    if (sD.y > 0.0 && groundDepth < 5.0)
+    {
+        float d = max(groundDepth, 0.02);
+        shoreWaveBand = 1.0 - smoothstep(3.2, 5.0, d);
+        float warp = 2.5 * sin(wpos.x * 0.060 + 0.7 * sin(wpos.y * 0.050)) + 1.5 * sin(wpos.y * 0.083 - wpos.x * 0.040 + 0.13 * sF.x);
+        float theta = 0.9 * sF.x + 19.9 * sqrt(d) + warp;
+        float skew = 0.5 + 0.5 * saturate((sin(theta) + 0.32 * sin(2.0 * theta + 1.2)) * 0.9);
+        float group = 0.6 + 0.4 * sin(0.17 * theta + 1.0);
+        float rawAmp = 0.20 * sD.y * pow(5.0 / max(d, 0.3), 0.25) * group;
+        float amp = min(rawAmp, 0.42 * d + 0.02);
+        shoreWaveBreak = saturate((rawAmp / d - 0.25) * 3.0);
+        shoreWaveCrest = pow(skew, 5.0);
+        float target = amp * (1.7 * pow(skew, 2.4) - 0.58);
+        hn = lerp(hn, target, 0.25 * shoreWaveBand);
+    }
     // a trough never goes deeper than half of the water: in the shallows the lifted grid would dip below the sea bed and show the sand in streaks
     hn = clamp(hn, -min(1.5, 0.5 * groundDepth), 1.5);
 
@@ -306,6 +334,9 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float crest = saturate(FafSwellHeight(wpos, sF.x) * sF.y * 6.0 + 0.1);
     foam += shore * (saturate(abs(hn) * 5.0 - 0.1) * 0.10 + crest * crest * 0.035 * sF.w);
     foam += saturate(abs(hn) * 6.0 - 0.9) * 0.004;
+    // the breaking of the shore waves: foam off the crest, and the sheet that runs up the beach behind it
+    foam += shoreWaveBand * shoreWaveCrest * (0.002 + 0.008 * shoreWaveBreak) * (0.5 + 0.5 * noise);
+    foam += (1.0 - smoothstep(0.0, 0.6, groundDepth)) * pow(shoreWaveCrest, 0.6) * 0.012 * sD.y;
     foam = clamp(foam, 0.0, 1.5);
     Nxt[idx] = float4(hn, cur.x, foam, 0.0);
 }
@@ -839,6 +870,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       constants.c[2] = centreX;
       constants.c[3] = centreZ;
       constants.d[0] = 0.5f * static_cast<float>(kN) * kCell;
+      constants.d[1] = landMask ? 0.01f * static_cast<float>(std::max(ren_WaterShoreWave, 0)) : 0.0f; // the shore waves need the depth of the sea bed
       for (int step = 0; step < steps; ++step) {
         const std::uint32_t sourceCount = step == 0 ? static_cast<std::uint32_t>(s.pending.size()) : 0U;
         if (sourceCount > 0U) {
