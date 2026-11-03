@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <limits>
 
+#include "moho/console/CConCommand.h"
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/STIMap.h"
 
@@ -15,6 +16,18 @@ namespace moho
   extern int ren_ClipDecalLevel;
   extern float ren_ShoreErrorCoeff;
   extern float ren_maxViewError;
+
+  // FAF: how much of the view error a terrain node near the water level may keep, as a factor (the shipped game only refines nodes that cross the
+  // water level, by ren_ShoreErrorCoeff = 0.4). Zoomed out, a coarse node of a canyon or of a shallow, broken shore can bridge over the water (or sink
+  // under it) by the error the view allows (about a unit at 1000 units), and the water mask then cuts a square, straight-edged hole in the sea.
+  float ren_ShoreTessCoeff = 0.1f;
+  static TConVar<float> gTConVar_ren_ShoreTessCoeff(
+    "ren_ShoreTessCoeff",
+    "Terrain tessellation near the water: the share of the screen error that a terrain node whose height range lies within its own error of the water "
+    "level may keep (default 0.1; 0.4 is the shipped value for nodes that cross the water, 1 turns the extra detail off). Smaller shows fewer square holes "
+    "in the water when zoomed out and costs triangles along broken shores.",
+    &ren_ShoreTessCoeff
+  );
 }
 namespace moho
 {
@@ -881,7 +894,11 @@ namespace moho
 
     const Wm3::Vector3f testCorner = SelectAabbCornerByMask(bounds, mCornerSelectionMask);
     const float tierMaxError = mField->GetTierMaxError(tier, x, z);
-    const float shoreErrorCoeff = crossesWaterSurface ? ren_ShoreErrorCoeff : 1.0f;
+    float shoreErrorCoeff = crossesWaterSurface ? ren_ShoreErrorCoeff : 1.0f;
+    // FAF: a node whose error can move the shore (the water level is within its error of its height range) is refined like one that crosses it
+    if (waterElevation >= tierBounds.x - tierMaxError && tierBounds.y + tierMaxError >= waterElevation) {
+      shoreErrorCoeff = std::min(shoreErrorCoeff, ren_ShoreTessCoeff);
+    }
 
     const Vector4f& row1 = mCam->viewport.r[1];
     const float projectedDepth =

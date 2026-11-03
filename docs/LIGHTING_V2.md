@@ -285,3 +285,14 @@ the surf foam covered 1-16 % of the shore strip. The second version has three sw
 (tilted lines of equal distance, short-crested patches of noise), a surf train that wanders and breaks in segments, a swash line that runs up and
 down the beach with the waves, and foam sheets behind the breaking crests: alignment 0.72, shore strip foam 55-63 %. The foam threshold is carried
 by float-only fractal noise (`FafFoamLace`) instead of a sum of sines, which showed as regular chevrons.
+
+## Water plane holes when zoomed out (terrain tessellation near the water)
+
+Retail bug, also in the shipped game: a straight-edged, square-in-world hole in the sea next to complex terrain, worse when zoomed out. The terrain mesh is a
+quadtree (`CTesselator::GetIntersectionResult`): a node stays coarse while its height error is below `coeff * depth * 0.003` (about a unit of height at 1000
+units), and only a node that crosses the water level gets a smaller `coeff` (`ren_ShoreErrorCoeff` = 0.4). A coarse node of a canyon or a broken shallow shore
+can then bridge over the water or sink under it by that error; the water mask (which is built against the real heights) and the depth test cut the square
+out of the sea. Fix: a node whose height range lies within its own error of the water level is refined too, with `ren_ShoreTessCoeff` (default 0.1; 1 =
+shipped behaviour). Flat nodes have no error and cost nothing; the cost is triangles along broken shores when zoomed out. `ren_WaterMaskDebug 1|2` shows
+what the water mask discards and where water pixels are drawn at all. Not reproduced on scmp_009 (no hole there, only the shoreline lines moved), so
+the fix is by cause, not yet seen on the user's map.
