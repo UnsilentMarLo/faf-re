@@ -262,3 +262,26 @@ Found with it:
   the alternating pushes made blobs, not crests).
 - Open: the thin dark outline around a hull is the unit shadow term of the water (gone with `ren_WaterUnitShadows 0`, kept with SSR off); a change of
   `FafWaterShadow` did not remove it and was reverted. A real motion check in a game is still to be done (use the recorder there).
+
+## Water lab (headless test of the water simulation)
+
+`tools/watersimlab/` (build: `tools/watersimlab/build.ps1`, MSVC, no engine code) runs the real compute shader of the game on a software D3D11
+device (WARP: the CPU, so a running game is not disturbed) over a synthetic coast, with the real distance-to-shore field. The HLSL is read from
+the raw string of `src/moho/terrain/water/WaterSimulation.cpp` at start, preceded by the shared noise of `WaterShaderCommon.h`, exactly as the game
+composes it (`SimSource()`), so what the lab shows is what the game computes. A "look" pass runs the shared foam code (`FafFoamAmount`) of the
+water pixel shader over a plain blue sea and writes a top-down BMP. 3600 steps (40 s of water) take about 15 s.
+
+    python tools/watersimlab.py run        [--terrain coast|beach|bay] [--seconds 40] [--from 20] [--every 4] [--out DIR]
+    python tools/watersimlab.py metrics    DIR      crest alignment with the shore (1 = every crest parallel), foam on the shore strip, limits
+    python tools/watersimlab.py selftest             runs and checks the numbers (exit 1 on failure)
+    python tools/watersimlab.py strip      DIR -o strip.png [--crop x0,y0,x1,y1]
+
+Captures are in the format of the in-game recorder, so `tools/waterrec.py sheet|stats` reads them too. Not covered: the rest of the water pixel
+shader (reflection, refraction, colour: the look pass uses a plain blue sea and a constant for the alpha of the shipped crest texture), ships'
+wakes (the lab has no hull feed yet) and the real maps (synthetic terrain only).
+
+Findings (2026-11-03): the first shore waves ran in the distance to the shore only, so every crest was parallel to the coast (alignment 0.96) and
+the surf foam covered 1-16 % of the shore strip. The second version has three swells of different length and heading crossing over the open water
+(tilted lines of equal distance, short-crested patches of noise), a surf train that wanders and breaks in segments, a swash line that runs up and
+down the beach with the waves, and foam sheets behind the breaking crests: alignment 0.72, shore strip foam 55-63 %. The foam threshold is carried
+by float-only fractal noise (`FafFoamLace`) instead of a sum of sines, which showed as regular chevrons.

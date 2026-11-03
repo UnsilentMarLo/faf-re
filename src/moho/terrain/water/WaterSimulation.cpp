@@ -1,4 +1,6 @@
 #include "moho/terrain/water/WaterSimulation.h"
+#include "moho/terrain/water/ShoreField.h"
+#include "moho/terrain/water/WaterShaderCommon.h"
 
 #include <algorithm>
 #include <chrono>
@@ -314,35 +316,65 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float dmax = max(abs(wpos.x - sC.z), abs(wpos.y - sC.w)) / sD.x;
     float edge = smoothstep(0.8, 1.0, dmax);   // the waves are absorbed at the border of the window
     float hn = (2.0 * cur.x - cur.y + sC.x * lap + 0.10 * lapv) * sC.y * (1.0 - 0.3 * edge) + add;
-    // Shore waves: a swell train that runs in from the open sea and breaks on the beach. The phase runs in the distance to the shore (a field of
-    // the map, computed once), as sqrt(distance): the crests close up and slow down towards the beach (about 28 units apart at 50 units out and
-    // 5 units a second, 8 apart and 1.4 a second at 4 units), and they follow the lines of equal distance, so they bend round bays and headlands
-    // and arrive parallel to the coast. The wave grows (Green's law) and leans forward, and where it is higher than about a quarter of the water
-    // under it (the real depth) it breaks and throws foam off the crest. A slight warp of the phase lets the crests wander (a fraction of a wave,
-    // not a snake) and a group envelope lets sets of bigger waves come in.
-    // The target is a function of the ground and the time only: no state, nothing to follow the camera.
+    // Shore waves. A real sea is not one train parallel to the coast: three swells of different length and heading (each a travelling wave along
+    // its own tilted line of equal distance to the shore, short-crested: patches of noise let each one come and go along its crest) cross each
+    // other over the open water, and only in the last twenty units does a train of the surf take over, which follows the coast, wanders along it
+    // (a warp of the phase by noise), breaks into segments (noise along the crest), grows (Green's law) and breaks where it is higher than about
+    // a quarter of the water under it (the real depth), throwing foam off the crest. The surf closes up and slows down towards the beach (sqrt of
+    // the distance to the shore, a field of the map computed once). The target is a function of the ground and the time only.
     float shoreWaveCrest = 0.0;
     float shoreWaveBreak = 0.0;
     float shoreWaveBand = 0.0;
+    float shoreWaveSkew = 0.0;
+    float shoreWaveSegment = 0.0;
+    float shoreWaveSurf = 0.0;
     float shoreDist = 1.0e4;
     if (sD.y > 0.0)
     {
         shoreDist = ShoreDist(wpos);
     }
-    if (sD.y > 0.0 && shoreDist < 70.0)
+    if (sD.y > 0.0 && shoreDist < 90.0)
     {
         float dist = max(shoreDist, 0.5);
-        shoreWaveBand = 1.0 - smoothstep(50.0, 70.0, dist);
-        float warp = 0.9 * sin(wpos.x * 0.025 + 0.7 * sin(wpos.y * 0.021)) + 0.6 * sin(wpos.y * 0.033 - wpos.x * 0.018 + 0.05 * sF.x);
-        float theta = 1.1 * sF.x + 3.2 * sqrt(dist) + warp;
-        float skew = 0.5 + 0.5 * saturate((sin(theta) + 0.32 * sin(2.0 * theta + 1.2)) * 0.9);
-        float group = 0.6 + 0.4 * sin(0.17 * theta + 1.0);
+        shoreWaveBand = 1.0 - smoothstep(60.0, 90.0, dist);
         float depth = max(groundDepth, 0.05);
-        float rawAmp = 0.22 * sD.y * pow(30.0 / max(dist, 4.0), 0.25) * group;
+        float wSurf = 1.0 - smoothstep(8.0, 22.0, dist);
+        float t = sF.x;
+        float target = 0.0;
+
+        // the open-water swells: wave length, heading of the crests against the coast (tilt of the line of equal distance), frequency
+        // x: wave number, y: tilt, z: along-coast direction angle, w: frequency
+        float4 swell0 = float4(0.286, 0.45, 0.7, 1.10);
+        float4 swell1 = float4(0.203, -0.38, 2.1, 0.90);
+        float4 swell2 = float4(0.370, 0.20, 4.0, 1.30);
+        [unroll] for (int i = 0; i < 3; ++i)
+        {
+            float4 sw = i == 0 ? swell0 : (i == 1 ? swell1 : swell2);
+            float along = dot(wpos, float2(cos(sw.z), sin(sw.z)));
+            float th = sw.w * t + sw.x * (dist + sw.y * along);
+            float s = 0.5 + 0.5 * saturate((sin(th) + 0.30 * sin(2.0 * th + 1.0)) * 0.9);
+            // patches: where this swell is strong (they drift slowly, so a crest is not the same length for long)
+            float patch = smoothstep(0.30, 0.75, FafNoise2(wpos * 0.045 + float2(7.3 * (float)i, 2.9 * (float)i) + float2(0.021, -0.017) * t * (1.0 + (float)i)));
+            float a = 0.105 * sD.y * (0.15 + 0.85 * patch) * pow(clamp(8.0 / depth, 1.0, 4.0), 0.25);
+            target += a * (1.6 * pow(s, 2.2) - 0.55) * (1.0 - 0.9 * wSurf);
+        }
+
+        // the surf train: follows the coast, wanders along it, comes in segments
+        float2 q = wpos * 0.04;
+        float warp = (FafNoise2(q + float2(1.7, 9.2)) - 0.5) * 5.0 + (FafNoise2(wpos * 0.13 + float2(4.1, 0.3) + float2(0.0, 0.05) * t) - 0.5) * 2.4;
+        float theta = 1.1 * t + 3.2 * sqrt(dist) + warp;
+        float skew = 0.5 + 0.5 * saturate((sin(theta) + 0.32 * sin(2.0 * theta + 1.2)) * 0.9);
+        float segment = smoothstep(0.22, 0.70, FafNoise2(wpos * 0.075 + float2(13.1, 5.7) + float2(0.03, 0.02) * t));
+        float group = 0.6 + 0.4 * sin(0.17 * theta + 1.0);
+        float rawAmp = 0.22 * sD.y * pow(30.0 / max(dist, 4.0), 0.25) * group * (0.25 + 0.75 * segment);
         float amp = min(rawAmp, 0.42 * depth + 0.02);
-        shoreWaveBreak = saturate((rawAmp / depth - 0.25) * 3.0);
-        shoreWaveCrest = pow(skew, 5.0);
-        float target = amp * (1.7 * pow(skew, 2.4) - 0.58);
+        shoreWaveBreak = saturate((rawAmp / depth - 0.12) * 3.0);
+        shoreWaveCrest = pow(skew, 5.0) * segment;
+        shoreWaveSkew = skew;
+        shoreWaveSegment = segment;
+        shoreWaveSurf = wSurf;
+        target += wSurf * amp * (1.7 * pow(skew, 2.4) - 0.58);
+        target = min(target, 0.42 * depth + 0.02);
         hn = lerp(hn, target, 0.25 * shoreWaveBand);
     }
     // a trough never goes deeper than half of the water: in the shallows the lifted grid would dip below the sea bed and show the sand in streaks
@@ -367,8 +399,11 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     foam += shore * (saturate(abs(hn) * 5.0 - 0.1) * 0.10 + crest * crest * 0.035 * sF.w);
     foam += saturate(abs(hn) * 6.0 - 0.9) * 0.004;
     // the breaking of the shore waves: foam off the crest, and the sheet that runs up the beach behind it
-    foam += shoreWaveBand * shoreWaveCrest * (0.0008 + 0.009 * shoreWaveBreak) * (0.5 + 0.5 * noise);
-    foam += (1.0 - smoothstep(0.0, 0.6, groundDepth)) * pow(shoreWaveCrest, 0.6) * 0.012 * sD.y;
+    // The surf: a foam sheet behind every breaking crest (it fades in about a second, so it trails the crest), and the swash on the beach: the foam
+    // runs up and down the beach with the waves (the line of the foam is a depth that rises while a crest arrives), in segments along the coast.
+    foam += shoreWaveSurf * shoreWaveCrest * (0.010 + 0.12 * shoreWaveBreak) * (0.5 + 0.5 * noise);
+    float swashLine = 0.12 + 0.75 * shoreWaveSkew * (0.4 + 0.6 * shoreWaveSegment);
+    foam += (1.0 - smoothstep(swashLine - 0.12, swashLine, groundDepth)) * 0.10 * min(sD.y, 1.0);
     foam = clamp(foam, 0.0, 1.5);
     Nxt[idx] = float4(hn, cur.x, foam, 0.0);
 }
@@ -392,6 +427,13 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     return float4((hr - hl) * 0.5 / sB.x, (hd - hu) * 0.5 / sB.x, here.x, here.z);
 }
 )HLSL";
+
+    // The shader of the simulation: the shared noise of WaterShaderCommon.h, then the source above (the headless lab builds the same text).
+    const std::string& SimSource()
+    {
+      static const std::string source = std::string(kWaterNoiseHlsl) + kSource;
+      return source;
+    }
 
     // ---- the water effect: variables, bound by name ------------------------------------------------------------------------------
     struct EffectVars
@@ -516,104 +558,6 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       }
     }
 
-    // Exact euclidean distance transform of one line (Felzenszwalb and Huttenlocher): d[q] = min over p of f[p] + (q - p)^2.
-    void DistanceLine(const std::vector<double>& f, std::vector<double>& d, std::vector<int>& v, std::vector<double>& z)
-    {
-      const int n = static_cast<int>(f.size());
-      int k = 0;
-      v[0] = 0;
-      z[0] = -1e30;
-      z[1] = 1e30;
-      for (int q = 1; q < n; ++q) {
-        double s = 0.0;
-        for (;;) {
-          const int p = v[k];
-          s = ((f[q] + static_cast<double>(q) * q) - (f[p] + static_cast<double>(p) * p)) / (2.0 * q - 2.0 * p);
-          if (s <= z[k] && k > 0) {
-            --k;
-          } else {
-            break;
-          }
-        }
-        if (s <= z[k]) {
-          v[k] = q; // k == 0: the new parabola is lower everywhere the old one was
-          continue;
-        }
-        ++k;
-        v[k] = q;
-        z[k] = s;
-        z[k + 1] = 1e30;
-      }
-      k = 0;
-      for (int q = 0; q < n; ++q) {
-        while (z[k + 1] < q) {
-          ++k;
-        }
-        const double dq = static_cast<double>(q - v[k]);
-        d[q] = dq * dq + f[v[k]];
-      }
-    }
-
-    // The distance in world units from every height sample to the nearest land sample (ground above `level`, raw height units), smoothed over
-    // five samples so that the staircase of a one-unit coast does not show in the contours the shore waves follow. 1e4 where the map has no land.
-    std::vector<float> ShoreDistance(const CHeightField& field, const std::uint32_t width, const std::uint32_t height, const float level)
-    {
-      const double kInf = 1e12;
-      std::vector<double> grid(static_cast<std::size_t>(width) * height);
-      for (std::uint32_t z = 0; z < height; ++z) {
-        for (std::uint32_t x = 0; x < width; ++x) {
-          const float raw = static_cast<float>(field.GetHeightAt(static_cast<std::int32_t>(x), static_cast<std::int32_t>(z)));
-          grid[static_cast<std::size_t>(z) * width + x] = raw > level ? 0.0 : kInf;
-        }
-      }
-      const std::size_t longest = std::max(width, height);
-      std::vector<double> f(longest), d(longest), z(longest + 1U);
-      std::vector<int> v(longest);
-      for (std::uint32_t x = 0; x < width; ++x) { // columns
-        f.assign(height, 0.0);
-        d.assign(height, 0.0);
-        for (std::uint32_t j = 0; j < height; ++j) {
-          f[j] = grid[static_cast<std::size_t>(j) * width + x];
-        }
-        DistanceLine(f, d, v, z);
-        for (std::uint32_t j = 0; j < height; ++j) {
-          grid[static_cast<std::size_t>(j) * width + x] = d[j];
-        }
-      }
-      for (std::uint32_t j = 0; j < height; ++j) { // rows
-        f.assign(width, 0.0);
-        d.assign(width, 0.0);
-        for (std::uint32_t x = 0; x < width; ++x) {
-          f[x] = grid[static_cast<std::size_t>(j) * width + x];
-        }
-        DistanceLine(f, d, v, z);
-        for (std::uint32_t x = 0; x < width; ++x) {
-          grid[static_cast<std::size_t>(j) * width + x] = d[x];
-        }
-      }
-      std::vector<float> dist(grid.size());
-      for (std::size_t i = 0; i < grid.size(); ++i) {
-        dist[i] = static_cast<float>(std::min(std::sqrt(grid[i]), 1e4));
-      }
-      // a box of five samples, in both directions
-      std::vector<float> tmp(dist.size());
-      for (int pass = 0; pass < 2; ++pass) {
-        for (std::uint32_t j = 0; j < height; ++j) {
-          for (std::uint32_t x = 0; x < width; ++x) {
-            float sum = 0.0f;
-            for (int o = -2; o <= 2; ++o) {
-              const std::uint32_t xx = pass == 0 ? static_cast<std::uint32_t>(std::min(std::max(static_cast<int>(x) + o, 0), static_cast<int>(width) - 1)) : x;
-              const std::uint32_t jj = pass == 1 ? static_cast<std::uint32_t>(std::min(std::max(static_cast<int>(j) + o, 0), static_cast<int>(height) - 1)) : j;
-              sum += dist[static_cast<std::size_t>(jj) * width + xx];
-            }
-            tmp[static_cast<std::size_t>(j) * width + x] = 0.2f * sum;
-          }
-        }
-        dist.swap(tmp);
-      }
-      return dist;
-    }
-
     bool EnsureResources(State& s, Device& device)
     {
       if (s.device != &device) {
@@ -637,14 +581,14 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       if (s.step == nullptr || s.copy == nullptr) {
         GpuProgramDesc desc;
         desc.name = "WaterSimStep";
-        desc.source = kSource;
-        desc.sourceBytes = sizeof(kSource) - 1U;
+        desc.source = SimSource().c_str();
+        desc.sourceBytes = SimSource().size();
         desc.computeEntry = "SimCS";
         s.step = device.CreateGpuProgram(desc);
         GpuProgramDesc draw;
         draw.name = "WaterSimCopy";
-        draw.source = kSource;
-        draw.sourceBytes = sizeof(kSource) - 1U;
+        draw.source = SimSource().c_str();
+        draw.sourceBytes = SimSource().size();
         draw.vertexEntry = "SimVS";
         draw.pixelEntry = "SimCopyPS";
         draw.blend = GpuBlend::Opaque;
@@ -908,7 +852,8 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       // The distance to the shore, once per map: the buildings that flatten ground a little do not move the coast.
       const float shoreLevel = (elevation - kLandMargin) * 128.0f;
       if (landMask && (s.shore == nullptr || s.shoreWidth != hw || s.shoreHeight != hh || s.shoreLevel != shoreLevel)) {
-        const std::vector<float> dist = ShoreDistance(*s.field, hw, hh, shoreLevel);
+        const std::vector<float> dist = ComputeShoreDistance(
+          [&](const std::uint32_t x, const std::uint32_t z) { return s.field->GetHeightAt(static_cast<std::int32_t>(x), static_cast<std::int32_t>(z)); }, hw, hh, shoreLevel);
         const std::uint32_t samples = static_cast<std::uint32_t>(dist.size());
         if (s.shore == nullptr || s.shore->Desc().capacity != samples) {
           GpuBufferDesc desc;
@@ -1408,9 +1353,7 @@ float3 FafWaterGridPosition(float2 uv, float elevation)
       text.insert(
         at,
         "\n    float fafFoam = FafWaterFoam(ViewPosition.xz - inV.mViewVec.xz);"
-        "\n    float2 fafFoamP = ViewPosition.xz - inV.mViewVec.xz;"
-        "\n    float fafLace = 0.5 + 0.25 * sin(fafFoamP.x * 2.9 + 2.0 * sin(fafFoamP.y * 2.1)) * sin(fafFoamP.y * 3.3 + 2.0 * sin(fafFoamP.x * 1.7)) + 0.25 * sin(fafFoamP.x * 7.1 + fafFoamP.y * 5.3 + 3.0 * sin(fafFoamP.x * 2.3 - fafFoamP.y * 3.1));"
-        "\n    float fafFoamAmount = smoothstep(0.15, 0.7, fafFoam * (0.4 + 0.8 * fafLace) +(saturate(sum.a * 0.5) - 0.5) * 0.9);"
+        "\n    float fafFoamAmount = FafFoamAmount(fafFoam, ViewPosition.xz - inV.mViewVec.xz, sum.a);"
         "\n    float3 fafFoamColor = float3(0.95, 0.98, 1.0) * (0.8 + 0.2 * saturate(dot(N, SunDirection)));"
         "\n    water = lerp(water, fafFoamColor, fafFoamAmount * 0.92);"
       );
@@ -1419,7 +1362,7 @@ float3 FafWaterGridPosition(float2 uv, float elevation)
     if (count(colourFactor) == 1) {
       text.replace(text.find(colourFactor), colourFactor.size(), "float factor = max(clamp(waterDepth, waterLerp.x, waterLerp.y), waterSimParams2.w);");
     }
-    text.insert(text.find(vertexShader), kDeclarations);
+    text.insert(text.find(vertexShader), std::string(kDeclarations) + kWaterNoiseHlsl + kWaterFoamLookHlsl);
     source = std::move(text);
     result.patched = true;
     return result;
