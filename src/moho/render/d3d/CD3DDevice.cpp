@@ -32,6 +32,7 @@
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
 #include "gpg/gal/Effect.hpp"
 #include "gpg/gal/EffectTechnique.hpp"
+#include "moho/editor/EdPopout.h"
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/misc/StartupHelpers.h"
@@ -371,6 +372,7 @@ namespace
 namespace gpg::gal
 {
   bool ED_D3D9ResetWouldChange(Device* device, const DeviceContext* context);
+  bool ED_NvidiaAdapterInstalled();
 }
 
 namespace moho
@@ -407,6 +409,16 @@ namespace moho
     }
     CD3DDevice* const device = D3D_GetDevice();
     device->Clear();
+    // With an NVIDIA D3D9 adapter installed, a Reset that keeps the back buffer size deadlocks the driver for good once a pop-out has existed (its additional swap chain was
+    // created and presented): the main thread then waits in the first discard-lock of the UI atlas texture for a GPU sync object that never signals (measured on an RTX 4060
+    // Laptop + Intel Arc, docs/projects/editor/LAPTOP_FREEZE.md). A Reset that changes the size does not, so such a change is made in two Resets: first with a back buffer 16 pixels
+    // wider, then at the real size. Waiting for the GPU, releasing the chains earlier, or giving them a window of their own did not help.
+    if (gpg::gal::ED_NvidiaAdapterInstalled() && moho::edpopout::EverHadPopout() && context->GetHeadCount() == 1) {
+      gpg::gal::DeviceContext transient(*context);
+      transient.GetHead(0).mWidth += 16;
+      gpg::Logf("EDITOR device: two-step Reset (an NVIDIA adapter, and a pop-out has existed): %ux%u first", transient.GetHead(0).mWidth, transient.GetHead(0).mHeight);
+      (void)device->InitContext(&transient);
+    }
     (void)device->InitContext(context.get());
   }
 

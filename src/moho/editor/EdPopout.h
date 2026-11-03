@@ -15,6 +15,12 @@ namespace moho
     /** Draws every open pop-out into its swap chain and presents it. Main thread only, after the main frame's scene. */
     void RenderAll();
 
+    /**
+     * True once any pop-out has been opened in this process, even if it is closed again (its swap chain is made lazily and released on every device reset). On a hybrid NVIDIA
+     * laptop a device Reset that keeps the back buffer size froze the editor for good after that (docs/projects/editor/LAPTOP_FREEZE.md); see ED_ApplyPendingDeviceContext.
+     */
+    bool EverHadPopout();
+
     /** Destroys every open pop-out (windows, swap chains, root frames). Call before the UI manager and the device go away. */
     void DestroyAll();
   } // namespace edpopout

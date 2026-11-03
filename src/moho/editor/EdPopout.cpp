@@ -152,6 +152,7 @@ namespace moho
     };
 
     std::map<int, Popout*> gPopouts;
+    bool gEverCreated = false; // a pop-out (and so an additional swap chain) has existed in this process
     unsigned long gFramesDrawn = 0;
 
     void EdPopoutView::MarkDirty()
@@ -369,6 +370,11 @@ namespace moho
       gEvents.clear();
     }
 
+    bool EverHadPopout()
+    {
+      return gEverCreated;
+    }
+
     void RenderAll()
     {
       if (gPopouts.empty()) {
@@ -504,6 +510,7 @@ namespace moho
       const char* const title = lua_isstring(state, 5) ? lua_tostring(state, 5) : "Panel";
 
       EnsureDeviceListener();
+      gEverCreated = true;
       Popout* const p = new Popout();
       p->frame = new EdPopoutFrame(wxString(Widen(title).c_str()), wxPoint(x, y), wxSize(w, h), p);
       p->view = new EdPopoutView(p->frame, p);
