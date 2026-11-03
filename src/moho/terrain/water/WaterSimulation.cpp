@@ -143,6 +143,7 @@ cbuffer SimConstants : register(b0)
 StructuredBuffer<float4> Cur : register(t0);     // height, last height, foam, 1 on land
 StructuredBuffer<float4> Src : register(t1);     // two float4 per source: x, z, radius, push; foam, 0, 0, 0
 StructuredBuffer<uint> Heights : register(t2);   // the raw uint16 heights of the map, two to a word (the land mask)
+StructuredBuffer<float> Shore : register(t3);    // per height sample: the distance to the nearest land sample, world units (the shore waves)
 RWStructuredBuffer<float4> Nxt : register(u0);
 
 groupshared uint sList[256];
@@ -195,17 +196,21 @@ float GroundRaw(float2 p)
     return lerp(lerp(r00, r10, gf.x), lerp(r01, r11, gf.x), gf.y);
 }
 
-// the ground smoothed over about four units: the bilinear ground has a kink in its slope at every height sample, and crests that follow its
-// contours zigzag there (chevrons); the shore waves follow this one
-float GroundRawSmooth(float2 p)
+// the distance to the nearest land (world units) between the four surrounding height samples; the field is smooth, the shore waves follow its
+// contours (the bilinear depth of the ground is not: its slope has a kink at every sample and crests that follow it zigzag)
+float ShoreDist(float2 p)
 {
-    float sum = GroundRaw(p);
-    [unroll] for (int i = 0; i < 8; ++i)
-    {
-        float a = 0.785398 * (float)i;
-        sum += GroundRaw(p + 2.0 * float2(cos(a), sin(a)));
-    }
-    return sum * (1.0 / 9.0);
+    int2 hmax = int2(sE.xy) - 1;
+    int2 g0 = (int2)floor(p);
+    float2 gf = p - (float2)g0;
+    int2 s00 = clamp(g0, int2(0, 0), hmax);
+    int2 s11 = clamp(g0 + 1, int2(0, 0), hmax);
+    uint w = (uint)sE.x;
+    float d00 = Shore[(uint)s00.y * w + (uint)s00.x];
+    float d10 = Shore[(uint)s00.y * w + (uint)s11.x];
+    float d01 = Shore[(uint)s11.y * w + (uint)s00.x];
+    float d11 = Shore[(uint)s11.y * w + (uint)s11.x];
+    return lerp(lerp(d00, d10, gf.x), lerp(d01, d11, gf.x), gf.y);
 }
 
 uint Hash(uint v)
@@ -309,30 +314,33 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float dmax = max(abs(wpos.x - sC.z), abs(wpos.y - sC.w)) / sD.x;
     float edge = smoothstep(0.8, 1.0, dmax);   // the waves are absorbed at the border of the window
     float hn = (2.0 * cur.x - cur.y + sC.x * lap + 0.10 * lapv) * sC.y * (1.0 - 0.3 * edge) + add;
-    // Shore waves: a swell train that runs in over the shallows and breaks on the beach. A wave feels the bottom where the water is a few units
-    // deep; it slows down (the crests close up: the phase is the travel time over the depth, sqrt(depth)), grows (Green's law, depth^-1/4), leans
-    // forward, and breaks where it is higher than about a quarter of the water under it, throwing foam off the crest. The crests follow the lines
-    // of equal depth (waves bend to the beach), a slow warp of the phase makes them wander and a group envelope lets sets of bigger waves come in.
-    // The target is a function of the depth and the time only: no state, nothing to follow the camera.
+    // Shore waves: a swell train that runs in from the open sea and breaks on the beach. The phase runs in the distance to the shore (a field of
+    // the map, computed once), as sqrt(distance): the crests close up and slow down towards the beach (about 28 units apart at 50 units out and
+    // 5 units a second, 8 apart and 1.4 a second at 4 units), and they follow the lines of equal distance, so they bend round bays and headlands
+    // and arrive parallel to the coast. The wave grows (Green's law) and leans forward, and where it is higher than about a quarter of the water
+    // under it (the real depth) it breaks and throws foam off the crest. A slight warp of the phase lets the crests wander (a fraction of a wave,
+    // not a snake) and a group envelope lets sets of bigger waves come in.
+    // The target is a function of the ground and the time only: no state, nothing to follow the camera.
     float shoreWaveCrest = 0.0;
     float shoreWaveBreak = 0.0;
     float shoreWaveBand = 0.0;
-    float smoothDepth = groundDepth;
-    if (sD.y > 0.0 && groundDepth < 7.0)
+    float shoreDist = 1.0e4;
+    if (sD.y > 0.0)
     {
-        smoothDepth = (sE.z - GroundRawSmooth(wpos)) / 128.0;
+        shoreDist = ShoreDist(wpos);
     }
-    if (sD.y > 0.0 && smoothDepth < 5.0)
+    if (sD.y > 0.0 && shoreDist < 70.0)
     {
-        float d = max(smoothDepth, 0.02);
-        shoreWaveBand = 1.0 - smoothstep(3.2, 5.0, d);
-        float warp = 2.5 * sin(wpos.x * 0.060 + 0.7 * sin(wpos.y * 0.050)) + 1.5 * sin(wpos.y * 0.083 - wpos.x * 0.040 + 0.13 * sF.x);
-        float theta = 0.9 * sF.x + 19.9 * sqrt(d) + warp;
+        float dist = max(shoreDist, 0.5);
+        shoreWaveBand = 1.0 - smoothstep(50.0, 70.0, dist);
+        float warp = 0.9 * sin(wpos.x * 0.025 + 0.7 * sin(wpos.y * 0.021)) + 0.6 * sin(wpos.y * 0.033 - wpos.x * 0.018 + 0.05 * sF.x);
+        float theta = 1.1 * sF.x + 3.2 * sqrt(dist) + warp;
         float skew = 0.5 + 0.5 * saturate((sin(theta) + 0.32 * sin(2.0 * theta + 1.2)) * 0.9);
         float group = 0.6 + 0.4 * sin(0.17 * theta + 1.0);
-        float rawAmp = 0.20 * sD.y * pow(5.0 / max(d, 0.3), 0.25) * group;
-        float amp = min(rawAmp, 0.42 * d + 0.02);
-        shoreWaveBreak = saturate((rawAmp / d - 0.25) * 3.0);
+        float depth = max(groundDepth, 0.05);
+        float rawAmp = 0.22 * sD.y * pow(30.0 / max(dist, 4.0), 0.25) * group;
+        float amp = min(rawAmp, 0.42 * depth + 0.02);
+        shoreWaveBreak = saturate((rawAmp / depth - 0.25) * 3.0);
         shoreWaveCrest = pow(skew, 5.0);
         float target = amp * (1.7 * pow(skew, 2.4) - 0.58);
         hn = lerp(hn, target, 0.25 * shoreWaveBand);
@@ -345,7 +353,8 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float fr = R.w > 0.5 ? cur.z : R.z;
     float fu = U.w > 0.5 ? cur.z : U.z;
     float fd = D.w > 0.5 ? cur.z : D.z;
-    float foam = lerp(cur.z, 0.25 * (fl + fr + fu + fd), 0.12) * sF.z;
+    // (the surf of the shore waves fades faster: a trail of a second behind the crest, not a smear that looks as if it stood still)
+    float foam = lerp(cur.z, 0.25 * (fl + fr + fu + fd), 0.12) * (sF.z - 0.008 * shoreWaveBand);
     uint seed = Hash((uint)cell.y * 2654435761u + (uint)cell.x * 40503u + (uint)(sF.x * 90.0) * 9973u);
     float noise = 0.3 + 1.4 * (float)(seed & 0xFFFFu) * (1.0 / 65536.0);
     foam += foamAdd * noise;
@@ -358,7 +367,7 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     foam += shore * (saturate(abs(hn) * 5.0 - 0.1) * 0.10 + crest * crest * 0.035 * sF.w);
     foam += saturate(abs(hn) * 6.0 - 0.9) * 0.004;
     // the breaking of the shore waves: foam off the crest, and the sheet that runs up the beach behind it
-    foam += shoreWaveBand * shoreWaveCrest * (0.002 + 0.008 * shoreWaveBreak) * (0.5 + 0.5 * noise);
+    foam += shoreWaveBand * shoreWaveCrest * (0.0008 + 0.009 * shoreWaveBreak) * (0.5 + 0.5 * noise);
     foam += (1.0 - smoothstep(0.0, 0.6, groundDepth)) * pow(shoreWaveCrest, 0.6) * 0.012 * sD.y;
     foam = clamp(foam, 0.0, 1.5);
     Nxt[idx] = float4(hn, cur.x, foam, 0.0);
@@ -411,6 +420,10 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       boost::shared_ptr<GpuBuffer> state[2];
       boost::shared_ptr<GpuBuffer> sources;
       boost::shared_ptr<GpuBuffer> heights;
+      boost::shared_ptr<GpuBuffer> shore; // per height sample: the distance in world units to the nearest land sample (the shore waves run in it)
+      std::uint32_t shoreWidth = 0U;
+      std::uint32_t shoreHeight = 0U;
+      float shoreLevel = 0.0f;
       std::uint64_t heightRevision = ~0ull;
       std::uint32_t heightAge = 1000U; // frames since the land mask went up
       std::uint32_t heightWidth = 0U;
@@ -503,6 +516,104 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       }
     }
 
+    // Exact euclidean distance transform of one line (Felzenszwalb and Huttenlocher): d[q] = min over p of f[p] + (q - p)^2.
+    void DistanceLine(const std::vector<double>& f, std::vector<double>& d, std::vector<int>& v, std::vector<double>& z)
+    {
+      const int n = static_cast<int>(f.size());
+      int k = 0;
+      v[0] = 0;
+      z[0] = -1e30;
+      z[1] = 1e30;
+      for (int q = 1; q < n; ++q) {
+        double s = 0.0;
+        for (;;) {
+          const int p = v[k];
+          s = ((f[q] + static_cast<double>(q) * q) - (f[p] + static_cast<double>(p) * p)) / (2.0 * q - 2.0 * p);
+          if (s <= z[k] && k > 0) {
+            --k;
+          } else {
+            break;
+          }
+        }
+        if (s <= z[k]) {
+          v[k] = q; // k == 0: the new parabola is lower everywhere the old one was
+          continue;
+        }
+        ++k;
+        v[k] = q;
+        z[k] = s;
+        z[k + 1] = 1e30;
+      }
+      k = 0;
+      for (int q = 0; q < n; ++q) {
+        while (z[k + 1] < q) {
+          ++k;
+        }
+        const double dq = static_cast<double>(q - v[k]);
+        d[q] = dq * dq + f[v[k]];
+      }
+    }
+
+    // The distance in world units from every height sample to the nearest land sample (ground above `level`, raw height units), smoothed over
+    // five samples so that the staircase of a one-unit coast does not show in the contours the shore waves follow. 1e4 where the map has no land.
+    std::vector<float> ShoreDistance(const CHeightField& field, const std::uint32_t width, const std::uint32_t height, const float level)
+    {
+      const double kInf = 1e12;
+      std::vector<double> grid(static_cast<std::size_t>(width) * height);
+      for (std::uint32_t z = 0; z < height; ++z) {
+        for (std::uint32_t x = 0; x < width; ++x) {
+          const float raw = static_cast<float>(field.GetHeightAt(static_cast<std::int32_t>(x), static_cast<std::int32_t>(z)));
+          grid[static_cast<std::size_t>(z) * width + x] = raw > level ? 0.0 : kInf;
+        }
+      }
+      const std::size_t longest = std::max(width, height);
+      std::vector<double> f(longest), d(longest), z(longest + 1U);
+      std::vector<int> v(longest);
+      for (std::uint32_t x = 0; x < width; ++x) { // columns
+        f.assign(height, 0.0);
+        d.assign(height, 0.0);
+        for (std::uint32_t j = 0; j < height; ++j) {
+          f[j] = grid[static_cast<std::size_t>(j) * width + x];
+        }
+        DistanceLine(f, d, v, z);
+        for (std::uint32_t j = 0; j < height; ++j) {
+          grid[static_cast<std::size_t>(j) * width + x] = d[j];
+        }
+      }
+      for (std::uint32_t j = 0; j < height; ++j) { // rows
+        f.assign(width, 0.0);
+        d.assign(width, 0.0);
+        for (std::uint32_t x = 0; x < width; ++x) {
+          f[x] = grid[static_cast<std::size_t>(j) * width + x];
+        }
+        DistanceLine(f, d, v, z);
+        for (std::uint32_t x = 0; x < width; ++x) {
+          grid[static_cast<std::size_t>(j) * width + x] = d[x];
+        }
+      }
+      std::vector<float> dist(grid.size());
+      for (std::size_t i = 0; i < grid.size(); ++i) {
+        dist[i] = static_cast<float>(std::min(std::sqrt(grid[i]), 1e4));
+      }
+      // a box of five samples, in both directions
+      std::vector<float> tmp(dist.size());
+      for (int pass = 0; pass < 2; ++pass) {
+        for (std::uint32_t j = 0; j < height; ++j) {
+          for (std::uint32_t x = 0; x < width; ++x) {
+            float sum = 0.0f;
+            for (int o = -2; o <= 2; ++o) {
+              const std::uint32_t xx = pass == 0 ? static_cast<std::uint32_t>(std::min(std::max(static_cast<int>(x) + o, 0), static_cast<int>(width) - 1)) : x;
+              const std::uint32_t jj = pass == 1 ? static_cast<std::uint32_t>(std::min(std::max(static_cast<int>(j) + o, 0), static_cast<int>(height) - 1)) : j;
+              sum += dist[static_cast<std::size_t>(jj) * width + xx];
+            }
+            tmp[static_cast<std::size_t>(j) * width + x] = 0.2f * sum;
+          }
+        }
+        dist.swap(tmp);
+      }
+      return dist;
+    }
+
     bool EnsureResources(State& s, Device& device)
     {
       if (s.device != &device) {
@@ -510,6 +621,8 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
         s.state[1].reset();
         s.sources.reset();
         s.heights.reset();
+        s.shore.reset();
+        s.shoreWidth = 0U;
         s.heightRevision = ~0ull;
         s.step.reset();
         s.copy.reset();
@@ -787,6 +900,26 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
         }
       }
       landMask = s.heights != nullptr && s.heightWidth == hw && s.heightHeight == hh;
+      // The distance to the shore, once per map: the buildings that flatten ground a little do not move the coast.
+      const float shoreLevel = (elevation - kLandMargin) * 128.0f;
+      if (landMask && (s.shore == nullptr || s.shoreWidth != hw || s.shoreHeight != hh || s.shoreLevel != shoreLevel)) {
+        const std::vector<float> dist = ShoreDistance(*s.field, hw, hh, shoreLevel);
+        const std::uint32_t samples = static_cast<std::uint32_t>(dist.size());
+        if (s.shore == nullptr || s.shore->Desc().capacity != samples) {
+          GpuBufferDesc desc;
+          desc.name = "WaterSimShore";
+          desc.stride = 4U;
+          desc.capacity = samples;
+          s.shore = device->CreateGpuBuffer(desc);
+        }
+        if (s.shore != nullptr) {
+          device->UpdateGpuBuffer(*s.shore, 0U, samples, dist.data());
+          s.shoreWidth = hw;
+          s.shoreHeight = hh;
+          s.shoreLevel = shoreLevel;
+          gpg::Logf("Water simulation: distance to the shore of %ux%u height samples uploaded", hw, hh);
+        }
+      }
     }
 
     // real time between frames, for the fixed steps
@@ -893,7 +1026,8 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       constants.c[2] = centreX;
       constants.c[3] = centreZ;
       constants.d[0] = 0.5f * static_cast<float>(kN) * kCell;
-      constants.d[1] = landMask ? 0.01f * static_cast<float>(std::max(ren_WaterShoreWave, 0)) : 0.0f; // the shore waves need the depth of the sea bed
+      const bool shoreField = landMask && s.shore != nullptr && s.shoreWidth == s.heightWidth && s.shoreHeight == s.heightHeight;
+      constants.d[1] = shoreField ? 0.01f * static_cast<float>(std::max(ren_WaterShoreWave, 0)) : 0.0f; // the shore waves need the distance to the shore
       for (int step = 0; step < steps; ++step) {
         const std::uint32_t sourceCount = step == 0 ? static_cast<std::uint32_t>(s.pending.size()) : 0U;
         if (sourceCount > 0U) {
@@ -911,6 +1045,7 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
         dispatch.bindings.readBuffers[0] = s.state[s.current].get();
         dispatch.bindings.readBuffers[1] = s.sources.get();
         dispatch.bindings.readBuffers[2] = landMask ? s.heights.get() : s.sources.get();
+        dispatch.bindings.readBuffers[3] = shoreField ? s.shore.get() : s.sources.get();
         dispatch.bindings.writeBuffers[0] = s.state[s.current ^ 1U].get();
         dispatch.groupsX = kN / kTile;
         dispatch.groupsY = kN / kTile;
@@ -1084,6 +1219,8 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     s.state[1].reset();
     s.sources.reset();
     s.heights.reset();
+    s.shore.reset();
+    s.shoreWidth = 0U;
     s.heightRevision = ~0ull;
     s.field = nullptr;
     s.step.reset();
