@@ -778,6 +778,11 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
     return GetState().sourceWeight;
   }
 
+  float SimTime()
+  {
+    return GetState().time;
+  }
+
   bool SimRecording()
   {
     return ren_WaterRec > 0;

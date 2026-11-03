@@ -1,12 +1,6 @@
-AB_PRESETS = {
-    top = { 45, 1.2, 0, 0, 0 },
-    low = { 22, 0.5, 0, 0, 0 },
-}
+AB_PRESETS = { top = { 40, 1.45, 0.0, 0, 0 } }
 AB_STEPS = {
-    { 'warm', { 'ren_WaterSim 1', 'ren_DynLights 4' }, 'top' },
-    { 'w_top', { 'ren_WaterSimStrength 100' }, 'top' },
-    { 'w_top2', { 'ren_WaterSimStrength 100' }, 'top' },
-    { 'w_low', { 'ren_WaterSimStrength 100' }, 'low' },
-    { 'w_low2', { 'ren_WaterSimStrength 100' }, 'low' },
-    { 'w_off', { 'ren_WaterSimStrength 0' }, 'low' },
+  { 'on', { 'ren_WaterQuality 3', 'ren_WaterSim 1', 'ren_WaterRecEvery 8', 'ren_WaterRec 120' }, 'top' },
+  { 't1', {}, 'top' }, { 't2', {}, 'top' }, { 't3', {}, 'top' }, { 't4', {}, 'top' }, { 't5', {}, 'top' }, { 't6', {}, 'top' }, { 't7', {}, 'top' }, { 't8', {}, 'top' }, { 't9', {}, 'top' }, { 't10', {}, 'top' }, { 't11', {}, 'top' }, { 't12', {}, 'top' }, { 't13', {}, 'top' }, { 't14', {}, 'top' },
 }
+

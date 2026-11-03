@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cctype>
 #include <cstring>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -221,6 +222,63 @@ namespace moho::lights
 
   namespace
   {
+    // The V of a wake is not a pattern fixed to the hull. The hull leaves points of its two arms in the water as it goes (one every couple of units
+    // of its track), and every point then spreads outward at the Kelvin angle and fades by itself: the arms come out of the bow wave a little behind
+    // the ship, bend where the ship turned, are a bit uneven (each point was emitted at another moment) and go on spreading after it has stopped.
+    struct WakePoint
+    {
+      float x, z;       // the track point where the hull left it (water frame: it does not move with the ship)
+      float px, pz;     // across the heading there
+      float born;       // simulation time
+      float speed;      // of the hull then: how fast the arm spreads
+      float halfBeam;
+      float unit;       // push per unit of wake scale
+      float fast, body; // foam factors
+      float life;       // seconds until it is gone
+      float variation;  // 0.65 .. 1
+    };
+    struct WakeTrail
+    {
+      std::deque<WakePoint> points; // oldest first
+      float lastX = 0.0f;
+      float lastZ = 0.0f;
+    };
+    std::unordered_map<const MeshInstance*, WakeTrail> gWakeTrails;
+    float gWakePurge = 0.0f;
+
+    // Puts the points of the arms of this hull into the water for this frame (the simulation takes sources per frame, so the points are stamped
+    // every frame while they live).
+    void StampWakeTrail(const MeshInstance* const key, const float weight)
+    {
+      const float now = water::SimTime();
+      if (gWakeTrails.size() > 64 && now - gWakePurge > 5.0f) {
+        gWakePurge = now;
+        for (auto it = gWakeTrails.begin(); it != gWakeTrails.end();) {
+          it = (it->second.points.empty() || now - it->second.points.back().born > 12.0f) ? gWakeTrails.erase(it) : std::next(it);
+        }
+      }
+      const auto found = gWakeTrails.find(key);
+      if (found == gWakeTrails.end()) {
+        return;
+      }
+      std::deque<WakePoint>& points = found->second.points;
+      while (!points.empty() && now - points.front().born > points.front().life) {
+        points.pop_front();
+      }
+      for (const WakePoint& p : points) {
+        const float age = now - p.born;
+        const float fade = 1.0f - age / p.life;
+        const float ramp = std::min(age / 0.8f, 1.0f); // the arms start a little behind the bow, not on it
+        const float strength = p.unit * water::SimWakeScale() * weight * 0.3f * fade * ramp * p.variation;
+        const float foam = 0.010f * p.fast * p.body * weight * (0.3f + 0.7f * fade) * ramp * p.variation;
+        const float radius = std::min(std::max(0.3f * p.halfBeam + 0.04f * p.speed * age, 0.9f), 3.0f);
+        const float lateral = p.halfBeam * 0.9f + 0.35f * p.speed * age; // tan 19.5 degrees, the Kelvin angle
+        for (int side = -1; side <= 1; side += 2) {
+          water::SimAddSource(p.x + p.px * lateral * static_cast<float>(side), p.z + p.pz * lateral * static_cast<float>(side), radius, strength, foam, true);
+        }
+      }
+    }
+
     // Units standing in the water leave a wake: a disc at the unit that pushes the water in proportion to how fast it moves (docs/LIGHTING_V2.md).
     void AddWaterSource(const MeshInstance& instance, const float waterElevation)
     {
@@ -253,12 +311,13 @@ namespace moho::lights
         note("rejected: not at the surface"); // a body whose middle is under water (a submarine, an amphibious unit on the sea bed) moves no waves
         return;
       }
-      if (!std::isfinite(speed) || speed < 0.4f) {
-        return;
-      }
       const float weight = water::SimSourceWeight();
       if (!(weight > 0.0f)) {
         return; // the game is paused: a hull under way pushes nothing
+      }
+      if (!std::isfinite(speed) || speed < 0.4f) {
+        StampWakeTrail(&instance, weight); // a hull that has stopped: the arms it left go on spreading and fading
+        return;
       }
       note("source");
       // A hull pushes the water up at its bow and leaves a trough behind it: a pair of discs of opposite sign along the heading (a single push piles
@@ -302,7 +361,8 @@ namespace moho::lights
       const float spacing = count > 1 ? 1.6f * halfBeam / static_cast<float>(count - 1) : 0.0f;
       const float lumpRadius = std::min(std::max(count > 1 ? 0.7f * spacing : 0.5f * halfBeam, 0.8f), 5.0f);
       const float lumpCells = lumpRadius / 0.5f;
-      const float strength = height / (2.5f + 0.8f * lumpCells) * water::SimWakeScale() * weight;
+      const float unit = height / (2.5f + 0.8f * lumpCells);
+      const float strength = unit * water::SimWakeScale() * weight;
       const float foamPerLump = fast * body * weight / std::sqrt(static_cast<float>(count));
       for (int k = 0; k < count; ++k) {
         const float t = count > 1 ? (static_cast<float>(k) / static_cast<float>(count - 1) * 2.0f - 1.0f) * 0.8f : 0.0f;
@@ -318,26 +378,39 @@ namespace moho::lights
         water::SimAddSource(bowX, bowZ, lumpRadius, strength, 0.005f * foamPerLump, true);
         water::SimAddSource(sternX, sternZ, lumpRadius, -strength * 0.5f, 0.008f * foamPerLump, true);
       }
-      // The V of the bow wave: the two arms of a hull under way run back from the hull at about the Kelvin angle (19.5 degrees, tan 0.35), each a
-      // line of foam (and a little crest) that fades with the distance and widens. They are stamped every frame from the hull, so they stay attached to
-      // it and straight, whatever the waves of the simulation do; a slow hull leaves short arms, a fast one long ones.
+      // The V of the bow wave: the two arms run back from the hull at about the Kelvin angle (19.5 degrees, tan 0.35), each a line of foam (and a
+      // little crest) that fades and widens. The hull only leaves points of them (one every 1.6 units of its track, a slow hull leaves short arms, a
+      // fast one long ones); the points live in the water and spread by themselves (StampWakeTrail).
       {
         const float arm = std::min(std::max(speed - 1.0f, 0.0f) / 3.0f, 1.0f);
         const float armLength = std::min(std::max(6.0f * halfLength, 10.0f), 30.0f) * (0.5f + 0.5f * std::min(speed / 5.0f, 1.5f)) * arm;
         if (armLength > 3.0f) {
           const float tailX = cx - hx * halfLength * 0.8f;
           const float tailZ = cz - hz * halfLength * 0.8f;
-          for (int side = -1; side <= 1; side += 2) {
-            float d = 0.0f;
-            while (d < armLength) {
-              const float fade = 1.0f - d / armLength;
-              const float radiusHere = std::min(std::max(0.3f * halfBeam + 0.04f * d, 0.9f), 3.0f);
-              const float lateral = (halfBeam * 0.9f + 0.35f * d) * static_cast<float>(side);
-              water::SimAddSource(tailX - hx * d + px * lateral, tailZ - hz * d + pz * lateral, radiusHere, strength * 0.3f * fade, 0.010f * fast * body * weight * (0.3f + 0.7f * fade), true);
-              d += std::max(1.4f * radiusHere, 1.5f);
-            }
+          WakeTrail& trail = gWakeTrails[&instance];
+          const float moved = trail.points.empty() ? 1.0e9f : std::hypot(tailX - trail.lastX, tailZ - trail.lastZ);
+          if (moved >= 1.6f) {
+            static std::uint32_t sSeed = 2463534242u;
+            sSeed = sSeed * 1664525u + 1013904223u;
+            WakePoint point{};
+            point.x = tailX;
+            point.z = tailZ;
+            point.px = px;
+            point.pz = pz;
+            point.born = water::SimTime();
+            point.speed = speed;
+            point.halfBeam = halfBeam;
+            point.unit = unit;
+            point.fast = fast;
+            point.body = body;
+            point.life = std::min(std::max(armLength / std::max(speed, 1.0f), 1.5f), 8.0f);
+            point.variation = 0.65f + 0.35f * static_cast<float>((sSeed >> 8) & 0xFFFFu) / 65535.0f;
+            trail.points.push_back(point);
+            trail.lastX = tailX;
+            trail.lastZ = tailZ;
           }
         }
+        StampWakeTrail(&instance, weight);
       }
       // the wash of the propellers: foam only, as wide as the hull
       const float washRadius = std::min(std::max(halfBeam * 0.8f, 0.8f), 6.0f);
