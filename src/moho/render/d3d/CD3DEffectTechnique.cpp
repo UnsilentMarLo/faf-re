@@ -648,7 +648,7 @@ namespace moho
       // into different shaders, so it is cached under a name of its own.
       const auto createEffect = [&](const bool boneTexture) {
         const msvc8::string cachePath =
-          cacheDirectory + "/" + mName + (dynLights ? ".dynlights2" : "") + (shadowFilter ? ".shadowf2" : "") + (waterFilter ? ".waterq1" : "") + (waterLights ? ".waterl1" : "") + (waterSim ? ".watersim2" : "") + (waterSsr ? ".waterssr26" : "") +
+          cacheDirectory + "/" + mName + (dynLights ? ".dynlights2" : "") + (shadowFilter ? ".shadowf2" : "") + (waterFilter ? ".waterq1" : "") + (waterLights ? ".waterl1" : "") + (waterSim ? ".watersim3" : "") + (waterSsr ? ".waterssr26" : "") +
           (lowResParticles ? ".lowres" : "") + (boneTexture ? ".bonetex." : ".") + engineVersion;
         SDiskFileInfo cacheInfo{};
         bool useCachePayload = false;

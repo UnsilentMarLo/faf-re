@@ -42,6 +42,7 @@ namespace moho::water
   static int ren_WaterSwell = 100;
   static int ren_WaterSolid = 25;
   static int ren_WaterShoreWave = 100;
+  static int ren_WaterMaskDebug = 0;
   static int ren_WaterSimWake = 200;
   static int ren_WaterSimImpact = 100;
   static int ren_WaterRec = 0;
@@ -78,6 +79,12 @@ namespace moho::water
   );
   static TConVar<int> gTConVar_ren_WaterSwell(
     "ren_WaterSwell", "The wind sea: height of the constant swell that lifts the water and breaks on the beaches, in percent (default 100, 0 off).", &ren_WaterSwell
+  );
+  static TConVar<int> gTConVar_ren_WaterMaskDebug(
+    "ren_WaterMaskDebug",
+    "Diagnostic of the water mask (needs ren_WaterGrid): 1 paints the water pixels that the shipped land cut-out mask discards in magenta, 2 paints every "
+    "water pixel that is drawn in green (a gap in the green is where no water pixel is made); 0 (the default) off.",
+    &ren_WaterMaskDebug
   );
   static TConVar<int> gTConVar_ren_WaterShoreWave(
     "ren_WaterShoreWave", "Waves that roll in over the shallows and break on the beach, as height in percent (default 100, 0 off). Needs ren_WaterSim.",
@@ -1147,13 +1154,17 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       if (s.vars.gridParams.Exists()) {
         s.vars.gridParams.mEffectVariable->SetVector(off);
       }
+      if (s.vars.gridParams2.Exists()) { // the mask diagnostic works on the flat quad too
+        const float debug[4] = {0.0f, 0.0f, static_cast<float>(ren_WaterMaskDebug), 0.0f};
+        s.vars.gridParams2.mEffectVariable->SetVector(debug);
+      }
       return false;
     }
     s.vars.gridInverse.SetMatrix4x4(&camera.inverseViewProjection);
     const float params[4] = {1.0f, 12000.0f, mapExtentX, mapExtentZ};
     s.vars.gridParams.mEffectVariable->SetVector(params);
     if (s.vars.gridParams2.Exists()) {
-      const float params2[4] = {0.01f * static_cast<float>(ren_WaterDisplace), 0.01f * static_cast<float>(ren_WaterSwell), 0.0f, 0.0f};
+      const float params2[4] = {0.01f * static_cast<float>(ren_WaterDisplace), 0.01f * static_cast<float>(ren_WaterSwell), static_cast<float>(ren_WaterMaskDebug), 0.0f};
       s.vars.gridParams2.mEffectVariable->SetVector(params2);
     }
     return true;
@@ -1356,6 +1367,15 @@ float3 FafWaterGridPosition(float2 uv, float elevation)
         "\n    float fafFoamAmount = FafFoamAmount(fafFoam, ViewPosition.xz - inV.mViewVec.xz, sum.a);"
         "\n    float3 fafFoamColor = float3(0.95, 0.98, 1.0) * (0.8 + 0.2 * saturate(dot(N, SunDirection)));"
         "\n    water = lerp(water, fafFoamColor, fafFoamAmount * 0.92);"
+      );
+    }
+    // The mask diagnostic: the shipped shader returns alpha 1 - mask and an alpha test drops the land cut-out. (waterGridParams2.z is set by BindWaterGrid.)
+    const std::string maskAlpha = "returnPixels.a = 1 - mask;";
+    if (count(maskAlpha) == 1) {
+      text.insert(
+        text.find(maskAlpha) + maskAlpha.size(),
+        "\n    if (waterGridParams2.z > 0.5 && waterGridParams2.z < 1.5 && mask > 0.01) { returnPixels.rgb = float3(1.0, 0.0, 1.0); returnPixels.a = 1.0; }"
+        "\n    if (waterGridParams2.z > 1.5) { returnPixels.rgb = lerp(returnPixels.rgb, float3(0.0, 1.0, 0.0), 0.8); returnPixels.a = 1.0; }"
       );
     }
     const std::string colourFactor = "float factor = clamp(waterDepth, waterLerp.x, waterLerp.y);";
