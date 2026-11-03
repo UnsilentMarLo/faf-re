@@ -296,3 +296,13 @@ out of the sea. Fix: a node whose height range lies within its own error of the 
 shipped behaviour). Flat nodes have no error and cost nothing; the cost is triangles along broken shores when zoomed out. `ren_WaterMaskDebug 1|2` shows
 what the water mask discards and where water pixels are drawn at all. Not reproduced on scmp_009 (no hole there, only the shoreline lines moved), so
 the fix is by cause, not yet seen on the user's map.
+
+Findings on the water holes (Stella Maris 1v1, reproduced with `tests/featab/steps_zoom.lua`, `ren_WaterMaskDebug 1`): the discarded band around coasts is absent at
+a camera distance of 100, one pixel at 300, and a thick staircase beyond 600. The terrain vertex shader (`terrain.fx`, `if (position.y < WaterElevation)
+position.y = WaterElevation + 0.0001`) flattens every submerged vertex to the water level, so a coarse triangle with one dry and two submerged vertices is a
+ramp that stays above the water across its whole width and the mask discards the water there. The tessellator's error test measures the real height error,
+not the flattened one, so a gently sloping beach stays coarse. Fix: `ren_ShoreTessCell` (default 0.002): a node that crosses the water level is split until
+it is at most that share of its view depth wide. At a distance of 1000 the discarded area fell from 15,730 to 10,310 pixels, the rest being the one-cell
+contour of the flattened mesh at full detail; the vertex cache at that distance rose from 13.5k to 19k of its 65k entries. The cvars of the test harness
+(`ConExecute` after the camera snap) only reach the tessellator at the next camera move: apply a setting one step before the camera goes to a fresh distance.
+Not done: removing the flattening in `terrain.fx` (a source patch of the shipped terrain effect), which would remove the last cell of the band.

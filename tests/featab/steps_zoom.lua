@@ -1,9 +1,8 @@
-AB_PRESETS = { a = { 150, 1.0, 0.8, 0, 0 }, b = { 400, 1.0, 0.8, 0, 0 }, c = { 700, 1.1, 2.2, 0, 0 }, d = { 1000, 1.2, 4.0, 0, 0 } }
+AB_PRESETS = { z60 = { 60, 1.3, 0.0, 0, 0 }, z120 = { 120, 1.3, 0.0, 0, 0 }, z240 = { 240, 1.3, 0.0, 0, 0 }, z480 = { 480, 1.3, 0.0, 0, 0 } }
 AB_STEPS = {
-    { 'warm', { 'ren_DynLightsSunShadows 1' }, 'a' },
-    { 'a', { 'ren_DynLightsSunShadows 1' }, 'a' },
-    { 'b', { 'ren_DynLightsSunShadows 1' }, 'b' },
-    { 'c', { 'ren_DynLightsSunShadows 1' }, 'c' },
-    { 'd', { 'ren_DynLightsSunShadows 1' }, 'd' },
-    { 'a2', { 'ren_DynLightsSunShadows 1' }, 'a' },
+  { 'on', { 'ren_WaterSim 1', 'ren_WaterQuality 3', 'ren_WaterMaskDebug 1' }, 'z60' },
+  { 'a1', {}, 'z60' }, { 'a2', {}, 'z60' },
+  { 'b1', {}, 'z120' }, { 'b2', {}, 'z120' },
+  { 'c1', {}, 'z240' }, { 'c2', {}, 'z240' },
+  { 'd1', {}, 'z480' }, { 'd2', {}, 'z480' },
 }

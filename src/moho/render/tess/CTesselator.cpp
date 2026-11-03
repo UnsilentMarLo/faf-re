@@ -21,6 +21,17 @@ namespace moho
   // water level, by ren_ShoreErrorCoeff = 0.4). Zoomed out, a coarse node of a canyon or of a shallow, broken shore can bridge over the water (or sink
   // under it) by the error the view allows (about a unit at 1000 units), and the water mask then cuts a square, straight-edged hole in the sea.
   float ren_ShoreTessCoeff = 0.1f;
+  // The vertex shader of the terrain flattens every submerged vertex to the water level, so a coarse triangle with one dry and two submerged vertices is a
+  // ramp that stays above the water over its whole width: the water mask then cuts a band as wide as the node out of the sea. The error test cannot see
+  // it (it measures the real height error, not the flattened one), so a node that crosses the water level is refined until it is only this share of its
+  // view depth wide (0.002: two or three pixels).
+  float ren_ShoreTessCell = 0.002f;
+  static TConVar<float> gTConVar_ren_ShoreTessCell(
+    "ren_ShoreTessCell",
+    "Terrain tessellation at the shore: a node that crosses the water level is split until its width is at most this share of its view depth (default 0.002, "
+    "two or three pixels; 0 turns it off). Larger shows bands of water cut away by the coarse terrain when zoomed out; smaller costs triangles along shores.",
+    &ren_ShoreTessCell
+  );
   static TConVar<float> gTConVar_ren_ShoreTessCoeff(
     "ren_ShoreTessCoeff",
     "Terrain tessellation near the water: the share of the screen error that a terrain node whose height range lies within its own error of the water "
@@ -903,6 +914,11 @@ namespace moho
     const Vector4f& row1 = mCam->viewport.r[1];
     const float projectedDepth =
       (row1.z * testCorner.z) + (row1.y * testCorner.y) + (row1.x * testCorner.x) + row1.w;
+
+    // FAF: see ren_ShoreTessCell
+    if (crossesWaterSurface && ren_ShoreTessCell > 0.0f && static_cast<float>(1 << tier) > std::max(1.0f, projectedDepth * ren_ShoreTessCell)) {
+      return kSplit;
+    }
 
     const float maxAllowedError = shoreErrorCoeff * projectedDepth * ren_maxViewError;
     return (tierMaxError < maxAllowedError) ? kAccept : kSplit;
