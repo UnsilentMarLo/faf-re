@@ -50,7 +50,8 @@ namespace moho::water
   }
 
   // `rawAt(x, z)` is the raw height of a sample (any callable returning a number). Land is ground above `level` (raw height units). The result is
-  // smoothed over five samples in both directions so that the staircase of a one-unit coast does not show in the contours the waves follow; 1e4
+  // smoothed over thirteen samples in both directions (twice a box of 6.5 units: the contours of a distance field have cusps where the shores of a bay or two
+  // islands meet, and crests that follow them show V shapes) so that neither those nor the staircase of a one-unit coast show in the contours the waves follow; 1e4
   // where the map has no land.
   template <class RawAt>
   std::vector<float> ComputeShoreDistance(RawAt&& rawAt, const std::uint32_t width, const std::uint32_t height, const float level)
@@ -93,16 +94,17 @@ namespace moho::water
       dist[i] = static_cast<float>(std::min(std::sqrt(grid[i]), 1e4));
     }
     std::vector<float> tmp(dist.size());
-    for (int pass = 0; pass < 2; ++pass) {
+    constexpr int kRadius = 6;
+    for (int pass = 0; pass < 4; ++pass) {
       for (std::uint32_t j = 0; j < height; ++j) {
         for (std::uint32_t x = 0; x < width; ++x) {
           float sum = 0.0f;
-          for (int o = -2; o <= 2; ++o) {
-            const std::uint32_t xx = pass == 0 ? static_cast<std::uint32_t>(std::min(std::max(static_cast<int>(x) + o, 0), static_cast<int>(width) - 1)) : x;
-            const std::uint32_t jj = pass == 1 ? static_cast<std::uint32_t>(std::min(std::max(static_cast<int>(j) + o, 0), static_cast<int>(height) - 1)) : j;
+          for (int o = -kRadius; o <= kRadius; ++o) {
+            const std::uint32_t xx = (pass & 1) == 0 ? static_cast<std::uint32_t>(std::min(std::max(static_cast<int>(x) + o, 0), static_cast<int>(width) - 1)) : x;
+            const std::uint32_t jj = (pass & 1) == 1 ? static_cast<std::uint32_t>(std::min(std::max(static_cast<int>(j) + o, 0), static_cast<int>(height) - 1)) : j;
             sum += dist[static_cast<std::size_t>(jj) * width + xx];
           }
-          tmp[static_cast<std::size_t>(j) * width + x] = 0.2f * sum;
+          tmp[static_cast<std::size_t>(j) * width + x] = sum / static_cast<float>(2 * kRadius + 1);
         }
       }
       dist.swap(tmp);

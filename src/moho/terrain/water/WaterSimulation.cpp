@@ -43,6 +43,7 @@ namespace moho::water
   static int ren_WaterSolid = 25;
   static int ren_WaterShoreWave = 100;
   static int ren_WaterMaskDebug = 0;
+  static int ren_WaterSeed = 0;
   static int ren_WaterSimWake = 200;
   static int ren_WaterSimImpact = 100;
   static int ren_WaterRec = 0;
@@ -79,6 +80,10 @@ namespace moho::water
   );
   static TConVar<int> gTConVar_ren_WaterSwell(
     "ren_WaterSwell", "The wind sea: height of the constant swell that lifts the water and breaks on the beaches, in percent (default 100, 0 off).", &ren_WaterSwell
+  );
+  static TConVar<int> gTConVar_ren_WaterSeed(
+    "ren_WaterSeed", "Seed of the ambient sea (the headings, lengths and heights of its waves and where its patches are): 0 (the default) takes one from the map, so every map has its own sea.",
+    &ren_WaterSeed
   );
   static TConVar<int> gTConVar_ren_WaterMaskDebug(
     "ren_WaterMaskDebug",
@@ -133,7 +138,7 @@ namespace moho::water
       float a[4]; // origin x, z (cells, a multiple of 8), previous origin x, z
       float b[4]; // cell size, cells, source count, step seconds
       float c[4]; // wave speed term, damping per step, centre x, z (world)
-      float d[4]; // half extent (world), shore wave height factor, unused
+      float d[4]; // half extent (world), shore wave height factor, sea seed
       float e[4]; // map height samples x, z, water level in raw height units, 1 when the land mask is on
       float f[4]; // time (s), swell scale, foam kept per step, shore surf
     };
@@ -323,12 +328,13 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float dmax = max(abs(wpos.x - sC.z), abs(wpos.y - sC.w)) / sD.x;
     float edge = smoothstep(0.8, 1.0, dmax);   // the waves are absorbed at the border of the window
     float hn = (2.0 * cur.x - cur.y + sC.x * lap + 0.10 * lapv) * sC.y * (1.0 - 0.3 * edge) + add;
-    // Shore waves. A real sea is not one train parallel to the coast: three swells of different length and heading (each a travelling wave along
-    // its own tilted line of equal distance to the shore, short-crested: patches of noise let each one come and go along its crest) cross each
-    // other over the open water, and only in the last twenty units does a train of the surf take over, which follows the coast, wanders along it
-    // (a warp of the phase by noise), breaks into segments (noise along the crest), grows (Green's law) and breaks where it is higher than about
-    // a quarter of the water under it (the real depth), throwing foam off the crest. The surf closes up and slows down towards the beach (sqrt of
-    // the distance to the shore, a field of the map computed once). The target is a function of the ground and the time only.
+    // The sea. A real sea is not one train parallel to the coast and not a few crossing ones: it is a spectrum of many waves of different lengths and
+    // headings, short-crested, that come and go. Six independent plane waves (their headings around a wind direction, lengths from 10 to 42 units,
+    // deep-water speeds, longer waves taller) are drawn from a seed (sD.z: the map's own unless ren_WaterSeed says otherwise), each one carried by
+    // patches of noise that drift with it, so no crest is long and no two seas are alike. Over the last twenty units the sea hands over to the surf: a
+    // train that follows the coast (the distance to the shore, a smoothed field of the map computed once, as sqrt of the distance: the crests close up
+    // and slow down), wanders along it (a warp of the phase by noise), comes in segments, grows (Green's law) and breaks where it is higher than a
+    // quarter of the water under it (the real depth), throwing foam off the crest. The target is a function of the ground and the time only.
     float shoreWaveCrest = 0.0;
     float shoreWaveBreak = 0.0;
     float shoreWaveBand = 0.0;
@@ -340,35 +346,43 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     {
         shoreDist = ShoreDist(wpos);
     }
-    if (sD.y > 0.0 && shoreDist < 90.0)
+    if (sD.y > 0.0 && shoreDist < 160.0)
     {
         float dist = max(shoreDist, 0.5);
-        shoreWaveBand = 1.0 - smoothstep(60.0, 90.0, dist);
+        shoreWaveBand = 1.0 - smoothstep(100.0, 160.0, dist);
         float depth = max(groundDepth, 0.05);
-        float wSurf = 1.0 - smoothstep(8.0, 22.0, dist);
+        float wSurf = 1.0 - smoothstep(8.0, 24.0, dist);
         float t = sF.x;
+        float seed = sD.z;
         float target = 0.0;
 
-        // the open-water swells: wave length, heading of the crests against the coast (tilt of the line of equal distance), frequency
-        // x: wave number, y: tilt, z: along-coast direction angle, w: frequency
-        float4 swell0 = float4(0.286, 0.45, 0.7, 1.10);
-        float4 swell1 = float4(0.203, -0.38, 2.1, 0.90);
-        float4 swell2 = float4(0.370, 0.20, 4.0, 1.30);
-        [unroll] for (int i = 0; i < 3; ++i)
+        float windAngle = 6.2832 * FafNoiseCorner(float2(seed, 91.7));
+        // the crests are not straight: the position the waves are read at is pushed about by slow noise (a fraction of a wave length)
+        float2 wq = wpos + (float2(FafNoise2(wpos * 0.022 + float2(seed, 3.1) + float2(0.013, 0.0) * t), FafNoise2(wpos * 0.022 + float2(seed + 17.3, 8.9) + float2(0.0, 0.011) * t)) - 0.5) * 16.0;
+        // three fields of patches, shared by the waves (where the sea is rough and where it is calm; they drift along the wind)
+        float2 windDir = float2(cos(windAngle), sin(windAngle));
+        float p0 = smoothstep(0.30, 0.75, FafNoise2((wpos - windDir * 1.2 * t) * 0.035 + float2(7.3, 2.9 + seed)));
+        float p1 = smoothstep(0.30, 0.75, FafNoise2((wpos - windDir * 0.9 * t) * 0.055 + float2(14.6, 5.8 + seed)));
+        float p2 = smoothstep(0.30, 0.75, FafNoise2((wpos - windDir * 1.6 * t) * 0.085 + float2(21.9, 8.7 + seed)));
+        [unroll] for (int i = 0; i < 10; ++i)
         {
-            float4 sw = i == 0 ? swell0 : (i == 1 ? swell1 : swell2);
-            float along = dot(wpos, float2(cos(sw.z), sin(sw.z)));
-            float th = sw.w * t + sw.x * (dist + sw.y * along);
-            float s = 0.5 + 0.5 * saturate((sin(th) + 0.30 * sin(2.0 * th + 1.0)) * 0.9);
-            // patches: where this swell is strong (they drift slowly, so a crest is not the same length for long)
-            float patch = smoothstep(0.30, 0.75, FafNoise2(wpos * 0.045 + float2(7.3 * (float)i, 2.9 * (float)i) + float2(0.021, -0.017) * t * (1.0 + (float)i)));
-            float a = 0.105 * sD.y * (0.15 + 0.85 * patch) * pow(clamp(8.0 / depth, 1.0, 4.0), 0.25);
-            target += a * (1.6 * pow(s, 2.2) - 0.55) * (1.0 - 0.9 * wSurf);
+            float fi = (float)i;
+            float heading = windAngle + (FafNoiseCorner(float2(seed + 13.1, fi * 5.3 + 1.0)) - 0.5) * 3.2;
+            float u = FafNoiseCorner(float2(seed + 29.9, fi * 7.1 + 2.0));
+            float lambda = 8.0 + 52.0 * u * u;                                        // many short waves, a few long ones
+            float k = 6.2832 / lambda;
+            float omega = sqrt(3.2 * k);                                             // deep-water dispersion, about 3.5 units a second at 24
+            float2 dir = float2(cos(heading), sin(heading));
+            float th = k * dot(dir, wq) - omega * t + 6.2832 * FafNoiseCorner(float2(seed + 41.3, fi * 3.9 + 3.0));
+            float s = 0.5 + 0.5 * saturate((sin(th) + 0.28 * sin(2.0 * th + 1.0)) * 0.9);
+            float patch = (i % 3 == 0) ? p0 : ((i % 3 == 1) ? p1 : p2);
+            float amp = 0.052 * sD.y * pow(lambda / 24.0, 0.8) * (0.55 + 0.9 * FafNoiseCorner(float2(seed + 53.7, fi * 2.3 + 4.0)));
+            target += amp * (0.2 + 0.8 * patch) * (1.6 * pow(s, 2.2) - 0.55);
         }
+        target *= 1.0 - 0.9 * wSurf;
 
         // the surf train: follows the coast, wanders along it, comes in segments
-        float2 q = wpos * 0.04;
-        float warp = (FafNoise2(q + float2(1.7, 9.2)) - 0.5) * 5.0 + (FafNoise2(wpos * 0.13 + float2(4.1, 0.3) + float2(0.0, 0.05) * t) - 0.5) * 2.4;
+        float warp = (FafNoise2(wpos * 0.04 + float2(1.7, 9.2) + seed) - 0.5) * 6.0 + (FafNoise2(wpos * 0.11 + float2(4.1, 0.3) + float2(0.0, 0.05) * t) - 0.5) * 3.0;
         float theta = 1.1 * t + 3.2 * sqrt(dist) + warp;
         float skew = 0.5 + 0.5 * saturate((sin(theta) + 0.32 * sin(2.0 * theta + 1.2)) * 0.9);
         float segment = smoothstep(0.22, 0.70, FafNoise2(wpos * 0.075 + float2(13.1, 5.7) + float2(0.03, 0.02) * t));
@@ -984,6 +998,12 @@ float4 SimCopyPS(float4 position : SV_Position) : SV_Target
       constants.c[3] = centreZ;
       constants.d[0] = 0.5f * static_cast<float>(kN) * kCell;
       const bool shoreField = landMask && s.shore != nullptr && s.shoreWidth == s.heightWidth && s.shoreHeight == s.heightHeight;
+      {
+        // the seed: the player's, else one from the map (its size and sea level), as a number the shader can hash
+        std::uint32_t h = ren_WaterSeed != 0 ? static_cast<std::uint32_t>(ren_WaterSeed) : (s.heightWidth * 2654435761u) ^ (s.heightHeight * 40503u) ^ static_cast<std::uint32_t>(elevation * 128.0f);
+        h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
+        constants.d[2] = 1.0f + static_cast<float>(h % 997u);
+      }
       constants.d[1] = shoreField ? 0.01f * static_cast<float>(std::max(ren_WaterShoreWave, 0)) : 0.0f; // the shore waves need the distance to the shore
       for (int step = 0; step < steps; ++step) {
         const std::uint32_t sourceCount = step == 0 ? static_cast<std::uint32_t>(s.pending.size()) : 0U;
@@ -1375,7 +1395,11 @@ float3 FafWaterGridPosition(float2 uv, float elevation)
       text.insert(
         text.find(maskAlpha) + maskAlpha.size(),
         "\n    if (waterGridParams2.z > 0.5 && waterGridParams2.z < 1.5 && mask > 0.01) { returnPixels.rgb = float3(1.0, 0.0, 1.0); returnPixels.a = 1.0; }"
-        "\n    if (waterGridParams2.z > 1.5) { returnPixels.rgb = lerp(returnPixels.rgb, float3(0.0, 1.0, 0.0), 0.8); returnPixels.a = 1.0; }"
+        "\n    if (waterGridParams2.z > 1.5 && waterGridParams2.z < 2.5) { returnPixels.rgb = lerp(returnPixels.rgb, float3(0.0, 1.0, 0.0), 0.8); returnPixels.a = 1.0; }"
+        // 3: the inputs of the mask: red = the cut-out alpha of the frame (land and units above the water), green = the baked water map's b channel,
+        // blue = the baked water depth (g channel) scaled; 4: the cut-out alpha as grey levels (0 .. 0.1)
+        "\n    if (waterGridParams2.z > 2.5 && waterGridParams2.z < 3.5) { returnPixels.rgb = float3(saturate(backGroundPixels.a * 255.0), waterTexture.b, saturate(waterDepth * 0.5)); returnPixels.a = 1.0; }"
+        "\n    if (waterGridParams2.z > 3.5) { returnPixels.rgb = saturate(backGroundPixels.a * 10.0).xxx; returnPixels.a = 1.0; }"
       );
     }
     const std::string colourFactor = "float factor = clamp(waterDepth, waterLerp.x, waterLerp.y);";

@@ -306,3 +306,14 @@ it is at most that share of its view depth wide. At a distance of 1000 the disca
 contour of the flattened mesh at full detail; the vertex cache at that distance rose from 13.5k to 19k of its 65k entries. The cvars of the test harness
 (`ConExecute` after the camera snap) only reach the tessellator at the next camera move: apply a setting one step before the camera goes to a fresh distance.
 Not done: removing the flattening in `terrain.fx` (a source patch of the shipped terrain effect), which would remove the last cell of the band.
+
+### Ambient sea, second rework (2026-11-03, night)
+
+The three crossing, shore-tilted swells made V shapes (the contours of a distance field have cusps where bays and islands meet) and, as six plain plane waves, a
+lattice. The open sea is now ten seeded plane waves: headings around a wind direction (+-92 degrees), lengths from 8 to 60 units (many short, a few long),
+deep-water dispersion, longer waves taller, three drifting fields of patches that say where the sea is rough and where it is calm, and the position the waves
+are read at is pushed about by slow noise so that no crest is straight. The seed (`ren_WaterSeed`, 0 = from the map's size and sea level) decides everything,
+so every map has its own sea. The distance to the shore is smoothed over 13 samples (twice), the surf train takes over in the last 24 units. Lab:
+`watersimlab.exe --seed N`. Mask diagnostics: `ren_WaterMaskDebug` 3 (inputs of the mask: red cut-out alpha, green the baked map's b, blue its depth) and 4.
+Tried and refuted for the coast bands: the mip level of the mask sampler (no change), flattening of submerged vertices in `terrain.fx` (dead code, `TerrainFogVS`
+is unused).

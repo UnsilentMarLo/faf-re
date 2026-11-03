@@ -112,6 +112,7 @@ namespace
     int n = 512;
     float seconds = 40.0f, every = 0.5f, from = 10.0f;
     int swell = 100, shoreWave = 100;
+    int seed = 17;
     int look = 4;       // pixels per world unit of the look images (0: none)
     float suma = 0.5f;  // the alpha of the shipped crest texture the foam threshold sees (a pixel of the game has a value of its own)
   };
@@ -133,6 +134,7 @@ int main(int argc, char** argv)
     else if (key == "--swell") args.swell = std::atoi(next().c_str());
     else if (key == "--shorewave") args.shoreWave = std::atoi(next().c_str());
     else if (key == "--look") args.look = std::atoi(next().c_str());
+    else if (key == "--seed") args.seed = std::atoi(next().c_str());
     else if (key == "--suma") args.suma = static_cast<float>(std::atof(next().c_str()));
   }
   if (args.src.empty()) {
@@ -353,7 +355,7 @@ void LookCS(uint3 id : SV_DispatchThreadID)
     k.a[0] = 0; k.a[1] = 0; k.a[2] = 0; k.a[3] = 0;                                    // origin and previous origin (cells)
     k.b[0] = kCell; k.b[1] = static_cast<float>(n); k.b[2] = 0.0f; k.b[3] = kStep;     // cell, cells, sources, step seconds
     k.c[0] = 0.0031f; k.c[1] = 0.997f; k.c[2] = half; k.c[3] = half;                   // wave speed term, damping, centre
-    k.d[0] = half; k.d[1] = 0.01f * static_cast<float>(args.shoreWave);               // half extent, shore wave factor
+    k.d[0] = half; k.d[1] = 0.01f * static_cast<float>(args.shoreWave); k.d[2] = static_cast<float>(args.seed);               // half extent, shore wave factor
     k.e[0] = static_cast<float>(hw); k.e[1] = static_cast<float>(hh); k.e[2] = levelRaw; k.e[3] = 1.0f; // heights, level, land mask on
     k.f[0] = time; k.f[1] = 0.01f * static_cast<float>(args.swell); k.f[2] = 0.994f; k.f[3] = 1.0f;     // time, swell, foam kept, surf
     context->UpdateSubresource(constantBuffer.Get(), 0, nullptr, &k, 0, 0);
