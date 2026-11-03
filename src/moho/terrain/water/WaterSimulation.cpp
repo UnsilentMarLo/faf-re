@@ -176,6 +176,38 @@ float2 FafSwellSlope(float2 p, float t)
     return s;
 }
 
+// the ground (raw height units) between the four surrounding height samples (they sit on the whole world units; a cell is half a sample)
+float GroundRaw(float2 p)
+{
+    int2 hmax = int2(sE.xy) - 1;
+    int2 g0 = (int2)floor(p);
+    float2 gf = p - (float2)g0;
+    int2 s00 = clamp(g0, int2(0, 0), hmax);
+    int2 s11 = clamp(g0 + 1, int2(0, 0), hmax);
+    uint i00 = (uint)s00.y * (uint)sE.x + (uint)s00.x;
+    uint i10 = (uint)s00.y * (uint)sE.x + (uint)s11.x;
+    uint i01 = (uint)s11.y * (uint)sE.x + (uint)s00.x;
+    uint i11 = (uint)s11.y * (uint)sE.x + (uint)s11.x;
+    float r00 = (float)((Heights[i00 >> 1] >> ((i00 & 1) * 16)) & 0xFFFF);
+    float r10 = (float)((Heights[i10 >> 1] >> ((i10 & 1) * 16)) & 0xFFFF);
+    float r01 = (float)((Heights[i01 >> 1] >> ((i01 & 1) * 16)) & 0xFFFF);
+    float r11 = (float)((Heights[i11 >> 1] >> ((i11 & 1) * 16)) & 0xFFFF);
+    return lerp(lerp(r00, r10, gf.x), lerp(r01, r11, gf.x), gf.y);
+}
+
+// the ground smoothed over about four units: the bilinear ground has a kink in its slope at every height sample, and crests that follow its
+// contours zigzag there (chevrons); the shore waves follow this one
+float GroundRawSmooth(float2 p)
+{
+    float sum = GroundRaw(p);
+    [unroll] for (int i = 0; i < 8; ++i)
+    {
+        float a = 0.785398 * (float)i;
+        sum += GroundRaw(p + 2.0 * float2(cos(a), sin(a)));
+    }
+    return sum * (1.0 / 9.0);
+}
+
 uint Hash(uint v)
 {
     uint state = v * 747796405u + 2891336453u;
@@ -244,21 +276,7 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
         // land is a wall: a cell whose ground is above the water holds no wave, so nothing that happens ashore moves the sea and a wave dies at the beach
         // the ground between the four surrounding height samples (a cell is half a sample): the coastline is a smooth line, not a staircase of
         // whole samples
-        int2 hmax = int2(sE.xy) - 1;
-        float2 gp = wpos;   // the height samples sit on the whole world units
-        int2 g0 = (int2)floor(gp);
-        float2 gf = gp - (float2)g0;
-        int2 s00 = clamp(g0, int2(0, 0), hmax);
-        int2 s11 = clamp(g0 + 1, int2(0, 0), hmax);
-        uint i00 = (uint)s00.y * (uint)sE.x + (uint)s00.x;
-        uint i10 = (uint)s00.y * (uint)sE.x + (uint)s11.x;
-        uint i01 = (uint)s11.y * (uint)sE.x + (uint)s00.x;
-        uint i11 = (uint)s11.y * (uint)sE.x + (uint)s11.x;
-        float r00 = (float)((Heights[i00 >> 1] >> ((i00 & 1) * 16)) & 0xFFFF);
-        float r10 = (float)((Heights[i10 >> 1] >> ((i10 & 1) * 16)) & 0xFFFF);
-        float r01 = (float)((Heights[i01 >> 1] >> ((i01 & 1) * 16)) & 0xFFFF);
-        float r11 = (float)((Heights[i11 >> 1] >> ((i11 & 1) * 16)) & 0xFFFF);
-        float raw = lerp(lerp(r00, r10, gf.x), lerp(r01, r11, gf.x), gf.y);
+        float raw = GroundRaw(wpos);
         if (raw > sE.z)
         {
             Nxt[idx] = float4(0.0, 0.0, 0.0, 1.0);
@@ -299,9 +317,14 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     float shoreWaveCrest = 0.0;
     float shoreWaveBreak = 0.0;
     float shoreWaveBand = 0.0;
-    if (sD.y > 0.0 && groundDepth < 5.0)
+    float smoothDepth = groundDepth;
+    if (sD.y > 0.0 && groundDepth < 7.0)
     {
-        float d = max(groundDepth, 0.02);
+        smoothDepth = (sE.z - GroundRawSmooth(wpos)) / 128.0;
+    }
+    if (sD.y > 0.0 && smoothDepth < 5.0)
+    {
+        float d = max(smoothDepth, 0.02);
         shoreWaveBand = 1.0 - smoothstep(3.2, 5.0, d);
         float warp = 2.5 * sin(wpos.x * 0.060 + 0.7 * sin(wpos.y * 0.050)) + 1.5 * sin(wpos.y * 0.083 - wpos.x * 0.040 + 0.13 * sF.x);
         float theta = 0.9 * sF.x + 19.9 * sqrt(d) + warp;
