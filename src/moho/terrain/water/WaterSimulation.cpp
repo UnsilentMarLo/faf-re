@@ -237,15 +237,29 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     if (sE.w > 0.5)
     {
         // land is a wall: a cell whose ground is above the water holds no wave, so nothing that happens ashore moves the sea and a wave dies at the beach
-        int2 sc = clamp((int2)floor(wpos), int2(0, 0), int2(sE.xy) - 1);
-        uint hi = (uint)sc.y * (uint)sE.x + (uint)sc.x;
-        uint raw = (Heights[hi >> 1] >> ((hi & 1) * 16)) & 0xFFFF;
-        if ((float)raw > sE.z)
+        // the ground between the four surrounding height samples (a cell is half a sample): the coastline is a smooth line, not a staircase of
+        // whole samples
+        int2 hmax = int2(sE.xy) - 1;
+        float2 gp = wpos;   // the height samples sit on the whole world units
+        int2 g0 = (int2)floor(gp);
+        float2 gf = gp - (float2)g0;
+        int2 s00 = clamp(g0, int2(0, 0), hmax);
+        int2 s11 = clamp(g0 + 1, int2(0, 0), hmax);
+        uint i00 = (uint)s00.y * (uint)sE.x + (uint)s00.x;
+        uint i10 = (uint)s00.y * (uint)sE.x + (uint)s11.x;
+        uint i01 = (uint)s11.y * (uint)sE.x + (uint)s00.x;
+        uint i11 = (uint)s11.y * (uint)sE.x + (uint)s11.x;
+        float r00 = (float)((Heights[i00 >> 1] >> ((i00 & 1) * 16)) & 0xFFFF);
+        float r10 = (float)((Heights[i10 >> 1] >> ((i10 & 1) * 16)) & 0xFFFF);
+        float r01 = (float)((Heights[i01 >> 1] >> ((i01 & 1) * 16)) & 0xFFFF);
+        float r11 = (float)((Heights[i11 >> 1] >> ((i11 & 1) * 16)) & 0xFFFF);
+        float raw = lerp(lerp(r00, r10, gf.x), lerp(r01, r11, gf.x), gf.y);
+        if (raw > sE.z)
         {
             Nxt[idx] = float4(0.0, 0.0, 0.0, 1.0);
             return;
         }
-        groundDepth = ((float)sE.z - (float)raw) / 128.0;   // how deep the water is here (to the margin above the beach)
+        groundDepth = (sE.z - raw) / 128.0;   // how deep the water is here (to the margin above the beach)
     }
     float4 cur = Cur[idx];
     if (w.x != wp.x || w.y != wp.y)
@@ -286,7 +300,9 @@ void SimCS(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint index : SV
     foam += foamAdd * noise;
     float ring2 = max(max(Cur[cell.y * n + (cell.x + n - 2) % n].w, Cur[cell.y * n + (cell.x + 2) % n].w),
                       max(Cur[((cell.y + n - 2) % n) * n + cell.x].w, Cur[((cell.y + 2) % n) * n + cell.x].w));
-    float shore = max(max(max(L.w, R.w), max(U.w, D.w)), 0.6 * ring2);
+    // the beach by depth, not by neighbours on land: a yes / no ring of one cell made the surf a hard band of square blocks. The depth fades the
+    // surf out over the shallows (about 0.3 units of water); the neighbours still count for the cells right at the edge.
+    float shore = max(max(max(max(L.w, R.w), max(U.w, D.w)), 0.6 * ring2), 1.0 - smoothstep(0.0, 0.3, groundDepth));
     float crest = saturate(FafSwellHeight(wpos, sF.x) * sF.y * 6.0 + 0.1);
     foam += shore * (saturate(abs(hn) * 5.0 - 0.1) * 0.10 + crest * crest * 0.035 * sF.w);
     foam += saturate(abs(hn) * 6.0 - 0.9) * 0.004;
@@ -1077,7 +1093,12 @@ float FafWaterFoam(float2 xz)
     {
         float2 d = abs(xz - waterSimParams.yz);
         float weight = saturate((waterSimParams.w - max(d.x, d.y)) / (waterSimParams.w * 0.15));
-        f = tex2Dlod(waterSimSampler, float4(xz * waterSimParams.x, 0, 0)).w * weight;
+        // four taps on the diagonals, a bit more than a cell out: the foam is a grid of half units, one bilinear tap of it shows as blocks
+        float2 uv = xz * waterSimParams.x;
+        float o = 0.45 * waterSimParams.x;
+        f = 0.25 * (tex2Dlod(waterSimSampler, float4(uv + float2(o, o), 0, 0)).w + tex2Dlod(waterSimSampler, float4(uv + float2(-o, o), 0, 0)).w
+                  + tex2Dlod(waterSimSampler, float4(uv + float2(o, -o), 0, 0)).w + tex2Dlod(waterSimSampler, float4(uv + float2(-o, -o), 0, 0)).w);
+        f *= weight;
     }
     return f;
 }
@@ -1190,7 +1211,9 @@ float3 FafWaterGridPosition(float2 uv, float elevation)
       text.insert(
         at,
         "\n    float fafFoam = FafWaterFoam(ViewPosition.xz - inV.mViewVec.xz);"
-        "\n    float fafFoamAmount = smoothstep(0.25, 0.6, fafFoam * 0.8 + (saturate(sum.a * 0.5) - 0.5) * 0.9);"
+        "\n    float2 fafFoamP = ViewPosition.xz - inV.mViewVec.xz;"
+        "\n    float fafLace = 0.5 + 0.25 * sin(fafFoamP.x * 2.9 + 2.0 * sin(fafFoamP.y * 2.1)) * sin(fafFoamP.y * 3.3 + 2.0 * sin(fafFoamP.x * 1.7)) + 0.25 * sin(fafFoamP.x * 7.1 + fafFoamP.y * 5.3 + 3.0 * sin(fafFoamP.x * 2.3 - fafFoamP.y * 3.1));"
+        "\n    float fafFoamAmount = smoothstep(0.15, 0.7, fafFoam * (0.4 + 0.8 * fafLace) +(saturate(sum.a * 0.5) - 0.5) * 0.9);"
         "\n    float3 fafFoamColor = float3(0.95, 0.98, 1.0) * (0.8 + 0.2 * saturate(dot(N, SunDirection)));"
         "\n    water = lerp(water, fafFoamColor, fafFoamAmount * 0.92);"
       );
