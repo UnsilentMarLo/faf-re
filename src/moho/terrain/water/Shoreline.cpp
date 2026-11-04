@@ -534,7 +534,30 @@ namespace
   )
   {}
 
-  constexpr std::array<ShoreCellMaskBuilder, 16> kShoreCellMaskBuilders = {
+  /**
+   * Not in the shipped binary. The cutout of the water pass only needs the polygon to COVER the part of the cell whose terrain is below the water: the
+   * depth test against the terrain does the exact cut. The shipped marching-squares polygons left the saddle cells (masks 6 and 9) without any polygon
+   * and only knew the four corners of a cell two height samples wide, so a 2x2 patch of coast stayed "land" and the water showed a rectangular hole.
+   * This builder covers the whole cell (plus the point bias) and is used for every cell with both dry and wet samples.
+   */
+  void BuildShoreCellFullQuad(
+    moho::ShoreCell& cell,
+    float,
+    const ShoreCorner3& corner00,
+    const ShoreCorner3&,
+    const ShoreCorner3&,
+    const ShoreCorner3& corner11
+  )
+  {
+    cell.mType = 2;
+    cell.mPoints[0] = {corner00.x - kPointBias, corner11.z + kPointBias};
+    cell.mPoints[1] = {corner00.x - kPointBias, corner00.z - kPointBias};
+    cell.mPoints[2] = {corner11.x + kPointBias, corner11.z + kPointBias};
+    cell.mPoints[3] = {corner11.x + kPointBias, corner00.z - kPointBias};
+    UpdateShoreCellCentroid(cell, 4);
+  }
+
+  [[maybe_unused]] constexpr std::array<ShoreCellMaskBuilder, 16> kShoreCellMaskBuilders = {
     &BuildShoreCellMask0,
     &BuildShoreCellMask1,
     &BuildShoreCellMask2,
@@ -624,15 +647,9 @@ namespace
     }
 
     ResetShoreCell(*cell);
-    if (maskType >= 0 && maskType < static_cast<std::int32_t>(kShoreCellMaskBuilders.size())) {
-      kShoreCellMaskBuilders[static_cast<std::size_t>(maskType)](
-        *cell,
-        waterElevation,
-        corner00,
-        corner10,
-        corner01,
-        corner11
-      );
+    if (maskType >= 0) {
+      // The shipped per-mask polygons (kShoreCellMaskBuilders) are kept above for reference; see BuildShoreCellFullQuad.
+      BuildShoreCellFullQuad(*cell, waterElevation, corner00, corner10, corner01, corner11);
     }
 
     InitializeShoreCellSpatialEntry(*cell, shoreline.mSpatialDb, terrainResource);
@@ -753,6 +770,18 @@ namespace moho
           const float height01 = ReadHeightSampleMeters(heightField, x, z + 2);
           const float height11 = ReadHeightSampleMeters(heightField, x + 2, z + 2);
 
+          // Nine samples of the cell, not just the corners: a ridge or pool between the corners makes the cell a shore cell too.
+          float lowest = height00;
+          float highest = height00;
+          for (std::int32_t sz = 0; sz <= 2; ++sz) {
+            for (std::int32_t sx = 0; sx <= 2; ++sx) {
+              const float sample = ReadHeightSampleMeters(heightField, x + sx, z + sz);
+              lowest = std::min(lowest, sample);
+              highest = std::max(highest, sample);
+            }
+          }
+          const bool mixedCell = highest >= waterElevation && lowest < waterElevation;
+
           std::int32_t maskType = 0;
           if (height00 >= waterElevation) {
             maskType |= 1;
@@ -767,7 +796,7 @@ namespace moho
             maskType |= 8;
           }
 
-          if (maskType != 0 && maskType != 6 && maskType != 9 && maskType != 15) {
+          if (mixedCell) {
             CreateShoreCellFromMask(
               *this,
               terrainResource,

@@ -331,3 +331,10 @@ Fix (Shoreline.cpp): cutoff 0 (never fades), sheet of 0x30000 vertices and a cap
 1000 10,337 -> 5,456 px, 1500 8,803 -> 4,127 px; closer than 1000 unchanged (3k at 300). The blocky staircase along the north coast is gone. What remains is the
 thin outline of the coast (the polygons are one cell narrow and the terrain mesh is coarser than the cells; `ren_ShoreTessCell` keeps that small).
 Test: `tests/featab/steps_cutoff.lua`. (The earlier note "flattening in terrain.fx" was a wrong lead; so was the mask mip level.)
+
+Second cause, the rectangular hole (2026-11-04): `Shoreline::Generate` classified each 2x2-sample cell by its four corners only and skipped the saddle masks 6 and 9
+(two diagonal corners dry) and had no polygon for them, so a patch of coast whose baked-map blue channel is non-zero (the mask pass does not clear it) was never
+cleared by `TShoreline` either: a square of "land" in the water. Fix: every cell with a dry and a wet sample among its nine samples gets a quad that covers the
+whole cell (`BuildShoreCellFullQuad`); the depth test against the terrain makes the exact cut, so covering more is harmless. Measured with mask debug 1 (looser
+magenta count, 16 oblique views of Stella Maris at zoom 200/400): 30,725 -> 2,523 px; at distance 1000 10,337 -> 696, at 300 2,937 -> 153.
+Tests: `tests/featab/steps_scan.lua` (5x5 grid, zoom 120), `steps_scan2.lua` (oblique 200/400), `steps_cutoff.lua` (far zoom).
