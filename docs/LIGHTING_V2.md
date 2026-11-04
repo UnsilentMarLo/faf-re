@@ -338,3 +338,17 @@ cleared by `TShoreline` either: a square of "land" in the water. Fix: every cell
 whole cell (`BuildShoreCellFullQuad`); the depth test against the terrain makes the exact cut, so covering more is harmless. Measured with mask debug 1 (looser
 magenta count, 16 oblique views of Stella Maris at zoom 200/400): 30,725 -> 2,523 px; at distance 1000 10,337 -> 696, at 300 2,937 -> 153.
 Tests: `tests/featab/steps_scan.lua` (5x5 grid, zoom 120), `steps_scan2.lua` (oblique 200/400), `steps_cutoff.lua` (far zoom).
+
+### Seabed caustics and the grey sheen (2026-11-04)
+
+Seabed: the speckled "lighting" in shallow water was `FafCaustic` of stage 9. It took the divergence of two shipped normal map layers by finite differences, and layer
+3 repeats every 2 units, so it was a thresholded noise of 0.25..4x at pixel scale (aliased, and unrelated to the simulated surface). It is replaced
+(`WaterReflections.cpp`): a smooth analytic web (`FafCausticWeb`, an iterated sine warp, no texture lookups, mean 1, 99th percentile 2.4), evaluated at the point where
+the sun ray entered the surface (bed point shifted up-sun by the refracted sun direction times the depth), displaced by the simulation's slope there
+(refraction), multiplied by a focus term from the simulation's curvature (a crest is a lens), with contrast that follows how steep the waves are, and faded out with the
+pixel footprint on the surface so it cannot alias. Without the simulation patch (`FAF_WATER_SIM` undefined) the surface is flat and only the web remains.
+Grey sheen: `ren_WaterSSRDebug 3|4|5` show the sun glint, the Fresnel weighted reflection and the Fresnel weight. Both were pale grey streaks over the blue sea; the
+shipped Fresnel is F0 0.08 on the sharpened per-pixel normal, so random facets at grazing angles light up with the grey sky colour. `ren_WaterSheen` (percent, default
+55, 0 = shipped look) moves to F0 0.03, a Fresnel angle taken on a smoothed normal, and a sky reflection tinted 30 percent toward the colour of the water. At 100 the sea
+loses its surface detail; 30 still has some beige; 50 to 70 is the useful range. Open: the tint and the smoothing are one knob; sun glint and sky are not separate.
+Tests: `tests/featab/steps_caus*.lua`, `steps_sheen*.lua`, `steps_dbg.lua`, `steps_final.lua` (Stella Maris 1v1).

@@ -27,6 +27,7 @@ namespace moho::water
   static int ren_WaterAbsorbDepth = 10;
   static int ren_WaterCaustics = 50;
   static int ren_WaterUnitShadows = 45;
+  static int ren_WaterSheen = 55;
 
   static TConVar<int> gTConVar_ren_WaterSSR(
     "ren_WaterSSR",
@@ -58,6 +59,13 @@ namespace moho::water
     "thickness. Needs ren_WaterAbsorb. Takes effect at the next map load for the shader patch; Direct3D 11, 12 and Vulkan.",
     &ren_WaterCaustics
   );
+  static TConVar<int> gTConVar_ren_WaterSheen(
+    "ren_WaterSheen",
+    "How far the Fresnel reflection of the water is moved from the shipped look (F0 0.08, the sharpened per-pixel normal, a grey cast from the sky) to a physical one "
+    "(F0 0.03, a smoothed normal so grazing streaks do not light up one by one, the sky reflection tinted toward the water's own colour), in percent "
+    "(0 = shipped, default 55: at 100 the sea loses its surface detail). Live; needs the water shader patch.",
+    &ren_WaterSheen
+  );
   static TConVar<int> gTConVar_ren_WaterUnitShadows(
     "ren_WaterUnitShadows",
     "How much the sun shadow map (units, buildings, trees) darkens the water it falls on, in percent (0 off, default 45); the sun glint is cut there as well. "
@@ -65,7 +73,7 @@ namespace moho::water
     &ren_WaterUnitShadows
   );
   static TConVar<int> gTConVar_ren_WaterSSRDebug(
-    "ren_WaterSSRDebug", "1: the water shows where the screen-space march found a hit (red) and where it did not (blue); 2: the unit sun shadow on the water (white lit, black shade, yellow no shadow map). 0 (the default) normal.", &ren_WaterSSRDebug
+    "ren_WaterSSRDebug", "3: only the sun glint, 4: only the Fresnel weighted reflection, 5: the Fresnel weight (red). 1: the water shows where the screen-space march found a hit (red) and where it did not (blue); 2: the unit sun shadow on the water (white lit, black shade, yellow no shadow map). 0 (the default) normal.", &ren_WaterSSRDebug
   );
 
   namespace
@@ -196,7 +204,7 @@ float FafWaterSceneZ(float2 uv)
     return FafWaterViewZ(tex2Dlod(waterSceneDepthSampler, float4(uv, 0.0, 0.0)).x);
 }
 
-float4 waterAbsorbParams; // x: 0 = the baked depth map, 1 = the real depth, 2 = the real depth and colour extinction, y: the depth in world units of 63 percent tint
+float4 waterAbsorbParams; // w: how far the Fresnel and the sky tint are moved from the shipped look (0..1); x: 0 = the baked depth map, 1 = the real depth, 2 = the real depth and colour extinction, y: the depth in world units of 63 percent tint
 
 // The sun shadow map of the units, buildings and trees (the one the terrain and the meshes read), on the water plane. 1 = lit.
 float4x4 waterShadowMatrix;
@@ -232,27 +240,65 @@ float FafWaterShadow(float3 position)
     return lerp(1.0, texel.g, reach);
 }
 
-// The slope of the small wave layers at a world position (the same normal maps and movement the surface uses).
-float2 FafCausticSlope(float2 xz)
+// ---- caustics on the sea bed (replaces the finite differences of the 2 unit normal map, which aliased and had nothing to do with the surface) ----
+// The slope of the simulated surface at a world position and how far the simulation reaches there (x, z: slope, w: weight). Without the
+// simulation (FAF_WATER_SIM is defined by the patch only when the simulation patch is in the shader) the surface is treated as flat.
+float3 FafCausticWaves(float2 xz)
 {
-    float4 a = tex2Dlod(NormalSampler2, float4((xz + normal3Movement * Time) * normalRepeatRate.z, 0.0, 0.0));
-    float4 b = tex2Dlod(NormalSampler3, float4((xz + normal4Movement * Time) * normalRepeatRate.w, 0.0, 0.0));
-    float3 n = 2.0 * (a.xyz + b.xyz) - 2.0;
-    return n.xy / max(n.z, 0.3);
+#ifdef FAF_WATER_SIM
+    float4 r = FafWaterRipple(xz);
+    return float3(r.x, r.y, r.w);
+#else
+    return float3(0.0, 0.0, 0.0);
+#endif
 }
 
-// The light the surface waves focus on the sea bed at a world position under `depth` units of water: the divergence of the slope field decides
-// whether the rays that enter there gather (above 1) or spread (below 1); it averages about 1.
-float FafCaustic(float2 xz, float depth)
+// A smooth, bounded web of bright lines (an iterated warp of sines; no texture lookups, so nothing to alias but its own lines), about 10 units to
+// a repeat, evolving with time. Normalised: the mean is 1, the 90th percentile 1.7, the 99th 2.4 (measured over a repeat).
+float FafCausticWeb(float2 xz, float t)
 {
-    const float e = 0.35;
-    float2 sx0 = FafCausticSlope(xz - float2(e, 0.0));
-    float2 sx1 = FafCausticSlope(xz + float2(e, 0.0));
-    float2 sz0 = FafCausticSlope(xz - float2(0.0, e));
-    float2 sz1 = FafCausticSlope(xz + float2(0.0, e));
-    float divergence = ((sx1.x - sx0.x) + (sz1.y - sz0.y)) / (2.0 * e);
-    float focus = 1.0 - depth * divergence * 1.5;
-    return clamp(0.6 * pow(1.0 / max(focus, 0.2), 1.6), 0.25, 4.0);
+    const float tau = 6.28318530718;
+    float2 p = fmod(xz * (tau / 10.0), tau) - 250.0;
+    float2 i = p;
+    float c = 1.0;
+    [unroll] for (int n = 0; n < 5; ++n)
+    {
+        float tt = t * (1.0 - 3.5 / (float(n) + 1.0));
+        i = p + float2(cos(tt - i.x) + sin(tt + i.y), sin(tt - i.y) + cos(tt + i.x));
+        c += 1.0 / length(float2(p.x / (sin(i.x + tt) / 0.005), p.y / (cos(i.y + tt) / 0.005)));
+    }
+    c = 1.17 - pow(c / 5.0, 1.4);
+    float c2 = c * c;
+    return c2 * c2 * 2.5;
+}
+
+// The light the surface focuses on the bed point `bedXZ` under `depth` units of water. The sun ray that reaches the bed there entered the surface
+// up-sun of it (shifted by the refracted sun direction times the depth), so the pattern is pinned to the surface and slides with the depth and the
+// sun. The simulated waves act on it as they act on light: their slope displaces it (refraction), their curvature focuses it (a crest is a lens),
+// and calm water gives a soft pattern, rough water a contrasty one. `footprint` is the size of a pixel on the surface: a web finer than that fades out.
+float FafCaustic(float2 bedXZ, float depth, float footprint)
+{
+    float2 toSun = SunDirection.xz;
+    toSun = SunDirection.y < 0.0 ? -toSun : toSun;
+    float sinI = min(length(toSun), 0.98);
+    float tanR = sinI / sqrt(1.7689 - sinI * sinI);
+    float2 entry = bedXZ + (sinI > 0.001 ? toSun / sinI : float2(0.0, 0.0)) * (tanR * depth);
+
+    float3 w = FafCausticWaves(entry);
+    const float e = 1.0;
+    float3 wx0 = FafCausticWaves(entry - float2(e, 0.0));
+    float3 wx1 = FafCausticWaves(entry + float2(e, 0.0));
+    float3 wz0 = FafCausticWaves(entry - float2(0.0, e));
+    float3 wz1 = FafCausticWaves(entry + float2(0.0, e));
+    float curvature = ((wx1.x - wx0.x) + (wz1.y - wz0.y)) / (2.0 * e);   // the Laplacian of the height: negative on a crest
+    float shake = w.z * saturate(length(w.xy) * 4.0);                       // how steep the waves are here, 0 in calm water and outside the simulation
+
+    float2 pos = entry - w.xy * (w.z * depth * 1.2);
+    float web = FafCausticWeb(pos, Time * 0.55);
+    float focus = exp(clamp(-curvature * w.z * depth * 8.0, -0.8, 0.8));
+    float contrast = 0.45 + 0.55 * shake;
+    float caustic = lerp(1.0, web * focus, contrast);
+    return lerp(1.0, caustic, saturate(1.5 - footprint * 1.5));
 }
 
 // The distance the view ray travels through the water before it meets what the scene drew at uv (0 when the scene is in front of the water).
@@ -376,17 +422,29 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
       return result;
     }
     std::string text = source;
+    // Fresnel: the shipped term is F0 0.08 on the sharpened per-pixel normal. F0 of water is 0.02; the normal of a rough sea reflects the sky as the average of its
+    // facets does, so the grazing angle is taken on a smoothed normal (the per-pixel tilt is kept at 35 percent). The reflection of a sky that is grey or beige is tinted
+    // toward the colour of the water, which it mixes with. All of it scales with waterAbsorbParams.w (the cvar ren_WaterSheen).
+    const std::string fresnelLine = "float fresnel = FresnelSchlick(NDotV, 0.08);";
+    if (text.find(fresnelLine) != std::string::npos && text.find(fresnelLine) == text.rfind(fresnelLine)) {
+      text.replace(
+        text.find(fresnelLine), fresnelLine.size(),
+        "float fresnel = lerp(FresnelSchlick(NDotV, 0.08), FresnelSchlick(saturate(dot(viewVector, normalize(float3(N.x * 0.35, N.y, N.z * 0.35)))), 0.03), waterAbsorbParams.w);"
+      );
+    }
     // the later line first, so the earlier anchors stay valid: the extinction of the colours (before the tint toward the deep colour)
     const std::size_t tintAt = text.find(tintLine);
     text.insert(
       tintAt,
-      "if (waterAbsorbParams.x > 1.5) { refractedPixels.rgb *= exp(-float3(1.0, 0.4, 0.15) * fafPath / (waterAbsorbParams.y * 4.0)); }"
+      "float2 fafSurfaceXZ = ViewPosition.xz - inV.mViewVec.xz;"
+      "\n    float fafFoot = length(ddx(fafSurfaceXZ)) + length(ddy(fafSurfaceXZ));"
+      "\n    if (waterAbsorbParams.x > 1.5) { refractedPixels.rgb *= exp(-float3(1.0, 0.4, 0.15) * fafPath / (waterAbsorbParams.y * 4.0)); }"
       "\n    if (waterAbsorbParams.x > 0.5 && waterAbsorbParams.z > 0.0 && fafPath > 0.0)"
       "\n    {"
       "\n        float fafVerticalDepth = fafPath * abs(viewVector.y);"
       "\n        float3 fafBed = ViewPosition - inV.mViewVec - viewVector * fafPath;"
       "\n        float fafFade = exp(-fafVerticalDepth / (waterAbsorbParams.y * 0.5));"
-      "\n        refractedPixels.rgb *= 1.0 + waterAbsorbParams.z * fafFade * waterTexture.r * (FafCaustic(fafBed.xz, fafVerticalDepth) - 1.0);"
+      "\n        refractedPixels.rgb *= 1.0 + waterAbsorbParams.z * fafFade * waterTexture.r * (FafCaustic(fafBed.xz, fafVerticalDepth, fafFoot) - 1.0);"
       "\n    }"
       "\n    "
     );
@@ -395,7 +453,10 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
     text.insert(
       sunAddAt + sunAdd.size(),
       "\n    if (waterSsrParams2.y > 0.5 && waterSsrParams2.y < 1.5) { water = lerp(float3(0.0, 0.0, 0.4), float3(1.0, 0.0, 0.0), ssrHit.a); }"
-      "\n    if (waterSsrParams2.y > 1.5) { water = float3(fafShadow, fafShadow, waterShadowParams.x > 0.0 ? fafShadow : 0.0); }"
+      "\n    if (waterSsrParams2.y > 1.5 && waterSsrParams2.y < 2.5) { water = float3(fafShadow, fafShadow, waterShadowParams.x > 0.0 ? fafShadow : 0.0); }"
+      "\n    if (waterSsrParams2.y > 2.5 && waterSsrParams2.y < 3.5) { water = sunReflection; }"
+      "\n    if (waterSsrParams2.y > 3.5 && waterSsrParams2.y < 4.5) { water = reflections * saturate(fresnel * skyreflectionAmount); }"
+      "\n    if (waterSsrParams2.y > 4.5) { water = float3(saturate(fresnel * skyreflectionAmount), 0.0, 0.0); }"
     );
     const std::size_t unitSunAt = text.find(unitSun);
     text.insert(unitSunAt + unitSun.size(), "\n\tsunReflection *= (1.0 - saturate(ssrHit.a * waterSsrParams2.x));\n\tsunReflection *= fafShadow;");
@@ -404,6 +465,7 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
     const std::size_t mixAt = text.find(mixLine);
     text.insert(
       mixAt + mixLine.size(),
+      "\n    reflections *= lerp(float3(1.0, 1.0, 1.0), waterColor / max(max(waterColor.r, max(waterColor.g, waterColor.b)), 0.001), 0.3 * waterAbsorbParams.w);"
       "\n    float fafShadow = FafWaterShadow(ViewPosition - inV.mViewVec);"
       "\n    float4 ssrHit = FafWaterSSR(ViewPosition - inV.mViewVec, R, screenPos * waterSsrParams.zw);"
       "\n    reflections = lerp(reflections, ssrHit.rgb, saturate(ssrHit.a * waterSsrParams2.x));"
@@ -433,7 +495,8 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
       "\n    }"
       "\n    "
     );
-    text.insert(text.find(shader), kDeclarations);
+    // the caustics follow the wave simulation when its patch is in the shader (FafWaterRipple is declared before the pixel shader then)
+    text.insert(text.find(shader), std::string(text.find("float4 FafWaterRipple(") != std::string::npos ? "#define FAF_WATER_SIM 1\n" : "") + kDeclarations);
     source = std::move(text);
     result.patched = true;
     return result;
@@ -465,7 +528,7 @@ float4 FafWaterSSR(float3 position, float3 dir, float2 pixel)
     if (s.vars.absorb.Exists()) {
       const float absorb[4] = {
         ren_WaterAbsorb <= 0 ? 0.0f : (ren_WaterAbsorb >= 2 ? 2.0f : 1.0f), static_cast<float>(ren_WaterAbsorbDepth < 1 ? 1 : ren_WaterAbsorbDepth),
-        0.005f * static_cast<float>(ren_WaterCaustics < 0 ? 0 : ren_WaterCaustics), 0.0f
+        0.005f * static_cast<float>(ren_WaterCaustics < 0 ? 0 : ren_WaterCaustics), 0.01f * static_cast<float>(ren_WaterSheen < 0 ? 0 : (ren_WaterSheen > 100 ? 100 : ren_WaterSheen))
       };
       s.vars.absorb.mEffectVariable->SetVector(absorb);
     }
