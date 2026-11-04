@@ -317,3 +317,17 @@ so every map has its own sea. The distance to the shore is smoothed over 13 samp
 `watersimlab.exe --seed N`. Mask diagnostics: `ren_WaterMaskDebug` 3 (inputs of the mask: red cut-out alpha, green the baked map's b, blue its depth) and 4.
 Tried and refuted for the coast bands: the mip level of the mask sampler (no change), flattening of submerged vertices in `terrain.fx` (dead code, `TerrainFogVS`
 is unused).
+
+### Water holes: the real cause (2026-11-04)
+
+How the retail water is cut out of the land: the terrain passes write alpha 0.01+spec (never 0) everywhere; `TWaterLayAlphaMask` clears the alpha where the water
+plane is in front of the terrain and the baked map's blue channel is 0; `TShoreline` clears it where an engine-built polygon at the water level is in front. The
+water pixel shader draws only where the alpha is 0. The shoreline polygons are made per frame (`Shoreline::Update`) from marching-squares cells of 2x2 height
+samples and collected from a spatial database. Two retail limits in that list produced the rectangular holes and bands:
+1. every cell had a dissolve cutoff of 1000 (`ren_ShorelineCutoff`): leaf blocks of 16 units whose view depth is >= 1000 were skipped, so far coasts lost their
+   cutout in blocks and a wider band the further out the camera went (it looked like a zoom-level dependent "culling");
+2. at most 4094 triangles per frame (sheet of 0x3000 vertices), taken in spatial order: a long coast overflowed it and the remainder was dropped in blocks.
+Fix (Shoreline.cpp): cutoff 0 (never fades), sheet of 0x30000 vertices and a cap of 65000 triangles. Stella Maris 1v1, mask debug 1, looser magenta count: zoom
+1000 10,337 -> 5,456 px, 1500 8,803 -> 4,127 px; closer than 1000 unchanged (3k at 300). The blocky staircase along the north coast is gone. What remains is the
+thin outline of the coast (the polygons are one cell narrow and the terrain mesh is coarser than the cells; `ren_ShoreTessCell` keeps that small).
+Test: `tests/featab/steps_cutoff.lua`. (The earlier note "flattening in terrain.fx" was a wrong lead; so was the mask mip level.)

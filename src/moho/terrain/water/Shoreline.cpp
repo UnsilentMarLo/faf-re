@@ -56,7 +56,8 @@ namespace
   constexpr float kNoWaterElevation = -10000.0f;
   constexpr float kHeightfieldSampleScale = 0.0078125f;
   constexpr std::uint32_t kShorelineVertexSheetUsageToken = 1U;
-  constexpr std::int32_t kShorelineVertexSheetVertexCount = 0x3000;
+  // Retail 0x3000 (4096 triangles): a long coast overflows that and the cells past the cap are dropped in blocks.
+  constexpr std::int32_t kShorelineVertexSheetVertexCount = 0x30000;
   constexpr std::int32_t kShorelineVertexFormatToken = 0;
 
   moho::StatItem* sEngineStatShorelineTotalCellsStage1 = nullptr;
@@ -98,7 +99,8 @@ namespace
   };
   static_assert(sizeof(ShorelineMeshRecord) == 0x18, "ShorelineMeshRecord size must be 0x18");
 
-  constexpr std::int32_t kMaxShorelineTriangles = 4094;
+  // Retail 4094. Room for three triangles of the last cell past the cap check stays inside the sheet.
+  constexpr std::int32_t kMaxShorelineTriangles = 65000;
 
   void WriteShorelineMeshRecord(
     ShorelineMeshRecord& dest,
@@ -642,7 +644,9 @@ namespace
 namespace moho
 {
   bool ren_Shoreline = false;
-  float ren_ShorelineCutoff = 1000.0f; // 0x00F57D64 (shipped .data)
+  // Retail 1000: shoreline cells further than 1000 units (view depth) were skipped, so the land cutout of the water pass
+  // vanished in blocks along far coasts. 0 = never fade (SpatialEntryLess: mFadeOut <= 0 entries do not fade).
+  float ren_ShorelineCutoff = 0.0f; // 0x00F57D64 (shipped .data: 1000)
 
   /**
    * Address: 0x008126E0 (FUN_008126E0, ??0ShoreCell@Moho@@QAE@XZ)
