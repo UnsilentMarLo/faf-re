@@ -11,14 +11,14 @@
 //   ed_gpu_selftest()           -> { ok, texturesOk, ms, error, parts = { { name, ok, detail, ms }, ... } }     scale + offset, group shared memory reduction, blur against the CPU op, texture sampling
 //   ed_gpu_stats([reset])       -> { enabled, ops = { name = { cpu, cpuMs, gpu, gpuMs, fallbacks } }, cpu, cpuMs, gpu, gpuMs, fallbacks }     per-op counters since start (or the last reset)
 //
-// Threads: the natives run on the UI thread. The D3D9 adapter lookup is done only there. Log lines of the backend can come from any thread that runs an op: they are queued and
+// Threads: the natives run on the UI thread. The adapter lookup of the game's Direct3D 11 device is done only there. Log lines of the backend can come from any thread that runs an op: they are queued and
 // written by the UI thread (the engine log is not known to be thread safe).
 #include "moho/editor/EdGpu.h"
-#include "moho/editor/EdD3D9Device.h"
+#include "moho/editor/EdD3D11Device.h"
 #include "moho/editor/EdGpuOps.h"
 
 #include <Windows.h>
-#include <d3d9.h>
+#include <dxgi.h>
 
 #include <deque>
 #include <mutex>
@@ -26,7 +26,6 @@
 #include <vector>
 
 #include "gpg/core/utils/Logging.h"
-#include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
 #include "lua/LuaPrimitives.h"
 #include "lua/LuaRuntimeTypes.h"
 #include "moho/console/CConCommand.h"
@@ -73,34 +72,36 @@ namespace moho::editor::gpu
       }
     }
 
-    // ---- the adapter of the game's Direct3D 9 device ----------------------------------------------------------------------------------------------
+    // ---- the adapter of the game's Direct3D 11 device ---------------------------------------------------------------------------------------------
 
-    bool FindD3D9Adapter(UINT& vendorId, UINT& deviceId)
+    bool FindGameAdapter(UINT& vendorId, UINT& deviceId)
     {
       CD3DDevice* const device = D3D_GetDevice();
       if (device == nullptr || device->GetGalDevice() == nullptr) {
         return false;
       }
-      IDirect3DDevice9* const dev = moho::editor::D3D9RawDevice(device->GetGalDevice());
+      ID3D11Device* const dev = moho::editor::D3D11RawDevice(device->GetGalDevice());
       if (dev == nullptr) {
         return false;
       }
-      D3DDEVICE_CREATION_PARAMETERS cp = {};
-      if (FAILED(dev->GetCreationParameters(&cp))) {
+      IDXGIDevice* dxgiDevice = nullptr;
+      if (FAILED(dev->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgiDevice))) || dxgiDevice == nullptr) {
         return false;
       }
-      IDirect3D9* d3d = nullptr;
-      if (FAILED(dev->GetDirect3D(&d3d)) || d3d == nullptr) {
+      IDXGIAdapter* adapter = nullptr;
+      const HRESULT got = dxgiDevice->GetAdapter(&adapter);
+      dxgiDevice->Release();
+      if (FAILED(got) || adapter == nullptr) {
         return false;
       }
-      D3DADAPTER_IDENTIFIER9 id = {};
-      const HRESULT hr = d3d->GetAdapterIdentifier(cp.AdapterOrdinal, 0, &id);
-      d3d->Release();
+      DXGI_ADAPTER_DESC desc = {};
+      const HRESULT hr = adapter->GetDesc(&desc);
+      adapter->Release();
       if (FAILED(hr)) {
         return false;
       }
-      vendorId = id.VendorId;
-      deviceId = id.DeviceId;
+      vendorId = desc.VendorId;
+      deviceId = desc.DeviceId;
       return true;
     }
 
@@ -109,7 +110,7 @@ namespace moho::editor::gpu
     {
       DrainLog();
       if (GetCurrentThreadId() != gMainThread) {
-        return false;   // another thread: not allowed to touch the D3D9 device; the next call on the main thread does it
+        return false;   // another thread: not allowed to touch the game's device; the next call on the main thread does it
       }
       static int attempts = 0;       // main thread only
       static bool known = false;
@@ -119,7 +120,7 @@ namespace moho::editor::gpu
       ++attempts;
       UINT vendor = 0;
       UINT device = 0;
-      if (FindD3D9Adapter(vendor, device)) {
+      if (FindGameAdapter(vendor, device)) {
         SetPreferredAdapter(vendor, device);
         known = true;
       }

@@ -1,11 +1,9 @@
-#include "moho/render/d3d/EdDeviceDeferred.h"
 #include "CD3DDevice.h"
 
 #include <Windows.h>
 #include <d3d9.h>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <bit>
 #include <cstddef>
@@ -13,9 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
-#include <thread>
 
-#include "gpg/core/diagnostics/CrashReport.h"
 #include "gpg/core/utils/BoostWrappers.h"
 #include "gpg/core/utils/Global.h"
 #include "gpg/core/utils/Logging.h"
@@ -32,7 +28,6 @@
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
 #include "gpg/gal/Effect.hpp"
 #include "gpg/gal/EffectTechnique.hpp"
-#include "moho/editor/EdPopout.h"
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/misc/StartupHelpers.h"
@@ -227,43 +222,6 @@ namespace
   // (FAF instrumentation, see DrawStatisticsLog).
   double sPresentSeconds = 0.0;
 
-  // EDITOR: hang watch of IDirect3DDevice9::Reset. A hybrid laptop driver can wait in Reset forever (seen after an invalid anti-aliasing request); the process looks frozen and
-  // the user has to kill it. A watchdog thread writes the crash report (all thread stacks, log) once when one Reset takes longer than 15 s, then lets the process be.
-  std::atomic<std::int64_t> sResetBeginTick{0};   // GetTickCount64 of the running Reset, 0 = none
-  void ResetWatchdogMain()
-  {
-    bool reported = false;
-    for (;;) {
-      ::Sleep(2000);
-      const std::int64_t begin = sResetBeginTick.load();
-      if (begin == 0) {
-        reported = false;
-      } else if (!reported && static_cast<std::int64_t>(::GetTickCount64()) - begin > 15000) {
-        reported = true;
-        gpg::Warnf("EDITOR device: IDirect3DDevice9::Reset has not returned for 15 s; writing the crash report with every thread's stack");
-        gpg::diag::CrashReportContext context;
-        context.reason = "IDirect3DDevice9::Reset has not returned for 15 seconds (device reset hang)";
-        (void)gpg::diag::WriteCrashReport(context);
-      }
-    }
-  }
-  struct ResetWatch
-  {
-    ResetWatch()
-    {
-      static const bool started = [] {
-        std::thread(ResetWatchdogMain).detach();
-        return true;
-      }();
-      (void)started;
-      sResetBeginTick.store(static_cast<std::int64_t>(::GetTickCount64()));
-    }
-    ~ResetWatch() { sResetBeginTick.store(0); }
-  };
-
-  // EDITOR: a device context change asked for from UI code (anti-aliasing, vertical sync) waits here until the main loop applies it between two frames.
-  std::unique_ptr<gpg::gal::DeviceContext> sPendingContext;
-
   // EDITOR: device loss and reset bookkeeping (CD3DDevice::Paint / InitContext).
   bool sDeviceNeedsRetry = false;   // a Reset failed: Paint polls the device and tries again
   bool sDeviceWasLost = false;
@@ -369,59 +327,8 @@ namespace
   DrawStatisticsLog sDrawStatisticsLog;
 } // namespace
 
-namespace gpg::gal
-{
-  bool ED_D3D9ResetWouldChange(Device* device, const DeviceContext* context);
-  bool ED_NvidiaAdapterInstalled();
-}
-
 namespace moho
 {
-  /** EDITOR: the context the next queued device change starts from: the pending one, else a copy of the device's active context. */
-  gpg::gal::DeviceContext* ED_PendingDeviceContext()
-  {
-    if (!sPendingContext) {
-      gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
-      gpg::gal::DeviceContext* const active = device != nullptr ? device->GetDeviceContext() : nullptr;
-      if (active == nullptr) {
-        return nullptr;
-      }
-      sPendingContext.reset(new gpg::gal::DeviceContext(*active));
-    }
-    return sPendingContext.get();
-  }
-
-  /** EDITOR: called at the top of every frame (CScApp::Main), outside any window message dispatch: applies a queued device change. */
-  void ED_ApplyPendingDeviceContext()
-  {
-    if (!sPendingContext) {
-      return;
-    }
-    const std::unique_ptr<gpg::gal::DeviceContext> context = std::move(sPendingContext);
-    if (!gpg::gal::Device::IsReady()) {
-      return;
-    }
-    // A Reset that would change nothing is not done: on the hybrid NVIDIA laptop one after the first presents never came back (a saved or default anti-aliasing mode the
-    // adapter does not offer, asked for again at every start, is exactly such a Reset).
-    if (!gpg::gal::ED_D3D9ResetWouldChange(gpg::gal::Device::GetInstance(), context.get())) {
-      gpg::Logf("EDITOR device: the requested change leaves the device parameters as they are; no Reset");
-      return;
-    }
-    CD3DDevice* const device = D3D_GetDevice();
-    device->Clear();
-    // With an NVIDIA D3D9 adapter installed, a Reset that keeps the back buffer size deadlocks the driver for good once a pop-out has existed (its additional swap chain was
-    // created and presented): the main thread then waits in the first discard-lock of the UI atlas texture for a GPU sync object that never signals (measured on an RTX 4060
-    // Laptop + Intel Arc, docs/projects/editor/LAPTOP_FREEZE.md). A Reset that changes the size does not, so such a change is made in two Resets: first with a back buffer 16 pixels
-    // wider, then at the real size. Waiting for the GPU, releasing the chains earlier, or giving them a window of their own did not help.
-    if (gpg::gal::ED_NvidiaAdapterInstalled() && moho::edpopout::EverHadPopout() && context->GetHeadCount() == 1) {
-      gpg::gal::DeviceContext transient(*context);
-      transient.GetHead(0).mWidth += 16;
-      gpg::Logf("EDITOR device: two-step Reset (an NVIDIA adapter, and a pop-out has existed): %ux%u first", transient.GetHead(0).mWidth, transient.GetHead(0).mHeight);
-      (void)device->InitContext(&transient);
-    }
-    (void)device->InitContext(context.get());
-  }
-
   /**
    * Address: 0x0042DBE0 (FUN_0042DBE0, the scalar deleting destructor)
    * Address: 0x00430DF0 (FUN_00430DF0, the non-deleting body this definition
@@ -537,13 +444,12 @@ namespace moho
       }
 
       resetT1 = ResetClock::now();
-      gpg::Logf("EDITOR device reset: resources released, calling IDirect3DDevice9::Reset");
+      gpg::Logf("EDITOR device reset: resources released, resetting the device");
       if (device != nullptr) {
-        const ResetWatch watch;   // a Reset the driver never returns from is reported after 15 s (all thread stacks: where it waits)
         device->Reset(context);
       }
       resetT2 = ResetClock::now();
-      gpg::Logf("EDITOR device reset: IDirect3DDevice9::Reset returned after %.1f ms, recreating resources", elapsedMs(resetT1, resetT2));
+      gpg::Logf("EDITOR device reset: the device reset took %.1f ms, recreating resources", elapsedMs(resetT1, resetT2));
 
       for (std::size_t headIndex = 0U; headIndex < lockHeadCount; ++headIndex) {
         if (device == nullptr) {
@@ -580,7 +486,7 @@ namespace moho
       mInitialized = 1;
       sDeviceNeedsRetry = false;
       gpg::Logf(
-        "EDITOR device reset: %dx%d, release %.1f ms, IDirect3DDevice9::Reset %.1f ms, resources %.1f ms, viewport init and UI relayout %.1f ms, total %.1f ms",
+        "EDITOR device reset: %dx%d, release %.1f ms, device reset %.1f ms, resources %.1f ms, viewport init and UI relayout %.1f ms, total %.1f ms",
         headCount > 0 ? context->GetHead(0).mWidth : 0, headCount > 0 ? context->GetHead(0).mHeight : 0, elapsedMs(resetT0, resetT1), elapsedMs(resetT1, resetT2),
         elapsedMs(resetT2, resetT3), elapsedMs(resetT3, ResetClock::now()), elapsedMs(resetT0, ResetClock::now()));
     } catch (const gpg::gal::Error& error) {
@@ -1403,19 +1309,25 @@ namespace moho
    */
   void CD3DDevice::SetAntiAliasingSamples(const int sampleCount)
   {
-    // EDITOR: the mode is queued; the main loop resets the device at the top of the next frame (ED_ApplyPendingDeviceContext). Called from a click in the editor's
-    // Settings pop-out the Reset ran inside that window's message dispatch, and on a hybrid NVIDIA laptop it never came back.
-    gpg::gal::DeviceContext* const context = ED_PendingDeviceContext();
-    if (context == nullptr) {
+    gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
+    if (device == nullptr) {
       return;
     }
 
-    const int headCount = context->GetHeadCount();
+    gpg::gal::DeviceContext* const activeContext = device->GetDeviceContext();
+    if (activeContext == nullptr) {
+      return;
+    }
+
+    gpg::gal::DeviceContext context = *activeContext;
+    const int headCount = context.GetHeadCount();
     for (int headIndex = 0; headIndex < headCount; ++headIndex) {
-      gpg::gal::Head& head = context->GetHead(static_cast<std::uint32_t>(headIndex));
+      gpg::gal::Head& head = context.GetHead(static_cast<std::uint32_t>(headIndex));
       head.antialiasingHigh = static_cast<std::uint32_t>(sampleCount >> 5);
       head.antialiasingLow = static_cast<std::uint32_t>(sampleCount & 0x1F);
     }
+
+    (void)InitContext(&context);
   }
 
   /**

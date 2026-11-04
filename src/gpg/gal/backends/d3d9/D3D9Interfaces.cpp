@@ -35,13 +35,11 @@
 #include "boost/shared_ptr.h"
 #include "boost/weak_ptr.h"
 #include "gpg/core/utils/BoostWrappers.h"
-#include "gpg/core/utils/Logging.h"
 
 #include <d3d9.h>
 #include <d3dx9.h>
 
 #include <bit>
-#include <chrono>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -56,9 +54,6 @@
 
 namespace gpg::gal
 {
-#ifdef FAF_STUDIO_EDITOR
-    void ED_NoteNvidiaAdapterInstalled(bool installed);
-#endif
 
     /**
      * Address: 0x008F3820 (FUN_008F3820)
@@ -1906,26 +1901,6 @@ namespace gpg::gal
             outParameters->BackBufferCount = 1U;
             outParameters->MultiSampleType = static_cast<D3DMULTISAMPLE_TYPE>(head.antialiasingHigh);
             outParameters->MultiSampleQuality = head.antialiasingLow;
-            // EDITOR: only a mode this adapter offered (HeadSampleOption list, built from CheckDeviceMultiSampleType) is asked for. Anything else (a stale or damaged saved
-            // value, the other bit layout) becomes "no anti-aliasing": an invalid request made the Reset of a hybrid NVIDIA laptop hang for good.
-            // (In the editor an empty list means "no mode offered", so nothing is asked for, also at device creation, before the list is filled.)
-            if (head.antialiasingHigh != 0U || head.antialiasingLow != 0U)
-            {
-                bool offered = false;
-                for (const HeadSampleOption* option = head.mStrs.begin(); option != head.mStrs.end(); ++option)
-                {
-                    if (option->sampleType == head.antialiasingHigh && option->sampleQuality == head.antialiasingLow)
-                    {
-                        offered = true;
-                        break;
-                    }
-                }
-                if (!offered)
-                {
-                    outParameters->MultiSampleType = D3DMULTISAMPLE_NONE;
-                    outParameters->MultiSampleQuality = 0U;
-                }
-            }
             outParameters->SwapEffect = D3DSWAPEFFECT_DISCARD;
             outParameters->hDeviceWindow =
                 (headIndex == 0U && head.mWindowed) ? reinterpret_cast<HWND>(head.mHandle) : reinterpret_cast<HWND>(head.mWindow);
@@ -2066,45 +2041,7 @@ namespace gpg::gal
             static_cast<void>(mDirect3D->GetAdapterIdentifier(0U, 0U, &adapterIdentifier));
 
             head.mStrs.clear();
-            // EDITOR: no swap chain anti-aliasing when any NVIDIA adapter is installed. A hybrid NVIDIA + Intel laptop (RTX 4060 Laptop; adapter 0 need not be the card that draws) froze for
-            // good, the main thread waiting inside nvd3dumx.dll, as soon as the 8x mode was active at start. The option list stays empty (the editor offers "Off" only) and
-            // GetHeadParameters then never asks for a mode. FAFSTUDIO_NVIDIA_AA=1 brings the lists back for testing a card on its own.
-            bool editorNoAntiAliasing = false;
-#ifdef FAF_STUDIO_EDITOR
-            {
-                static bool adaptersLogged = false;
-                if (!adaptersLogged)
-                {
-                    adaptersLogged = true;
-                    for (unsigned int listed = 0; listed < mDirect3D->GetAdapterCount(); ++listed)
-                    {
-                        D3DADAPTER_IDENTIFIER9 listedIdentifier{};
-                        if (SUCCEEDED(mDirect3D->GetAdapterIdentifier(listed, 0U, &listedIdentifier)))
-                        {
-                            gpg::Logf("EDITOR D3D9 adapter %u%s: %s (vendor 0x%04X, device 0x%04X)", listed, listed == adapterIndex ? " (head 0)" : "", listedIdentifier.Description,
-                                      static_cast<unsigned int>(listedIdentifier.VendorId), static_cast<unsigned int>(listedIdentifier.DeviceId));
-                        }
-                    }
-                }
-                const char* const override = std::getenv("FAFSTUDIO_NVIDIA_AA");
-                const unsigned int installedAdapters = mDirect3D->GetAdapterCount();
-                for (unsigned int installed = 0; installed < installedAdapters && (override == nullptr || override[0] != '1'); ++installed)
-                {
-                    D3DADAPTER_IDENTIFIER9 installedIdentifier{};
-                    if (SUCCEEDED(mDirect3D->GetAdapterIdentifier(installed, 0U, &installedIdentifier)) && installedIdentifier.VendorId == kVendorIdNvidia)
-                    {
-                        editorNoAntiAliasing = true;
-                    }
-                }
-            }
-#endif
-#ifdef FAF_STUDIO_EDITOR
-            ED_NoteNvidiaAdapterInstalled(editorNoAntiAliasing || adapterIdentifier.VendorId == kVendorIdNvidia);
-#endif
-            if (editorNoAntiAliasing)
-            {
-            }
-            else if (adapterIdentifier.VendorId != kVendorIdNvidia)
+            if (adapterIdentifier.VendorId != kVendorIdNvidia)
             {
                 for (unsigned int sampleType = 2U; sampleType <= 16U; ++sampleType)
                 {
@@ -2347,15 +2284,6 @@ namespace gpg::gal
             new D3DPRESENT_PARAMETERS[static_cast<std::size_t>(context->GetHeadCount())];
         GetDeviceParameters(parameters, context);
 
-        {
-            const unsigned int logHeads = static_cast<unsigned int>(context->GetHeadCount());
-            for (unsigned int logHead = 0; logHead < logHeads; ++logHead)
-            {
-                gpg::Logf("EDITOR D3D9 Reset parameters: head %u %ux%u, MultiSampleType %d quality %u, %s, presentation interval %u", logHead, parameters[logHead].BackBufferWidth,
-                          parameters[logHead].BackBufferHeight, static_cast<int>(parameters[logHead].MultiSampleType), static_cast<unsigned int>(parameters[logHead].MultiSampleQuality),
-                          parameters[logHead].Windowed ? "windowed" : "full screen", static_cast<unsigned int>(parameters[logHead].PresentationInterval));
-            }
-        }
         const HRESULT resetResult = mDevice->Reset(parameters);
         if (resetResult < 0)
         {
@@ -3437,9 +3365,6 @@ namespace gpg::gal
         }
     }
 
-    /// EDITOR: set by moho/editor/EdPerf.cpp; sleeps a short while and returns true, or returns false when it cannot (see DeviceD3D9::Present).
-    bool (*gPresentWaitSleep)() = nullptr;
-
     /**
      * Address: 0x008ED640 (FUN_008ED640)
      *
@@ -3450,20 +3375,8 @@ namespace gpg::gal
     {
         Func1();
         IDirect3DQuery9* const frameEventQuery = mFrameEventQuery;
-        // EDITOR: the original loop below polls with the flush flag as fast as it can, a core at 100 percent for as long as the GPU is behind (a frame, or the vsync wait of
-        // the one before). The flag is only needed once (it submits the pending commands); after 100 microseconds of spinning the editor's hook (moho/editor/EdPerf.cpp,
-        // `ed_present_wait`) sleeps about 0.3 ms between polls. No hook, or a hook that cannot sleep: the original loop, unchanged.
-        if (frameEventQuery->GetData(nullptr, 0U, D3DGETDATA_FLUSH) == 1)
+        while (frameEventQuery->GetData(nullptr, 0U, D3DGETDATA_FLUSH) == 1)
         {
-            bool sleeping = gPresentWaitSleep != nullptr;
-            const std::chrono::steady_clock::time_point spinStart = std::chrono::steady_clock::now();
-            while (frameEventQuery->GetData(nullptr, 0U, sleeping ? 0U : D3DGETDATA_FLUSH) == 1)
-            {
-                if (sleeping && std::chrono::steady_clock::now() - spinStart > std::chrono::microseconds(100) && !gPresentWaitSleep())
-                {
-                    sleeping = false;   // cannot sleep here: spin as before
-                }
-            }
         }
 
         const HRESULT result = mDevice->Present(nullptr, nullptr, nullptr, nullptr);
@@ -6385,56 +6298,3 @@ long gpg::gal::DebugSaveTextureToFileA(const char* const filePath, const unsigne
         filePath, static_cast<D3DXIMAGE_FILEFORMAT>(fileFormat), static_cast<IDirect3DBaseTexture9*>(sourceTexture), nullptr
     ));
 }
-
-#ifdef FAF_STUDIO_EDITOR
-// EDITOR: helpers for the editor's device handling (moho/render/d3d/CD3DDevice.cpp ED_ApplyPendingDeviceContext, moho/editor/EdPerf.cpp ed_engine_info).
-namespace gpg::gal
-{
-  namespace
-  {
-    bool gEditorNvidiaInstalled = false;
-  }
-
-  void ED_NoteNvidiaAdapterInstalled(const bool installed)
-  {
-    gEditorNvidiaInstalled = installed;
-  }
-
-  /** True when any NVIDIA D3D9 adapter is installed (hybrid laptops included): swap chain anti-aliasing and runtime vertical sync changes are not offered there. */
-  bool ED_NvidiaAdapterInstalled()
-  {
-    return gEditorNvidiaInstalled;
-  }
-
-  /**
-   * Would a Reset with `context` change anything the device runs with now? Compares the new present parameters with those of the live swap chain (size, multisample
-   * type and quality, presentation interval, windowed). A Reset with identical parameters changes nothing; on the hybrid NVIDIA laptop one that came after the first
-   * presents never returned. true when unsure.
-   */
-  bool ED_D3D9ResetWouldChange(Device* device, const DeviceContext* context)
-  {
-    DeviceD3D9* const d3d9 = dynamic_cast<DeviceD3D9*>(device);
-    if (d3d9 == nullptr || context == nullptr || d3d9->mDevice == nullptr || context->GetHeadCount() != 1)
-    {
-      return true;
-    }
-    D3DPRESENT_PARAMETERS next{};
-    d3d9->GetDeviceParameters(&next, context);
-    IDirect3DSwapChain9* chain = nullptr;
-    if (FAILED(d3d9->mDevice->GetSwapChain(0U, &chain)) || chain == nullptr)
-    {
-      return true;
-    }
-    D3DPRESENT_PARAMETERS current{};
-    const HRESULT result = chain->GetPresentParameters(&current);
-    chain->Release();
-    if (FAILED(result))
-    {
-      return true;
-    }
-    return next.BackBufferWidth != current.BackBufferWidth || next.BackBufferHeight != current.BackBufferHeight || next.MultiSampleType != current.MultiSampleType ||
-           next.MultiSampleQuality != current.MultiSampleQuality || next.PresentationInterval != current.PresentationInterval || next.Windowed != current.Windowed ||
-           next.hDeviceWindow != current.hDeviceWindow;
-  }
-} // namespace gpg::gal
-#endif

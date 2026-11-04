@@ -8,7 +8,7 @@
 //   ed_fxaa_edge_min 0.0833 edges with less absolute luma contrast than this are left alone (FXAA "edge threshold min"; raise it to keep fine texture detail)
 //
 //   ed_fxaa_passes   1      draws the pass this many times per frame (1..40): for measuring its cost, the picture does not change
-//   ed_fxaa_time     0      1 = measure the GPU time of the copy and the passes with D3D9 timestamp queries, logged every 120 frames
+//   ed_fxaa_time     0      1 = measure the GPU time of the copy and the passes with Direct3D 11 timestamp queries, logged every 120 frames
 //
 // FXAA only runs on a back buffer without swap chain anti-aliasing (a multisampled back buffer cannot be the target of the copy the pass needs); with MSAA on it stays off.
 #pragma once

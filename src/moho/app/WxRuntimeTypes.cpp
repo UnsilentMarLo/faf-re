@@ -1,4 +1,3 @@
-#include "moho/render/d3d/EdDeviceDeferred.h"
 #include "WxRuntimeTypes.h"
 
 #include <Windows.h>
@@ -1216,18 +1215,13 @@ namespace
       return;
     }
 
-    // EDITOR: restoring or maximizing a window whose back buffer already has this size changes nothing for the device; a Reset anyway releases and recreates every
-    // render target, shadow map and dynamic texture, and on a hybrid laptop GPU (the copy to the display adapter is rebuilt too) it showed as seconds of flicker.
+    // EDITOR: restoring or maximizing a window whose back buffer already has this size changes nothing for the device; a reset anyway releases and recreates every
+    // render target, shadow map and dynamic texture.
     if (sameSize && d3dDevice->mInitialized != 0) {
       return;
     }
-    // EDITOR: the new back buffer size is queued and the main loop resets the device at the top of the next frame, not inside this WM_SIZE dispatch (see
-    // CD3DDevice::SetAntiAliasingSamples). The viewport and the frame already follow the new size; one frame is stretched until then.
-    if (gpg::gal::DeviceContext* const pending = moho::ED_PendingDeviceContext(); pending != nullptr && pending->GetHeadCount() > 0) {
-      gpg::gal::Head& pendingHead = pending->GetHead(0);
-      pendingHead.mWidth = width;
-      pendingHead.mHeight = height;
-    }
+    d3dDevice->Clear();
+    d3dDevice->InitContext(&context);
   }
 
   /**

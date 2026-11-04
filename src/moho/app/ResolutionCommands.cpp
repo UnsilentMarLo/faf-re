@@ -1,4 +1,3 @@
-#include "moho/render/d3d/EdDeviceDeferred.h"
 #include "moho/app/ResolutionCommands.h"
 
 #include <Windows.h>
@@ -197,16 +196,8 @@ namespace moho
     sDeviceLock = true;
 
     if (args.size() == 2u) {
-      // EDITOR: the argument is applied. The recovered body (see above) resets the device with the context it already had, so `SC_VerticalSync 0` changed nothing and the editor's
-      // Vertical sync setting (lua/editor/graphics.lua) could not switch it off: the swap chain keeps the PresentationInterval it was created with (D3D9Interfaces.cpp,
-      // GetHeadParameters reads `context->mVSync`). Only an exact "0" / "1" is taken; anything else keeps the value, as before.
-      const char* const text = args[1].c_str();
-      if (text != nullptr && (text[0] == '0' || text[0] == '1') && text[1] == '\0') {
-        // queued, applied between two frames (CD3DDevice::SetAntiAliasingSamples says why: a Reset inside a click's message dispatch hangs a hybrid laptop GPU)
-        if (gpg::gal::DeviceContext* const pending = ED_PendingDeviceContext(); pending != nullptr) {
-          pending->mVSync = text[0] == '1';
-        }
-      }
+      device->Clear();
+      (void)device->InitContext(&deviceContext);
     }
 
     sDeviceLock = false;

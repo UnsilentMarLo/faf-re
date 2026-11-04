@@ -1217,7 +1217,7 @@ namespace moho::editor::gpu
           return;
         }
 
-        // adapters: hardware only; the one the game's D3D9 device runs on first, then by dedicated video memory
+        // adapters: hardware only; the one the game's Direct3D 11 device runs on first, then by dedicated video memory
         Com<IDXGIFactory1> factory;
         HRESULT hr = createFactory(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(factory.Put()));
         if (FAILED(hr)) {

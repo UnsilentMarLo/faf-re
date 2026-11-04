@@ -31,16 +31,6 @@
 #include "moho/render/RenderInfo.h"
 #include "moho/sim/CWldSession.h"
 
-namespace gpg::gal
-{
-  extern bool (*gPresentWaitSleep)();   // D3D9Interfaces.cpp
-}
-
-namespace gpg::gal
-{
-  bool ED_NvidiaAdapterInstalled();   // D3D9Interfaces.cpp
-}
-
 namespace moho::editor::perf
 {
   namespace
@@ -60,8 +50,6 @@ namespace moho::editor::perf
     TConVar<float> gConLoading("ed_fps_loading", "Editor: frames per second cap while a map loads, 0 = none (default 60)", &gFpsLoading);
     TConVar<float> gConBackground("ed_fps_background", "Editor: frames per second cap while another program has the focus, 0 = none (default 60)", &gFpsBackground);
     TConVar<float> gConIdle("ed_fps_idle", "Editor: frames per second cap after ed_idle_seconds without keyboard or mouse input, 0 = none (default 60: a still scene needs no more, input lifts the cap at once)", &gFpsIdle);
-    bool gPresentWait = true;
-    TConVar<bool> gConPresentWait("ed_present_wait", "Editor: 1 = Present waits for the GPU in short sleeps instead of a spin that keeps a core at 100 percent (default 1)", &gPresentWait);
     bool gParallelNormalMap = true;
     TConVar<bool> gConParNormalMap("ed_par_normalmap", "Editor: 1 = big normal map updates (map load, whole map edits) use the worker pool (default 1)", &gParallelNormalMap);
     float gUiGcKb = 8192.0f;
@@ -259,45 +247,6 @@ namespace moho::editor::perf
   {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
   }
-
-  namespace
-  {
-    /**
-     * `DeviceD3D9::Present` (gpg/gal/backends/d3d9/D3D9Interfaces.cpp) waits for the GPU to reach the frame's start marker (an event query) before it presents the frame. The
-     * original polls with a flush flag as fast as it can: a core at 100 percent for as long as the GPU is behind (a frame, or the vsync wait of the one before it). The library
-     * calls this hook after 100 microseconds of spinning: it sleeps about 0.3 ms on a high resolution timer and the poll goes on. Returning false (switched off with
-     * `ed_present_wait 0`, or no high resolution timer: before Windows 10 1803) keeps the original loop.
-     */
-    bool PresentSleep()
-    {
-      if (!gPresentWait) {
-        return false;
-      }
-      // One high resolution timer per thread (Present is the main thread's, but nothing here assumes it).
-      thread_local HANDLE timer = [] {
-        HMODULE const kernel = ::GetModuleHandleW(L"kernel32.dll");
-        using CreateExFn = HANDLE(WINAPI*)(LPSECURITY_ATTRIBUTES, LPCWSTR, DWORD, DWORD);
-        const auto createEx = kernel != nullptr ? reinterpret_cast<CreateExFn>(reinterpret_cast<void*>(::GetProcAddress(kernel, "CreateWaitableTimerExW"))) : nullptr;
-        return createEx != nullptr ? createEx(nullptr, nullptr, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */, 0x1F0003 /* TIMER_ALL_ACCESS */) : HANDLE(nullptr);
-      }();
-      if (timer == nullptr) {
-        return false;
-      }
-      LARGE_INTEGER due;
-      due.QuadPart = -3000;   // 0.3 ms, relative, 100 ns units
-      if (::SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE) == FALSE) {
-        return false;
-      }
-      (void)::WaitForSingleObject(timer, 100);   // the 100 ms is a guard, the timer fires after about 0.3 to 1 ms
-      return true;
-    }
-
-    struct PresentSleepInstaller
-    {
-      PresentSleepInstaller() { gpg::gal::gPresentWaitSleep = &PresentSleep; }
-    };
-    const PresentSleepInstaller gPresentSleepInstaller{};
-  } // namespace
 
   bool UiGcDue(const int heapKb, const float dtSeconds) noexcept
   {
@@ -627,7 +576,6 @@ namespace moho::editor::perf
       SetNumber(L, "refreshHz", gSampled.refreshHz);
       SetNumber(L, "cap", gLastCap);
       SetBool(L, "followRefresh", gFollowRefresh);
-      SetBool(L, "nvidia", gpg::gal::ED_NvidiaAdapterInstalled());
       return 1;
     }
 

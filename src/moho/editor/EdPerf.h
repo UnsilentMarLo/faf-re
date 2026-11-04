@@ -9,7 +9,6 @@
 //   ed_fps_background 60     while another program has the focus
 //   ed_fps_idle       0      after `ed_idle_seconds` without input (power saving; off)
 //   ed_idle_seconds   10
-//   ed_present_wait   1      DeviceD3D9::Present waits for the GPU in short sleeps instead of a spin that keeps a core at 100 percent (EdPerf.cpp, PresentSleep)
 //   ed_par_normalmap  1      big normal map updates (map load, whole map edits) use the worker pool of the field engine (CWldMap.cpp, UpdateNormalMap)
 //   ed_ui_gc_kb       8192   the UI state's forced full GC (every 5 s) runs only after this much new Lua heap, or after ed_gc_max_seconds; 0 = always (the original)
 //   ed_sim_gc_kb      8192   the same for the sim state (every 70 ticks)

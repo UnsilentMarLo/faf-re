@@ -1,7 +1,8 @@
 #include "moho/editor/EdPopout.h"
-#include "moho/editor/EdD3D9Device.h"
+#include "moho/editor/EdD3D11Device.h"
 
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <string>
@@ -15,10 +16,17 @@
 #include <wx/frame.h>
 #include <wx/window.h>
 
-#include <d3d9.h>
-#include <d3dx9.h>
+#include <d3d11.h>
+#include <wincodec.h>
+#include <dxgi1_2.h>
+#include <wrl/client.h>
 
-#include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
+#include "boost/shared_ptr.h"
+#include "gpg/gal/Device.hpp"
+#include "gpg/gal/Error.hpp"
+#include "gpg/gal/OutputContext.hpp"
+#include "gpg/gal/backends/d3d11/RenderTargetD3D11.h"
+#include "gpg/core/utils/Logging.h"
 #include "lua/LuaRuntimeTypes.h"
 #include "lua/LuaPrimitives.h"
 #include "moho/lua/CScrLuaBinder.h"
@@ -28,6 +36,8 @@
 #include "moho/render/WRenViewport.h"
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/d3d/CD3DPrimBatcher.h"
+#include "moho/render/d3d/CD3DRenderTarget.h"
+#include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/textures/DeviceExitListener.h"
 #include "moho/ui/CUIManager.h"
 #include "moho/ui/IUIManager.h"
@@ -140,8 +150,8 @@ namespace moho
       int id = -1; // = the Maui root-frame index
       EdPopoutFrame* frame = nullptr;
       EdPopoutView* view = nullptr;
-      IDirect3DSwapChain9* chain = nullptr;
-      IDirect3DSurface9* back = nullptr;
+      Microsoft::WRL::ComPtr<IDXGISwapChain1> chain;        // the window's own flip-model swap chain on the game's Direct3D 11 device
+      boost::shared_ptr<CD3DRenderTarget> target;          // what the frame is drawn into (the engine's targets, copied to the chain's buffer)
       int chainWidth = 0;
       int chainHeight = 0;
       int dirty = kDirtyFrames;
@@ -152,7 +162,6 @@ namespace moho
     };
 
     std::map<int, Popout*> gPopouts;
-    bool gEverCreated = false; // a pop-out (and so an additional swap chain) has existed in this process
     unsigned long gFramesDrawn = 0;
 
     void EdPopoutView::MarkDirty()
@@ -167,62 +176,147 @@ namespace moho
       return static_cast<CUIManager*>(UI_GetManager());
     }
 
-    IDirect3DDevice9* RawDevice()
+    ID3D11Device* RawDevice()
     {
       CD3DDevice* const device = D3D_GetDevice();
       if (device == nullptr || device->GetGalDevice() == nullptr) {
         return nullptr;
       }
-      return moho::editor::D3D9RawDevice(device->GetGalDevice());
+      return moho::editor::D3D11RawDevice(device->GetGalDevice());
+    }
+
+    ID3D11DeviceContext* RawContext()
+    {
+      CD3DDevice* const device = D3D_GetDevice();
+      if (device == nullptr || device->GetGalDevice() == nullptr) {
+        return nullptr;
+      }
+      return moho::editor::D3D11RawContext(device->GetGalDevice());
+    }
+
+    std::wstring Widen(const char* text);
+
+    // The window's picture as a PNG (what ed_window_capture writes): the target's texture is copied to a staging texture and encoded by WIC. The format is the
+    // swap chain's, B8G8R8A8; the alpha is made opaque (the PNG encoder takes 32bppBGRA).
+    bool CapturePng(ID3D11Device* const dev, ID3D11DeviceContext* const ctx, ID3D11Texture2D* const texture, const std::string& path, std::string& error)
+    {
+      D3D11_TEXTURE2D_DESC desc{};
+      texture->GetDesc(&desc);
+      if (desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) {
+        error = "capture: the target is not B8G8R8A8";
+        return false;
+      }
+      desc.Usage = D3D11_USAGE_STAGING;
+      desc.BindFlags = 0;
+      desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+      desc.MiscFlags = 0;
+      Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
+      if (FAILED(dev->CreateTexture2D(&desc, nullptr, &staging))) {
+        error = "capture: no staging texture";
+        return false;
+      }
+      ctx->CopyResource(staging.Get(), texture);
+      D3D11_MAPPED_SUBRESOURCE mapped{};
+      if (FAILED(ctx->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+        error = "capture: Map failed";
+        return false;
+      }
+      bool ok = false;
+      HRESULT hr = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);   // already initialized by the window system: S_FALSE / RPC_E_CHANGED_MODE are fine
+      (void)hr;
+      Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
+      Microsoft::WRL::ComPtr<IWICStream> stream;
+      Microsoft::WRL::ComPtr<IWICBitmapEncoder> encoder;
+      Microsoft::WRL::ComPtr<IWICBitmapFrameEncode> frame;
+      Microsoft::WRL::ComPtr<IPropertyBag2> properties;
+      WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+      std::vector<std::uint8_t> opaque(static_cast<std::size_t>(desc.Width) * desc.Height * 4u);
+      for (UINT row = 0; row < desc.Height; ++row) {
+        const std::uint8_t* const src = static_cast<const std::uint8_t*>(mapped.pData) + static_cast<std::size_t>(row) * mapped.RowPitch;
+        std::uint8_t* const dst = opaque.data() + static_cast<std::size_t>(row) * desc.Width * 4u;
+        std::memcpy(dst, src, static_cast<std::size_t>(desc.Width) * 4u);
+        for (UINT x = 0; x < desc.Width; ++x) {
+          dst[x * 4u + 3u] = 0xFF;
+        }
+      }
+      const std::wstring widePath = Widen(path.c_str());
+      if (SUCCEEDED(::CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) && SUCCEEDED(factory->CreateStream(&stream)) &&
+          SUCCEEDED(stream->InitializeFromFilename(widePath.c_str(), GENERIC_WRITE)) && SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
+          SUCCEEDED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) && SUCCEEDED(encoder->CreateNewFrame(&frame, &properties)) && SUCCEEDED(frame->Initialize(properties.Get())) &&
+          SUCCEEDED(frame->SetSize(desc.Width, desc.Height)) && SUCCEEDED(frame->SetPixelFormat(&format)) &&
+          SUCCEEDED(frame->WritePixels(desc.Height, desc.Width * 4u, static_cast<UINT>(opaque.size()), opaque.data())) && SUCCEEDED(frame->Commit()) &&
+          SUCCEEDED(encoder->Commit())) {
+        ok = true;
+      } else {
+        error = "capture: the PNG could not be written";
+      }
+      ctx->Unmap(staging.Get(), 0);
+      return ok;
     }
 
     void ReleaseChain(Popout& p)
     {
-      if (p.back != nullptr) {
-        p.back->Release();
-        p.back = nullptr;
-      }
-      if (p.chain != nullptr) {
-        p.chain->Release();
-        p.chain = nullptr;
-      }
+      p.target.reset();
+      p.chain.Reset();
       p.chainWidth = 0;
       p.chainHeight = 0;
     }
 
-    // The swap chain must be created at the window's real client size (wx 2.4.2 reports a few pixels more than asked).
+    // The swap chain and the target are made at the window's real client size (wx 2.4.2 reports a few pixels more than asked).
     bool CreateChain(Popout& p, const int width, const int height)
     {
-      IDirect3DDevice9* const dev = RawDevice();
-      if (dev == nullptr || width <= 0 || height <= 0) {
+      ID3D11Device* const dev = RawDevice();
+      CD3DDevice* const device = D3D_GetDevice();
+      if (dev == nullptr || device == nullptr || width <= 0 || height <= 0) {
         return false;
       }
       ReleaseChain(p);
 
-      D3DPRESENT_PARAMETERS pp{};
-      pp.BackBufferWidth = static_cast<UINT>(width);
-      pp.BackBufferHeight = static_cast<UINT>(height);
-      pp.BackBufferFormat = D3DFMT_UNKNOWN; // windowed: the desktop format
-      pp.BackBufferCount = 1;
-      pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
-      pp.hDeviceWindow = reinterpret_cast<HWND>(p.view->GetHWND());
-      pp.Windowed = TRUE;
-      pp.EnableAutoDepthStencil = FALSE;
-      pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE; // never block the single main thread on a pop-out
-
-      const HRESULT hr = dev->CreateAdditionalSwapChain(&pp, &p.chain);
-      if (FAILED(hr) || p.chain == nullptr) {
-        char text[96];
-        std::snprintf(text, sizeof(text), "CreateAdditionalSwapChain failed 0x%08lX", static_cast<unsigned long>(hr));
-        p.lastError = text;
-        p.chain = nullptr;
-        return false;
+      // the target the engine draws into: the same kind of target the main frame's scene uses (format 2, as WRenViewport's head sized targets)
+      constexpr int kPopoutTargetFormat = 2;
+      device->GetResources()->CreateRenderTarget(p.target, width, height, kPopoutTargetFormat);
+      boost::shared_ptr<gpg::gal::RenderTarget> surface{};
+      if (p.target) {
+        p.target->GetSurface(surface);
       }
-      if (FAILED(p.chain->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &p.back)) || p.back == nullptr) {
+      auto* const surfaceD3D11 = static_cast<gpg::gal::RenderTargetD3D11*>(surface.get());
+      if (surfaceD3D11 == nullptr || surfaceD3D11->GetTexture() == nullptr) {
         ReleaseChain(p);
-        p.lastError = "GetBackBuffer failed";
+        p.lastError = "the pop-out target could not be created";
         return false;
       }
+      D3D11_TEXTURE2D_DESC targetDesc{};
+      surfaceD3D11->GetTexture()->GetDesc(&targetDesc);
+
+      // the window's flip-model swap chain on the factory of the device's adapter
+      Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+      Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+      Microsoft::WRL::ComPtr<IDXGIFactory2> factory;
+      if (FAILED(dev->QueryInterface(IID_PPV_ARGS(&dxgiDevice))) || FAILED(dxgiDevice->GetAdapter(&adapter)) || FAILED(adapter->GetParent(IID_PPV_ARGS(&factory)))) {
+        ReleaseChain(p);
+        p.lastError = "no DXGI factory for the device";
+        return false;
+      }
+      DXGI_SWAP_CHAIN_DESC1 desc{};
+      desc.Width = static_cast<UINT>(width);
+      desc.Height = static_cast<UINT>(height);
+      desc.Format = targetDesc.Format;   // the copy needs the same format as the target
+      desc.SampleDesc.Count = 1;
+      desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+      desc.BufferCount = 2;
+      desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+      desc.Scaling = DXGI_SCALING_NONE;
+      desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+      const HRESULT hr = factory->CreateSwapChainForHwnd(dev, reinterpret_cast<HWND>(p.view->GetHWND()), &desc, nullptr, nullptr, &p.chain);
+      if (FAILED(hr) || !p.chain) {
+        char text[96];
+        std::snprintf(text, sizeof(text), "CreateSwapChainForHwnd failed 0x%08lX (format %u)", static_cast<unsigned long>(hr), static_cast<unsigned>(targetDesc.Format));
+        p.lastError = text;
+        ReleaseChain(p);
+        return false;
+      }
+      (void)factory->MakeWindowAssociation(reinterpret_cast<HWND>(p.view->GetHWND()), DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
+      gpg::Logf("EDITOR popout %d: swap chain %dx%d, DXGI format %u, flip-discard", p.id, width, height, static_cast<unsigned>(targetDesc.Format));
       p.chainWidth = width;
       p.chainHeight = height;
       p.dirty = kDirtyFrames;
@@ -230,8 +324,8 @@ namespace moho
       return true;
     }
 
-    // Device reset / shutdown: additional swap chains do not survive IDirect3DDevice9::Reset, so they are released on the
-    // exit event (type 1) and created again lazily by RenderAll.
+    // Device reset / shutdown: the engine's render targets are released on the exit event (type 1), so the pop-outs' targets go with them and are made again lazily by
+    // RenderAll (their swap chains would survive, they are released with them for simplicity).
     class DeviceListener final : public Listener<const SD3DDeviceEvent&>
     {
     public:
@@ -370,20 +464,16 @@ namespace moho
       gEvents.clear();
     }
 
-    bool EverHadPopout()
-    {
-      return gEverCreated;
-    }
-
     void RenderAll()
     {
       if (gPopouts.empty()) {
         return;
       }
-      IDirect3DDevice9* const dev = RawDevice();
+      ID3D11DeviceContext* const context = RawContext();
+      gpg::gal::Device* const gal = D3D_GetDevice() != nullptr ? D3D_GetDevice()->GetGalDevice() : nullptr;
       CUIManager* const ui = UiManager();
       WRenViewport* const viewport = ren_Viewport;
-      if (dev == nullptr || ui == nullptr || viewport == nullptr || viewport->GetPrimBatcher() == nullptr) {
+      if (context == nullptr || gal == nullptr || ui == nullptr || viewport == nullptr || viewport->GetPrimBatcher() == nullptr) {
         return;
       }
       CD3DPrimBatcher* const batcher = viewport->GetPrimBatcher();
@@ -408,7 +498,7 @@ namespace moho
         if (client.x <= 0 || client.y <= 0) {
           continue;
         }
-        const bool needChain = p.chain == nullptr || p.chainWidth != client.x || p.chainHeight != client.y;
+        const bool needChain = !p.chain || !p.target || p.chainWidth != client.x || p.chainHeight != client.y;
         const bool wantsCapture = !p.capturePath.empty();
         if (!needChain && !wantsCapture && p.dirty <= 0 && now - p.lastDrawMs < kHeartbeatMs) {
           continue; // nothing changed and the heartbeat is not due
@@ -425,54 +515,34 @@ namespace moho
 
         ui->ValidateFrame(p.id);
 
-        IDirect3DSurface9* oldTarget = nullptr;
-        IDirect3DSurface9* oldDepth = nullptr;
-        (void)dev->GetRenderTarget(0, &oldTarget);
-        (void)dev->GetDepthStencilSurface(&oldDepth);
-
-        if (SUCCEEDED(dev->SetRenderTarget(0, p.back))) {
-          (void)dev->SetDepthStencilSurface(nullptr); // UI techniques have depth disabled; the main depth buffer may be smaller
-          (void)dev->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(255, 34, 36, 40), 1.0f, 0);
-          if (SUCCEEDED(dev->BeginScene())) {
-            ui->RenderFrames(p.id, batcher);
-            ui->DrawUI(p.id, batcher);
-            ui->DrawHead(p.id, batcher);
-            (void)dev->EndScene();
-          }
+        boost::shared_ptr<gpg::gal::RenderTarget> surface{};
+        p.target->GetSurface(surface);
+        auto* const surfaceD3D11 = static_cast<gpg::gal::RenderTargetD3D11*>(surface.get());
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> back;
+        if (surfaceD3D11 != nullptr && SUCCEEDED(p.chain->GetBuffer(0, IID_PPV_ARGS(&back)))) {
+          // the UI of this window is drawn into the target (no depth: the UI techniques have depth disabled), then copied to the swap chain's buffer
+          const gpg::gal::OutputContext output(surface, boost::shared_ptr<gpg::gal::DepthStencilTarget>());
+          gal->ClearTarget(&output);
+          gal->Clear(true, false, false, 0xFF222428u, 1.0f, 0);
+          gal->BeginScene();
+          ui->RenderFrames(p.id, batcher);
+          ui->DrawUI(p.id, batcher);
+          ui->DrawHead(p.id, batcher);
+          gal->EndScene();
 
           if (wantsCapture) {
-            // GetRenderTargetData needs a system-memory surface of the same size and format as the back buffer.
-            D3DSURFACE_DESC desc{};
-            IDirect3DSurface9* system = nullptr;
-            if (SUCCEEDED(p.back->GetDesc(&desc)) &&
-                SUCCEEDED(dev->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &system, nullptr)) &&
-                system != nullptr) {
-              if (SUCCEEDED(dev->GetRenderTargetData(p.back, system))) {
-                const HRESULT saved = D3DXSaveSurfaceToFileA(p.capturePath.c_str(), D3DXIFF_PNG, system, nullptr, nullptr);
-                char text[160];
-                std::snprintf(text, sizeof(text), "capture %s hr=0x%08lX fmt=%u", FAILED(saved) ? "failed" : "saved", static_cast<unsigned long>(saved), static_cast<unsigned>(desc.Format));
-                p.lastError = text; // reported by ed_window_get_rect until the next error
-              } else {
-                p.lastError = "capture GetRenderTargetData failed";
-              }
-              system->Release();
-            } else {
-              p.lastError = "capture surface failed";
-            }
+            std::string error;
+            p.lastError = CapturePng(RawDevice(), context, surfaceD3D11->GetTexture(), p.capturePath, error) ? "capture saved" : error;   // reported by ed_window_get_rect until the next error
             p.capturePath.clear();
           }
 
-          (void)p.chain->Present(nullptr, nullptr, nullptr, nullptr, 0);
+          context->CopyResource(back.Get(), surfaceD3D11->GetTexture());
+          (void)p.chain->Present(0, 0);   // never block the single main thread on a pop-out
         }
 
         // Back to the main frame's targets (the next WRenViewport::Render rebinds them anyway).
-        (void)dev->SetRenderTarget(0, oldTarget);
-        (void)dev->SetDepthStencilSurface(oldDepth);
-        if (oldTarget != nullptr) {
-          oldTarget->Release();
-        }
-        if (oldDepth != nullptr) {
-          oldDepth->Release();
+        if (const gpg::gal::OutputContext* const head = gal->GetHeadOutputContext(0); head != nullptr) {
+          gal->ClearTarget(head);
         }
         ++gFramesDrawn;
       }
@@ -510,7 +580,6 @@ namespace moho
       const char* const title = lua_isstring(state, 5) ? lua_tostring(state, 5) : "Panel";
 
       EnsureDeviceListener();
-      gEverCreated = true;
       Popout* const p = new Popout();
       p->frame = new EdPopoutFrame(wxString(Widen(title).c_str()), wxPoint(x, y), wxSize(w, h), p);
       p->view = new EdPopoutView(p->frame, p);

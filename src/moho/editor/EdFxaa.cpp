@@ -1,8 +1,8 @@
 // EDITOR: post-process FXAA for the world view (see EdFxaa.h and docs/projects/editor/FXAA.md).
 #include "moho/editor/EdFxaa.h"
-#include "moho/editor/EdD3D9Device.h"
+#include "moho/editor/EdD3D11Device.h"
 
-#include <d3d9.h>
+#include <d3d11.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -14,7 +14,6 @@
 #include "gpg/gal/EffectVariable.hpp"
 #include "gpg/gal/Error.hpp"
 #include "gpg/gal/Head.hpp"
-#include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
 #include "moho/console/CConCommand.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/CRenFrame.h"
@@ -52,7 +51,7 @@ namespace
   );
   moho::TConVar<bool> gTConVar_ed_fxaa_time(
     "ed_fxaa_time",
-    "Editor: 1 = the GPU time of the FXAA copy and passes is measured with Direct3D 9 timestamp queries and logged every 120 frames (default 0)",
+    "Editor: 1 = the GPU time of the FXAA copy and passes is measured with Direct3D 11 timestamp queries and logged every 120 frames (default 0)",
     &moho::ed_fxaa_time
   );
   moho::TConVar<int> gTConVar_ed_fxaa_passes(
@@ -81,11 +80,10 @@ namespace
     bool unavailable = false;   // the effect is missing, or the target could not be made: stay off
     bool announced = false;
     // ed_fxaa_time: GPU timestamps around the copy and the passes of the last frame that was measured
-    IDirect3DQuery9* qDisjoint = nullptr;
-    IDirect3DQuery9* qFreq = nullptr;
-    IDirect3DQuery9* qT0 = nullptr;
-    IDirect3DQuery9* qT1 = nullptr;
-    IDirect3DQuery9* qT2 = nullptr;
+    ID3D11Query* qDisjoint = nullptr;   // the frequency comes with it (D3D11_QUERY_TIMESTAMP_DISJOINT)
+    ID3D11Query* qT0 = nullptr;
+    ID3D11Query* qT1 = nullptr;
+    ID3D11Query* qT2 = nullptr;
     bool timePending = false;
     double sumCopyMs = 0.0;
     double sumPassMs = 0.0;
@@ -144,23 +142,9 @@ namespace
     }
   }
 
-  // The head's back buffer is multisampled when the swap chain asks for it: StretchRect from the off-screen target into such a surface is not allowed.
-  bool HeadIsMultisampled(const int head)
-  {
-    if (!gpg::gal::Device::IsReady()) {
-      return true;
-    }
-    gpg::gal::DeviceContext* const context = gpg::gal::Device::GetInstance()->GetDeviceContext();
-    if (context == nullptr || context->GetHeadCount() <= head) {
-      return true;
-    }
-    const gpg::gal::Head& h = context->GetHead(static_cast<std::uint32_t>(head));
-    return h.antialiasingHigh != 0u || h.antialiasingLow != 0u;
-  }
-
   void ReleaseQueries(State& state)
   {
-    for (IDirect3DQuery9** q : {&state.qDisjoint, &state.qFreq, &state.qT0, &state.qT1, &state.qT2}) {
+    for (ID3D11Query** q : {&state.qDisjoint, &state.qT0, &state.qT1, &state.qT2}) {
       if (*q != nullptr) {
         (*q)->Release();
         *q = nullptr;
@@ -169,18 +153,24 @@ namespace
     state.timePending = false;
   }
 
-  IDirect3DDevice9* RawDevice(moho::CD3DDevice* const device)
+  ID3D11Device* RawDevice(moho::CD3DDevice* const device)
   {
-    return device != nullptr && device->GetGalDevice() != nullptr ? moho::editor::D3D9RawDevice(device->GetGalDevice()) : nullptr;
+    return device != nullptr && device->GetGalDevice() != nullptr ? moho::editor::D3D11RawDevice(device->GetGalDevice()) : nullptr;
+  }
+
+  ID3D11DeviceContext* RawContext(moho::CD3DDevice* const device)
+  {
+    return device != nullptr && device->GetGalDevice() != nullptr ? moho::editor::D3D11RawContext(device->GetGalDevice()) : nullptr;
   }
 
   // Reads the timestamps of the previous measured frame when they are ready; true when a new measurement may be issued.
-  bool CollectTimes(State& state, IDirect3DDevice9* const dev)
+  bool CollectTimes(State& state, ID3D11Device* const dev, ID3D11DeviceContext* const ctx)
   {
     if (state.qDisjoint == nullptr) {
-      if (dev == nullptr || FAILED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMPDISJOINT, &state.qDisjoint)) || FAILED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMPFREQ, &state.qFreq))
-          || FAILED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &state.qT0)) || FAILED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &state.qT1))
-          || FAILED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &state.qT2))) {
+      D3D11_QUERY_DESC disjointDesc = {D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+      D3D11_QUERY_DESC stampDesc = {D3D11_QUERY_TIMESTAMP, 0};
+      if (dev == nullptr || ctx == nullptr || FAILED(dev->CreateQuery(&disjointDesc, &state.qDisjoint)) || FAILED(dev->CreateQuery(&stampDesc, &state.qT0))
+          || FAILED(dev->CreateQuery(&stampDesc, &state.qT1)) || FAILED(dev->CreateQuery(&stampDesc, &state.qT2))) {
         gpg::Warnf("EDITOR fxaa: this adapter has no timestamp queries; ed_fxaa_time does nothing");
         ReleaseQueries(state);
         moho::ed_fxaa_time = false;
@@ -191,13 +181,16 @@ namespace
     if (!state.timePending) {
       return true;
     }
-    BOOL disjoint = TRUE;
-    UINT64 freq = 0, t0 = 0, t1 = 0, t2 = 0;
-    if (state.qDisjoint->GetData(&disjoint, sizeof(disjoint), 0) != S_OK || state.qFreq->GetData(&freq, sizeof(freq), 0) != S_OK || state.qT0->GetData(&t0, sizeof(t0), 0) != S_OK
-        || state.qT1->GetData(&t1, sizeof(t1), 0) != S_OK || state.qT2->GetData(&t2, sizeof(t2), 0) != S_OK) {
+    D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjointData = {};
+    UINT64 t0 = 0, t1 = 0, t2 = 0;
+    const UINT noFlush = D3D11_ASYNC_GETDATA_DONOTFLUSH;
+    if (ctx->GetData(state.qDisjoint, &disjointData, sizeof(disjointData), noFlush) != S_OK || ctx->GetData(state.qT0, &t0, sizeof(t0), noFlush) != S_OK
+        || ctx->GetData(state.qT1, &t1, sizeof(t1), noFlush) != S_OK || ctx->GetData(state.qT2, &t2, sizeof(t2), noFlush) != S_OK) {
       return false;   // not ready yet: this frame is not measured
     }
     state.timePending = false;
+    const bool disjoint = disjointData.Disjoint != FALSE;
+    const UINT64 freq = disjointData.Frequency;
     if (!disjoint && freq != 0) {
       state.sumCopyMs += 1000.0 * static_cast<double>(t1 - t0) / static_cast<double>(freq);
       state.sumPassMs += 1000.0 * static_cast<double>(t2 - t1) / static_cast<double>(freq);
@@ -224,9 +217,6 @@ namespace moho::edfxaa
     State& state = GetState();
     if (state.unavailable) {
       return;
-    }
-    if (HeadIsMultisampled(head)) {
-      return;   // swap chain anti-aliasing is on: the user chose that, nothing to add
     }
 
     const int width = device->GetHeadWidth(static_cast<unsigned int>(head));
@@ -316,23 +306,22 @@ namespace moho::edfxaa
     Restore();   // from here on every pass draws into the real back buffer again
 
     // the scene is in the off-screen target: all of it goes to the back buffer first (the Maui frames pass, the rest of the window), the world views are smoothed over it
-    IDirect3DDevice9* const rawDevice = ed_fxaa_time ? RawDevice(mDevice) : nullptr;
-    const bool timed = rawDevice != nullptr && CollectTimes(state, rawDevice);
+    ID3D11DeviceContext* const rawContext = ed_fxaa_time ? RawContext(mDevice) : nullptr;
+    const bool timed = rawContext != nullptr && CollectTimes(state, RawDevice(mDevice), rawContext);
     if (timed) {
-      state.qDisjoint->Issue(D3DISSUE_BEGIN);
-      state.qFreq->Issue(D3DISSUE_END);
-      state.qT0->Issue(D3DISSUE_END);
+      rawContext->Begin(state.qDisjoint);
+      rawContext->End(state.qT0);
     }
     boost::shared_ptr<moho::ID3DRenderTarget> headLock{};
     mDevice->GetWriterLock1(headLock, mHead);
     mDevice->SetViewRect(scene.get(), headLock.get(), nullptr, nullptr);
     if (timed) {
-      state.qT1->Issue(D3DISSUE_END);
+      rawContext->End(state.qT1);
     }
     if (mRects.empty()) {
       if (timed) {
-        state.qT2->Issue(D3DISSUE_END);
-        state.qDisjoint->Issue(D3DISSUE_END);
+        rawContext->End(state.qT2);
+        rawContext->End(state.qDisjoint);
         state.timePending = true;
       }
       return;
@@ -385,8 +374,8 @@ namespace moho::edfxaa
     state.shaderBound = false;
     gal->SetViewport(&savedViewport);
     if (timed) {
-      state.qT2->Issue(D3DISSUE_END);
-      state.qDisjoint->Issue(D3DISSUE_END);
+      rawContext->End(state.qT2);
+      rawContext->End(state.qDisjoint);
       state.timePending = true;
     }
   }

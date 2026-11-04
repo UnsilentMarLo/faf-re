@@ -1,4 +1,3 @@
-#include "moho/render/d3d/EdDeviceDeferred.h"
 #include "CScApp.h"
 
 #include <Windows.h>
@@ -1079,7 +1078,6 @@ bool CScApp::Init()
  */
 void CScApp::Main()
 {
-  moho::ED_ApplyPendingDeviceContext();   // EDITOR: a device change queued by a click (anti-aliasing, vertical sync) happens here, outside any window message
   moho::CTimeBarSection appFrameSection("AppFrame");
   PublishAllocatorHeapStats();
   UpdateAddressSpaceMonitor();
@@ -1279,6 +1277,16 @@ namespace
   [[nodiscard]] std::vector<gpg::gal::DeviceApi> RendererAttemptOrder()
   {
     using gpg::gal::DeviceApi;
+#if defined(FAF_STUDIO_EDITOR)
+    // EDITOR: Direct3D 11 is the editor's renderer, its baseline and its only one (Direct3D 9 is gone from the editor; the editor's natives draw on the raw Direct3D 11 device).
+    // A /d3d9, /D3D10, /d3d12 or /vulkan switch is ignored with a log line, and so is the `graphics_api` option the FAF client saves in the game preferences.
+    for (const char* const name : {"/d3d9", "/D3D10", "/d3d11", "/d3d12", "/vulkan"}) {
+      if (moho::CFG_GetArgOption(name, 0, nullptr)) {
+        gpg::Logf("renderer: %s on the command line: the editor runs on Direct3D 11 only", name);
+      }
+    }
+    return {DeviceApi::Direct3D11};
+#else
     const auto explicitApi = [](const DeviceApi api) {
       return (api == DeviceApi::Direct3D9) ? std::vector<DeviceApi>{api} : std::vector<DeviceApi>{api, DeviceApi::Direct3D9};
     };
@@ -1295,15 +1303,8 @@ namespace
       }
     }
 
-#if defined(FAF_STUDIO_EDITOR)
-    // EDITOR: the FAF client saves graphics_api = d3d12 (or d3d11 / vulkan) in the game preferences the editor reads; the editor natives need Direct3D 9, so only a command-line switch
-    // (above) picks another renderer for an editor build. (Before, the saved option started the editor on Direct3D 12 and the GPU compute adapter match crashed on the foreign device.)
-    const msvc8::string option;
-    gpg::Logf("graphics_api option: ignored in the editor (use /d3d11, /d3d12 or /vulkan on the command line)");
-#else
     const msvc8::string option = moho::OPTIONS_GetString("graphics_api");
     gpg::Logf("graphics_api option: %s", option.empty() ? "(unset)" : option.c_str());
-#endif
     static constexpr std::pair<const char*, DeviceApi> kOptions[] = {
       {"d3d9", DeviceApi::Direct3D9}, {"d3d11", DeviceApi::Direct3D11}, {"d3d12", DeviceApi::Direct3D12}, {"vulkan", DeviceApi::Vulkan},
     };
@@ -1312,11 +1313,6 @@ namespace
         return explicitApi(api);
       }
     }
-#if defined(FAF_STUDIO_EDITOR)
-    // EDITOR: the editor's natives (overlay, mesh drawing, pop-out windows, the GPU compute adapter match) take the game's Direct3D 9 device and the editor was built and
-    // tested on it: `auto` means Direct3D 9 here. /d3d11, /d3d12 and /vulkan (or the option) still choose another renderer for the game view; those natives are then off.
-    return {DeviceApi::Direct3D9};
-#endif
 #if defined(_M_IX86)
     // The 32-bit build starts Direct3D 11 first: Direct3D 12 there faults the
     // GPU (an SM MMU fault, "device hung") on NVIDIA's 32-bit driver after
@@ -1325,6 +1321,7 @@ namespace
     return {DeviceApi::Direct3D11, DeviceApi::Vulkan, DeviceApi::Direct3D12, DeviceApi::Direct3D9};
 #else
     return {DeviceApi::Direct3D12, DeviceApi::Vulkan, DeviceApi::Direct3D11, DeviceApi::Direct3D9};
+#endif
 #endif
   }
 
@@ -1546,7 +1543,11 @@ bool CScApp::CreateDevice()
   }
 
   if (!created) {
+#if defined(FAF_STUDIO_EDITOR)
+    gpg::gal::DeviceContext fallbackContext(gpg::gal::DeviceApi::Direct3D11);      // EDITOR: Direct3D 11 is the baseline, no Direct3D 9 fallback
+#else
     gpg::gal::DeviceContext fallbackContext(useD3D10 ? gpg::gal::DeviceApi::Direct3D10 : gpg::gal::DeviceApi::Direct3D9);
+#endif
     context = fallbackContext;
 
     gpg::gal::Head fallbackHead{};

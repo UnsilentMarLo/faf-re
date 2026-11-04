@@ -1,4 +1,4 @@
-// EDITOR GPU compute backend (docs/projects/editor/GPU_COMPUTE.md). A SEPARATE Direct3D 11 device with compute shaders (cs_5_0) next to the game's Direct3D 9 renderer: the field
+// EDITOR GPU compute backend (docs/projects/editor/GPU_COMPUTE.md). A SEPARATE Direct3D 11 device with compute shaders (cs_5_0) next to the game's Direct3D 11 renderer: the field
 // engine's heavy ops (erosion, generators, filters) can run there and fall back to the CPU ops on any problem.
 //
 // This header is plain C++ (no Windows, no Direct3D): the kernels, the op glue and the tests use it, only EdGpu.cpp knows Direct3D 11. The pieces:
@@ -156,7 +156,7 @@ namespace moho::editor::gpu
   [[nodiscard]] Backend& CurrentBackend();
   /** Tests: use `b` instead (null restores the real one). */
   void SetBackendForTest(Backend* b);
-  /** The adapter the game's Direct3D 9 device runs on (0 = unknown): the backend prefers the same vendor / device. Call from the thread that owns the D3D9 device. */
+  /** The adapter the game's Direct3D 11 device runs on (0 = unknown): the backend prefers the same vendor / device. Call from the thread that owns the game's device. */
   void SetPreferredAdapter(u32 vendorId, u32 deviceId);
 
   /** RAII access to the backend: holds its lock while alive. Not copyable. A thread that already holds a Lease gets none (no nested use). */
