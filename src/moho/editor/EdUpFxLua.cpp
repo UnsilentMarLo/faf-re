@@ -1,0 +1,796 @@
+// EDITOR: the "up" natives of the particle editor (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP8): upstream's emitter / beam / trail
+// blueprint model, its curve sampling, the browser's grouping and the effect templates as node graphs, bound to Lua over EdUpCommon.h. The logic is
+// upstream's (src/editor/doc/EdEmitter, src/editor/graph/EdEffectGraph, EdNodeGraph, in faf_editor_logic); this unit is the table <-> struct glue and nothing
+// else. The engine side of the preview (particles, the offscreen view) is EdFxView.cpp.
+//
+// An emitter is a table (a field a table lacks keeps retail's starting value, see ed_fx_emitter_new):
+//   { blueprintId, lifetime, repeatTime, textureFrameCount, blendMode, lodCutoff, textureStripCount, sortOrder, lowFidelity, medFidelity, highFidelity,
+//     texture, rampTexture, flags = { [FlagName] = bool }, curves = { [1..21] = curve, [CurveName] = curve }, extra = { { key, text }, ... } }
+//   curve = { name, xRange, keys = { { x, y, z }, ... } }     x the time (0..xRange), y the value, z the random spread around it
+//
+//   ed_fx_info()                          -> { curves = { { name, group, caption, viewMin, viewMax, initialValue, initialSpread }, ... in the file's order },
+//                                              flags = { names }, blendModes = { names }, factions = { names }, kinds = { names } }
+//   ed_fx_emitter_new()                   -> emitter      retail's editor's new emitter
+//   ed_fx_emitter_parse(text)             -> emitter | nil, message       (message names the line)
+//   ed_fx_emitter_write(emitter)          -> text         as retail's emitter editor writes it (so a file it wrote reads back byte for byte)
+//   ed_fx_emitter_roundtrip(text)         -> { ok, identical, error, written }     parse + write + parse + compare: what the retail audit runs over every file
+//   ed_fx_emitter_type_tag(emitter)       -> string       the particle technique's type tag (TRamp, TRampFlat, TRampAlign, ...)
+//   ed_fx_curve_samples(keys, xRange, n)  -> { mid = {n y}, lo = {n}, hi = {n} }     SEfxCurve::GetValue at n points from 0 to xRange (lo / hi: the spread's edges)
+//   ed_fx_flat_info(kind)                 -> { { key, kind, initial, color = {r,g,b,a}, help, texture }, ... }       kind 'BeamBlueprint' | 'TrailEmitterBlueprint'
+//   ed_fx_flat_parse(text)                -> flat | nil, message         flat = { kind, fields = { { key, kind = 'number'|'bool'|'text'|'color'|'raw', number, flag, text, color = {r,g,b,a} }, ... } }
+//   ed_fx_flat_write(flat)                -> text
+//   ed_fx_effect_class(path)              -> factionIndex, kindIndex     the browser's grouping of a game file name (0 = "all", index into ed_fx_info().factions / kinds, 0-based)
+//   ed_fx_list_files()                    -> { { path, name, faction, kind }, ... }     every /effects/**/*.bp of the game's file system, sorted by name
+//   ed_fx_templates(luaText)              -> { { name, paths = { ... } }, ... }          the templates of an EffectTemplates.lua that are plain lists of emitter paths
+//   ed_fx_script_effects(script, on)      -> text         the map's _script.lua with the editor's MapEditorEffects function and its call in OnPopulate (on) or both taken out (off)
+//   ed_fx_graph_node_types()              -> { { name, title, category, help, output, inputs = { { name, type } }, outputs = { ... },
+//                                                params = { { name, kind, min, max, choices = {..}, initial = {a,b,c,d}, initialText, help } } }, ... }
+//   ed_fx_graph_build(name, { { name, emitter }, ... }) -> graph    the Effect output fed by Emitter / Curve / Constant / Texture nodes
+//   ed_fx_graph_emitters(graph)           -> { { name, emitter }, ... } | nil, message      the emitters the graph makes, in the output's pin order
+//        graph = { nodes = { { id, type, x, y, params = { { v = {a,b,c,d}, text }, ... in the type's parameter order } }, ... }, links = { { fromNode, fromPin, toNode, toPin }, ... } }
+//        (pin and parameter numbers are 0-based as upstream's, ids are the graph's own)
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "editor/doc/EdEmitter.h"
+#include "editor/doc/EdSaveFile.h"
+#include "editor/graph/EdEffectGraph.h"
+#include "editor/graph/EdNodeGraph.h"
+#include "legacy/containers/String.h"
+#include "legacy/containers/Vector.h"
+#include "moho/editor/EdUpCommon.h"
+#include "moho/editor/EdUpFx.h"
+#include "moho/misc/CVirtualFileSystem.h"
+#include "moho/misc/FileWaitHandleSet.h"
+
+namespace
+{
+  namespace up = moho::editor::up;
+  using namespace faf::editor;
+
+  // ---- small helpers ------------------------------------------------------------------------------------------------------------------------------
+
+  /** Calls `fn(elementIndex)` for each table element of the array t[key] (the element is on top of the stack during the call). */
+  template <class Fn>
+  void EachElement(lua_State* const L, const int index, const char* const key, Fn&& fn)
+  {
+    if (up::PushField(L, index, key) == LUA_TTABLE) {
+      const int list = lua_gettop(L);
+      for (int i = 1;; ++i) {
+        lua_rawgeti(L, list, i);
+        if (lua_type(L, -1) == LUA_TNIL) {
+          lua_settop(L, -2);
+          break;
+        }
+        if (lua_type(L, -1) == LUA_TTABLE) {
+          fn(lua_gettop(L));
+        }
+        lua_settop(L, -2);
+      }
+    }
+    lua_settop(L, -2);
+  }
+
+  /** Same for an array held at stack index `index` itself. */
+  template <class Fn>
+  void EachOf(lua_State* const L, const int index, Fn&& fn)
+  {
+    const int list = index < 0 ? lua_gettop(L) + index + 1 : index;
+    if (lua_type(L, list) != LUA_TTABLE) {
+      return;
+    }
+    for (int i = 1;; ++i) {
+      lua_rawgeti(L, list, i);
+      if (lua_type(L, -1) == LUA_TNIL) {
+        lua_settop(L, -2);
+        break;
+      }
+      if (lua_type(L, -1) == LUA_TTABLE) {
+        fn(lua_gettop(L));
+      }
+      lua_settop(L, -2);
+    }
+  }
+
+  [[nodiscard]] float FieldFloat(lua_State* const L, const int index, const char* const key, const float fallback)
+  {
+    return static_cast<float>(up::FieldNumber(L, index, key, static_cast<double>(fallback)));
+  }
+
+  /** t[key] when it is a table (left on the stack: pop it with lua_settop(L, -2)), else pushes nil and returns false. */
+  [[nodiscard]] bool PushTable(lua_State* const L, const int index, const char* const key)
+  {
+    if (up::PushField(L, index, key) == LUA_TTABLE) {
+      return true;
+    }
+    return false;
+  }
+
+  void SetFloatArray(lua_State* const L, const char* const key, const std::array<float, 4>& values)
+  {
+    lua_pushstring(L, key);
+    lua_newtable(L);
+    for (int i = 0; i < 4; ++i) {
+      lua_pushnumber(L, static_cast<lua_Number>(values[static_cast<std::size_t>(i)]));
+      lua_rawseti(L, -2, i + 1);
+    }
+    lua_settable(L, -3);
+  }
+
+  [[nodiscard]] std::array<float, 4> ReadFloatArray(lua_State* const L, const int index, const char* const key, const std::array<float, 4>& fallback)
+  {
+    std::array<float, 4> out = fallback;
+    if (up::PushField(L, index, key) == LUA_TTABLE) {
+      const int list = lua_gettop(L);
+      for (int i = 0; i < 4; ++i) {
+        lua_rawgeti(L, list, i + 1);
+        if (lua_type(L, -1) == LUA_TNUMBER) {
+          out[static_cast<std::size_t>(i)] = static_cast<float>(lua_tonumber(L, -1));
+        }
+        lua_settop(L, -2);
+      }
+    }
+    lua_settop(L, -2);
+    return out;
+  }
+
+  // ---- emitter <-> table --------------------------------------------------------------------------------------------------------------------------
+
+  void PushCurve(lua_State* const L, const char* const name, const EmitterCurve& curve)
+  {
+    lua_newtable(L);
+    up::SetString(L, "name", name);
+    up::SetNumber(L, "xRange", curve.xRange);
+    lua_pushstring(L, "keys");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < curve.keys.size(); ++i) {
+      lua_newtable(L);
+      up::SetNumber(L, "x", curve.keys[i].x);
+      up::SetNumber(L, "y", curve.keys[i].y);
+      up::SetNumber(L, "z", curve.keys[i].z);
+      lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    lua_settable(L, -3);
+  }
+
+  void PushEmitter(lua_State* const L, const EmitterBlueprint& e)
+  {
+    lua_newtable(L);
+    up::SetString(L, "blueprintId", e.blueprintId);
+    up::SetNumber(L, "lifetime", e.lifetime);
+    up::SetNumber(L, "repeatTime", e.repeatTime);
+    up::SetNumber(L, "textureFrameCount", e.textureFrameCount);
+    up::SetNumber(L, "blendMode", e.blendMode);
+    up::SetNumber(L, "lodCutoff", e.lodCutoff);
+    up::SetNumber(L, "textureStripCount", e.textureStripCount);
+    up::SetNumber(L, "sortOrder", e.sortOrder);
+    up::SetBool(L, "lowFidelity", e.lowFidelity);
+    up::SetBool(L, "medFidelity", e.medFidelity);
+    up::SetBool(L, "highFidelity", e.highFidelity);
+    up::SetString(L, "texture", e.texture);
+    up::SetString(L, "rampTexture", e.rampTexture);
+
+    lua_pushstring(L, "flags");
+    lua_newtable(L);
+    for (int i = 0; i < kEmitterFlagCount; ++i) {
+      up::SetBool(L, FlagName(i), e.flags[static_cast<std::size_t>(i)]);
+    }
+    lua_settable(L, -3);
+
+    lua_pushstring(L, "curves");
+    lua_newtable(L);
+    for (int i = 0; i < kEmitterCurveCount; ++i) {
+      const char* const name = CurveInfo(i).name;
+      PushCurve(L, name, e.curves[static_cast<std::size_t>(i)]);
+      lua_pushstring(L, name);
+      lua_pushvalue(L, -2);
+      lua_settable(L, -4); // curves[name] = the same table
+      lua_rawseti(L, -2, i + 1);
+    }
+    lua_settable(L, -3);
+
+    lua_pushstring(L, "extra");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < e.extra.size(); ++i) {
+      lua_newtable(L);
+      up::SetString(L, "key", e.extra[i].first);
+      up::SetString(L, "text", e.extra[i].second);
+      lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    lua_settable(L, -3);
+  }
+
+  /** The emitter a table describes; a field it lacks keeps retail's starting value. */
+  [[nodiscard]] EmitterBlueprint ReadEmitter(lua_State* const L, const int index)
+  {
+    EmitterBlueprint e = NewEmitter();
+    e.blueprintId = up::FieldString(L, index, "blueprintId", e.blueprintId);
+    e.lifetime = FieldFloat(L, index, "lifetime", e.lifetime);
+    e.repeatTime = FieldFloat(L, index, "repeatTime", e.repeatTime);
+    e.textureFrameCount = FieldFloat(L, index, "textureFrameCount", e.textureFrameCount);
+    e.blendMode = FieldFloat(L, index, "blendMode", e.blendMode);
+    e.lodCutoff = FieldFloat(L, index, "lodCutoff", e.lodCutoff);
+    e.textureStripCount = FieldFloat(L, index, "textureStripCount", e.textureStripCount);
+    e.sortOrder = FieldFloat(L, index, "sortOrder", e.sortOrder);
+    e.lowFidelity = up::FieldBool(L, index, "lowFidelity", e.lowFidelity);
+    e.medFidelity = up::FieldBool(L, index, "medFidelity", e.medFidelity);
+    e.highFidelity = up::FieldBool(L, index, "highFidelity", e.highFidelity);
+    e.texture = up::FieldString(L, index, "texture", e.texture);
+    e.rampTexture = up::FieldString(L, index, "rampTexture", e.rampTexture);
+    if (PushTable(L, index, "flags")) {
+      const int flags = lua_gettop(L);
+      for (int i = 0; i < kEmitterFlagCount; ++i) {
+        e.flags[static_cast<std::size_t>(i)] = up::FieldBool(L, flags, FlagName(i), e.flags[static_cast<std::size_t>(i)]);
+      }
+    }
+    lua_settop(L, -2);
+    if (PushTable(L, index, "curves")) {
+      const int curves = lua_gettop(L);
+      for (int i = 0; i < kEmitterCurveCount; ++i) {
+        // by name first, then by position
+        int type = up::PushField(L, curves, CurveInfo(i).name);
+        if (type != LUA_TTABLE) {
+          lua_settop(L, -2);
+          lua_rawgeti(L, curves, i + 1);
+          type = lua_type(L, -1);
+        }
+        if (type == LUA_TTABLE) {
+          const int curve = lua_gettop(L);
+          EmitterCurve& c = e.curves[static_cast<std::size_t>(i)];
+          c.xRange = FieldFloat(L, curve, "xRange", c.xRange);
+          if (PushTable(L, curve, "keys")) {
+            c.keys.clear();
+            EachOf(L, -1, [&](const int key) {
+              EmitterKey k;
+              k.x = FieldFloat(L, key, "x", 0.0f);
+              k.y = FieldFloat(L, key, "y", 0.0f);
+              k.z = FieldFloat(L, key, "z", 0.0f);
+              c.keys.push_back(k);
+            });
+          }
+          lua_settop(L, -2);
+        }
+        lua_settop(L, -2);
+      }
+    }
+    lua_settop(L, -2);
+    e.extra.clear();
+    EachElement(L, index, "extra", [&](const int item) {
+      e.extra.emplace_back(up::FieldString(L, item, "key"), up::FieldString(L, item, "text"));
+    });
+    return e;
+  }
+
+  // ---- info ---------------------------------------------------------------------------------------------------------------------------------------
+
+  int __cdecl cfunc_Info(lua_State* const L)
+  {
+    lua_newtable(L);
+    lua_pushstring(L, "curves");
+    lua_newtable(L);
+    for (int i = 0; i < kEmitterCurveCount; ++i) {
+      const EmitterCurveInfo& info = CurveInfo(i);
+      lua_newtable(L);
+      up::SetString(L, "name", info.name);
+      up::SetString(L, "group", info.group);
+      up::SetString(L, "caption", info.caption);
+      up::SetNumber(L, "viewMin", info.viewMin);
+      up::SetNumber(L, "viewMax", info.viewMax);
+      up::SetNumber(L, "initialValue", info.initialValue);
+      up::SetNumber(L, "initialSpread", info.initialSpread);
+      lua_rawseti(L, -2, i + 1);
+    }
+    lua_settable(L, -3);
+    std::vector<std::string> list;
+    for (int i = 0; i < kEmitterFlagCount; ++i) {
+      list.emplace_back(FlagName(i));
+    }
+    up::SetStringList(L, "flags", list);
+    list.clear();
+    for (const char* const mode : kEmitterBlendModes) {
+      list.emplace_back(mode);
+    }
+    up::SetStringList(L, "blendModes", list);
+    list.assign(std::begin(kEffectFactions), std::end(kEffectFactions));
+    up::SetStringList(L, "factions", list);
+    list.assign(std::begin(kEffectKinds), std::end(kEffectKinds));
+    up::SetStringList(L, "kinds", list);
+    return 1;
+  }
+
+  // ---- emitters -----------------------------------------------------------------------------------------------------------------------------------
+
+  int __cdecl cfunc_EmitterNew(lua_State* const L)
+  {
+    PushEmitter(L, NewEmitter());
+    return 1;
+  }
+
+  int __cdecl cfunc_EmitterParse(lua_State* const L)
+  {
+    EmitterBlueprint emitter;
+    std::string error;
+    if (!ParseEmitter(up::ArgString(L, 1, "ed_fx_emitter_parse"), emitter, error)) {
+      return up::Fail(L, error);
+    }
+    PushEmitter(L, emitter);
+    return 1;
+  }
+
+  int __cdecl cfunc_EmitterWrite(lua_State* const L)
+  {
+    const std::string text = WriteEmitter(ReadEmitter(L, 1));
+    lua_pushlstring(L, text.data(), text.size());
+    return 1;
+  }
+
+  /** The two emitters hold the same (what upstream's tests call Same: every setting, texture, key and unknown key). */
+  [[nodiscard]] bool SameEmitter(const EmitterBlueprint& a, const EmitterBlueprint& b)
+  {
+    if (a.blueprintId != b.blueprintId || a.lifetime != b.lifetime || a.repeatTime != b.repeatTime || a.textureFrameCount != b.textureFrameCount ||
+        a.blendMode != b.blendMode || a.lodCutoff != b.lodCutoff || a.textureStripCount != b.textureStripCount || a.sortOrder != b.sortOrder ||
+        a.flags != b.flags || a.lowFidelity != b.lowFidelity || a.medFidelity != b.medFidelity || a.highFidelity != b.highFidelity ||
+        a.texture != b.texture || a.rampTexture != b.rampTexture || a.extra != b.extra) {
+      return false;
+    }
+    for (int i = 0; i < kEmitterCurveCount; ++i) {
+      const EmitterCurve& ca = a.curves[static_cast<std::size_t>(i)];
+      const EmitterCurve& cb = b.curves[static_cast<std::size_t>(i)];
+      if (ca.xRange != cb.xRange || ca.keys.size() != cb.keys.size()) {
+        return false;
+      }
+      for (std::size_t k = 0; k < ca.keys.size(); ++k) {
+        if (ca.keys[k].x != cb.keys[k].x || ca.keys[k].y != cb.keys[k].y || ca.keys[k].z != cb.keys[k].z) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  int __cdecl cfunc_EmitterRoundTrip(lua_State* const L)
+  {
+    std::string text = up::ArgString(L, 1, "ed_fx_emitter_roundtrip");
+    // the files are read as text with LF (the game's own files have no CR: if one does, it is dropped before the comparison, as upstream's test does)
+    text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+    EmitterBlueprint first;
+    std::string error;
+    lua_newtable(L);
+    if (!ParseEmitter(text, first, error)) {
+      up::SetBool(L, "ok", false);
+      up::SetString(L, "error", error);
+      return 1;
+    }
+    const std::string written = WriteEmitter(first);
+    EmitterBlueprint second;
+    const bool again = ParseEmitter(written, second, error);
+    up::SetBool(L, "ok", again && SameEmitter(first, second));
+    up::SetBool(L, "identical", written == text);
+    if (!again) {
+      up::SetString(L, "error", error);
+    }
+    if (written != text) {
+      up::SetString(L, "written", written);
+    }
+    return 1;
+  }
+
+  int __cdecl cfunc_EmitterTypeTag(lua_State* const L)
+  {
+    const std::string tag = EmitterTypeTag(ReadEmitter(L, 1));
+    lua_pushlstring(L, tag.data(), tag.size());
+    return 1;
+  }
+
+  int __cdecl cfunc_CurveSamples(lua_State* const L)
+  {
+    EmitterCurve curve;
+    curve.xRange = static_cast<float>(lua_type(L, 2) == LUA_TNUMBER ? lua_tonumber(L, 2) : 1.0);
+    if (lua_type(L, 1) == LUA_TTABLE) {
+      EachOf(L, 1, [&](const int key) {
+        EmitterKey k;
+        k.x = FieldFloat(L, key, "x", 0.0f);
+        k.y = FieldFloat(L, key, "y", 0.0f);
+        k.z = FieldFloat(L, key, "z", 0.0f);
+        curve.keys.push_back(k);
+      });
+    }
+    const int count = std::clamp(lua_type(L, 3) == LUA_TNUMBER ? static_cast<int>(lua_tonumber(L, 3)) : 64, 2, 4096);
+    std::vector<double> mid(static_cast<std::size_t>(count)), lo(static_cast<std::size_t>(count)), hi(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+      const float t = curve.xRange * static_cast<float>(i) / static_cast<float>(count - 1);
+      mid[static_cast<std::size_t>(i)] = EmitterCurveValue(curve, t, 0.5f);
+      lo[static_cast<std::size_t>(i)] = EmitterCurveValue(curve, t, 0.0f);
+      hi[static_cast<std::size_t>(i)] = EmitterCurveValue(curve, t, 1.0f);
+    }
+    lua_newtable(L);
+    up::SetNumberList(L, "mid", mid);
+    up::SetNumberList(L, "lo", lo);
+    up::SetNumberList(L, "hi", hi);
+    return 1;
+  }
+
+  // ---- beams and trails ---------------------------------------------------------------------------------------------------------------------------
+
+  const char* KindName(const FlatValue::Kind kind)
+  {
+    switch (kind) {
+    case FlatValue::Kind::Number: return "number";
+    case FlatValue::Kind::Bool: return "bool";
+    case FlatValue::Kind::Text: return "text";
+    case FlatValue::Kind::Color: return "color";
+    default: return "raw";
+    }
+  }
+
+  FlatValue::Kind KindOf(const std::string& name)
+  {
+    if (name == "number") {
+      return FlatValue::Kind::Number;
+    }
+    if (name == "bool") {
+      return FlatValue::Kind::Bool;
+    }
+    if (name == "text") {
+      return FlatValue::Kind::Text;
+    }
+    if (name == "color") {
+      return FlatValue::Kind::Color;
+    }
+    return FlatValue::Kind::Raw;
+  }
+
+  int __cdecl cfunc_FlatInfo(lua_State* const L)
+  {
+    const std::string kind = up::ArgString(L, 1, "ed_fx_flat_info");
+    lua_newtable(L);
+    int n = 0;
+    for (const FlatField& field : FlatFields(kind)) {
+      lua_newtable(L);
+      up::SetString(L, "key", field.key);
+      up::SetString(L, "kind", KindName(field.kind));
+      up::SetNumber(L, "initial", field.initial);
+      SetFloatArray(L, "color", field.initialColor);
+      up::SetString(L, "help", field.help != nullptr ? field.help : "");
+      up::SetBool(L, "texture", field.texture);
+      lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+  }
+
+  int __cdecl cfunc_FlatParse(lua_State* const L)
+  {
+    FlatBlueprint flat;
+    std::string error;
+    if (!ParseFlatBlueprint(up::ArgString(L, 1, "ed_fx_flat_parse"), flat, error)) {
+      return up::Fail(L, error);
+    }
+    lua_newtable(L);
+    up::SetString(L, "kind", flat.kind);
+    lua_pushstring(L, "fields");
+    lua_newtable(L);
+    int n = 0;
+    for (const auto& [key, value] : flat.fields) {
+      lua_newtable(L);
+      up::SetString(L, "key", key);
+      up::SetString(L, "kind", KindName(value.kind));
+      up::SetNumber(L, "number", value.number);
+      up::SetBool(L, "flag", value.flag);
+      up::SetString(L, "text", value.text);
+      SetFloatArray(L, "color", value.color);
+      lua_rawseti(L, -2, ++n);
+    }
+    lua_settable(L, -3);
+    return 1;
+  }
+
+  [[nodiscard]] FlatBlueprint ReadFlat(lua_State* const L, const int index)
+  {
+    FlatBlueprint flat;
+    flat.kind = up::FieldString(L, index, "kind", "BeamBlueprint");
+    EachElement(L, index, "fields", [&](const int item) {
+      FlatValue value;
+      value.kind = KindOf(up::FieldString(L, item, "kind", "number"));
+      value.number = FieldFloat(L, item, "number", 0.0f);
+      value.flag = up::FieldBool(L, item, "flag", false);
+      value.text = up::FieldString(L, item, "text");
+      value.color = ReadFloatArray(L, item, "color", {0.0f, 0.0f, 0.0f, 0.0f});
+      flat.fields.emplace_back(up::FieldString(L, item, "key"), value);
+    });
+    return flat;
+  }
+
+  int __cdecl cfunc_FlatWrite(lua_State* const L)
+  {
+    const std::string text = WriteFlatBlueprint(ReadFlat(L, 1));
+    lua_pushlstring(L, text.data(), text.size());
+    return 1;
+  }
+
+  // ---- the browser --------------------------------------------------------------------------------------------------------------------------------
+
+  int __cdecl cfunc_EffectClass(lua_State* const L)
+  {
+    const std::string path = up::ArgString(L, 1, "ed_fx_effect_class");
+    lua_pushnumber(L, static_cast<lua_Number>(EffectFaction(path)));
+    lua_pushnumber(L, static_cast<lua_Number>(EffectKind(path)));
+    return 2;
+  }
+
+  [[nodiscard]] std::string Lower(std::string text)
+  {
+    std::transform(text.begin(), text.end(), text.begin(), [](const unsigned char c) { return static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c); });
+    return text;
+  }
+
+  int __cdecl cfunc_ListFiles(lua_State* const L)
+  {
+    struct Entry
+    {
+      std::string path;
+      std::string name;
+      std::string sortKey;
+    };
+    std::vector<Entry> entries;
+    if (moho::CVirtualFileSystem* const vfs = moho::DISK_GetVFS(); vfs != nullptr) {
+      fa::vector<fa::string> found;
+      vfs->EnumerateFiles("/effects", "*.bp", true, &found);
+      for (const fa::string& file : found) {
+        Entry entry;
+        entry.path = file.c_str();
+        entry.name = entry.path.substr(entry.path.find_last_of('/') + 1);
+        if (const std::size_t dot = entry.name.rfind(".bp"); dot != std::string::npos) {
+          entry.name.resize(dot);
+        }
+        entry.sortKey = Lower(entry.name);
+        entries.push_back(std::move(entry));
+      }
+    }
+    std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.sortKey < b.sortKey; });
+    lua_newtable(L);
+    int n = 0;
+    for (const Entry& entry : entries) {
+      lua_newtable(L);
+      up::SetString(L, "path", entry.path);
+      up::SetString(L, "name", entry.name);
+      up::SetNumber(L, "faction", EffectFaction(entry.path));
+      up::SetNumber(L, "kind", EffectKind(entry.path));
+      lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+  }
+
+  int __cdecl cfunc_Templates(lua_State* const L)
+  {
+    const std::vector<EffectTemplate> templates = ParseEffectTemplates(up::ArgString(L, 1, "ed_fx_templates"));
+    lua_newtable(L);
+    int n = 0;
+    for (const EffectTemplate& t : templates) {
+      lua_newtable(L);
+      up::SetString(L, "name", t.name);
+      up::SetStringList(L, "paths", t.paths);
+      lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+  }
+
+  // ---- the effect graph ---------------------------------------------------------------------------------------------------------------------------
+
+  const char* PinTypeText(const PinType type)
+  {
+    return PinTypeName(type);
+  }
+
+  const char* ParamKindText(const ParamKind kind)
+  {
+    switch (kind) {
+    case ParamKind::Float: return "float";
+    case ParamKind::Int: return "int";
+    case ParamKind::Bool: return "bool";
+    case ParamKind::Color: return "color";
+    case ParamKind::Choice: return "choice";
+    default: return "text";
+    }
+  }
+
+  void PushPins(lua_State* const L, const char* const key, const std::vector<PinDef>& pins)
+  {
+    lua_pushstring(L, key);
+    lua_newtable(L);
+    for (std::size_t i = 0; i < pins.size(); ++i) {
+      lua_newtable(L);
+      up::SetString(L, "name", pins[i].name);
+      up::SetString(L, "type", PinTypeText(pins[i].type));
+      SetFloatArray(L, "initial", pins[i].initial);
+      lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    lua_settable(L, -3);
+  }
+
+  int __cdecl cfunc_GraphNodeTypes(lua_State* const L)
+  {
+    lua_newtable(L);
+    int n = 0;
+    for (const auto& type : EffectNodeTypes().All()) {
+      lua_newtable(L);
+      up::SetString(L, "name", type->name);
+      up::SetString(L, "title", type->title);
+      up::SetString(L, "category", type->category);
+      up::SetString(L, "help", type->help);
+      up::SetBool(L, "output", type->isOutput);
+      PushPins(L, "inputs", type->inputs);
+      PushPins(L, "outputs", type->outputs);
+      lua_pushstring(L, "params");
+      lua_newtable(L);
+      for (std::size_t i = 0; i < type->params.size(); ++i) {
+        const ParamDef& p = type->params[i];
+        lua_newtable(L);
+        up::SetString(L, "name", p.name);
+        up::SetString(L, "kind", ParamKindText(p.kind));
+        up::SetNumber(L, "min", p.min);
+        up::SetNumber(L, "max", p.max);
+        up::SetStringList(L, "choices", p.choices);
+        SetFloatArray(L, "initial", p.initial);
+        up::SetString(L, "initialText", p.initialText);
+        up::SetString(L, "help", p.help);
+        lua_rawseti(L, -2, static_cast<int>(i) + 1);
+      }
+      lua_settable(L, -3);
+      lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+  }
+
+  void PushGraph(lua_State* const L, const NodeGraph& graph)
+  {
+    lua_newtable(L);
+    lua_pushstring(L, "nodes");
+    lua_newtable(L);
+    int n = 0;
+    for (const GraphNode& node : graph.Nodes()) {
+      lua_newtable(L);
+      up::SetNumber(L, "id", node.id);
+      up::SetString(L, "type", node.type != nullptr ? node.type->name : "");
+      up::SetNumber(L, "x", node.x);
+      up::SetNumber(L, "y", node.y);
+      lua_pushstring(L, "params");
+      lua_newtable(L);
+      for (std::size_t i = 0; i < node.params.size(); ++i) {
+        lua_newtable(L);
+        SetFloatArray(L, "v", node.params[i].value);
+        up::SetString(L, "text", node.params[i].text);
+        lua_rawseti(L, -2, static_cast<int>(i) + 1);
+      }
+      lua_settable(L, -3);
+      lua_rawseti(L, -2, ++n);
+    }
+    lua_settable(L, -3);
+    lua_pushstring(L, "links");
+    lua_newtable(L);
+    n = 0;
+    for (const GraphLink& link : graph.Links()) {
+      lua_newtable(L);
+      up::SetNumber(L, "fromNode", link.fromNode);
+      up::SetNumber(L, "fromPin", link.fromPin);
+      up::SetNumber(L, "toNode", link.toNode);
+      up::SetNumber(L, "toPin", link.toPin);
+      lua_rawseti(L, -2, ++n);
+    }
+    lua_settable(L, -3);
+  }
+
+  int __cdecl cfunc_GraphBuild(lua_State* const L)
+  {
+    const std::string name = up::ArgString(L, 1, "ed_fx_graph_build");
+    std::vector<std::pair<std::string, EmitterBlueprint>> emitters;
+    EachOf(L, 2, [&](const int item) {
+      const bool has = up::PushField(L, item, "emitter") == LUA_TTABLE;
+      emitters.emplace_back(up::FieldString(L, item, "name"), has ? ReadEmitter(L, lua_gettop(L)) : NewEmitter());
+      lua_settop(L, -2);
+    });
+    NodeGraph graph(EffectNodeTypes());
+    BuildEffectGraph(graph, name, emitters);
+    PushGraph(L, graph);
+    return 1;
+  }
+
+  int __cdecl cfunc_GraphEmitters(lua_State* const L)
+  {
+    NodeGraph graph(EffectNodeTypes());
+    std::map<int, int> ids; // the table's ids -> the graph's
+    std::vector<std::pair<int, int>> nodes; // (table id, node)
+    EachElement(L, 1, "nodes", [&](const int item) {
+      const int old = up::FieldInt(L, item, "id", 0);
+      const int id = graph.AddNode(up::FieldString(L, item, "type"), FieldFloat(L, item, "x", 0.0f), FieldFloat(L, item, "y", 0.0f));
+      if (id == 0) {
+        return;
+      }
+      ids[old] = id;
+      GraphNode* const node = graph.Find(id);
+      std::size_t index = 0;
+      if (PushTable(L, item, "params")) {
+        EachOf(L, -1, [&](const int param) {
+          if (node != nullptr && index < node->params.size()) {
+            ParamValue value = node->params[index];
+            value.value = ReadFloatArray(L, param, "v", value.value);
+            value.text = up::FieldString(L, param, "text", value.text);
+            graph.SetParam(id, index, value);
+          }
+          ++index;
+        });
+      }
+      lua_settop(L, -2);
+    });
+    EachElement(L, 1, "links", [&](const int item) {
+      const auto from = ids.find(up::FieldInt(L, item, "fromNode", -1));
+      const auto to = ids.find(up::FieldInt(L, item, "toNode", -1));
+      if (from != ids.end() && to != ids.end()) {
+        (void)graph.Link(from->second, up::FieldInt(L, item, "fromPin", 0), to->second, up::FieldInt(L, item, "toPin", 0));
+      }
+    });
+    std::vector<std::pair<std::string, EmitterBlueprint>> emitters;
+    std::string error;
+    if (!GraphEmitters(graph, emitters, error)) {
+      return up::Fail(L, error);
+    }
+    lua_newtable(L);
+    int n = 0;
+    for (const auto& [name, emitter] : emitters) {
+      lua_newtable(L);
+      up::SetString(L, "name", name);
+      lua_pushstring(L, "emitter");
+      PushEmitter(L, emitter);
+      lua_settable(L, -3);
+      lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+  }
+
+  // ---- effect decorations in the map's script ---------------------------------------------------------------------------------------------------
+
+  int __cdecl cfunc_ScriptEffects(lua_State* const L)
+  {
+    const std::string text = WithScriptEffects(up::ArgString(L, 1, "ed_fx_script_effects"), lua_toboolean(L, 2) != 0);
+    lua_pushlstring(L, text.data(), text.size());
+    return 1;
+  }
+
+  const up::Natives gEdUpFxNatives{{
+    {"ed_fx_info", &cfunc_Info, "ed_fx_info() -> { curves, flags, blendModes, factions, kinds }"},
+    {"ed_fx_emitter_new", &cfunc_EmitterNew, "ed_fx_emitter_new() -> emitter"},
+    {"ed_fx_emitter_parse", &cfunc_EmitterParse, "ed_fx_emitter_parse(text) -> emitter | nil, message"},
+    {"ed_fx_emitter_write", &cfunc_EmitterWrite, "ed_fx_emitter_write(emitter) -> text"},
+    {"ed_fx_emitter_roundtrip", &cfunc_EmitterRoundTrip, "ed_fx_emitter_roundtrip(text) -> { ok, identical, error, written }"},
+    {"ed_fx_emitter_type_tag", &cfunc_EmitterTypeTag, "ed_fx_emitter_type_tag(emitter) -> string"},
+    {"ed_fx_curve_samples", &cfunc_CurveSamples, "ed_fx_curve_samples(keys, xRange, n) -> { mid, lo, hi }"},
+    {"ed_fx_flat_info", &cfunc_FlatInfo, "ed_fx_flat_info(kind) -> { { key, kind, initial, color, help, texture }, ... }"},
+    {"ed_fx_flat_parse", &cfunc_FlatParse, "ed_fx_flat_parse(text) -> flat | nil, message"},
+    {"ed_fx_flat_write", &cfunc_FlatWrite, "ed_fx_flat_write(flat) -> text"},
+    {"ed_fx_effect_class", &cfunc_EffectClass, "ed_fx_effect_class(path) -> factionIndex, kindIndex"},
+    {"ed_fx_list_files", &cfunc_ListFiles, "ed_fx_list_files() -> { { path, name, faction, kind }, ... }"},
+    {"ed_fx_templates", &cfunc_Templates, "ed_fx_templates(luaText) -> { { name, paths }, ... }"},
+    {"ed_fx_graph_node_types", &cfunc_GraphNodeTypes, "ed_fx_graph_node_types() -> { { name, title, category, inputs, outputs, params }, ... }"},
+    {"ed_fx_graph_build", &cfunc_GraphBuild, "ed_fx_graph_build(name, { { name, emitter }, ... }) -> graph"},
+    {"ed_fx_script_effects", &cfunc_ScriptEffects, "ed_fx_script_effects(scriptText, on) -> text   the map script with the MapEditorEffects function and its call (on) or without (off)"},
+    {"ed_fx_graph_emitters", &cfunc_GraphEmitters, "ed_fx_graph_emitters(graph) -> { { name, emitter }, ... } | nil, message"},
+  }};
+} // namespace
+
+namespace moho::editor::up
+{
+  faf::editor::EmitterBlueprint FxReadEmitter(lua_State* const L, const int index)
+  {
+    return ReadEmitter(L, index);
+  }
+
+  faf::editor::FlatBlueprint FxReadFlat(lua_State* const L, const int index)
+  {
+    return ReadFlat(L, index);
+  }
+} // namespace moho::editor::up
