@@ -1,0 +1,1197 @@
+#pragma once
+
+#include "editor/ui/EdProperties.h"
+#include "editor/tools/EdHeightBrush.h"
+#include "editor/tools/EdMaskBrush.h"
+#include "editor/doc/EdPropPaint.h"
+#include "editor/doc/EdUnits.h"
+#include "editor/tools/EdWaves.h"
+#include "editor/tools/EdTerrainTypes.h"
+#include "editor/doc/EdWater.h"
+#include "editor/doc/EdWaterBodies.h"
+#include "editor/tools/EdDecals.h"
+#include "editor/tools/EdMarkers.h"
+#include "editor/doc/EdViewState.h"
+#include "editor/tools/EdTextureLibrary.h"
+
+#include <algorithm>
+#include <cstdio>
+#include <functional>
+#include <cmath>
+#include <array>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace faf::editor
+{
+  /**
+   * The tool box, as the mockup lays it out (tmp/claude/map-editor/editor-mockup.html): a strip of tool icons
+   * and, beside it, the chosen tool's settings (brush modes, size, strength, falloff, the symmetry modes with
+   * their diagrams, limits). The settings are kept here; the tools act on a map from stages 3 to 6 of the plan.
+   */
+  class EdTools
+  {
+  public:
+    /** Draws the panel's contents into the current ImGui window. */
+    void Draw();
+
+    /** Whether the Terrain tool is the chosen one (the viewport's left button paints heights). */
+    [[nodiscard]] bool TerrainToolActive() const noexcept { return mTool == 1; }
+    /** The Select tool (the viewport's left button picks and moves objects) and the Props tool. */
+    [[nodiscard]] bool SelectToolActive() const noexcept { return mTool == 0; }
+    [[nodiscard]] bool PropsToolActive() const noexcept { return mTool == 4; }
+    /** The Props tool's settings: the blueprint placed, Single / Scatter / Erase, props a second, random turn. */
+    enum class PropMode
+    {
+      Single,
+      Scatter,
+      Erase,
+    };
+    [[nodiscard]] const std::string& PropBlueprint() const noexcept { return mPropBlueprint; }
+    [[nodiscard]] PropMode CurrentPropMode() const noexcept { return static_cast<PropMode>(mPropMode); }
+    [[nodiscard]] float PropDensity() const noexcept { return mPropDensity; }
+    [[nodiscard]] bool RandomPropTurn() const noexcept { return mPropRandomTurn; }
+    /** Scatter's paint list (FAFME's): when it has props, Scatter picks one of them by chance for each prop. */
+    [[nodiscard]] const std::vector<PropPaintEntry>& PaintList() const noexcept { return mPaintList; }
+    /** The palette's spelling of this prop blueprint (case aside), or empty when it hasn't it. */
+    [[nodiscard]] std::string PropBlueprintNamed(const std::string& path) const
+    {
+      const auto lower = [](std::string text) {
+        for (char& c : text) {
+          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        return text;
+      };
+      const std::string wanted = lower(path);
+      const auto at = std::find_if(mPropBlueprints.begin(), mPropBlueprints.end(), [&](const std::string& known) { return lower(known) == wanted; });
+      return at != mPropBlueprints.end() ? *at : std::string();
+    }
+    void SetPaintList(std::vector<PropPaintEntry> list) { mPaintList = std::move(list); }
+    /** The paint list's Import / Export of a `.proppaintset`, taken by the app. */
+    [[nodiscard]] bool TakePaintSetImport() noexcept { return std::exchange(mPaintSetImport, false); }
+    [[nodiscard]] bool TakePaintSetExport() noexcept { return std::exchange(mPaintSetExport, false); }
+    /** The chosen prop's reclaim, scale and LODs, for the panel. */
+    void SetPropDetails(std::string details) { mPropDetails = std::move(details); }
+    /** The prop blueprints the rules have (their ids), for the palette. */
+    void SetPropBlueprints(std::vector<std::string> blueprints) { mPropBlueprints = std::move(blueprints); }
+    /** Where the panels get a prop blueprint's picture (an ImTextureID, 0 until made): the app's thumbnail cache. */
+    void SetPropPictures(std::function<std::uint64_t(const std::string&)> source) { mPropPictures = std::move(source); }
+    [[nodiscard]] std::uint64_t PropPicture(const std::string& blueprint) const { return mPropPictures ? mPropPictures(blueprint) : 0U; }
+    [[nodiscard]] bool HasPropBlueprints() const noexcept { return !mPropBlueprints.empty(); }
+    /** The map's prop reclaim for the panel (the app counts it now and then while the Props tool shows). */
+    void SetPropReclaim(std::string summary, std::vector<std::string> rows)
+    {
+      mReclaimSummary = std::move(summary);
+      mReclaimRows = std::move(rows);
+    }
+    /** The Markers tool. */
+    [[nodiscard]] bool MarkersToolActive() const noexcept { return mTool == 6; }
+    /** The Check's results on the map, for the view's pins: where, and how bad (0 error, 1 warning, 2 note). */
+    struct CheckPin
+    {
+      float x;
+      float z;
+      int level;
+    };
+    void SetCheckPins(std::vector<CheckPin> pins) { mCheckPins = std::move(pins); }
+    /** The Check's pathing on the ground: blocks of cells in a colour (ARGB), drawn while the switch is on. */
+    struct PathQuad
+    {
+      float x0;
+      float z0;
+      float x1;
+      float z1;
+      std::uint32_t color;
+    };
+    void SetPathing(std::vector<PathQuad> land, std::vector<PathQuad> ships)
+    {
+      mPathQuads = std::move(land);
+      mShipQuads = std::move(ships);
+    }
+    /** The layer shown: the land unit's (0) or the ship's (1). */
+    [[nodiscard]] const std::vector<PathQuad>& PathingQuads() const noexcept { return mPathingLayer == 1 ? mShipQuads : mPathQuads; }
+    [[nodiscard]] bool& ShowPathing() noexcept { return mShowPathing; }
+    [[nodiscard]] int& PathingLayer() noexcept { return mPathingLayer; }
+    [[nodiscard]] bool ShowingPathing() const noexcept { return mShowPathing && !PathingQuads().empty(); }
+    [[nodiscard]] const std::vector<CheckPin>& CheckPins() const noexcept { return mCheckPins; }
+    /** The Water tool's panel: the map's water as it is, and a change it made (`final` when a drag or a click ended). */
+    [[nodiscard]] bool WaterToolActive() const noexcept { return mTool == 3; }
+    void SetWater(const WaterState& water)
+    {
+      if (!mWaterEditing) {
+        mWater = water;
+      }
+    }
+    /** The Water panel's Import / Export of FAForeverMapEditor's `.scmwtr`, taken by the app (it asks for the file). */
+    [[nodiscard]] bool TakeWaterImport() noexcept { return std::exchange(mWaterImport, false); }
+    [[nodiscard]] bool TakeWaterExport() noexcept { return std::exchange(mWaterExport, false); }
+    /** The Water panel's waves: what was asked, and the settings for adding them along the shore. */
+    enum class WaveAsk
+    {
+      None,
+      AddAlongShore,
+      Clear,
+      LoadPatterns,
+      Import,
+      Export,
+    };
+    struct WaveSettings
+    {
+      WavePattern pattern;
+      float depth = 2.0f;
+      float density = 0.25f;
+      float spacing = 4.0f;
+      float centre = 0.0f;
+      float range = 180.0f;
+    };
+    void SetWaveCount(const int count) noexcept { mWaveCount = count; }
+    [[nodiscard]] WaveAsk TakeWaveAsk(WaveSettings& settings)
+    {
+      if (mWavePatterns.empty()) {
+        mWavePatterns = BuiltInWavePatterns();
+      }
+      mWavePattern = std::clamp(mWavePattern, 0, static_cast<int>(mWavePatterns.size()) - 1);
+      settings = {mWavePatterns[static_cast<std::size_t>(mWavePattern)], mWaveDepth, mWaveDensity, mWaveSpacing, mWaveCentre, mWaveRange};
+      return std::exchange(mWaveAsk, WaveAsk::None);
+    }
+    /** Patterns read from a file, after the built-in ones. */
+    void AddWavePatterns(const std::vector<WavePattern>& patterns)
+    {
+      if (mWavePatterns.empty()) {
+        mWavePatterns = BuiltInWavePatterns();
+      }
+      mWavePatterns.insert(mWavePatterns.end(), patterns.begin(), patterns.end());
+    }
+    /** Test runs (`/waves`): a pattern, depth, density and spacing, then add them along the shore. */
+    void AskWaves(const int pattern, const float depth, const float density, const float spacing) noexcept
+    {
+      mWavePattern = pattern;
+      mWaveDepth = depth;
+      mWaveDensity = density;
+      mWaveSpacing = spacing;
+      mWaveAsk = WaveAsk::AddAlongShore;
+    }
+    [[nodiscard]] bool TakeWaterChange(WaterState& water, bool& final)
+    {
+      if (!mWaterChanged) {
+        return false;
+      }
+      water = mWater;
+      final = mWaterFinal;
+      mWaterChanged = false;
+      mWaterFinal = false;
+      return true;
+    }
+    /**
+     * The Water panel's water bodies (`ScenarioInfo.WaterBodies`): the scenario's, given each frame and kept while the
+     * panel or the view is changing them; a change either made (`final` when a drag or a click ended).
+     */
+    void SetWaterBodies(const std::vector<WaterBody>& bodies, std::string error)
+    {
+      if (!mBodiesEditing && !mBodiesChanged) {
+        mBodies = bodies;
+      }
+      mBodiesError = std::move(error);
+      mBody = std::clamp(mBody, -1, static_cast<int>(mBodies.size()) - 1);
+    }
+    [[nodiscard]] bool TakeWaterBodiesChange(std::vector<WaterBody>& bodies, bool& final)
+    {
+      if (!mBodiesChanged) {
+        return false;
+      }
+      bodies = mBodies;
+      final = mBodiesFinal;
+      mBodiesChanged = false;
+      mBodiesFinal = false;
+      return true;
+    }
+    /** For the view: the bodies as the panel has them, the one chosen (-1 none), and a change it made to them. */
+    [[nodiscard]] std::vector<WaterBody>& EditedWaterBodies() noexcept { return mBodies; }
+    [[nodiscard]] int SelectedWaterBody() const noexcept { return mBody; }
+    void SelectWaterBody(const int body) noexcept { mBody = body; }
+    void WaterBodiesChanged(const bool final) noexcept
+    {
+      mBodiesChanged = true;
+      mBodiesFinal = mBodiesFinal || final;
+    }
+    /** What a click in the view does to the chosen body: nothing, put its seed there, or add an outline point. */
+    enum class WaterPick
+    {
+      None,
+      Seed,
+      Outline,
+    };
+    [[nodiscard]] WaterPick& WaterBodyPick() noexcept { return mWaterPick; }
+    /** The panel's Add: a new body, chosen, waiting for its seed to be clicked on the map. */
+    void AddWaterBody()
+    {
+      WaterBody body;
+      body.elevation = mWater.enabled ? mWater.elevation : 0.0f;
+      mBodies.push_back(body);
+      mBody = static_cast<int>(mBodies.size()) - 1;
+      mWaterPick = WaterPick::Seed;
+      mBodyIsNew = true;
+      mBodiesChanged = true;
+      mBodiesFinal = true;
+    }
+    /** A new body waits for its seed: the click also sets its level a little above the ground there. */
+    [[nodiscard]] bool& WaterBodyIsNew() noexcept { return mBodyIsNew; }
+    /** The view is dragging a seed or an outline point (the panel keeps its copy). */
+    void SetWaterBodyDragging(const bool dragging) noexcept { mBodyDragging = dragging; }
+    /** What the fill made of the bodies: a line for each (cells, or why the game skips it), and the game's other lines. */
+    void SetWaterBodyReport(std::vector<std::string> perBody, std::vector<std::string> log)
+    {
+      mBodyReport = std::move(perBody);
+      mBodyLog = std::move(log);
+    }
+    /** The Units tool: Place (the chosen unit type in the chosen army, with symmetric copies) or Select. */
+    [[nodiscard]] bool UnitsToolActive() const noexcept { return mTool == 7; }
+    [[nodiscard]] bool UnitPlaceMode() const noexcept { return mUnitMode == 0; }
+    /** The Units tool's group tree of its army (the app gives it now and then), and what the panel asked of it. */
+    enum class GroupAsk
+    {
+      None,
+      Select,
+      Add,
+      Rename,
+      Remove,
+      MoveSelected,
+    };
+    void SetUnitTree(std::string army, UnitGroup tree)
+    {
+      mUnitTreeArmy = std::move(army);
+      mUnitTree = std::move(tree);
+    }
+    [[nodiscard]] GroupAsk TakeGroupAsk(std::vector<std::string>& path, std::string& name)
+    {
+      path = mGroupPath;
+      name = mGroupName;
+      return std::exchange(mGroupAsk, GroupAsk::None);
+    }
+    /** Test runs (`/unitgroup <ask>,<path a/b>[,<name>]`). */
+    void AskGroup(const GroupAsk ask, std::vector<std::string> path, const std::string& name)
+    {
+      mGroupPath = std::move(path);
+      (void)std::snprintf(mGroupName, sizeof(mGroupName), "%s", name.c_str());
+      mGroupAsk = ask;
+    }
+    [[nodiscard]] const std::string& UnitType() const noexcept { return mUnitType; }
+    [[nodiscard]] const std::string& UnitArmy() const noexcept { return mUnitArmy; }
+    [[nodiscard]] bool RandomUnitTurn() const noexcept { return mUnitRandomTurn; }
+    /** The unit blueprints the rules have: id and name. */
+    void SetUnitTypes(std::vector<std::pair<std::string, std::string>> types) { mUnitTypes = std::move(types); }
+    [[nodiscard]] bool HasUnitTypes() const noexcept { return !mUnitTypes.empty(); }
+    /** A unit blueprint's name ("Mass Extractor"), or "" when the rules don't have it. */
+    [[nodiscard]] std::string UnitTypeName(const std::string& id) const
+    {
+      for (const auto& [type, name] : mUnitTypes) {
+        if (type.size() == id.size() && std::equal(type.begin(), type.end(), id.begin(), [](const char a, const char b) {
+              return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+            })) {
+          return name;
+        }
+      }
+      return {};
+    }
+    void SetUnitSelectionCount(const int count) noexcept { mUnitSelectionCount = count; }
+    /** The view's unit selection (army, name), each frame, for the panels. */
+    void SetUnitSelection(std::vector<std::pair<std::string, std::string>> units) { mUnitSelectionNow = std::move(units); }
+    [[nodiscard]] const std::vector<std::pair<std::string, std::string>>& UnitSelection() const noexcept { return mUnitSelectionNow; }
+    /** A panel's ask: select these units, or move these units of an army into a group (made when missing). */
+    struct UnitGroupAsk
+    {
+      bool select = false;
+      /** Remove the group at `path` of `army` (and those at `morePaths`) with their units instead of moving into it. */
+      bool removeGroup = false;
+      std::vector<std::vector<std::string>> morePaths;
+      std::vector<std::pair<std::string, std::string>> units;
+      std::string army;
+      std::vector<std::string> names;
+      std::vector<std::string> path;
+    };
+    void AskUnitGroup(UnitGroupAsk ask)
+    {
+      mUnitGroupAsk = std::move(ask);
+      mUnitGroupAsked = true;
+    }
+    [[nodiscard]] bool TakeUnitGroup(UnitGroupAsk& ask)
+    {
+      if (!std::exchange(mUnitGroupAsked, false)) {
+        return false;
+      }
+      ask = std::move(mUnitGroupAsk);
+      return true;
+    }
+    /** Test runs (`/unittool <type>,<army>[,select]`). */
+    void SetUnitTool(std::string type, std::string army, const bool select)
+    {
+      mTool = 7;
+      mUnitType = std::move(type);
+      mUnitArmy = std::move(army);
+      mUnitMode = select ? 1 : 0;
+    }
+    /** The Decals tool: Place (a click places the chosen texture with its symmetric copies) or Select (pick, drag, delete). */
+    [[nodiscard]] bool DecalsToolActive() const noexcept { return mTool == 5; }
+    [[nodiscard]] bool DecalPlaceMode() const noexcept { return mDecalMode == 0; }
+    /** Path mode: clicks lay a curve's points; decals follow it end to end when placed. */
+    [[nodiscard]] bool DecalPathMode() const noexcept { return mDecalMode == 2; }
+    /** How much each decal along a path overlaps the next (0 to 0.9 of its length). */
+    [[nodiscard]] float DecalOverlap() const noexcept { return mDecalOverlap; }
+    /** What the panel's path buttons asked for, taken once. */
+    enum class DecalPathAction
+    {
+      None,
+      Place,
+      RemoveLast,
+      Clear,
+    };
+    [[nodiscard]] DecalPathAction TakeDecalPathAction() noexcept { return std::exchange(mDecalPathAction, DecalPathAction::None); }
+    /** The path's points and the decals it would place, for the panel. */
+    void SetDecalPathInfo(const int points, const int decals) noexcept
+    {
+      mDecalPathPoints = points;
+      mDecalPathDecals = decals;
+    }
+    [[nodiscard]] const std::string& DecalTexturePath() const noexcept { return mDecalTexture; }
+    /** The albedo's spec map, the decal's second texture, or "" when it has none or the option is off. */
+    [[nodiscard]] std::string DecalPairPath() const
+    {
+      if (!mDecalWithPair) {
+        return {};
+      }
+      for (const DecalTexture& texture : mDecalTextures) {
+        if (texture.path == mDecalTexture) {
+          return texture.pair;
+        }
+      }
+      return {};
+    }
+    [[nodiscard]] float DecalSizeX() const noexcept { return mDecalSize[0]; }
+    [[nodiscard]] float DecalSizeZ() const noexcept { return mDecalSize[1]; }
+    /** The heading in radians; a random one when Random turn is on. */
+    [[nodiscard]] float DecalTurnDegrees() const noexcept { return mDecalTurn; }
+    [[nodiscard]] bool RandomDecalTurn() const noexcept { return mDecalRandomTurn; }
+    /** The far cutoff distance (0: the decal works one out from its size). */
+    [[nodiscard]] float DecalCutoff() const noexcept { return mDecalCutoff; }
+    /** How many decals the view has selected, for the panel. */
+    void SetDecalSelectionCount(const int count) noexcept { mDecalSelectionCount = count; }
+    /** Test runs (`/decaltool <texture>[,select]`): the Decals tool with this texture and mode. */
+    void SetDecalTool(std::string texture, const int mode)
+    {
+      mTool = 5;
+      mDecalTexture = std::move(texture);
+      mDecalMode = mode;
+    }
+    /** The map's playable area (x0, z0, x1, z1) as it is, and the map's size, for the panel. */
+    void SetPlayableArea(const std::optional<std::array<int, 4>>& area, const int width, const int height)
+    {
+      mArea = area;
+      mMapWidth = width;
+      mMapHeight = height;
+    }
+    /** The map's size in units (its height field's samples less one), as the app last gave it. */
+    [[nodiscard]] int MapWidth() const noexcept { return mMapWidth; }
+    [[nodiscard]] int MapHeight() const noexcept { return mMapHeight; }
+    /** A change the panel asked for: the new area, or none to remove it. */
+    [[nodiscard]] bool TakePlayableAreaChange(std::optional<std::array<int, 4>>& area)
+    {
+      if (!mAreaChanged) {
+        return false;
+      }
+      mAreaChanged = false;
+      area = mAreaChange;
+      return true;
+    }
+
+    /** The Markers tool's air node grid: its size and whether it replaces the map's air nodes, asked once. */
+    void AskAirGrid(const int count, const bool replace) noexcept
+    {
+      mAirGridCount = count;
+      mAirGridReplace = replace;
+      mAirGridAsked = true;
+    }
+    [[nodiscard]] bool TakeAirGrid(int& count, bool& replace) noexcept
+    {
+      count = mAirGridCount;
+      replace = mAirGridReplace;
+      return std::exchange(mAirGridAsked, false);
+    }
+    /** The Markers tool's type to place (an entry of MarkerTypes()). */
+    [[nodiscard]] const MarkerType& PlaceMarkerType() const noexcept { return MarkerTypes()[static_cast<std::size_t>(mMarkerType)]; }
+    /** The markers the view has selected (copies of their entries), for the properties panel. */
+    void SetMarkerSelection(std::vector<SaveEntry> selection) { mMarkerSelection = std::move(selection); }
+    /** A property of the selected marker the panel changed (`key` "name" renames it). */
+    [[nodiscard]] bool TakeMarkerEdit(std::string& marker, std::string& key, std::string& value)
+    {
+      if (mMarkerEditKey.empty()) {
+        return false;
+      }
+      marker = std::exchange(mMarkerEditName, {});
+      key = std::exchange(mMarkerEditKey, {});
+      value = std::exchange(mMarkerEditValue, {});
+      return true;
+    }
+    /** The scenario's armies and extra armies, for the panel; an extra-armies change it asks for. */
+    void SetArmies(std::vector<std::string> armies, std::vector<std::string> extra)
+    {
+      mArmies = std::move(armies);
+      mExtraArmies = std::move(extra);
+    }
+    /** The scenario's teams, for the panel's slot order and its FFA check; a change it asks for, taken once. */
+    void SetTeams(std::vector<ScenarioTeam> teams) { mTeams = std::move(teams); }
+    [[nodiscard]] bool TakeTeamsChange(std::vector<ScenarioTeam>& teams)
+    {
+      if (!mTeamsChanged) {
+        return false;
+      }
+      mTeamsChanged = false;
+      teams = mTeamsChange;
+      return true;
+    }
+    /** The Armies panel's slot order and extra armies (one space-separated list), taken like the tool's own. */
+    void AskTeamsChange(std::vector<ScenarioTeam> teams)
+    {
+      mTeamsChange = std::move(teams);
+      mTeamsChanged = true;
+    }
+    void AskExtraArmiesChange(const std::string& extra)
+    {
+      (void)std::snprintf(mExtraBuffer, sizeof(mExtraBuffer), "%s", extra.c_str());
+      mExtraChanged = true;
+    }
+    /** The Markers tool's "Open the Armies panel", taken by the shell. */
+    [[nodiscard]] bool TakeOpenArmies() noexcept { return std::exchange(mOpenArmies, false); }
+    [[nodiscard]] bool TakeExtraArmiesChange(std::string& extra)
+    {
+      if (!mExtraChanged) {
+        return false;
+      }
+      mExtraChanged = false;
+      extra = mExtraBuffer;
+      return true;
+    }
+
+    /**
+     * The map border (the playable area) edited from any tool: the toolbar's border button. While on, the view draws the
+     * border's handles and a drag on an edge moves it; the Properties panel shows the settings (DrawPlayableArea).
+     */
+    [[nodiscard]] bool& EditingBorder() noexcept { return mEditBorder; }
+    /** Moving one edge moves the opposite one the same way, so the border stays centred on the map. */
+    [[nodiscard]] bool BorderCentred() const noexcept { return mBorderCentred; }
+    /** The border's settings: on or off, the four edges, centred (the Markers tool and the Properties panel show them). */
+    void DrawPlayableArea();
+    /** The toolbar's Show menu: prop and unit models drawn or hidden (hidden ones are not picked either). */
+    [[nodiscard]] bool& ShowProps() noexcept { return mShowProps; }
+    [[nodiscard]] bool& ShowUnits() noexcept { return mShowUnits; }
+    /** Rings a panel asks the view to draw this frame (a choice's markers or units under the mouse); the panels refill them each frame. */
+    struct ViewRing
+    {
+      float x = 0.0f;
+      float z = 0.0f;
+      float radius = 3.0f;
+      std::uint32_t colour = 0xF0FFA040u;
+    };
+    /** The view switches and tool, as kept per map across restarts (doc/EdViewState). */
+    [[nodiscard]] ViewState GetViewState() const
+    {
+      ViewState s;
+      s.tool = mTool;
+      s.grid = mShowGrid;
+      s.snap = mSnap;
+      s.gridStep = mGridStep;
+      s.keepOnGround = mKeepOnGround;
+      s.slope = mShowSlope;
+      s.kmGrid = mShowKmGrid;
+      s.terrainTypes = mShowTerrainTypes;
+      s.pathing = mShowPathing;
+      s.pathingLayer = mPathingLayer;
+      s.layerWeight = mShowWeight;
+      s.differences = mShowDifferences;
+      s.props = mShowProps;
+      s.units = mShowUnits;
+      s.gameUnits = mShowGameUnits;
+      s.hiddenMarkerTypes = mHiddenMarkerTypes;
+      return s;
+    }
+    void SetViewState(const ViewState& s)
+    {
+      mTool = s.tool;
+      mShowGrid = s.grid;
+      mSnap = s.snap;
+      mGridStep = s.gridStep;
+      mKeepOnGround = s.keepOnGround;
+      mShowSlope = s.slope;
+      mShowKmGrid = s.kmGrid;
+      mShowTerrainTypes = s.terrainTypes;
+      mShowPathing = s.pathing;
+      mPathingLayer = s.pathingLayer;
+      mShowWeight = s.layerWeight;
+      mShowDifferences = s.differences;
+      mShowProps = s.props;
+      mShowUnits = s.units;
+      mShowGameUnits = s.gameUnits;
+      mHiddenMarkerTypes = s.hiddenMarkerTypes;
+    }
+    /** In front of a play: the game's units selected in the editor's view (entity ids), for the Properties panel. */
+    void SetLiveSelection(std::vector<std::uint32_t> ids) { mLiveSelection = std::move(ids); }
+    [[nodiscard]] const std::vector<std::uint32_t>& LiveSelection() const noexcept { return mLiveSelection; }
+    /** The game's units drawn in the editor's view in front of a play (hidden: not drawn, not picked). */
+    [[nodiscard]] bool& ShowGameUnits() noexcept { return mShowGameUnits; }
+    /** The map's props and units still loading (the view says so, else an empty map looks finished; user report). */
+    void SetModelsLoading(const bool loading) noexcept { mModelsLoading = loading; }
+    [[nodiscard]] bool ModelsLoading() const noexcept { return mModelsLoading; }
+    void ClearViewRings() noexcept { mViewRings.clear(); }
+    void AddViewRing(const ViewRing& ring) { mViewRings.push_back(ring); }
+    [[nodiscard]] const std::vector<ViewRing>& ViewRings() const noexcept { return mViewRings; }
+    /**
+     * The Adaptive Map window's preview of a game: the units (army, name) and markers a lobby setting doesn't create,
+     * hidden in the view (not drawn, not picked) while it is on; empty when off.
+     */
+    void SetPreviewHidden(std::set<std::pair<std::string, std::string>> units, std::set<std::string> markers)
+    {
+      mPreviewHiddenUnits = std::move(units);
+      mPreviewHiddenMarkers = std::move(markers);
+    }
+    [[nodiscard]] const std::set<std::pair<std::string, std::string>>& PreviewHiddenUnits() const noexcept { return mPreviewHiddenUnits; }
+    [[nodiscard]] const std::set<std::string>& PreviewHiddenMarkers() const noexcept { return mPreviewHiddenMarkers; }
+    /** The Markers panel: the types it hides (not drawn, not picked), and what it asks the view for. */
+    [[nodiscard]] const std::set<std::string>& HiddenMarkerTypes() const noexcept { return mHiddenMarkerTypes; }
+    [[nodiscard]] std::set<std::string>& HiddenMarkerTypes() noexcept { return mHiddenMarkerTypes; }
+    /** Select these markers (`add`: Ctrl, toggles them in the selection); the Markers tool comes up to edit them. */
+    void AskMarkerSelect(std::vector<std::string> names, const bool add)
+    {
+      mAskSelect = std::move(names);
+      mAskSelectAdd = add;
+      mAskSelectSet = true;
+      mTool = 6;
+    }
+    void AskMarkerFrame(std::string name) { mAskFrame = std::move(name); }
+    /** The view to a point of the map (the Check's prop issues). */
+    void AskPointFrame(const float x, const float z)
+    {
+      mAskPoint = {x, z};
+      mAskPointSet = true;
+    }
+    [[nodiscard]] bool TakePointFrame(float& x, float& z)
+    {
+      if (!std::exchange(mAskPointSet, false)) {
+        return false;
+      }
+      x = mAskPoint[0];
+      z = mAskPoint[1];
+      return true;
+    }
+    [[nodiscard]] bool TakeMarkerSelect(std::vector<std::string>& names, bool& add)
+    {
+      if (!mAskSelectSet) {
+        return false;
+      }
+      mAskSelectSet = false;
+      names = std::move(mAskSelect);
+      add = mAskSelectAdd;
+      return true;
+    }
+    [[nodiscard]] bool TakeMarkerFrame(std::string& name)
+    {
+      if (mAskFrame.empty()) {
+        return false;
+      }
+      name = std::exchange(mAskFrame, {});
+      return true;
+    }
+    [[nodiscard]] const std::vector<SaveEntry>& MarkerSelection() const noexcept { return mMarkerSelection; }
+    /** The layer textures and their thumbnails (the Info panel shows the map's layers with them too). */
+    [[nodiscard]] EdTextureLibrary& Library() noexcept { return mLibrary; }
+
+    /** The build grid around the cursor, snapping to its cells, and its step in game units (toolbar). */
+    [[nodiscard]] bool ShowGrid() const noexcept { return mShowGrid; }
+    void SetShowGrid(const bool show) noexcept { mShowGrid = show; }
+    [[nodiscard]] bool SnapToGrid() const noexcept { return mSnap; }
+    void SetSnapToGrid(const bool snap) noexcept { mSnap = snap; }
+    [[nodiscard]] float GridStep() const noexcept { return mGridStep; }
+    /** The move gizmo keeps objects on the ground (X, Z and free moves); off, they keep their height. Never below it. */
+    [[nodiscard]] bool KeepOnGround() const noexcept { return mKeepOnGround; }
+    void SetKeepOnGround(const bool keep) noexcept { mKeepOnGround = keep; }
+    void SetGridStep(const float step) noexcept { mGridStep = step; }
+
+    /** The Markers tool's connect mode: a click on a path node links it to the selection. */
+    [[nodiscard]] bool ConnectPathNodes() const noexcept { return mConnectNodes; }
+    void SetConnectPathNodes(const bool connect) noexcept { mConnectNodes = connect; }
+    /** Test runs (`/markertool`): the Markers tool placing this type. */
+    void SetMarkerTool(std::string type) noexcept
+    {
+      mTool = 6;
+      // `_` for a space, as a command line option is one word (`Blank_Marker`).
+      std::replace(type.begin(), type.end(), '_', ' ');
+      for (std::size_t i = 0; i < MarkerTypes().size(); ++i) {
+        if (type == MarkerTypes()[i].type) {
+          mMarkerType = static_cast<int>(i);
+        }
+      }
+    }
+
+    /** How many objects the view has selected, for the Select tool's panel. */
+    /** The Properties panel: the selection's active item (the view gives it each frame), and an edit it asks for. */
+    void SetSelectionProperties(SelectionProperties properties) { mSelectionProperties = std::move(properties); }
+    [[nodiscard]] const SelectionProperties& SelectionPropertiesNow() const noexcept { return mSelectionProperties; }
+    void AskPropertyEdit(PropertyEdit edit) { mPropertyEdit = std::move(edit); }
+    [[nodiscard]] bool TakePropertyEdit(PropertyEdit& edit)
+    {
+      if (mPropertyEdit.what == PropertyEdit::What::None) {
+        return false;
+      }
+      edit = std::exchange(mPropertyEdit, PropertyEdit{});
+      return true;
+    }
+    /** The Select tool's panel: what is selected and what a click would pick, in words (the view gives them). */
+    void SetSelectInfo(std::string selected, std::string hover)
+    {
+      mSelectSelected = std::move(selected);
+      mSelectHover = std::move(hover);
+    }
+    /** Test runs (`/proptool`): the Props tool with this blueprint and mode, the list filtered to its name. */
+    void SetPropTool(std::string blueprint, const int mode) noexcept
+    {
+      mTool = 4;
+      mPropBlueprint = std::move(blueprint);
+      mPropMode = mode;
+      const std::size_t slash = mPropBlueprint.find_last_of('/');
+      std::string name = slash == std::string::npos ? mPropBlueprint : mPropBlueprint.substr(slash + 1);
+      if (const std::size_t suffix = name.find("_prop.bp"); suffix != std::string::npos) {
+        name.resize(suffix);
+      }
+      (void)std::snprintf(mPropFilter, sizeof(mPropFilter), "%s", name.c_str());
+    }
+    void SetTool(const int tool) noexcept { mTool = tool; }
+    /** Properties: these units of `army` become wrecks from the start (its WRECKAGE group) or units again (INITIAL). */
+    struct UnitWreckAsk
+    {
+      std::string army;
+      std::vector<std::string> names;
+      bool wreck = false;
+    };
+    void AskUnitWreck(UnitWreckAsk ask)
+    {
+      mUnitWreckAsk = std::move(ask);
+      mUnitWreckAsked = true;
+    }
+    [[nodiscard]] bool TakeUnitWreck(UnitWreckAsk& ask)
+    {
+      if (!std::exchange(mUnitWreckAsked, false)) {
+        return false;
+      }
+      ask = std::move(mUnitWreckAsk);
+      return true;
+    }
+    /** The tool shown (0 Select ... 7 Units). */
+    [[nodiscard]] int Tool() const noexcept { return mTool; }
+
+    /** Whether the Texture tool is the chosen one (the viewport's left button paints a layer's mask). */
+    [[nodiscard]] bool TextureToolActive() const noexcept { return mTool == 2; }
+    /** The Texture tool paints the terrain type grid instead of the layer masks. */
+    [[nodiscard]] bool PaintingTerrainTypes() const noexcept { return mTool == 2 && mTexturePaint == 1; }
+    [[nodiscard]] std::uint8_t TerrainTypeCode() const noexcept { return static_cast<std::uint8_t>(mTerrainTypeCode); }
+    [[nodiscard]] bool ShowTerrainTypes() const noexcept { return mTool == 2 && mTexturePaint == 1 && mShowTerrainTypes; }
+    /** The game's types (TerrainTypes.lua), given once the app has read them. */
+    void SetTerrainTypes(std::vector<TerrainTypeInfo> types) { mTerrainTypes = std::move(types); }
+    [[nodiscard]] bool HasTerrainTypes() const noexcept { return !mTerrainTypes.empty(); }
+    [[nodiscard]] std::uint32_t TerrainTypeColor(const std::uint8_t code) const noexcept
+    {
+      for (const TerrainTypeInfo& type : mTerrainTypes) {
+        if (type.code == code) {
+          return type.color;
+        }
+      }
+      return 0xFFFF00FFu;
+    }
+    /** The view aids: the slope bands, the km grid with the centre lines, and the status bar's cursor and ruler. */
+    [[nodiscard]] bool ShowSlope() const noexcept { return mShowSlope; }
+    void SetShowSlope(const bool on) noexcept { mShowSlope = on; }
+    [[nodiscard]] bool ShowKmGrid() const noexcept { return mShowKmGrid; }
+    void SetShowKmGrid(const bool on) noexcept { mShowKmGrid = on; }
+    void SetCursorText(std::string text) { mCursorText = std::move(text); }
+    [[nodiscard]] const std::string& CursorText() const noexcept { return mCursorText; }
+    void SetRulerText(std::string text) { mRulerText = std::move(text); }
+    [[nodiscard]] const std::string& RulerText() const noexcept { return mRulerText; }
+    /** The type under the cursor (-1: none), for the panel. */
+    void SetTerrainTypeUnderCursor(const int code) noexcept { mTypeUnderCursor = code; }
+    /** Test runs (`/terraintype <code>`): the Texture tool painting that type. */
+    void SetTerrainTypeTool(const int code) noexcept
+    {
+      mTool = 2;
+      mTexturePaint = 1;
+      mTerrainTypeCode = code;
+    }
+
+    /** The texture brush as the panel sets it: the brush's shape, the layer, the mode. */
+    [[nodiscard]] MaskBrush CurrentMaskBrush() const noexcept
+    {
+      MaskBrush brush;
+      brush.shape = CurrentHeightBrush();
+      brush.mode = static_cast<MaskBrushMode>(mMaskMode);
+      brush.layer = mMaskLayer;
+      brush.lowerAbove = mLowerAbove;
+      return brush;
+    }
+    /** The open map's layer texture paths (lower, strata 1-8, upper), for the layer list. */
+    void SetLayerNames(std::vector<std::string> names) { mLayerNames = std::move(names); }
+
+    /** One of the map's ten texture slots (lower, strata 1-8, upper): albedo and normal map, each with its size in game units. */
+    struct LayerSlot
+    {
+      std::string albedo;
+      std::string normals;
+      float albedoSize = 4.0f;
+      float normalsSize = 4.0f;
+      bool operator==(const LayerSlot& other) const
+      {
+        return albedo == other.albedo && normals == other.normals && albedoSize == other.albedoSize && normalsSize == other.normalsSize;
+      }
+    };
+    /** The open map's size in game units (the larger side), for the slots' map-wide switch. */
+    void SetMapSizeUnits(const float size) noexcept { mMapSizeUnits = size; }
+    /** A layer slot the user wants a texture made for with nodes (the Material Editor opens on it); taken once. */
+    [[nodiscard]] bool TakeMaterialAsk(int& slot) noexcept
+    {
+      if (mMaterialAsk < 0) {
+        return false;
+      }
+      slot = std::exchange(mMaterialAsk, -1);
+      return true;
+    }
+    /** The open map's slots as the terrain has them, each frame. */
+    void SetLayerSlots(std::vector<LayerSlot> slots) { mSlots = std::move(slots); }
+    /** A slot the panel changed (its texture or size): the app applies it. */
+    [[nodiscard]] bool TakeLayerChange(int& slot, LayerSlot& value)
+    {
+      if (mChangedSlot < 0) {
+        return false;
+      }
+      slot = std::exchange(mChangedSlot, -1);
+      value = mChangedValue;
+      return true;
+    }
+    /** Each stratum's share of the map (0..1), for the paint list. */
+    void SetCoverage(const float (&coverage)[8]) noexcept
+    {
+      for (int i = 0; i < 8; ++i) {
+        mCoverage[i] = coverage[i];
+      }
+      mHasCoverage = true;
+    }
+    /** The paint layer's mask buttons: Clear, Import, Export. */
+    enum class MaskOp
+    {
+      None,
+      Clear,
+      Import,
+      Export,
+    };
+    [[nodiscard]] MaskOp TakeMaskOp() noexcept { return std::exchange(mMaskOp, MaskOp::None); }
+    [[nodiscard]] int MaskLayer() const noexcept { return mMaskLayer; }
+    /** Whether the view colours the paint layer's weight on the terrain. */
+    [[nodiscard]] bool ShowLayerWeight() const noexcept { return mShowWeight; }
+    void SetShowLayerWeight(const bool show) noexcept { mShowWeight = show; }
+    /** The terrain shaders the game data has, and the map's. */
+    void SetShaders(std::vector<std::string> shaders, std::string current)
+    {
+      mShaders = std::move(shaders);
+      mShader = std::move(current);
+    }
+    [[nodiscard]] bool TakeShaderChange(std::string& shader)
+    {
+      if (mShaderChange.empty()) {
+        return false;
+      }
+      shader = std::exchange(mShaderChange, {});
+      return true;
+    }
+
+    /** Apply rules to whole map was pressed; the rules. */
+    [[nodiscard]] bool TakeRulesRequest() noexcept { return std::exchange(mRulesRequested, false); }
+    [[nodiscard]] const std::vector<MaskRule>& Rules() const noexcept { return mRules; }
+    /** Test runs (`/maskrule`): one more rule, then Apply. */
+    void AddRule(const MaskRule& rule)
+    {
+      mTool = 2;
+      mRules.push_back(rule);
+    }
+    void RequestRules() noexcept { mRulesRequested = true; }
+    /** Test runs (`/browse`): the texture browser opened for a slot. */
+    void OpenBrowser(const int slot) noexcept
+    {
+      mTool = 2;
+      mBrowseSlot = slot;
+      mBrowseOpen = true;
+    }
+    /** Test runs (`/masklayer`): the Texture tool on this layer. */
+    void SetMaskLayer(const int layer) noexcept
+    {
+      mTool = 2;
+      mMaskLayer = layer;
+    }
+
+    /** The terrain brush as the panel sets it (Flatten's height is the stroke's, set by the viewport). */
+    [[nodiscard]] HeightBrush CurrentHeightBrush() const noexcept
+    {
+      HeightBrush brush;
+      brush.mode = static_cast<HeightBrushMode>(mBrushMode);
+      brush.symmetry = static_cast<Symmetry>(mSymmetry);
+      brush.radius = mRadius;
+      brush.strength = mStrength;
+      brush.falloff = mFalloff;
+      brush.turns = mNWay;
+      brush.setTo = mSetHeight * 128.0f;
+      brush.terraceStep = mTerraceStep * 128.0f;
+      brush.planeSet = mPlaneSet;
+      brush.planeX = mPlaneX;
+      brush.planeZ = mPlaneZ;
+      brush.planeC = mPlaneC;
+      brush.stamp = mStamp.get();
+      brush.stampHeight = mStampHeight * 128.0f;
+      brush.limitHeight = mLimitHeight;
+      brush.limitLow = mLimitLow * 128.0f;
+      brush.limitHigh = mLimitHigh * 128.0f;
+      brush.limitSlope = mLimitSlope;
+      brush.limitMaxSlope = std::tan(mLimitSlopeDegrees * 0.0174532925f);
+      return brush;
+    }
+
+    /** Plane mode: a picked point (game units: x, height, z); the plane goes through the last three. */
+    void AddPlanePoint(float x, float height, float z) noexcept;
+    void ClearPlanePoints() noexcept
+    {
+      mPlanePoints = 0;
+      mPlaneSet = false;
+    }
+    /** The picked points, oldest first, for the view to mark. */
+    [[nodiscard]] int PlanePoints(float (&x)[3], float (&height)[3], float (&z)[3]) const noexcept;
+
+    /** Stamp mode: the image the Stamp image button loaded. */
+    [[nodiscard]] bool TakeStampRequest() noexcept { return std::exchange(mStampRequested, false); }
+    void SetStamp(HeightStamp stamp, std::string name)
+    {
+      mStamp = std::make_shared<HeightStamp>(std::move(stamp));
+      mStampName = std::move(name);
+    }
+
+    /** Test runs (`/symcheck`): the Terrain tool with this symmetry (the panel's index), then Check or Copy. */
+    void SetSymmetry(const int index, const int turns) noexcept
+    {
+      mTool = mTool == 2 ? 2 : 1; // the Texture tool checks the masks
+      mSymmetry = index;
+      mNWay = turns;
+    }
+    /** A newly opened map's symmetry as DetectSymmetry found it (the panel's index and turns; -1: none found). */
+    void SetDetectedSymmetry(const int index, const int turns, const float matched) noexcept
+    {
+      mDetectedSymmetry = index;
+      mDetectedMatch = matched;
+      if (index >= 0) {
+        mSymmetry = index;
+        mNWay = index == 9 ? turns : mNWay;
+      } else {
+        mSymmetry = 0;
+      }
+    }
+    void RequestCheck() noexcept { mCheckRequested = true; }
+    void RequestImport() noexcept { mImportRequested = true; }
+    /** Test runs (`/brush`): the Terrain tool with this brush mode (a HeightBrushMode). */
+    void SetBrushMode(const int mode) noexcept
+    {
+      mTool = 1;
+      mBrushMode = mode;
+    }
+    void RequestRepair() noexcept { mRepairRequested = true; }
+
+    /** The height field's Import and Export buttons, taken by the app each frame (it asks for the file). */
+    [[nodiscard]] bool TakeImportRequest() noexcept { return std::exchange(mImportRequested, false); }
+    /** The Markers tool's Import / Export of FAForeverMapEditor's `.fafmapmarkers`, taken by the app (it asks for the file). */
+    [[nodiscard]] bool TakeMarkerFileImport() noexcept { return std::exchange(mMarkerFileImport, false); }
+    [[nodiscard]] bool TakeMarkerFileExport() noexcept { return std::exchange(mMarkerFileExport, false); }
+    /** The Units tool's Import / Export of FAForeverMapEditor's `.scunits`, taken by the app. */
+    [[nodiscard]] bool TakeUnitFileImport() noexcept { return std::exchange(mUnitFileImport, false); }
+    [[nodiscard]] bool TakeUnitFileExport() noexcept { return std::exchange(mUnitFileExport, false); }
+    /** The Texture tool's layer files: what was asked (LayerFileAsk) and for which slot, taken by the app. */
+    enum class LayerFileAsk
+    {
+      None,
+      ImportLayer,
+      ExportLayer,
+      ImportSet,
+      ExportSet,
+    };
+    [[nodiscard]] LayerFileAsk TakeLayerFileAsk(int& slot) noexcept
+    {
+      slot = mLayerFileSlot;
+      return std::exchange(mLayerFileAsk, LayerFileAsk::None);
+    }
+    [[nodiscard]] bool TakeExportRequest() noexcept { return std::exchange(mExportRequested, false); }
+    /** Heights times this on import and export. */
+    [[nodiscard]] float HeightScale() const noexcept { return mHeightScale; }
+    /** The exported image's width in samples, 0 for the map's own. */
+    [[nodiscard]] int ExportWidth() const noexcept { return kExportWidths[mExportSize]; }
+
+    /** The symmetry check's buttons, taken by the view each frame. */
+    [[nodiscard]] bool TakeCheckRequest() noexcept { return std::exchange(mCheckRequested, false); }
+    [[nodiscard]] bool TakeRepairRequest() noexcept { return std::exchange(mRepairRequested, false); }
+    /** Whether the view marks the vertices whose copies differ. */
+    [[nodiscard]] bool ShowDifferences() const noexcept { return mShowDifferences; }
+
+    /** The check's result for the panel, for the symmetry it checked (`checked` 0: nothing to show). */
+    void SetCheckResult(const int checked, const int differing, const int largestWords, const HeightBrush& checkedWith, const bool masks = false) noexcept
+    {
+      mCheckedMasks = masks;
+      mChecked = checked;
+      mDiffering = differing;
+      mLargest = largestWords;
+      mCheckedSymmetry = static_cast<int>(checkedWith.symmetry);
+      mCheckedTurns = checkedWith.turns;
+    }
+
+    /** True if the last check was made with the panel's current symmetry. */
+    [[nodiscard]] bool CheckIsCurrent() const noexcept
+    {
+      return mChecked > 0 && mCheckedSymmetry == mSymmetry && (mSymmetry != 9 || mCheckedTurns == mNWay) && mCheckedMasks == TextureToolActive();
+    }
+
+  private:
+    void DrawStrip();
+    void DrawTerrain();
+    void DrawTexture();
+    void DrawWater();
+    void DrawProps();
+    void DrawTerrainTypes();
+    void DrawDecals();
+    void DrawMarkers();
+    void DrawUnits();
+    void DrawSelect();
+    void DrawBrush(bool withModes);
+    void DrawSymmetry(bool withCheck = true);
+    void DrawLimits();
+
+    int mTool = 1;
+
+    int mBrushMode = 0;
+    float mRadius = 14.0f;
+    float mStrength = 0.5f;
+    float mFalloff = 0.6f;
+    int mSymmetry = 6; // both axes
+    int mNWay = 3;
+    bool mLimitHeight = false;
+    float mLimitLow = 0.0f;
+    float mLimitHigh = 100.0f;
+    bool mLimitSlope = false;
+    float mLimitSlopeDegrees = 30.0f;
+    float mSetHeight = 20.0f;
+    float mTerraceStep = 5.0f;
+    float mPlanePointX[3]{};
+    float mPlanePointH[3]{};
+    float mPlanePointZ[3]{};
+    int mPlanePoints = 0;
+    bool mPlaneSet = false;
+    double mPlaneX = 0.0;
+    double mPlaneZ = 0.0;
+    double mPlaneC = 0.0;
+    std::shared_ptr<HeightStamp> mStamp;
+    std::string mStampName;
+    float mStampHeight = 20.0f;
+    bool mStampRequested = false;
+    int mMarkerType = 0;
+    int mDecalMode = 0; // 0 Place, 1 Select
+
+    static constexpr int kExportWidths[] = {0, 257, 513, 1025, 2049, 4097};
+    bool mImportRequested = false;
+    bool mMarkerFileImport = false;
+    bool mMarkerFileExport = false;
+    bool mUnitFileImport = false;
+    bool mUnitFileExport = false;
+    int mTexturePaint = 0;
+    bool mOpenArmies = false;
+    std::string mUnitTreeArmy;
+    UnitGroup mUnitTree;
+    std::vector<std::string> mGroupPath;
+    char mGroupName[64]{};
+    GroupAsk mGroupAsk = GroupAsk::None;
+    UnitWreckAsk mUnitWreckAsk;
+    bool mUnitWreckAsked = false;
+    std::vector<std::pair<std::string, std::string>> mUnitSelectionNow;
+    UnitGroupAsk mUnitGroupAsk;
+    bool mUnitGroupAsked = false;
+    std::vector<ViewRing> mViewRings;
+    bool mModelsLoading = false;
+    std::vector<std::uint32_t> mLiveSelection;
+    bool mShowGameUnits = true;
+    std::set<std::pair<std::string, std::string>> mPreviewHiddenUnits;
+    std::set<std::string> mPreviewHiddenMarkers;
+    void DrawUnitGroup(const UnitGroup& group, std::vector<std::string>& path);
+    int mTerrainTypeCode = 81;
+    bool mShowTerrainTypes = true;
+    bool mShowSlope = false;
+    bool mShowKmGrid = false;
+    std::string mCursorText;
+    std::string mRulerText;
+    int mTypeUnderCursor = -1;
+    char mTerrainTypeFilter[64]{};
+    std::vector<TerrainTypeInfo> mTerrainTypes;
+    LayerFileAsk mLayerFileAsk = LayerFileAsk::None;
+    int mLayerFileSlot = 1;
+    bool mExportRequested = false;
+    float mHeightScale = 1.0f;
+    int mExportSize = 0;
+
+    int mMaskLayer = 0;
+    int mMaskMode = 0;
+    bool mLowerAbove = true;
+    std::vector<std::string> mLayerNames;
+    std::vector<LayerSlot> mSlots;
+    int mChangedSlot = -1;
+    LayerSlot mChangedValue;
+    EdTextureLibrary mLibrary;
+    void DrawLayerSlots();
+    void DrawTextureBrowser();
+    int mBrowseSlot = -1;
+    bool mBrowseOpen = false;
+    /** A layer slot to make a texture for in the Material Editor (its button here and in the texture browser). */
+    int mMaterialAsk = -1;
+    char mBrowseFilter[64]{};
+    std::vector<MaskRule> mRules;
+    bool mRulesRequested = false;
+
+    bool mCheckedMasks = false;
+    float mCoverage[8]{};
+    bool mHasCoverage = false;
+    bool mShowWeight = false;
+    std::vector<std::string> mPropBlueprints;
+    std::function<std::uint64_t(const std::string&)> mPropPictures;
+    std::string mPropBlueprint;
+    int mPropMode = 0;
+    float mPropDensity = 8.0f;
+    bool mPropRandomTurn = true;
+    std::vector<PropPaintEntry> mPaintList;
+    bool mPaintSetImport = false;
+    bool mPaintSetExport = false;
+    std::string mPropDetails;
+    std::string mReclaimSummary;
+    std::vector<std::string> mReclaimRows;
+    char mPropFilter[64]{};
+    int mAirGridCount = 16;
+    bool mAirGridReplace = true;
+    bool mAirGridAsked = false;
+    bool mEditBorder = false;
+    bool mBorderCentred = false;
+    bool mShowProps = true;
+    bool mShowUnits = true;
+    SelectionProperties mSelectionProperties;
+    PropertyEdit mPropertyEdit;
+    std::string mSelectSelected;
+    std::string mSelectHover;
+    std::vector<SaveEntry> mMarkerSelection;
+    bool mConnectNodes = false;
+    std::vector<CheckPin> mCheckPins;
+    std::vector<PathQuad> mPathQuads;
+    bool mShowPathing = false;
+    std::vector<PathQuad> mShipQuads;
+    int mPathingLayer = 0;
+    WaterState mWater;
+    bool mWaterEditing = false;
+    int mWaveCount = 0;
+    std::vector<WavePattern> mWavePatterns;
+    int mWavePattern = 0;
+    float mWaveDepth = 2.0f;
+    float mWaveDensity = 0.25f;
+    float mWaveSpacing = 4.0f;
+    float mWaveCentre = 0.0f;
+    float mWaveRange = 180.0f;
+    WaveAsk mWaveAsk = WaveAsk::None;
+    bool mWaterChanged = false;
+    bool mWaterFinal = false;
+    bool mWaterImport = false;
+    bool mWaterExport = false;
+    void DrawWaterBodies();
+    std::vector<WaterBody> mBodies;
+    std::string mBodiesError;
+    int mBody = -1;
+    bool mBodiesEditing = false;
+    bool mBodyDragging = false;
+    bool mBodiesChanged = false;
+    bool mBodiesFinal = false;
+    bool mBodyIsNew = false;
+    WaterPick mWaterPick = WaterPick::None;
+    std::vector<std::string> mBodyReport;
+    std::vector<std::string> mBodyLog;
+    std::vector<std::pair<std::string, std::string>> mUnitTypes;
+    std::string mUnitType;
+    std::string mUnitArmy;
+    int mUnitMode = 0;
+    bool mUnitRandomTurn = false;
+    char mUnitFilter[64]{};
+    int mUnitSelectionCount = 0;
+    std::vector<DecalTexture> mDecalTextures;
+    bool mDecalTexturesListed = false;
+    std::string mDecalTexture;
+    char mDecalFilter[64]{};
+    int mDecalTypeFilter = 0;
+    float mDecalSize[2] = {32.0f, 32.0f};
+    float mDecalTurn = 0.0f;
+    bool mDecalRandomTurn = false;
+    bool mDecalWithPair = true;
+    float mDecalOverlap = 0.1f;
+    DecalPathAction mDecalPathAction = DecalPathAction::None;
+    int mDecalPathPoints = 0;
+    int mDecalPathDecals = 0;
+    float mDecalCutoff = 0.0f;
+    int mDecalSelectionCount = 0;
+    bool mShowGrid = false;
+    bool mSnap = false;
+    float mGridStep = 1.0f;
+    bool mKeepOnGround = true;
+    std::set<std::string> mHiddenMarkerTypes;
+    std::vector<std::string> mAskSelect;
+    bool mAskSelectAdd = false;
+    bool mAskSelectSet = false;
+    std::string mAskFrame;
+    std::array<float, 2> mAskPoint{};
+    bool mAskPointSet = false;
+    int mDetectedSymmetry = -2; // -2: no map opened yet
+    float mDetectedMatch = 0.0f;
+    std::vector<std::string> mArmies;
+    std::vector<std::string> mExtraArmies;
+    std::vector<ScenarioTeam> mTeams;
+    std::vector<ScenarioTeam> mTeamsChange;
+    bool mTeamsChanged = false;
+    char mExtraBuffer[256]{};
+    bool mExtraChanged = false;
+    std::string mMarkerEditName;
+    std::string mMarkerEditKey;
+    std::string mMarkerEditValue;
+    char mMarkerEditBuffer[256]{};
+    /** A typed marker field's own copy while it is held (a number, a vector, a colour). */
+    MarkerValue mMarkerTyped;
+    float mMarkerTypedColour[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    std::string mMarkerEditing;
+    std::optional<std::array<int, 4>> mArea;
+    int mMapWidth = 0;
+    int mMapHeight = 0;
+    bool mAreaChanged = false;
+    std::optional<std::array<int, 4>> mAreaChange;
+    MaskOp mMaskOp = MaskOp::None;
+    std::vector<std::string> mShaders;
+    std::string mShader;
+    std::string mShaderChange;
+    float mMapSizeUnits = 0.0f;
+
+    bool mCheckRequested = false;
+    bool mRepairRequested = false;
+    bool mShowDifferences = true;
+    int mChecked = 0;
+    int mDiffering = 0;
+    int mLargest = 0;
+    int mCheckedSymmetry = -1;
+    int mCheckedTurns = 0;
+  };
+} // namespace faf::editor

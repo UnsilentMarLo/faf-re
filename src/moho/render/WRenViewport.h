@@ -24,11 +24,35 @@ class wxMouseEvent;
 
 namespace moho
 {
+  /**
+   * Engine addition: when set, the viewport leaves the keyboard focus where it is as the mouse leaves it, instead
+   * of giving it to the second head's window (OnMouseLeave). The map editor sets it while it draws the view into
+   * its panels' window, the second head: the real cursor is then never over the viewport's own window, so the
+   * game saw the mouse leave all the time and the keys went to the panels. Off, as in retail, by default.
+   */
+  extern bool gViewportLeaveKeepsFocus;
+
+  /**
+   * Engine addition: called at the start of each head's frame, right after the mesh thumbnails render and before the
+   * head's own target is bound again (so it may render into targets of its own). The map editor draws its particle
+   * editor's view there. Null in the game.
+   */
+  extern void (*gViewportBeforeFrame)(int head);
+
+  class IRenderWorldView;
+  /**
+   * Engine addition: when set, the viewport draws this one of its world views and skips the others (they stay
+   * registered). The map editor sets it to its own view while a play runs behind it, so the editor's map shows and the
+   * session's world views wait. Null in the game.
+   */
+  extern IRenderWorldView* gViewportOnlyView;
+
   class CD3DDepthStencil;
   class CD3DDynamicTextureSheet;
   class CD3DPrimBatcher;
   class CD3DRenderTarget;
   class CD3DTextureBatcher;
+  class CWldMap;
   class CWldSession;
   class ID3DRenderTarget;
   class ID3DTextureSheet;
@@ -308,7 +332,7 @@ namespace moho
      * effects, water, shadow, bloom and UI passes for each world view in
      * `worldViews` that draws on it.
      */
-    void Render(int head, msvc8::vector<SWorldViewInfo>& worldViews);
+    void Render(int head, fa::vector<SWorldViewInfo>& worldViews);
 
     /**
      * Address: 0x007F88B0 (FUN_007F88B0)
@@ -317,7 +341,7 @@ namespace moho
      * What it does:
      * Draws the UI and the debug overlays over the head's full extent.
      */
-    void RenderUI(const msvc8::vector<SWorldViewInfo>& worldViews);
+    void RenderUI(const fa::vector<SWorldViewInfo>& worldViews);
 
     /**
      * Address: 0x007F98A0 (FUN_007F98A0)
@@ -336,7 +360,7 @@ namespace moho
      * Renders the cartographic (map-mode) views of `head`; returns how many it
      * drew.
      */
-    unsigned int RenderCartographic(int head, msvc8::vector<SWorldViewInfo>& worldViews);
+    unsigned int RenderCartographic(int head, fa::vector<SWorldViewInfo>& worldViews);
 
     /**
      * Address: 0x007F7FC0 (FUN_007F7FC0)
@@ -411,6 +435,13 @@ namespace moho
      */
     void RenderReflections();
 
+    /// Engine addition (water bodies): the lake reflection after the sea's; `meshes` false
+    /// when reflections are off, which still clears the target lakes sample.
+    void RenderWaterBodyReflection(bool meshes);
+
+    /// Engine addition (water bodies): drops the lake reflection targets with the device.
+    static void ReleaseWaterBodyReflections();
+
     /**
      * Address: 0x007F7ED0 (FUN_007F7ED0)
      * Mangled: ?SetViewportToFullScreen@WRenViewport@Moho@@AAEXXZ
@@ -427,6 +458,19 @@ namespace moho
      * Address: 0x007F87F0 (FUN_007F87F0)
      * Mangled: ?UpdateRenderViewportCoordinates@WRenViewport@Moho@@AAEXXZ
      */
+    /**
+     * Engine addition: one world view of `Render`'s per-view loop.
+     */
+    void RenderWorldView(
+      const SWorldViewInfo* worldView, int head, const SWorldViewInfo* begin, bool regenerateShoreline
+    );
+
+    /**
+     * Engine addition: FXAA, sharpening and grading (ren_Fxaa, ren_Sharpen, ren_Grade) over the world
+     * view being drawn, inside its viewport, before its overlay pass.
+     */
+    void RenderWorldViewPostEffects();
+
     void UpdateRenderViewportCoordinates();
 
     /**
@@ -469,7 +513,7 @@ namespace moho
     // and cleared at 0x007F9709. The fog-of-war guard reads [ebx+488h] from
     // the same register, CWldSession::FocusArmy, which pins the type.
     CWldSession* mSession;                                            // +0x2140
-    msvc8::vector<SWorldViewInfo> mWorldViews;                        // +0x2144
+    fa::vector<SWorldViewInfo> mWorldViews;                        // +0x2144
     boost::shared_ptr<CD3DTextureBatcher> mTexBatcher;                // +0x2154
     boost::shared_ptr<CD3DPrimBatcher> mPrimBatcher;                  // +0x215C
     // Concrete types, not the interfaces: D3DWindowOnDeviceInit fills them
@@ -547,4 +591,22 @@ namespace moho
    * Returns the loaded map's terrain resource, or null when no map is bound.
    */
   [[nodiscard]] IWldTerrainRes* REN_GetTerrainRes();
+
+  /**
+   * Address: 0x010A6438 (sWldMap)
+   *
+   * The map the renderer draws (`REN_GetTerrainRes`). The world session sets it to its own map when it is
+   * constructed (0x00893581) and clears it when it is destroyed (0x00893BE6); `REN_SetWldMap` sets it
+   * otherwise.
+   */
+  extern CWldMap* sWldMap;
+
+  /**
+   * Address: 0x007FA150 (FUN_007FA150)
+   *
+   * What it does:
+   * Stores `map` in `sWldMap` (`mov [sWldMap], eax`). The game never calls it; the original map editor
+   * drew its own map through it, as the editor here does between plays.
+   */
+  void REN_SetWldMap(CWldMap* map);
 } // namespace moho

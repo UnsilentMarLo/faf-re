@@ -2,6 +2,7 @@
 #include "moho/editor/EditorDocument.h"
 #include "moho/editor/EdDirtyRect.h"
 #include "moho/editor/EdOverlay.h"
+#include "moho/editor/EdPerf.h"
 
 #include <algorithm>
 #include <atomic>
@@ -13,11 +14,13 @@
 #include "gpg/core/containers/Rect2.h"
 #include "moho/path/PathTables.h"
 #include "moho/sim/CWldMap.h"
+#include "moho/terrain/CWldTerrainRes.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
 #include "moho/sim/ISessionListener.h"
 #include "moho/sim/ISessionListener.h"
 #include "moho/sim/Sim.h"
+#include "moho/sim/SimEditorHook.h"
 #include "moho/terrain/splat/CWldSplat.h"
 
 namespace moho::editor
@@ -259,4 +262,16 @@ namespace moho::editor
       return true;
     }();
   } // namespace
+} // namespace moho::editor
+
+// Height edits the editor committed since the last beat reach the sim's field at the start of its next beat, on the sim thread: the engine's per-beat hook
+// (moho/sim/SimEditorHook.h, null in the game; docs/projects/MAP_EDITOR_DESIGN.md, commit path). A single atomic read when nothing is queued.
+namespace moho::editor
+{
+  void InstallSimBeatHook()
+  {
+    moho::gSimBeforeBeat = [](moho::Sim& sim) { (void)ApplyPendingHeightEdits(&sim); };
+    moho::gSimGcDue = [](const int heapKb, const float seconds) { return perf::SimGcDue(heapKb, seconds); };
+    moho::gSimGcDone = [](const int heapKb) { perf::SimGcDone(heapKb); };
+  }
 } // namespace moho::editor

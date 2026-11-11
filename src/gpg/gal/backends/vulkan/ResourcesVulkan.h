@@ -95,18 +95,23 @@ namespace gpg::gal
   class DepthStencilTargetVulkan final : public DepthStencilTarget
   {
   public:
-    DepthStencilTargetVulkan(const DepthStencilTargetContext& context, vulkan::TrackedImage image, VkImageView view);
+    DepthStencilTargetVulkan(
+      const DepthStencilTargetContext& context, vulkan::TrackedImage image, VkImageView view, VkImageView sampledView = VK_NULL_HANDLE
+    );
     ~DepthStencilTargetVulkan() override;
 
     DepthStencilTargetContext* GetContext() override;
 
     [[nodiscard]] vulkan::TrackedImage& Image() noexcept { return mImage; }
     [[nodiscard]] VkImageView View() const noexcept { return mView; }
+    /** The depth aspect for shaders, when the target was created readable and the format can be sampled. */
+    [[nodiscard]] VkImageView SampledView() const noexcept { return mSampledView; }
 
   private:
     DepthStencilTargetContext mContext;
     vulkan::TrackedImage mImage;
     VkImageView mView = VK_NULL_HANDLE;
+    VkImageView mSampledView = VK_NULL_HANDLE;
   };
 
   /** Cube targets stay empty, as on D3D10, D3D11 and D3D12. */
@@ -134,10 +139,18 @@ namespace gpg::gal
 
     [[nodiscard]] std::uint8_t* Lock(std::uint32_t offset, std::uint32_t size, MohoD3DLockFlags flags);
     void Unlock();
+    /** Device::ReleaseBufferCopy: frees the CPU copy of a static buffer, once it's on the GPU. */
+    void ReleaseCopy() noexcept;
+    /** Device::CopyLockedRangeOnly. */
+    void CopyLockedRangeOnly() noexcept { mLockedRangeOnly = true; }
 
     /** The buffer and offset draws read from. */
     void PrepareForDraw(DeviceVulkan& device, VkBuffer& outBuffer, VkDeviceSize& outOffset);
     [[nodiscard]] std::uint32_t ByteWidth() const noexcept { return mByteWidth; }
+    /** Device::CopyWrittenOnly (ren_CopyWrittenOnly). */
+    void MarkWrittenOnly() noexcept { mCopyWrittenOnly = true; }
+    /** How many leading bytes a fresh copy needs: those written since the last discard for a marked buffer, else all. */
+    [[nodiscard]] std::uint32_t WrittenCopyBytes() const noexcept;
     /** A static buffer, for a GPU copy into it; nullptr for a dynamic buffer (upload memory). */
     [[nodiscard]] vulkan::TrackedBuffer* CopyDestination() noexcept { return mDynamic ? nullptr : &mBuffer; }
 
@@ -146,6 +159,7 @@ namespace gpg::gal
     const char* mKind = nullptr;
     bool mDynamic = false;
     backend::LockShadow mShadow;
+    bool mLockedRangeOnly = false;
     vulkan::TrackedBuffer mBuffer; // static buffers
     VkBuffer mChunkBuffer = VK_NULL_HANDLE;
     VkDeviceSize mChunkOffset = 0;
@@ -155,6 +169,8 @@ namespace gpg::gal
     std::uint32_t mLockOffset = 0;
     std::uint32_t mLockSize = 0;
     std::uint32_t mLockFlags = 0;
+    bool mCopyWrittenOnly = false;  // Device::CopyWrittenOnly
+    std::uint32_t mWrittenEnd = 0;  // end of the bytes written since the last discard lock
   };
 
   class VertexBufferVulkan final : public VertexBuffer

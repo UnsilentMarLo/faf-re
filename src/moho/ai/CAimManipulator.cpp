@@ -1,5 +1,7 @@
 // Auto-generated from IDA VFTABLE/RTTI scan.
+#include "moho/animation/AniPoseBones.h"
 #include "moho/ai/CAimManipulator.h"
+#include "moho/lua/CScrLuaObjectFactory.h"
 #include "legacy/math/X87Math.h"
 
 #include <cmath>
@@ -14,6 +16,7 @@
 #include "gpg/core/containers/ArchiveSerialization.h"
 #include "gpg/core/containers/ReadArchive.h"
 #include "gpg/core/containers/WriteArchive.h"
+#include "gpg/core/utils/Global.h"
 #include "gpg/core/utils/Logging.h"
 #include "legacy/containers/String.h"
 #include "lua/LuaObject.h"
@@ -21,6 +24,7 @@
 #include "moho/animation/CAniPose.h"
 #include "moho/animation/CAniSkel.h"
 #include "moho/animation/IAniManipulator.h"
+#include "moho/animation/PoseJobs.h"
 #include "moho/entity/Entity.h"
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/lua/CScrLuaInitForm.h"
@@ -35,6 +39,7 @@
 #include "moho/sim/ReconBlip.h"
 #include "moho/sim/SPhysConstants.h"
 #include "moho/sim/Sim.h"
+#include "moho/sim/SimArchiveMode.h"
 #include "moho/sim/ManipulatorLuaFunctionThunks.h"
 #include "moho/task/CTaskEvent.h"
 #include "moho/unit/core/Unit.h"
@@ -54,7 +59,6 @@ moho::CScrLuaMetatableFactory<moho::CAimManipulator>
 
 namespace
 {
-  constexpr const char* kLuaExpectedArgsWarning = "%s\n  expected %d args, but got %d";
   constexpr const char* kAimManipulatorLuaClassName = "CAimManipulator";
 
   constexpr const char* kCAimManipulatorSetFiringArcName = "SetFiringArc";
@@ -155,12 +159,7 @@ namespace
    */
   [[nodiscard]] gpg::RType* CachedIAniManipulatorType()
   {
-    gpg::RType* type = moho::IAniManipulator::sType;
-    if (!type) {
-      type = gpg::LookupRType(typeid(moho::IAniManipulator));
-      moho::IAniManipulator::sType = type;
-    }
-    return type;
+    return gpg::CachedLookup<moho::IAniManipulator>(moho::IAniManipulator::sType);
   }
 
   /**
@@ -201,97 +200,22 @@ namespace
     return archive;
   }
 
-  [[nodiscard]] gpg::RType* CachedWeakPtrUnitType()
-  {
-    static gpg::RType* sType = nullptr;
-    if (!sType) {
-      sType = gpg::LookupRType(typeid(moho::WeakPtr<moho::Unit>));
-    }
-    return sType;
-  }
-
-  [[nodiscard]] gpg::RType* CachedWeakPtrUnitWeaponType()
-  {
-    static gpg::RType* sType = nullptr;
-    if (!sType) {
-      sType = gpg::LookupRType(typeid(moho::WeakPtr<moho::UnitWeapon>));
-    }
-    return sType;
-  }
-
-  [[nodiscard]] gpg::RType* CachedQuaternionfType()
-  {
-    static gpg::RType* type = nullptr;
-    if (!type) {
-      type = gpg::LookupRType(typeid(Wm3::Quaternionf));
-    }
-    return type;
-  }
-
   [[nodiscard]] gpg::RRef NullOwnerRef() noexcept
   {
     return {};
   }
 
-  template <class TObject>
-  [[nodiscard]] gpg::RRef MakeDerivedRef(TObject* const object, gpg::RType* const baseType)
+  /**
+   * The projectile blueprint whose `Physics` member `physics` is, or null.
+   */
+  [[nodiscard]] moho::RProjectileBlueprint*
+  ProjectileBlueprintOfPhysics(const moho::RProjectileBlueprintPhysics* const physics) noexcept
   {
-    gpg::RRef out{};
-    out.mObj = nullptr;
-    out.mType = baseType;
-    if (!object) {
-      return out;
-    }
-
-    gpg::RType* dynamicType = baseType;
-    try {
-      dynamicType = gpg::LookupRType(typeid(*object));
-    } catch (...) {
-      dynamicType = baseType;
-    }
-
-    std::int32_t baseOffset = 0;
-    const bool isDerived = dynamicType != nullptr && baseType != nullptr && dynamicType->IsDerivedFrom(baseType, &baseOffset);
-    if (!isDerived) {
-      out.mObj = object;
-      out.mType = dynamicType;
-      return out;
-    }
-
-    out.mObj = reinterpret_cast<void*>(reinterpret_cast<char*>(object) - baseOffset);
-    out.mType = dynamicType;
-    return out;
-  }
-
-  [[nodiscard]] moho::CScrLuaInitFormSet& SimLuaInitSet()
-  {
-    if (moho::CScrLuaInitFormSet* const set = moho::SCR_FindLuaInitFormSet("Sim"); set != nullptr) {
-      return *set;
-    }
-
-    static moho::CScrLuaInitFormSet fallbackSet("Sim");
-    return fallbackSet;
-  }
-
-  [[nodiscard]] moho::CAniPoseBone* ResolvePoseBone(moho::CAniActor* const actor, const int boneIndex) noexcept
-  {
-    if (actor == nullptr || actor->mPose.get() == nullptr || boneIndex < 0) {
+    if (physics == nullptr) {
       return nullptr;
     }
-
-    moho::CAniPose* const pose = actor->mPose.get();
-    moho::CAniPoseBone* const bonesBegin = pose->mBones.begin();
-    moho::CAniPoseBone* const bonesEnd = pose->mBones.end();
-    if (bonesBegin == nullptr || bonesEnd == nullptr || bonesBegin >= bonesEnd) {
-      return nullptr;
-    }
-
-    const std::ptrdiff_t boneCount = bonesEnd - bonesBegin;
-    if (boneIndex >= boneCount) {
-      return nullptr;
-    }
-
-    return &bonesBegin[boneIndex];
+    auto* const bytes = reinterpret_cast<const std::uint8_t*>(physics) - offsetof(moho::RProjectileBlueprint, Physics);
+    return const_cast<moho::RProjectileBlueprint*>(reinterpret_cast<const moho::RProjectileBlueprint*>(bytes));
   }
 
   [[nodiscard]] moho::CAniPoseBone* ResolveWatchBone(
@@ -302,10 +226,10 @@ namespace
       return nullptr;
     }
 
-    return ResolvePoseBone(manipulator->mOwnerActor, manipulator->mWatchBones[watchIndex].mBoneIndex);
+    return moho::ResolvePoseBone(manipulator->mOwnerActor, manipulator->mWatchBones[watchIndex].mBoneIndex);
   }
 
-  [[nodiscard]] std::string ToStdString(const msvc8::string& value)
+  [[nodiscard]] std::string ToStdString(const fa::string& value)
   {
     const std::string_view view = value.view();
     return std::string(view.data(), view.size());
@@ -313,12 +237,8 @@ namespace
 
   [[nodiscard]] const Wm3::Vector3f& InvalidAimVector() noexcept
   {
-    static bool initialized = false;
-    static Wm3::Vector3f invalid{};
-    if (!initialized) {
-      invalid = Wm3::Vector3f::NaN();
-      initialized = true;
-    }
+    // A function-local static: its first use may be on a sim worker (sim_ParallelPose).
+    static const Wm3::Vector3f invalid = Wm3::Vector3f::NaN();
     return invalid;
   }
 
@@ -351,6 +271,45 @@ namespace
     }
 
     return entity->mLastTickProcessed != entity->SimulationRef->mCurTick;
+  }
+
+  /**
+   * The step `CheckTracking` turns one tracked angle by this tick, limited by the arc and the slew
+   * (0x00630B1B..0x00630BB0). Its own function so that `CAimManipulator::IsPoseJobQuiet` predicts
+   * the heading step with the same arithmetic.
+   */
+  [[nodiscard]] float ComputeTrackingStep(
+    const float desiredAngle,
+    const float currentAngle,
+    const float minAngleCenter,
+    const float maxAngleHalfRange,
+    const float maxAngleSlew
+  )
+  {
+    float step = 0.0f;
+    // 0x00630B1B..0x00630B29: `comiss range, 3.1405928; jb` -- an unordered
+    // (NaN) range takes the clamped branch as well.
+    if (!(maxAngleHalfRange >= kAngleNormalizationClamp)) {
+      float constrained = moho::NormalizeAngleSignedRadians(desiredAngle - minAngleCenter);
+      // 0x00630B69..0x00630B7A: two independent clamps, `max > x ? x : max`
+      // then `-max > x ? -max : x`, so an unordered (NaN) angle takes `max`.
+      if (!(maxAngleHalfRange > constrained)) {
+        constrained = maxAngleHalfRange;
+      }
+      if (-maxAngleHalfRange > constrained) {
+        constrained = -maxAngleHalfRange;
+      }
+      step = (constrained + minAngleCenter) - currentAngle;
+    } else {
+      step = moho::NormalizeAngleSignedRadians(desiredAngle - currentAngle);
+    }
+
+    // 0x00630B8E..0x00630BB0: `_copysign(slew, step)` is stored back over the
+    // same local, so the heading-motion test reads the slew-limited step.
+    if (std::fabs(step) > maxAngleSlew) {
+      step = std::copysign(maxAngleSlew, step);
+    }
+    return step;
   }
 
   [[nodiscard]] Wm3::Vector3f ComputeUnitForwardDirection(const moho::Unit& unit) noexcept
@@ -532,10 +491,10 @@ namespace
     const float denominator = pitchScalar * 2.0f;
     // 0x005D6407..0x005D640B / 0x005D641E..0x005D6422: `fld1; fpatan; fchs`.
     if (highArc != nullptr) {
-      *highArc = -msvc8::atan2((discriminantRoot - negDistance) / denominator, 1.0f);
+      *highArc = -fa::atan2((discriminantRoot - negDistance) / denominator, 1.0f);
     }
     if (lowArc != nullptr) {
-      *lowArc = -msvc8::atan2(((-negDistance) - discriminantRoot) / denominator, 1.0f);
+      *lowArc = -fa::atan2(((-negDistance) - discriminantRoot) / denominator, 1.0f);
     }
 
     return true;
@@ -551,7 +510,7 @@ namespace
    * DETERMINISM NOTE -- the trig in this file's sim paths (`CalculateFiringPitch`
    * 0x005D6310, `CheckTracking` 0x006309F0, `RotateHeadingBone` 0x00631190,
    * `RotatePitchBone` 0x00631220, and this function: `fcos` at 0x005D644F, `fsin`
-   * at 0x005D647E) goes through the `msvc8::` x87 helpers, i.e. the same
+   * at 0x005D647E) goes through the `fa::` x87 helpers, i.e. the same
    * `fsin`/`fcos`/`fpatan` instructions the binary runs. Under the simulation
    * thread's `_PC_24` precision control those were measured correctly rounded
    * over ~1.4M distinct float inputs (zero ulp deviation, including near
@@ -573,9 +532,9 @@ namespace
     // func_VecSetLengthS (0x005B1C90) with `cos(pitch)` as the length, so the
     // scale `cos / sqrt(lenSq)` and the lane products stay on the x87 stack
     // (VecSetLength skips a non-positive length, leaving the delta as is).
-    (void)moho::VecSetLength(outDirection, msvc8::cos(pitch));
+    (void)moho::VecSetLength(outDirection, fa::cos(pitch));
 
-    outDirection->y = -msvc8::sin(pitch);
+    outDirection->y = -fa::sin(pitch);
     return outDirection;
   }
 } // namespace
@@ -652,7 +611,7 @@ moho::CAimManipulator::CAimManipulator(
   Unit* const ownerUnit = weapon->mUnit;
 
   // Label.
-  (void)new (static_cast<void*>(&this->mLabel)) msvc8::string(label, std::strlen(label));
+  (void)new (static_cast<void*>(&this->mLabel)) fa::string(label, std::strlen(label));
 
   // Field defaults (firing arc, tracking state, identity bone quaternions).
   this->mMaxHeading = 3.1415927f;
@@ -727,7 +686,7 @@ moho::CAimManipulator::CAimManipulator(
       const RUnitBlueprintWeapon* const weaponBlueprint = this->mUnitWepBlueprint;
       // 0x006305F1..0x00630604: the unrounded `fpatan` result is `faddp`ed to
       // the rounded `HeadingArcCenter * pi/180` and rounded once on the store.
-      this->mMinHeading = msvc8::Atan2Plus(
+      this->mMinHeading = fa::Atan2Plus(
         ((ori.w * ori.y) + (ori.x * ori.z)) * 2.0f,
         1.0f - (((ori.x * ori.x) + (ori.y * ori.y)) * 2.0f),
         weaponBlueprint->HeadingArcCenter * kDegreesToRadians
@@ -781,7 +740,7 @@ gpg::RType* moho::CAimManipulator::GetClass() const
  */
 gpg::RRef moho::CAimManipulator::GetDerivedObjectRef()
 {
-  return MakeDerivedRef(this, CachedCAimManipulatorType());
+  return gpg::MakeDerivedRef(this, CachedCAimManipulatorType());
 }
 
 /**
@@ -806,7 +765,7 @@ moho::CAimManipulator::~CAimManipulator()
   // latched as the object died.
   this->EventSetSignaled(false);
 
-  // `mLabel` is a real member now, so the compiler emits `~msvc8::string`
+  // `mLabel` is a real member now, so the compiler emits `~fa::string`
   // after this body -- the same teardown the binary runs, and the one the
   // 2007 source never wrote down. Tidying it here as well would release the
   // storage twice.
@@ -861,7 +820,9 @@ bool moho::CAimManipulator::ManipulatorUpdate()
     return false;
   }
 
-  if (unit->IsBeingBuilt()) {
+  // Engine addition (sim_ParallelPose): inside a queued pose job, the inputs copied at queue time.
+  const SPoseJobInputs* const jobInputs = POSE_JobInputsFor(unit);
+  if (jobInputs != nullptr ? jobInputs->mBeingBuilt : unit->IsBeingBuilt()) {
     return false;
   }
 
@@ -872,7 +833,9 @@ bool moho::CAimManipulator::ManipulatorUpdate()
   }
 
   UnitWeapon* const weapon = this->mWeapon.GetObjectPtr();
-  if (weapon == nullptr || unit->IsDead() || unit->mUnitVarDat.mStunTicks != 0) {
+  const bool dead = jobInputs != nullptr ? jobInputs->mDead : unit->IsDead();
+  const bool stunned = jobInputs != nullptr ? jobInputs->mStunned : unit->mUnitVarDat.mStunTicks != 0;
+  if (weapon == nullptr || dead || stunned) {
     this->mOnTarget = false;
     if (CAniPoseBone* const watchBone0 = ResolveWatchBone(this, 0u); watchBone0 != nullptr) {
       watchBone0->Rotate(this->mHeadingRot);
@@ -889,8 +852,12 @@ bool moho::CAimManipulator::ManipulatorUpdate()
 
   const bool shouldTrackTarget = this->mEnabled || !aimsStraightOnDisable;
   CAiTarget* const target = &weapon->mTarget;
-  if (target->targetType != EAiTargetType::AITARGET_None && shouldTrackTarget) {
-    if (!target->HasTarget()) {
+  // Engine addition (sim_ParallelPose): a queued aim reads the target as copied at queue time, and
+  // never has a live one (IsPoseJobQuiet).
+  const SPoseJobAim* const jobAim = jobInputs != nullptr ? POSE_JobAimFor(this) : nullptr;
+  const bool targetSet = jobAim != nullptr ? jobAim->mTargetSet : target->targetType != EAiTargetType::AITARGET_None;
+  if (targetSet && shouldTrackTarget) {
+    if (jobAim != nullptr || !target->HasTarget()) {
       this->mOnTarget = false;
       RotateHeadingBone(true);
       RotatePitchBone(true);
@@ -901,7 +868,7 @@ bool moho::CAimManipulator::ManipulatorUpdate()
           // 0x00630F3E..0x00630F60: `mulss` by 10.0f, then 0x00425110 -- `frndint`
           // bumped by one when the input is above the rounded value, i.e. a
           // float ceil -- clamped to at least one tick. Not round-to-nearest.
-          resetTime = static_cast<std::int32_t>(std::ceil(weapon->mWeaponBlueprint->TargetCheckInterval * 10.0f));
+          resetTime = fa::CeilToIntX87(weapon->mWeaponBlueprint->TargetCheckInterval * 10.0f);
           if (resetTime < 1) {
             resetTime = 1;
           }
@@ -937,7 +904,7 @@ bool moho::CAimManipulator::ManipulatorUpdate()
 
   bool isWeaponLabelMatch = false;
   if (weapon != nullptr) {
-    msvc8::string weaponLabel;
+    fa::string weaponLabel;
     (void)weapon->GetLabel(&weaponLabel);
     isWeaponLabelMatch = (_stricmp(weaponLabel.c_str(), this->mLabel.c_str()) == 0);
   }
@@ -954,6 +921,56 @@ bool moho::CAimManipulator::ManipulatorUpdate()
   this->EventSetSignaled(false);
 
   return false;
+}
+
+/**
+ * Engine addition (sim_ParallelPose), not in the binary.
+ *
+ * Follows `ManipulatorUpdate`'s branches on the sim thread before the unit's pose update is queued.
+ * Quiet means the update neither aims at a live target (`Aim` reads the target's pose and velocity,
+ * and the turn depends on this unit's pose) nor makes `Track` call the weapon's OnStartTracking or
+ * OnStopTracking. Without a live target `Track` runs in world space, where the heading step needs
+ * no pose: `ComputeTrackingStep` on the forward direction, as `CheckTracking` computes it.
+ */
+bool moho::CAimManipulator::IsPoseJobQuiet(const Unit& owner, bool& outTargetSet) const
+{
+  outTargetSet = false;
+  const Unit* const unit = this->mUnit.GetObjectPtr();
+  if (unit != &owner) {
+    return false;
+  }
+  if (unit->IsBeingBuilt()) {
+    return true;
+  }
+
+  const bool aimsStraightOnDisable =
+    this->mUnitWepBlueprint != nullptr && this->mUnitWepBlueprint->AimsStraightOnDisable != 0u;
+  if (!this->mEnabled && !aimsStraightOnDisable) {
+    return true;
+  }
+
+  const UnitWeapon* const weapon = this->mWeapon.GetObjectPtr();
+  if (weapon == nullptr || unit->IsDead() || unit->mUnitVarDat.mStunTicks != 0) {
+    return true;
+  }
+
+  outTargetSet = weapon->mTarget.targetType != EAiTargetType::AITARGET_None;
+  if (outTargetSet && (this->mEnabled || !aimsStraightOnDisable)) {
+    return !weapon->mTarget.HasTarget();
+  }
+  if (this->mResetTime > 0) {
+    return true;
+  }
+
+  // `Track(forward, kTrackingModeWorldSpace)`: both of its paths take the heading from watch bone 0.
+  bool headingMotion = false;
+  if (ResolveWatchBone(const_cast<CAimManipulator*>(this), 0u) != nullptr) {
+    const float desiredAngle = fa::Atan2Plus(0.0f, 1.0f, this->mHeadingOffset);
+    const float step =
+      ComputeTrackingStep(desiredAngle, this->mHeading, this->mMinHeading, this->mMaxHeading, this->mHeadingMaxSlew);
+    headingMotion = std::fabs(step) > kTrackingMotionEpsilon;
+  }
+  return headingMotion == this->mIsTracking;
 }
 
 /**
@@ -1186,7 +1203,7 @@ int moho::cfunc_CAimManipulatorSetFiringArc(lua_State* const luaContext)
 moho::CScrLuaInitForm* moho::func_CAimManipulatorSetFiringArc_LuaFuncDef()
 {
   static CScrLuaBinder binder(
-    SimLuaInitSet(),
+    moho::SCR_SimLuaInitSet(),
     kCAimManipulatorSetFiringArcName,
     &moho::cfunc_CAimManipulatorSetFiringArc,
     &CScrLuaMetatableFactory<CAimManipulator>::Instance(),
@@ -1206,10 +1223,7 @@ moho::CScrLuaInitForm* moho::func_CAimManipulatorSetFiringArc_LuaFuncDef()
 int moho::cfunc_CAimManipulatorSetFiringArcL(LuaPlus::LuaState* const state)
 {
   lua_State* const rawState = state->m_state;
-  const int argumentCount = lua_gettop(rawState);
-  if (argumentCount != 7) {
-    LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kCAimManipulatorSetFiringArcHelpText, 7, argumentCount);
-  }
+  moho::SCR_ExpectExactArgs(state, 7, kCAimManipulatorSetFiringArcHelpText);
 
   const LuaPlus::LuaObject manipulatorObject(LuaPlus::LuaStackObject(state, 1));
   CAimManipulator* const manipulator = SCR_FromLua_CAimManipulator(manipulatorObject, state);
@@ -1256,18 +1270,18 @@ int moho::cfunc_CAimManipulatorSetFiringArcL(LuaPlus::LuaState* const state)
  * Both centres are `NormalizeAngleSignedRadians` (0x0062FB50) inlined
  * (0x00630CC5..0x00630CFD, 0x00630D36..0x00630D6A: `_CIfmod` by 2*pi, then
  * the +-2*pi fix-up). The sums, differences and halvings run on the x87
- * stack, so they go through `msvc8::HalfSumX87` / `HalfAbsDifferenceX87`,
+ * stack, so they go through `fa::HalfSumX87` / `HalfAbsDifferenceX87`,
  * and the centre reaches `_CIfmod` unrounded (`NormalizeAngleSignedRadiansX87`).
  */
 void moho::CAimManipulator::SetFiringArc(const CAimFiringArc arc)
 {
-  this->mMinHeading = NormalizeAngleSignedRadiansX87(msvc8::HalfSumX87(arc.mMinHeading, arc.mMaxHeading));
+  this->mMinHeading = NormalizeAngleSignedRadiansX87(fa::HalfSumX87(arc.mMinHeading, arc.mMaxHeading));
   this->mHeadingMaxSlew = arc.mHeadingMaxSlew;
-  this->mMaxHeading = msvc8::HalfAbsDifferenceX87(arc.mMaxHeading, arc.mMinHeading);
+  this->mMaxHeading = fa::HalfAbsDifferenceX87(arc.mMaxHeading, arc.mMinHeading);
 
-  this->mMinPitch = NormalizeAngleSignedRadiansX87(msvc8::HalfSumX87(arc.mMinPitch, arc.mMaxPitch));
+  this->mMinPitch = NormalizeAngleSignedRadiansX87(fa::HalfSumX87(arc.mMinPitch, arc.mMaxPitch));
   this->mPitchMaxSlew = arc.mPitchMaxSlew;
-  this->mMaxPitch = msvc8::HalfAbsDifferenceX87(arc.mMaxPitch, arc.mMinPitch);
+  this->mMaxPitch = fa::HalfAbsDifferenceX87(arc.mMaxPitch, arc.mMinPitch);
 }
 
 /**
@@ -1320,7 +1334,7 @@ std::uint8_t moho::CAimManipulator::CheckTracking(
   if ((trackingModeFlags & kTrackingModeHeading) != 0u) {
     currentAngleLane = &this->mHeading;
     // 0x00630AB2..0x00630AB7: the offset is added to the unrounded `fpatan`.
-    desiredAngle = msvc8::Atan2Plus(transformedTarget.x, transformedTarget.z, this->mHeadingOffset);
+    desiredAngle = fa::Atan2Plus(transformedTarget.x, transformedTarget.z, this->mHeadingOffset);
   } else {
     const float halfCenter = minAngleCenter * kHalfScale;
     // The four consecutive stack floats handed to `MultQuadVec` as the
@@ -1328,8 +1342,8 @@ std::uint8_t moho::CAimManipulator::CheckTracking(
     // the last two lanes, 0x00630AE2 `fcos` stores lane 0 and 0x00630AEE
     // `fsin` stores lane 1. Scalar-first, so this is a rotation about X.
     Wm3::Quaternionf pitchBasis{};
-    pitchBasis.w = msvc8::cos(halfCenter);
-    pitchBasis.x = msvc8::sin(halfCenter);
+    pitchBasis.w = fa::cos(halfCenter);
+    pitchBasis.x = fa::sin(halfCenter);
     pitchBasis.y = 0.0f;
     pitchBasis.z = 0.0f;
 
@@ -1346,29 +1360,7 @@ std::uint8_t moho::CAimManipulator::CheckTracking(
   }
 
   const float currentAngle = *currentAngleLane;
-  float step = 0.0f;
-  // 0x00630B1B..0x00630B29: `comiss range, 3.1405928; jb` -- an unordered
-  // (NaN) range takes the clamped branch as well.
-  if (!(maxAngleHalfRange >= kAngleNormalizationClamp)) {
-    float constrained = NormalizeAngleSignedRadians(desiredAngle - minAngleCenter);
-    // 0x00630B69..0x00630B7A: two independent clamps, `max > x ? x : max`
-    // then `-max > x ? -max : x`, so an unordered (NaN) angle takes `max`.
-    if (!(maxAngleHalfRange > constrained)) {
-      constrained = maxAngleHalfRange;
-    }
-    if (-maxAngleHalfRange > constrained) {
-      constrained = -maxAngleHalfRange;
-    }
-    step = (constrained + minAngleCenter) - currentAngle;
-  } else {
-    step = NormalizeAngleSignedRadians(desiredAngle - currentAngle);
-  }
-
-  // 0x00630B8E..0x00630BB0: `_copysign(slew, step)` is stored back over the
-  // same local, so the heading-motion test below reads the slew-limited step.
-  if (std::fabs(step) > maxAngleSlew) {
-    step = std::copysign(maxAngleSlew, step);
-  }
+  const float step = ComputeTrackingStep(desiredAngle, currentAngle, minAngleCenter, maxAngleHalfRange, maxAngleSlew);
 
   // 0x00630BBB..0x00630BF7: `NormalizeAngleSignedRadians` inlined on the x87
   // sum. That sum keeps the extended exponent, so it differs from this float
@@ -1418,9 +1410,9 @@ void moho::CAimManipulator::RotateHeadingBone(const bool recomputeFromAngle)
 
   if (recomputeFromAngle) {
     const float halfHeading = this->mHeading * kHalfScale;
-    this->mHeadingRot.w = msvc8::cos(halfHeading);
+    this->mHeadingRot.w = fa::cos(halfHeading);
     this->mHeadingRot.x = 0.0f;
-    this->mHeadingRot.y = msvc8::sin(halfHeading);
+    this->mHeadingRot.y = fa::sin(halfHeading);
     this->mHeadingRot.z = 0.0f;
   }
 
@@ -1445,8 +1437,8 @@ void moho::CAimManipulator::RotatePitchBone(const bool recomputeFromAngle)
 
   if (recomputeFromAngle) {
     const float halfPitch = (-this->mPitch) * kHalfScale;
-    this->mPitchRot.w = msvc8::cos(halfPitch);
-    this->mPitchRot.x = msvc8::sin(halfPitch);
+    this->mPitchRot.w = fa::cos(halfPitch);
+    this->mPitchRot.x = fa::sin(halfPitch);
     this->mPitchRot.y = 0.0f;
     this->mPitchRot.z = 0.0f;
   }
@@ -1534,6 +1526,10 @@ bool moho::CAimManipulator::Track(const Wm3::Vector3f& targetDirection, const st
 
   const bool onTarget = (trackingResult & kTrackingResultOutsideTolerance) == 0u;
   const bool shouldBeTracking = (trackingResult & kTrackingResultHeadingMotion) != 0u;
+  if (shouldBeTracking != this->mIsTracking && POSE_InJob()) {
+    // Engine addition (sim_ParallelPose): IsPoseJobQuiet queued this update as one without a script call.
+    gpg::Die("sim_ParallelPose: aim manipulator '%s' would call Lua inside a pose job", this->mLabel.c_str());
+  }
   if (shouldBeTracking) {
     if (!this->mIsTracking) {
       weapon->CallString("OnStartTracking", ToStdString(this->mLabel));
@@ -1568,7 +1564,7 @@ int moho::cfunc_CAimManipulatorSetResetPoseTime(lua_State* const luaContext)
 moho::CScrLuaInitForm* moho::func_CAimManipulatorSetResetPoseTime_LuaFuncDef()
 {
   static CScrLuaBinder binder(
-    SimLuaInitSet(),
+    moho::SCR_SimLuaInitSet(),
     kCAimManipulatorSetResetPoseTimeName,
     &moho::cfunc_CAimManipulatorSetResetPoseTime,
     &CScrLuaMetatableFactory<CAimManipulator>::Instance(),
@@ -1588,16 +1584,7 @@ moho::CScrLuaInitForm* moho::func_CAimManipulatorSetResetPoseTime_LuaFuncDef()
 int moho::cfunc_CAimManipulatorSetResetPoseTimeL(LuaPlus::LuaState* const state)
 {
   lua_State* const rawState = state->m_state;
-  const int argumentCount = lua_gettop(rawState);
-  if (argumentCount != 2) {
-    LuaPlus::LuaState::Error(
-      state,
-      kLuaExpectedArgsWarning,
-      kCAimManipulatorSetResetPoseTimeHelpText,
-      2,
-      argumentCount
-    );
-  }
+  moho::SCR_ExpectExactArgs(state, 2, kCAimManipulatorSetResetPoseTimeHelpText);
 
   const LuaPlus::LuaObject manipulatorObject(LuaPlus::LuaStackObject(state, 1));
   CAimManipulator* const manipulator = SCR_FromLua_CAimManipulator(manipulatorObject, state);
@@ -1635,7 +1622,7 @@ int moho::cfunc_CAimManipulatorOnTarget(lua_State* const luaContext)
 moho::CScrLuaInitForm* moho::func_CAimManipulatorOnTarget_LuaFuncDef()
 {
   static CScrLuaBinder binder(
-    SimLuaInitSet(),
+    moho::SCR_SimLuaInitSet(),
     kCAimManipulatorOnTargetName,
     &moho::cfunc_CAimManipulatorOnTarget,
     &CScrLuaMetatableFactory<CAimManipulator>::Instance(),
@@ -1654,10 +1641,7 @@ moho::CScrLuaInitForm* moho::func_CAimManipulatorOnTarget_LuaFuncDef()
 int moho::cfunc_CAimManipulatorOnTargetL(LuaPlus::LuaState* const state)
 {
   lua_State* const rawState = state->m_state;
-  const int argumentCount = lua_gettop(rawState);
-  if (argumentCount != 1) {
-    LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kCAimManipulatorOnTargetHelpText, 1, argumentCount);
-  }
+  moho::SCR_ExpectExactArgs(state, 1, kCAimManipulatorOnTargetHelpText);
 
   const LuaPlus::LuaObject manipObject(LuaPlus::LuaStackObject(state, 1));
   CAimManipulator* const manipulator = moho::SCR_FromLua_CAimManipulator(manipObject, state);
@@ -1688,7 +1672,7 @@ int moho::cfunc_CAimManipulatorSetEnabled(lua_State* const luaContext)
 moho::CScrLuaInitForm* moho::func_CAimManipulatorSetEnabled_LuaFuncDef()
 {
   static CScrLuaBinder binder(
-    SimLuaInitSet(),
+    moho::SCR_SimLuaInitSet(),
     kCAimManipulatorSetEnabledName,
     &moho::cfunc_CAimManipulatorSetEnabled,
     &CScrLuaMetatableFactory<CAimManipulator>::Instance(),
@@ -1707,11 +1691,7 @@ moho::CScrLuaInitForm* moho::func_CAimManipulatorSetEnabled_LuaFuncDef()
  */
 int moho::cfunc_CAimManipulatorSetEnabledL(LuaPlus::LuaState* const state)
 {
-  lua_State* const rawState = state->m_state;
-  const int argumentCount = lua_gettop(rawState);
-  if (argumentCount != 2) {
-    LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kCAimManipulatorSetEnabledHelpText, 2, argumentCount);
-  }
+  moho::SCR_ExpectExactArgs(state, 2, kCAimManipulatorSetEnabledHelpText);
 
   const LuaPlus::LuaObject manipObject(LuaPlus::LuaStackObject(state, 1));
   CAimManipulator* const manipulator = moho::SCR_FromLua_CAimManipulator(manipObject, state);
@@ -1742,7 +1722,7 @@ int moho::cfunc_CAimManipulatorGetHeadingPitch(lua_State* const luaContext)
 moho::CScrLuaInitForm* moho::func_CAimManipulatorGetHeadingPitch_LuaFuncDef()
 {
   static CScrLuaBinder binder(
-    SimLuaInitSet(),
+    moho::SCR_SimLuaInitSet(),
     kCAimManipulatorGetHeadingPitchName,
     &moho::cfunc_CAimManipulatorGetHeadingPitch,
     &CScrLuaMetatableFactory<CAimManipulator>::Instance(),
@@ -1761,10 +1741,7 @@ moho::CScrLuaInitForm* moho::func_CAimManipulatorGetHeadingPitch_LuaFuncDef()
 int moho::cfunc_CAimManipulatorGetHeadingPitchL(LuaPlus::LuaState* const state)
 {
   lua_State* const rawState = state->m_state;
-  const int argumentCount = lua_gettop(rawState);
-  if (argumentCount != 1) {
-    LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kCAimManipulatorGetHeadingPitchHelpText, 1, argumentCount);
-  }
+  moho::SCR_ExpectExactArgs(state, 1, kCAimManipulatorGetHeadingPitchHelpText);
 
   const LuaPlus::LuaObject manipObject(LuaPlus::LuaStackObject(state, 1));
   CAimManipulator* const manipulator = moho::SCR_FromLua_CAimManipulator(manipObject, state);
@@ -1797,7 +1774,7 @@ int moho::cfunc_CAimManipulatorSetHeadingPitch(lua_State* const luaContext)
 moho::CScrLuaInitForm* moho::func_CAimManipulatorSetHeadingPitch_LuaFuncDef()
 {
   static CScrLuaBinder binder(
-    SimLuaInitSet(),
+    moho::SCR_SimLuaInitSet(),
     kCAimManipulatorSetHeadingPitchName,
     &moho::cfunc_CAimManipulatorSetHeadingPitch,
     &CScrLuaMetatableFactory<CAimManipulator>::Instance(),
@@ -1817,10 +1794,7 @@ moho::CScrLuaInitForm* moho::func_CAimManipulatorSetHeadingPitch_LuaFuncDef()
 int moho::cfunc_CAimManipulatorSetHeadingPitchL(LuaPlus::LuaState* const state)
 {
   lua_State* const rawState = state->m_state;
-  const int argumentCount = lua_gettop(rawState);
-  if (argumentCount != 3) {
-    LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kCAimManipulatorSetHeadingPitchHelpText, 3, argumentCount);
-  }
+  moho::SCR_ExpectExactArgs(state, 3, kCAimManipulatorSetHeadingPitchHelpText);
 
   const LuaPlus::LuaObject manipObject(LuaPlus::LuaStackObject(state, 1));
   CAimManipulator* const manipulator = moho::SCR_FromLua_CAimManipulator(manipObject, state);
@@ -1862,7 +1836,7 @@ int moho::cfunc_CAimManipulatorSetAimHeadingOffset(lua_State* const luaContext)
 moho::CScrLuaInitForm* moho::func_CAimManipulatorSetAimHeadingOffset_LuaFuncDef()
 {
   static CScrLuaBinder binder(
-    SimLuaInitSet(),
+    moho::SCR_SimLuaInitSet(),
     kCAimManipulatorSetAimHeadingOffsetName,
     &moho::cfunc_CAimManipulatorSetAimHeadingOffset,
     &CScrLuaMetatableFactory<CAimManipulator>::Instance(),
@@ -1881,16 +1855,7 @@ moho::CScrLuaInitForm* moho::func_CAimManipulatorSetAimHeadingOffset_LuaFuncDef(
 int moho::cfunc_CAimManipulatorSetAimHeadingOffsetL(LuaPlus::LuaState* const state)
 {
   lua_State* const rawState = state->m_state;
-  const int argumentCount = lua_gettop(rawState);
-  if (argumentCount != 2) {
-    LuaPlus::LuaState::Error(
-      state,
-      kLuaExpectedArgsWarning,
-      kCAimManipulatorSetAimHeadingOffsetHelpText,
-      2,
-      argumentCount
-    );
-  }
+  moho::SCR_ExpectExactArgs(state, 2, kCAimManipulatorSetAimHeadingOffsetHelpText);
 
   const LuaPlus::LuaObject manipObject(LuaPlus::LuaStackObject(state, 1));
   CAimManipulator* const manipulator = moho::SCR_FromLua_CAimManipulator(manipObject, state);
@@ -1913,23 +1878,24 @@ int moho::cfunc_CAimManipulatorSetAimHeadingOffsetL(LuaPlus::LuaState* const sta
  */
 void moho::CAimManipulator::MemberDeserialize(gpg::ReadArchive* const archive)
 {
-  if (this == nullptr || archive == nullptr) {
+  if (static_cast<const void*>(this) == nullptr || archive == nullptr) {
     return;
   }
 
   const gpg::RRef ownerRef = NullOwnerRef();
 
   archive->Read(CachedIAniManipulatorType(), this, ownerRef);
-  archive->Read(CachedWeakPtrUnitType(), &mUnit, ownerRef);
-  archive->Read(CachedWeakPtrUnitWeaponType(), &mWeapon, ownerRef);
+  archive->Read(gpg::RTypeOf<moho::WeakPtr<moho::Unit>>(), &mUnit, ownerRef);
+  archive->Read(gpg::RTypeOf<moho::WeakPtr<moho::UnitWeapon>>(), &mWeapon, ownerRef);
   archive->ReadString(&mLabel);
 
   archive->ReadPointer(&mUnitWepBlueprint, &ownerRef);
 
+  const bool exact = gSimExactArchive.load(std::memory_order_relaxed);
   if (UnitWeapon* const weapon = mWeapon.GetObjectPtr(); weapon != nullptr) {
     RProjectileBlueprint* projectileBlueprint = weapon->mProjectileBlueprint;
     archive->ReadPointer(&projectileBlueprint, &ownerRef);
-    if (projectileBlueprint != nullptr) {
+    if (projectileBlueprint != nullptr && !exact) {
       mProjPhysBlueprint = &projectileBlueprint->Physics;
     }
   }
@@ -1949,9 +1915,16 @@ void moho::CAimManipulator::MemberDeserialize(gpg::ReadArchive* const archive)
   archive->ReadBool(&mUnknownBoolE1);
   archive->ReadInt(&mResetPoseTime);
   archive->ReadInt(&mResetTime);
-  archive->Read(CachedQuaternionfType(), &mHeadingRot, ownerRef);
-  archive->Read(CachedQuaternionfType(), &mPitchRot, ownerRef);
+  archive->Read(gpg::RTypeOf<Wm3::Quaternionf>(), &mHeadingRot, ownerRef);
+  archive->Read(gpg::RTypeOf<Wm3::Quaternionf>(), &mPitchRot, ownerRef);
   archive->ReadFloat(&mHeadingOffset);
+
+  // Engine addition (keyframes): `MemberSerialize`'s exact-mode tail.
+  if (exact) {
+    RProjectileBlueprint* cachedBlueprint = nullptr;
+    archive->ReadPointer(&cachedBlueprint, &ownerRef);
+    mProjPhysBlueprint = cachedBlueprint != nullptr ? &cachedBlueprint->Physics : nullptr;
+  }
 }
 
 /**
@@ -1962,7 +1935,7 @@ void moho::CAimManipulator::MemberDeserialize(gpg::ReadArchive* const archive)
  */
 void moho::CAimManipulator::MemberSerialize(gpg::WriteArchive* const archive) const
 {
-  if (this == nullptr || archive == nullptr) {
+  if (static_cast<const void*>(this) == nullptr || archive == nullptr) {
     return;
   }
 
@@ -1975,16 +1948,17 @@ void moho::CAimManipulator::MemberSerialize(gpg::WriteArchive* const archive) co
   CAimManipulator* const self = const_cast<CAimManipulator*>(this);
 
   archive->Write(CachedIAniManipulatorType(), this, ownerRef);
-  archive->Write(CachedWeakPtrUnitType(), &mUnit, ownerRef);
-  archive->Write(CachedWeakPtrUnitWeaponType(), &mWeapon, ownerRef);
+  archive->Write(gpg::RTypeOf<moho::WeakPtr<moho::Unit>>(), &mUnit, ownerRef);
+  archive->Write(gpg::RTypeOf<moho::WeakPtr<moho::UnitWeapon>>(), &mWeapon, ownerRef);
   archive->WriteString(&self->mLabel);
 
   archive->WritePointer<moho::RUnitBlueprintWeapon>(mUnitWepBlueprint, gpg::TrackedPointerState::Unowned, ownerRef);
 
+  const bool exact = gSimExactArchive.load(std::memory_order_relaxed);
   if (UnitWeapon* const weapon = mWeapon.GetObjectPtr(); weapon != nullptr) {
     RProjectileBlueprint* const projectileBlueprint = weapon->mProjectileBlueprint;
     archive->WritePointer<moho::RProjectileBlueprint>(projectileBlueprint, gpg::TrackedPointerState::Unowned, ownerRef);
-    if (projectileBlueprint != nullptr) {
+    if (projectileBlueprint != nullptr && !exact) {
       self->mProjPhysBlueprint = &projectileBlueprint->Physics;
     }
   }
@@ -2004,9 +1978,16 @@ void moho::CAimManipulator::MemberSerialize(gpg::WriteArchive* const archive) co
   archive->WriteBool(mUnknownBoolE1);
   archive->WriteInt(mResetPoseTime);
   archive->WriteInt(mResetTime);
-  archive->Write(CachedQuaternionfType(), &mHeadingRot, ownerRef);
-  archive->Write(CachedQuaternionfType(), &mPitchRot, ownerRef);
+  archive->Write(gpg::RTypeOf<Wm3::Quaternionf>(), &mHeadingRot, ownerRef);
+  archive->Write(gpg::RTypeOf<Wm3::Quaternionf>(), &mPitchRot, ownerRef);
   archive->WriteFloat(mHeadingOffset);
+
+  // Engine addition (keyframes): the cached physics as it is, which may be null or an older
+  // projectile blueprint than the weapon's current one; retail stores neither.
+  if (exact) {
+    RProjectileBlueprint* const cachedBlueprint = ProjectileBlueprintOfPhysics(mProjPhysBlueprint);
+    archive->WritePointer<moho::RProjectileBlueprint>(cachedBlueprint, gpg::TrackedPointerState::Unowned, ownerRef);
+  }
 }
 
 namespace gpg
@@ -2020,12 +2001,7 @@ namespace gpg
    */
   gpg::RRef* RRef_CAimManipulator(gpg::RRef* const outRef, moho::CAimManipulator* const value)
   {
-    if (!outRef) {
-      return nullptr;
-    }
-
-    *outRef = MakeDerivedRef(value, CachedCAimManipulatorType());
-    return outRef;
+    return gpg::WriteDerivedRef(outRef, value, &CachedCAimManipulatorType);
   }
 
   /**

@@ -13,6 +13,7 @@
 #include "moho/render/camera/CameraImpl.h"
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/sim/CWldMap.h"
+#include "moho/terrain/CWldTerrainRes.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
 

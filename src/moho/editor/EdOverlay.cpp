@@ -32,6 +32,7 @@
 #include "moho/render/d3d/CD3DPrimBatcher.h"
 #include "moho/render/textures/CD3DBatchTexture.h"
 #include "moho/sim/CWldMap.h"
+#include "moho/terrain/CWldTerrainRes.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
 

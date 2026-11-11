@@ -7,7 +7,7 @@
 //   ren_WaterSkipDisabled   1    a map with water switched off (water_on 0) skips the reflection pass, the water mask, the refraction copy and the water surface
 //   ui_CullOffscreen        1    Maui bitmaps / borders / texts that lie completely outside the window are not built and queued (EdUiCull.h)
 //   ui_SkipTransparent      1    Maui bitmaps / borders whose alpha is 0 are not drawn
-//   ren_AtlasFastLookup     1    the texture atlas finds a texture it holds by pointer (hash) before it walks its ordered set
+//   (the atlas lookup shortcut is the engine's own ren_TextureAtlasCache; atlasLookups / atlasFastHits count its use)
 // Lua: ed_render_stats() -> table (see EdRenderStats.cpp).
 //
 // All counters are plain integers: everything that writes them runs on the main thread (the render pass, the UI pass and the Lua natives are the same thread).
@@ -24,7 +24,6 @@ namespace moho
   extern bool ren_WaterSkipDisabled;
   extern bool ui_CullOffscreen;
   extern bool ui_SkipTransparent;
-  extern bool ren_AtlasFastLookup;
 }
 
 namespace moho::editor::renderstats

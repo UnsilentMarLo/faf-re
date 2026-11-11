@@ -12,13 +12,532 @@
 #include <utility>
 
 #include "EffectText.h"
+#include "RayTracedShadows.h"
+#include "ShadowCascades.h"
+#include "TextureFiltering.h"
 
 namespace gpg::gal::effects
 {
   using namespace text;
 
+  ShadowCascadeConstants gShadowCascades{};
+  int gTextureAnisotropy = 8;
+  std::atomic<bool> gShadowCascadesBlocked{false};
+  RayShadowConstants gRayShadows{};
+  bool gRayQueryShaders = false;
+  int gRayTracedShadows = 0;
+
+  std::string_view RayShadowDeclaration() noexcept
+  {
+    return "float4 faf_RayShadows[8]; // engine addition (ren_RayTracedShadows), filled by the backend\n";
+  }
+
+  bool IsShadowLookupSampler(const SamplerDesc& sampler)
+  {
+    return Lower(sampler.texture) == "shadowtexture" && Lower(sampler.name).find("blur") == std::string::npos;
+  }
+
+  std::string_view ShadowCascadeDeclaration() noexcept
+  {
+    return "float4 faf_ShadowCascades[9]; // engine addition (ren_ShadowCascades), filled by the backend\n";
+  }
+
   namespace
   {
+    static_assert(kShadowCascadeVectors == 9U, "ShadowCascadeDeclaration's array length");
+
+    // Engine addition (ren_ShadowCascades): the lighting shadow samplers' own type; see ShadowCascades.h.
+    // The shadow targets have one mip, so every lookup reads level 0 and needs no derivatives: a pixel's
+    // neighbours may sit in another tile.
+    constexpr const char* kShadowCascadeHelpers = R"hlsl(
+// ---- engine addition (ren_ShadowCascades): shadow lookups through the cascade atlas ----
+// HLSL converts between structs whose members match one for one, which would make every tex2D on this
+// type ambiguous with faf_sampler's. The sampler comes first here and the texture first there, so
+// neither converts to the other.
+struct faf_shadow_sampler
+{
+    SamplerState s;
+    Texture2D t2;
+};
+faf_shadow_sampler faf_make_shadow_sampler(Texture2D t2, TextureCube tc, Texture3D t3, SamplerState s)
+{
+    faf_shadow_sampler r;
+    r.s = s;
+    r.t2 = t2;
+    return r;
+}
+float2 faf_shadow_uv(float2 uv)
+{
+    const int count = (int)faf_ShadowCascades[0].x;
+    if (count <= 0) return uv;
+    [unroll] for (int k = 0; k < 4; ++k) {
+        if (k < count) {
+            const float4 box = faf_ShadowCascades[1 + 2 * k];
+            if (all(uv >= box.xy) && all(uv <= box.zw)) {
+                const float4 map = faf_ShadowCascades[2 + 2 * k];
+                return uv * map.xy + map.zw;
+            }
+        }
+    }
+    return faf_ShadowCascades[0].zw;
+}
+float4 faf_shadow_read(faf_shadow_sampler s, float2 uv) { return s.t2.SampleLevel(s.s, faf_shadow_uv(uv), 0); }
+float4 tex2D(faf_shadow_sampler s, float2 uv) { return faf_shadow_read(s, uv); }
+float4 tex2D(faf_shadow_sampler s, float2 uv, float2 dx, float2 dy) { return faf_shadow_read(s, uv); }
+float4 tex2Dbias(faf_shadow_sampler s, float4 uv) { return faf_shadow_read(s, uv.xy); }
+float4 tex2Dproj(faf_shadow_sampler s, float4 uv) { return faf_shadow_read(s, uv.xy / uv.w); }
+float4 tex2Dlod(faf_shadow_sampler s, float4 uv) { return faf_shadow_read(s, uv.xy); }
+float4 tex2Dgrad(faf_shadow_sampler s, float2 uv, float2 dx, float2 dy) { return faf_shadow_read(s, uv); }
+// ---- end of the cascade lookups ----
+)hlsl";
+
+    static_assert(kRayShadowVectors == 8U,"RayShadowDeclaration's array length");
+
+    // Engine addition (ren_RayTracedShadows): the lookups' third argument, the point's whole shadow
+    // coordinate (RayTracedShadows.h). A call site whose coordinate has no depth passes a z of -1e30,
+    // which the ray code reads as "no point". Its w says which channel the call site reads (the rewrite looks
+    // past the call): 1 red (mesh.fx's depth compare), 2 green (terrain.fx's "1 where sun is"), 3 unknown, so
+    // the lookup traces only for the reading that is used.
+    constexpr const char* kShadowCoordinateHelpers = R"hlsl(
+float4 faf_shadow_full(float4 v) { return float4(v.xyz, 3); }
+float4 faf_shadow_full(float3 v) { return float4(v.xy, -1e30, 3); }
+float4 faf_shadow_full(float2 v) { return float4(v, -1e30, 3); }
+float4 faf_shadow_full_r(float4 v) { return float4(v.xyz, 1); }
+float4 faf_shadow_full_r(float3 v) { return float4(v.xy, -1e30, 1); }
+float4 faf_shadow_full_r(float2 v) { return float4(v, -1e30, 1); }
+float4 faf_shadow_full_g(float4 v) { return float4(v.xyz, 2); }
+float4 faf_shadow_full_g(float3 v) { return float4(v.xy, -1e30, 2); }
+float4 faf_shadow_full_g(float2 v) { return float4(v, -1e30, 2); }
+)hlsl";
+
+    // Without rays: the coordinate is ignored.
+    constexpr const char* kRayShadowFallback = R"hlsl(
+float4 tex2D(faf_shadow_sampler s, float2 uv, float4 full) { return faf_shadow_read(s, uv); }
+)hlsl";
+
+    // With rays. A coordinate names a point two ways: as mesh.fx reads it (at z) and as terrain.fx does (at
+    // z + 0.01, its own 0.01 shift undone). Both lie on one line towards the sun, so one ray along it answers
+    // both: it starts at whichever of the two is further from the sun, and a hit counts for a point only past
+    // that point's own distance along the ray plus its bias. The longer test runs first; the short stretch
+    // between the two only when it found nothing. Meshes and the ground are traced apart, the ground with a
+    // bias that grows with camera distance. mesh.fx's five-tap filter asks for the same point five times, so
+    // the answer is kept for the next call.
+    constexpr const char* kRayShadowHelpers = R"hlsl(
+[[vk::binding(0, 2)]] RaytracingAccelerationStructure faf_RayScene : register(t0, space1);
+// Engine addition (ren_RayAlphaShadows): alpha-tested pieces (trees). Per scene instance a record (index offset,
+// texture-coordinate offset, texture slot, 1 when alpha-tested); the pieces' indices and texture coordinates;
+// their textures (RayTracingD3D12.cpp / RayTracingVulkan.cpp).
+[[vk::binding(1, 2)]] ByteAddressBuffer faf_RayAttributes : register(t1, space1);
+[[vk::binding(2, 2)]] StructuredBuffer<uint4> faf_RayRecords : register(t2, space1);
+[[vk::binding(3, 2)]] Texture2D faf_RayTextures[64] : register(t0, space2);
+[[vk::binding(4, 2)]] SamplerState faf_RaySampler : register(s0, space1);
+// Whether a ray meets solid surface at this point of an alpha-tested triangle: mesh.fx's DepthClip test (the
+// albedo's alpha at least 0.5). `bary` weighs the triangle's second and third corners.
+bool faf_ray_solid(uint instance, uint primitive, float2 bary)
+{
+    const uint4 record = faf_RayRecords[instance];
+    if (record.w == 0) return true;
+    const uint3 corner = faf_RayAttributes.Load3(record.x + primitive * 12);
+    const float2 uv0 = asfloat(faf_RayAttributes.Load2(record.y + corner.x * 8));
+    const float2 uv1 = asfloat(faf_RayAttributes.Load2(record.y + corner.y * 8));
+    const float2 uv2 = asfloat(faf_RayAttributes.Load2(record.y + corner.z * 8));
+    const float2 uv = uv0 + bary.x * (uv1 - uv0) + bary.y * (uv2 - uv0);
+    return faf_RayTextures[NonUniformResourceIndex(record.z)].SampleLevel(faf_RaySampler, uv, 1).a >= 0.5;
+}
+static float4 faf_ray_key = float4(-1e31, -1e31, -1e31, -1e31);
+static float2 faf_ray_lit = float2(1, 1);
+float3 faf_ray_point(float2 uv, float z)
+{
+    const float4 clip = float4(uv.x * 2 - 1, 1 - uv.y * 2, z, 1);
+    const float4 p = clip.x * faf_RayShadows[0] + clip.y * faf_RayShadows[1] + clip.z * faf_RayShadows[2] + faf_RayShadows[3];
+    return p.xyz / p.w;
+}
+bool faf_ray_blocked(float3 origin, float3 direction, float tMin, float tMax, uint mask)
+{
+    if (tMax <= tMin) return false;
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = direction;
+    ray.TMin = tMin;
+    ray.TMax = tMax;
+    // Opaque pieces commit by themselves; an alpha-tested one only where its texture is solid.
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+    query.TraceRayInline(faf_RayScene, RAY_FLAG_NONE, mask, ray);
+    while (query.Proceed()) {
+        if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            faf_ray_solid(query.CandidateInstanceIndex(), query.CandidatePrimitiveIndex(), query.CandidateTriangleBarycentrics())) {
+            query.CommitNonOpaqueTriangleHit();
+        }
+    }
+    return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+bool faf_ray_blocked(float3 origin, float3 direction, float tMin, float tMax)
+{
+    return faf_ray_blocked(origin, direction, tMin, tMax, 0xFF);
+}
+// How far under the traced ground `p` lies, 0 when it doesn't: the drawn ground is coarser than the traced
+// height field with camera distance (terrain level of detail), so a drawn point can lie under it by more than
+// any fixed bias, and a ray towards a low sun from there is shaded by the ground itself. A height field has one
+// surface over each point, so a ray straight up hits the ground only from under it.
+float faf_ray_under_ground(float3 p)
+{
+    RayDesc ray;
+    ray.Origin = p;
+    ray.Direction = float3(0, 1, 0);
+    ray.TMin = 0;
+    ray.TMax = 200;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE> query;
+    query.TraceRayInline(faf_RayScene, RAY_FLAG_NONE, 1, ray);
+    query.Proceed();
+    return (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? query.CommittedRayT() : 0;
+}
+// Engine addition (ren_RaySunAngle): a direction towards a point of the sun's disc. `disc` lies in the unit
+// disc; faf_RayShadows[7].z is the tangent of the disc's angular radius (0: the centre only, hard shadows).
+float3 faf_ray_sun_point(float3 toSun, float2 disc)
+{
+    const float3 helper = (abs(toSun.y) < 0.9) ? float3(0, 1, 0) : float3(1, 0, 0);
+    const float3 across = normalize(cross(helper, toSun));
+    const float3 along = cross(toSun, across);
+    return normalize(toSun + faf_RayShadows[7].z * (disc.x * across + disc.y * along));
+}
+// A value in [0, 1) fixed to the world under `p`, so the spread of soft-shadow rays turns from point to point
+// without crawling when the camera moves. The cells are 1/8 unit near the camera and grow with distance, so a
+// pixel far away doesn't cover many of them (which would make it pick a new one as the view pans).
+float faf_ray_noise(float3 p)
+{
+    const float scale = 8.0 / max(1.0, distance(p, faf_RayShadows[5].xyz) * 0.025);
+    const float2 cell = floor(p.xz * scale);
+    return frac(52.9829189 * frac(dot(cell, float2(0.06711056, 0.00583715))));
+}
+// A mesh's shadow on `p` along `direction` past `tMin`. A point the drawn ground puts under the traced ground
+// could see the sunk part of a building from below: only a hit needs the check, then the ray leaves again from
+// the traced ground over the point.
+bool faf_ray_mesh_blocked(float3 p, float3 direction, float tMin, float tMax)
+{
+    if (!faf_ray_blocked(p, direction, tMin, tMax, 2)) return false;
+    const float under = faf_ray_under_ground(p);
+    return (under > 0) ? faf_ray_blocked(p + float3(0, under, 0), direction, tMin, tMax, 2) : true;
+}
+// The share of `count` rays from `origin` towards points spread over the sun's disc (a sunflower spiral,
+// turned by `spin`) that no mesh blocks past `tMin`.
+float faf_ray_mesh_share(float3 origin, float3 toSun, float tMin, float tMax, float spin, int count)
+{
+    float lit = 0;
+    [loop] for (int i = 0; i < count; ++i) {
+        const float radius = sqrt((i + 0.5) / count);
+        const float angle = (i + spin) * 2.39996323;
+        const float3 direction = faf_ray_sun_point(toSun, radius * float2(cos(angle), sin(angle)));
+        lit += faf_ray_mesh_blocked(origin, direction, tMin, tMax) ? 0 : 1;
+    }
+    return lit / count;
+}
+// The ground's shadow on `p` past `tMin` along `direction`. A point under the traced ground (see
+// faf_ray_under_ground) sees that ground above it, so only a hit needs the check: then the ray leaves again from
+// the traced ground over the point. Lit points, most of the screen, pay one ray.
+bool faf_ray_ground_blocked(float3 p, float3 direction, float tMin, float tMax)
+{
+    if (!faf_ray_blocked(p, direction, tMin, tMax, 1)) return false;
+    const float under = faf_ray_under_ground(p);
+    return (under > 0) ? faf_ray_blocked(p + float3(0, under, 0), direction, tMin, tMax, 1) : true;
+}
+// One ray against the instances in `mask` answering both readings: x lit past meshT, y lit past terrainT.
+float2 faf_ray_pair(float3 start, float3 toSun, float meshT, float terrainT, float tMax, uint mask)
+{
+    const float nearT = min(meshT, terrainT);
+    const float farT = max(meshT, terrainT);
+    if (faf_ray_blocked(start, toSun, farT, tMax, mask)) {
+        return float2(0, 0);
+    }
+    if (faf_ray_blocked(start, toSun, nearT, farT, mask)) {
+        return (meshT < terrainT) ? float2(0, 1) : float2(1, 0);
+    }
+    return float2(1, 1);
+}
+static float2 faf_ray_key_tap = float2(-1e31, -1e31);
+// x: sunlit for a mesh point at full.z; y: sunlit for a terrain point whose z is 0.01 short. `tap` is the
+// lookup's offset from the point (mesh.fx's filter taps): with a sun disc each tap traces towards its own
+// point of it, and mesh.fx's average of the taps makes the soft edge.
+float2 faf_ray_light(float4 full, float2 tap)
+{
+    if (faf_RayShadows[4].x <= 0 || full.z < -1e29) return float2(1, 1);
+    const bool soft = faf_RayShadows[7].z > 0;
+    if (all(full == faf_ray_key) && (!soft || all(tap == faf_ray_key_tap))) return faf_ray_lit;
+    const float2 uv = full.xy;
+    const float3 drawnPoint = faf_ray_point(uv, full.z + 0.01);
+    // A point the drawn ground puts under the traced one moves up onto it only when the ground's ray hits
+    // (faf_ray_ground_blocked).
+    const float3 meshPoint = faf_ray_point(uv, full.z);
+    const float3 terrainPoint = drawnPoint;
+    const float3 toSun = faf_RayShadows[6].xyz;
+    const float ahead = dot(meshPoint - terrainPoint, toSun); // the mesh reading's lead along the ray
+    float3 start = (ahead >= 0) ? terrainPoint : meshPoint;
+    const float meshT = max(ahead, 0) + faf_RayShadows[4].y;
+    const float terrainT = max(-ahead, 0) + faf_RayShadows[4].z;
+    const float tMax = faf_RayShadows[5].w;
+    // Meshes (mask 2, RayTracing.h's kRayMaskMesh) with the small biases, so units keep their contact
+    // shadows. The ground (mask 1) is drawn coarser with distance than the traced height field, so a ground
+    // point can lie under the traced ground: against the ground, its ray leaves further out.
+    const float terrainOnTerrainT = terrainT + faf_RayShadows[7].x + faf_RayShadows[4].w * distance(terrainPoint, faf_RayShadows[5].xyz);
+    float2 lit;
+    if (full.w < 1.5) {
+        // Red only (mesh.fx): the mesh reading, from its own point.
+        // Against the traced ground with its allowance: it can lie above the drawn ground (a coarse field,
+        // tessellation), up into a unit's base.
+        float3 meshRay = toSun;
+        if (soft) {
+            // This tap's point of the disc: from its offset, turned per point of the world. A single lookup (mesh.fx
+            // below its top shadow quality has no filter taps) takes a point from the noise alone, a dithered edge.
+            const float seed = any(tap != 0) ? frac(sin(dot(tap, float2(12.9898, 78.233)) * 1e4) * 43758.5453) : 0.37;
+            const float angle = (seed + faf_ray_noise(meshPoint)) * 6.2831853;
+            const float radius = sqrt(frac(seed * 7.31 + 0.5));
+            meshRay = faf_ray_sun_point(toSun, radius * float2(cos(angle), sin(angle)));
+        }
+        const bool shaded = faf_ray_mesh_blocked(meshPoint, meshRay, faf_RayShadows[4].y, tMax) ||
+            faf_ray_ground_blocked(meshPoint, toSun, faf_RayShadows[4].y + faf_RayShadows[7].x, tMax);
+        lit = shaded ? float2(0, 1) : float2(1, 1);
+    } else if (full.w < 2.5) {
+        // Green only (terrain.fx): the terrain reading, from its own point. With a sun disc, the share of
+        // faf_RayShadows[7].w rays over it that meshes don't block; the ground's own shadow stays one ray.
+        const float groundT = faf_RayShadows[4].z;
+        const int count = clamp((int)faf_RayShadows[7].w, 1, 16);
+        const float meshLit = soft
+            ? faf_ray_mesh_share(terrainPoint, toSun, groundT, tMax, faf_ray_noise(terrainPoint), count)
+            : (faf_ray_mesh_blocked(terrainPoint, toSun, groundT, tMax) ? 0 : 1);
+        const bool ground = meshLit > 0 && faf_ray_ground_blocked(terrainPoint, toSun, terrainOnTerrainT - max(-ahead, 0), tMax);
+        lit = float2(1, ground ? 0 : meshLit);
+    } else {
+        // Both readings (a call site that reads the whole texel): the old way, both points lifted first.
+        const float3 up = float3(0, faf_ray_under_ground(drawnPoint), 0);
+        start += up;
+        lit = faf_ray_pair(start, toSun, meshT, terrainT, tMax, 2);
+        if (any(lit > 0)) {
+            lit = min(lit, faf_ray_pair(start, toSun, meshT + faf_RayShadows[7].x, terrainOnTerrainT, tMax, 1));
+        }
+    }
+    // Diagnostics (ren_RayShadowDebug): stripes 20 world units apart across x (1) or z (2) from the
+    // rebuilt point, and (3) shade where the rebuilt point lies below the ray scene (a ray straight up hits).
+    const float debugMode = faf_RayShadows[6].w;
+    if (debugMode > 0.5 && debugMode < 1.5) {
+        lit = (frac(terrainPoint.x * 0.05) > 0.5) ? float2(1, 1) : float2(0, 0);
+    } else if (debugMode > 1.5 && debugMode < 2.5) {
+        lit = (frac(terrainPoint.z * 0.05) > 0.5) ? float2(1, 1) : float2(0, 0);
+    } else if (debugMode > 2.5) {
+        lit = faf_ray_blocked(drawnPoint + float3(0, 0.02, 0), float3(0, 1, 0), 0.0, 1000.0) ? float2(0, 0) : float2(1, 1);
+    }
+    faf_ray_key = full;
+    faf_ray_key_tap = tap;
+    faf_ray_lit = lit;
+    return lit;
+}
+float4 tex2D(faf_shadow_sampler s, float2 uv, float4 full)
+{
+    float4 texel = faf_shadow_read(s, uv);
+    const float2 lit = faf_ray_light(full, uv - full.xy);
+    texel.r = (lit.x > 0) ? texel.r : -1e4;
+    texel.g *= lit.y;
+    return texel;
+}
+)hlsl";
+
+    /**
+     * Engine addition (ren_RayTracedShadows): gives each `tex2D(<shadow sampler>, <coords>.xy ...)` call in
+     * `body` a third argument, `faf_shadow_full(<coords>)`, when the call has two arguments and the second
+     * starts with a plain name or member chain followed by `.xy`, or is a plain name or member chain alone
+     * (not ending in a swizzle). Other calls keep two arguments and read the map alone.
+     */
+    [[nodiscard]] std::string PassShadowCoordinates(const std::string& body, const std::vector<std::string>& samplers)
+    {
+      std::string out;
+      out.reserve(body.size() + 64U);
+      std::size_t index = 0U;
+      while (index < body.size()) {
+        const std::size_t call = body.find("tex2D", index);
+        if (call == std::string::npos) {
+          break;
+        }
+        std::size_t cursor = call + 5U;
+        const bool whole = (call == 0U || !IsIdentifierChar(body[call - 1U])) && cursor < body.size() && !IsIdentifierChar(body[cursor]);
+        const auto skip = [&] {
+          while (cursor < body.size() && std::isspace(static_cast<unsigned char>(body[cursor])) != 0) {
+            ++cursor;
+          }
+        };
+        bool rewritten = false;
+        if (whole) {
+          skip();
+          if (cursor < body.size() && body[cursor] == '(') {
+            ++cursor;
+            skip();
+            const std::size_t nameStart = cursor;
+            while (cursor < body.size() && IsIdentifierChar(body[cursor])) {
+              ++cursor;
+            }
+            const std::string name = body.substr(nameStart, cursor - nameStart);
+            skip();
+            if (std::find(samplers.begin(), samplers.end(), name) != samplers.end() && cursor < body.size() && body[cursor] == ',') {
+              ++cursor;
+              const std::size_t argumentStart = cursor;
+              int depth = 0;
+              std::size_t end = std::string::npos;
+              bool more = false;
+              for (std::size_t at = cursor; at < body.size(); ++at) {
+                const char c = body[at];
+                if (c == '(' || c == '[') {
+                  ++depth;
+                } else if ((c == ')' || c == ']') && depth > 0) {
+                  --depth;
+                } else if (c == ')' && depth == 0) {
+                  end = at;
+                  break;
+                } else if (c == ',' && depth == 0) {
+                  more = true;
+                  break;
+                }
+              }
+              if (end != std::string::npos && !more) {
+                std::size_t at = argumentStart;
+                while (at < end && std::isspace(static_cast<unsigned char>(body[at])) != 0) {
+                  ++at;
+                }
+                // The member chain's names; the effect layer's token stream spaces them (`inV . mShadow . xy`).
+                std::vector<std::string> names;
+                while (at < end && IsIdentifierChar(body[at])) {
+                  const std::size_t nameAt = at;
+                  while (at < end && IsIdentifierChar(body[at])) {
+                    ++at;
+                  }
+                  names.push_back(body.substr(nameAt, at - nameAt));
+                  std::size_t next = at;
+                  while (next < end && std::isspace(static_cast<unsigned char>(body[next])) != 0) {
+                    ++next;
+                  }
+                  if (next >= end || body[next] != '.') {
+                    at = next;
+                    break;
+                  }
+                  ++next;
+                  while (next < end && std::isspace(static_cast<unsigned char>(body[next])) != 0) {
+                    ++next;
+                  }
+                  at = next;
+                }
+                const bool named = !names.empty() && std::isdigit(static_cast<unsigned char>(names.front().front())) == 0;
+                const bool plainChain = named && at == end;
+                const auto join = [&](const std::size_t count) {
+                  std::string chain;
+                  for (std::size_t k = 0U; k < count; ++k) {
+                    chain += (k == 0U ? "" : ".") + names[k];
+                  }
+                  return chain;
+                };
+                // The last member of the chain, when it is a swizzle (only xyzw / rgba letters).
+                const bool swizzle = names.size() > 1U && names.back().find_first_not_of("xyzwrgba") == std::string::npos;
+                // The channel the call site reads (`tex2D( ... ).g`): the lookup then traces for it alone.
+                std::string channel;
+                {
+                  std::size_t after = end + 1U;
+                  while (after < body.size() && std::isspace(static_cast<unsigned char>(body[after])) != 0) {
+                    ++after;
+                  }
+                  if (after < body.size() && body[after] == '.') {
+                    ++after;
+                    while (after < body.size() && std::isspace(static_cast<unsigned char>(body[after])) != 0) {
+                      ++after;
+                    }
+                    const std::size_t memberAt = after;
+                    while (after < body.size() && IsIdentifierChar(body[after])) {
+                      ++after;
+                    }
+                    const std::string member = body.substr(memberAt, after - memberAt);
+                    if (member == "r" || member == "x") {
+                      channel = "_r";
+                    } else if (member == "g" || member == "y") {
+                      channel = "_g";
+                    }
+                  }
+                }
+                if (named && names.size() > 1U && names.back() == "xy") {
+                  // `<coords>.xy`, maybe offset (a filter's taps): the coordinate is the chain before the swizzle.
+                  out.append(body, index, end - index);
+                  out += ", faf_shadow_full" + channel + "(" + join(names.size() - 1U) + ")";
+                  index = end;
+                  rewritten = true;
+                } else if (plainChain && !swizzle) {
+                  // A whole coordinate (terrain.fx's ComputeShadow passes its float4): faf_shadow_full's overloads
+                  // trace a float4 and leave a float2 or float3 to the map.
+                  out.append(body, index, end - index);
+                  out += ", faf_shadow_full" + channel + "(" + join(names.size()) + ")";
+                  index = end;
+                  rewritten = true;
+                }
+              }
+            }
+          }
+        }
+        if (!rewritten) {
+          out.append(body, index, call + 5U - index);
+          index = call + 5U;
+        }
+      }
+      out.append(body, index, std::string::npos);
+      return out;
+    }
+
+    /**
+     * Engine addition (ren_ShadowCascades): true when every use of `sampler` in `source`, past its own
+     * declaration and outside comments, is the first argument of a tex2D-family call. Those are the
+     * calls faf_shadow_sampler answers; anything else (passing it to a function) needs a faf_sampler.
+     */
+    [[nodiscard]] bool ShadowSamplerOnlyLookedUp(const std::string_view source, const SamplerDesc& sampler)
+    {
+      static constexpr std::string_view kCalls[] = {"tex2D", "tex2Dbias", "tex2Dproj", "tex2Dlod", "tex2Dgrad"};
+      const std::string_view name = sampler.name;
+      std::size_t index = 0U;
+      while (index < source.size()) {
+        if (source.compare(index, 2U, "//") == 0) {
+          const std::size_t end = source.find('\n', index);
+          index = (end == std::string_view::npos) ? source.size() : end;
+          continue;
+        }
+        if (source.compare(index, 2U, "/*") == 0) {
+          const std::size_t end = source.find("*/", index + 2U);
+          index = (end == std::string_view::npos) ? source.size() : end + 2U;
+          continue;
+        }
+        if (index >= sampler.begin && index < sampler.end) {
+          index = sampler.end;
+          continue;
+        }
+        const bool whole = (index == 0U || !IsIdentifierChar(source[index - 1U])) && source.compare(index, name.size(), name) == 0 &&
+          (index + name.size() >= source.size() || !IsIdentifierChar(source[index + name.size()]));
+        if (!whole) {
+          ++index;
+          continue;
+        }
+        std::size_t before = index;
+        const auto skipSpace = [&] {
+          while (before > 0U && std::isspace(static_cast<unsigned char>(source[before - 1U])) != 0) {
+            --before;
+          }
+        };
+        skipSpace();
+        if (before == 0U || source[before - 1U] != '(') {
+          return false;
+        }
+        --before;
+        skipSpace();
+        std::size_t start = before;
+        while (start > 0U && IsIdentifierChar(source[start - 1U])) {
+          --start;
+        }
+        const std::string_view call = source.substr(start, before - start);
+        if (std::find(std::begin(kCalls), std::end(kCalls), call) == std::end(kCalls)) {
+          return false;
+        }
+        index += name.size();
+      }
+      return true;
+    }
     // Register numbers of the placeholder views a faf_sampler carries for the
     // dimensions its texture is never sampled in. The compiler removes them
     // with the dead fields; ModernEffect consumers can check none survive.
@@ -43,8 +562,19 @@ faf_sampler faf_make_sampler(Texture2D t2, TextureCube tc, Texture3D t3, Sampler
 Texture2D faf_null2D : register(t125);
 TextureCube faf_nullCube : register(t126);
 Texture3D faf_null3D : register(t127);
-#ifdef FAF_VERTEX_STAGE
-// Vertex shaders have no derivatives: Direct3D 9 sampled mip 0.
+// The patch constants of a tessellated pass (engine addition): the factors of the
+// edges opposite control points 0, 1 and 2, and of the inside.
+struct faf_tess_factors
+{
+    float edges[3] : SV_TessFactor;
+    float inside : SV_InsideTessFactor;
+};
+#ifndef FAF_TESS_TOPOLOGY
+#define FAF_TESS_TOPOLOGY "triangle_cw"
+#endif
+#if defined(FAF_VERTEX_STAGE) || defined(FAF_HULL_STAGE) || defined(FAF_DOMAIN_STAGE)
+// Vertex shaders have no derivatives: Direct3D 9 sampled mip 0 (hull and domain
+// shaders have none either).
 float4 tex2D(faf_sampler s, float2 uv) { return s.t2.SampleLevel(s.s, uv, 0); }
 float4 tex2Dbias(faf_sampler s, float4 uv) { return s.t2.SampleLevel(s.s, uv.xy, 0); }
 float4 tex2Dproj(faf_sampler s, float4 uv) { return s.t2.SampleLevel(s.s, uv.xy / uv.w, 0); }
@@ -566,46 +1096,184 @@ float4 tex3Dlod(faf_sampler s, float4 uv) { return s.t3.SampleLevel(s.s, uv.xyz,
     return layout;
   }
 
+  namespace
+  {
+    /// What GenerateModernHlsl's body needs from the texture views.
+    struct TextureViews
+    {
+      std::vector<std::vector<TextureDimension>> samplerDimensions;
+    };
+
+    /// Texture views and sampler registers.
+    TextureViews BuildTextureViews(const std::string_view source, EffectDescription& description, ModernEffect& modern)
+    {
+      TextureViews views;
+      std::map<std::string, std::vector<TextureDimension>> textureDimensions;
+      std::vector<std::vector<TextureDimension>>& samplerDimensions = views.samplerDimensions;
+      for (const SamplerDesc& sampler : description.samplers) {
+        samplerDimensions.push_back(SamplerDimensions(sampler, source));
+        if (sampler.texture.empty()) {
+          continue;
+        }
+        std::vector<TextureDimension>& dimensions = textureDimensions[sampler.texture];
+        for (const TextureDimension dimension : samplerDimensions.back()) {
+          if (std::find(dimensions.begin(), dimensions.end(), dimension) == dimensions.end()) {
+            dimensions.push_back(dimension);
+          }
+        }
+      }
+      for (const Parameter& parameter : description.parameters) {
+        if (parameter.parameterClass != ParameterClass::Texture) {
+          continue;
+        }
+        const auto found = textureDimensions.find(parameter.name);
+        if (found == textureDimensions.end()) {
+          continue; // never sampled
+        }
+        for (const TextureDimension dimension : found->second) {
+          const std::uint32_t slot = static_cast<std::uint32_t>(modern.textures.size());
+          modern.textures.push_back(TextureSlot{parameter.name, dimension, slot});
+        }
+      }
+      if (modern.textures.size() > kMaxTextureSlots) {
+        modern.notes.push_back("more texture views than the register budget");
+      }
+      if (description.samplers.size() > kMaxSamplerSlots) {
+        modern.notes.push_back("more samplers than the register budget");
+      }
+      return views;
+    }
+
+    /// The functions in the source, by name; the first definition of a name wins.
+    std::map<std::string, Function> CollectFunctions(const std::vector<Item>& items)
+    {
+      std::map<std::string, Function> functions;
+      for (const Item& item : items) {
+        Function function;
+        if (item.braced && item.head.find('(') != std::string::npos && !HasTopLevelAssignment(item.head) &&
+            ParseFunctionHead(item.head, function) && functions.find(function.name) == functions.end()) {
+          functions[function.name] = function;
+        }
+      }
+      return functions;
+    }
+
+    /// The role each struct plays in a stage's signature.
+    std::map<std::string, SemanticRole> AssignStructRoles(
+      EffectDescription& description, const std::map<std::string, Function>& functions, ModernEffect& modern
+    )
+    {
+      std::map<std::string, SemanticRole> structRoles;
+      std::set<std::string> vertexInputStructs;
+      const auto isStruct = [&](const std::string& name) { return description.FindStruct(name) != nullptr; };
+      // Roles belong to the struct definition, typedef'd names included.
+      const auto baseStruct = [&](const std::string& name) {
+        const StructType* const found = description.FindStruct(name);
+        return (found != nullptr && !found->aliasOf.empty()) ? found->aliasOf : name;
+      };
+      for (const Technique& technique : description.techniques) {
+        for (const Pass& pass : technique.passes) {
+          // A domain function's result goes to the rasterizer, as a vertex shader's does.
+          // Its control-point parameters are the vertex shader's output struct.
+          if (pass.Tessellated()) {
+            const auto domain = functions.find(pass.domainShader.function);
+            if (domain != functions.end() && isStruct(domain->second.returnType)) {
+              structRoles.emplace(baseStruct(domain->second.returnType), SemanticRole::VertexOutput);
+            }
+          }
+          for (const auto& [reference, stage] :
+               {std::pair{&pass.vertexShader, ShaderStage::Vertex}, std::pair{&pass.pixelShader, ShaderStage::Pixel}}) {
+            const auto found = functions.find(reference->function);
+            if (found == functions.end()) {
+              continue;
+            }
+            const Function& function = found->second;
+            if (stage == ShaderStage::Vertex) {
+              if (isStruct(function.returnType)) {
+                structRoles.emplace(baseStruct(function.returnType), SemanticRole::VertexOutput);
+              }
+              for (const std::string& parameter : function.parameters) {
+                const ParameterParts parts = SplitParameter(parameter);
+                if (!isStruct(parts.type)) {
+                  continue;
+                }
+                if (parts.isOut) {
+                  structRoles.emplace(baseStruct(parts.type), SemanticRole::VertexOutput);
+                } else if (!parts.isUniform) {
+                  vertexInputStructs.insert(baseStruct(parts.type));
+                }
+              }
+            } else {
+              if (isStruct(function.returnType)) {
+                structRoles[baseStruct(function.returnType)] = SemanticRole::PixelOutput;
+              }
+              for (const std::string& parameter : function.parameters) {
+                const ParameterParts parts = SplitParameter(parameter);
+                if (!isStruct(parts.type)) {
+                  continue;
+                }
+                if (parts.isOut) {
+                  structRoles[baseStruct(parts.type)] = SemanticRole::PixelOutput;
+                } else if (!parts.isUniform) {
+                  structRoles.emplace(baseStruct(parts.type), SemanticRole::PixelInput);
+                }
+              }
+            }
+          }
+        }
+      }
+      for (const std::string& name : vertexInputStructs) {
+        const auto found = structRoles.find(name);
+        if (found != structRoles.end() && found->second != SemanticRole::PixelOutput) {
+          modern.notes.push_back("struct " + name + " is both a vertex input and a stage output; semantics left as written");
+          structRoles.erase(found);
+        }
+      }
+      return structRoles;
+    }
+  } // namespace
+
   ModernEffect GenerateModernHlsl(const std::string_view source, EffectDescription& description)
   {
     ModernEffect modern;
     const std::vector<Item> items = SplitItems(source);
 
-    // ---- texture views and sampler registers ----------------------------------
-    std::map<std::string, std::vector<TextureDimension>> textureDimensions;
-    std::vector<std::vector<TextureDimension>> samplerDimensions;
-    for (const SamplerDesc& sampler : description.samplers) {
-      samplerDimensions.push_back(SamplerDimensions(sampler, source));
-      if (sampler.texture.empty()) {
-        continue;
-      }
-      std::vector<TextureDimension>& dimensions = textureDimensions[sampler.texture];
-      for (const TextureDimension dimension : samplerDimensions.back()) {
-        if (std::find(dimensions.begin(), dimensions.end(), dimension) == dimensions.end()) {
-          dimensions.push_back(dimension);
+    TextureViews textureViews = BuildTextureViews(source, description, modern);
+    std::vector<std::vector<TextureDimension>>& samplerDimensions = textureViews.samplerDimensions;
+
+    // Engine addition (ren_ShadowCascades): the lighting shadow samplers read through the atlas when the
+    // effect carries the cascade parameter (EffectProgram adds it) and only ever looks them up.
+    bool shadowCascades = false;
+    bool rayShadows = false;
+    std::vector<std::string> shadowLookupSamplers;
+    {
+      const bool declared = std::any_of(description.parameters.begin(), description.parameters.end(), [](const Parameter& parameter) {
+        return parameter.name == kShadowCascadeParameter && parameter.elements == kShadowCascadeVectors;
+      });
+      bool lookups = true;
+      bool any = false;
+      for (const SamplerDesc& sampler : description.samplers) {
+        if (IsShadowLookupSampler(sampler)) {
+          any = true;
+          lookups = lookups && ShadowSamplerOnlyLookedUp(source, sampler);
         }
       }
-    }
-    std::map<std::pair<std::string, TextureDimension>, std::uint32_t> viewSlots;
-    for (const Parameter& parameter : description.parameters) {
-      if (parameter.parameterClass != ParameterClass::Texture) {
-        continue;
+      shadowCascades = declared && any && lookups;
+      if (shadowCascades) {
+        for (const SamplerDesc& sampler : description.samplers) {
+          if (IsShadowLookupSampler(sampler)) {
+            shadowLookupSamplers.push_back(sampler.name);
+          }
+        }
+        // Engine addition (ren_RayTracedShadows): EffectProgram declares faf_RayShadows ahead of the cascades.
+        rayShadows = gRayQueryShaders && std::any_of(description.parameters.begin(), description.parameters.end(), [](const Parameter& parameter) {
+          return parameter.name == kRayShadowParameter && parameter.elements == kRayShadowVectors;
+        });
       }
-      const auto found = textureDimensions.find(parameter.name);
-      if (found == textureDimensions.end()) {
-        continue; // never sampled
+      if (declared && any && !lookups) {
+        gShadowCascadesBlocked.store(true);
+        modern.notes.push_back("a shadow sampler is used other than in a tex2D lookup; shadow cascades are off");
       }
-      for (const TextureDimension dimension : found->second) {
-        const std::uint32_t slot = static_cast<std::uint32_t>(modern.textures.size());
-        modern.textures.push_back(TextureSlot{parameter.name, dimension, slot});
-        viewSlots[{parameter.name, dimension}] = slot;
-      }
-    }
-    if (modern.textures.size() > kMaxTextureSlots) {
-      modern.notes.push_back("more texture views than the register budget");
-    }
-    if (description.samplers.size() > kMaxSamplerSlots) {
-      modern.notes.push_back("more samplers than the register budget");
     }
 
     // ---- parameters a function writes -------------------------------------------
@@ -617,74 +1285,8 @@ float4 tex3Dlod(faf_sampler s, float4 uv) { return s.t3.SampleLevel(s.s, uv.xyz,
       }
     }
 
-    // ---- functions and the roles of their structs --------------------------------
-    std::map<std::string, Function> functions;
-    for (const Item& item : items) {
-      Function function;
-      if (item.braced && item.head.find('(') != std::string::npos && !HasTopLevelAssignment(item.head) &&
-          ParseFunctionHead(item.head, function) && functions.find(function.name) == functions.end()) {
-        functions[function.name] = function;
-      }
-    }
-
-    std::map<std::string, SemanticRole> structRoles;
-    std::set<std::string> vertexInputStructs;
-    const auto isStruct = [&](const std::string& name) { return description.FindStruct(name) != nullptr; };
-    // Roles belong to the struct definition, typedef'd names included.
-    const auto baseStruct = [&](const std::string& name) {
-      const StructType* const found = description.FindStruct(name);
-      return (found != nullptr && !found->aliasOf.empty()) ? found->aliasOf : name;
-    };
-    for (const Technique& technique : description.techniques) {
-      for (const Pass& pass : technique.passes) {
-        for (const auto& [reference, stage] :
-             {std::pair{&pass.vertexShader, ShaderStage::Vertex}, std::pair{&pass.pixelShader, ShaderStage::Pixel}}) {
-          const auto found = functions.find(reference->function);
-          if (found == functions.end()) {
-            continue;
-          }
-          const Function& function = found->second;
-          if (stage == ShaderStage::Vertex) {
-            if (isStruct(function.returnType)) {
-              structRoles.emplace(baseStruct(function.returnType), SemanticRole::VertexOutput);
-            }
-            for (const std::string& parameter : function.parameters) {
-              const ParameterParts parts = SplitParameter(parameter);
-              if (!isStruct(parts.type)) {
-                continue;
-              }
-              if (parts.isOut) {
-                structRoles.emplace(baseStruct(parts.type), SemanticRole::VertexOutput);
-              } else if (!parts.isUniform) {
-                vertexInputStructs.insert(baseStruct(parts.type));
-              }
-            }
-          } else {
-            if (isStruct(function.returnType)) {
-              structRoles[baseStruct(function.returnType)] = SemanticRole::PixelOutput;
-            }
-            for (const std::string& parameter : function.parameters) {
-              const ParameterParts parts = SplitParameter(parameter);
-              if (!isStruct(parts.type)) {
-                continue;
-              }
-              if (parts.isOut) {
-                structRoles[baseStruct(parts.type)] = SemanticRole::PixelOutput;
-              } else if (!parts.isUniform) {
-                structRoles.emplace(baseStruct(parts.type), SemanticRole::PixelInput);
-              }
-            }
-          }
-        }
-      }
-    }
-    for (const std::string& name : vertexInputStructs) {
-      const auto found = structRoles.find(name);
-      if (found != structRoles.end() && found->second != SemanticRole::PixelOutput) {
-        modern.notes.push_back("struct " + name + " is both a vertex input and a stage output; semantics left as written");
-        structRoles.erase(found);
-      }
-    }
+    const std::map<std::string, Function> functions = CollectFunctions(items);
+    std::map<std::string, SemanticRole> structRoles = AssignStructRoles(description, functions, modern);
 
     // ---- the body ---------------------------------------------------------------
     std::string body;
@@ -719,7 +1321,7 @@ float4 tex3Dlod(faf_sampler s, float4 uv) { return s.t3.SampleLevel(s.s, uv.xyz,
       if (StartsWithWord(head, "technique") || StartsWithWord(head, "technique10") || StartsWithWord(head, "technique11") ||
           StartsWithWord(head, "BlendState") || StartsWithWord(head, "DepthStencilState") || StartsWithWord(head, "RasterizerState") ||
           StartsWithWord(head, "VertexShader") || StartsWithWord(head, "PixelShader") || StartsWithWord(head, "GeometryShader") ||
-          StartsWithWord(head, "string")) {
+          StartsWithWord(head, "HullShader") || StartsWithWord(head, "DomainShader") || StartsWithWord(head, "string")) {
         continue; // the effect description carries these
       }
 
@@ -740,7 +1342,8 @@ float4 tex3Dlod(faf_sampler s, float4 uv) { return s.t3.SampleLevel(s.s, uv.xyz,
         std::snprintf(declaration, sizeof(declaration), "SamplerState faf_smp_%s : register(s%u);\n", sampler->name.c_str(),
                       static_cast<unsigned>(index));
         body += declaration;
-        body += "#define " + sampler->name + " faf_make_sampler(" + view(TextureDimension::Texture2D, "faf_null2D") + ", " +
+        const char* const maker = (shadowCascades && IsShadowLookupSampler(*sampler)) ? "faf_make_shadow_sampler(" : "faf_make_sampler(";
+        body += "#define " + sampler->name + " " + maker + view(TextureDimension::Texture2D, "faf_null2D") + ", " +
           view(TextureDimension::TextureCube, "faf_nullCube") + ", " + view(TextureDimension::Texture3D, "faf_null3D") +
           ", faf_smp_" + sampler->name + ")\n";
         continue;
@@ -762,6 +1365,11 @@ float4 tex3Dlod(faf_sampler s, float4 uv) { return s.t3.SampleLevel(s.s, uv.xyz,
           }
         } else if (numericParameters.count(parameter->name) != 0U || parameter->parameterClass == ParameterClass::Struct) {
           body += GlobalDeclaration(*parameter) + "\n";
+          if (shadowCascades && parameter->name == kShadowCascadeParameter) {
+            body += kShadowCascadeHelpers;
+            body += kShadowCoordinateHelpers;
+            body += rayShadows ? kRayShadowHelpers : kRayShadowFallback;
+          }
         }
         // Anything else (strings, sampler parameters without state) has no shader-side form.
         continue;
@@ -812,6 +1420,9 @@ float4 tex3Dlod(faf_sampler s, float4 uv) { return s.t3.SampleLevel(s.s, uv.xyz,
             " = " + name + ";";
         }
         const std::size_t open = original.find('{', original.find(')'));
+        if (shadowCascades) {
+          functionBody = PassShadowCoordinates(functionBody, shadowLookupSamplers);
+        }
         body += ReplaceSamplerTypes(original.substr(0U, open)) + "{" + copies + ReplaceSamplerTypes(functionBody) + "}";
         continue;
       }
@@ -826,9 +1437,100 @@ float4 tex3Dlod(faf_sampler s, float4 uv) { return s.t3.SampleLevel(s.s, uv.xyz,
     std::string wrappers;
     for (Technique& technique : description.techniques) {
       for (Pass& pass : technique.passes) {
+        const bool tessellated = pass.Tessellated();
+        const bool namedTessellation = !pass.hullShader.function.empty() || !pass.domainShader.function.empty();
         for (const auto& [reference, stage] :
-             {std::pair{&pass.vertexShader, ShaderStage::Vertex}, std::pair{&pass.pixelShader, ShaderStage::Pixel}}) {
+             {std::pair{&pass.vertexShader, ShaderStage::Vertex}, std::pair{&pass.pixelShader, ShaderStage::Pixel},
+              std::pair{&pass.hullShader, ShaderStage::Hull}, std::pair{&pass.domainShader, ShaderStage::Domain}}) {
           if (reference->function.empty()) {
+            continue;
+          }
+          if (stage == ShaderStage::Hull || stage == ShaderStage::Domain) {
+            if (!tessellated) {
+              modern.notes.push_back("technique " + technique.name + ": a hull shader needs a domain shader and the reverse; ignored");
+              reference->function.clear();
+              continue;
+            }
+            const std::string arguments = Squeeze(reference->arguments);
+            const auto key = std::make_tuple(stage, reference->function, arguments);
+            const auto known = entryNames.find(key);
+            if (known != entryNames.end()) {
+              reference->entry = known->second;
+              continue;
+            }
+            const auto found = functions.find(reference->function);
+            if (found == functions.end()) {
+              modern.notes.push_back("technique " + technique.name + ": shader function " + reference->function + " not found");
+              reference->function.clear();
+              continue;
+            }
+            const Function& function = found->second;
+            const unsigned index = static_cast<unsigned>(modern.entries.size());
+            char name[64]{};
+            std::snprintf(name, sizeof(name), "faf_entry_%s_%u", stage == ShaderStage::Hull ? "hs" : "ds", index);
+
+            // The call: varying parameters take `varying` in order, uniform ones the
+            // pass's arguments or their defaults. The control-point type is the type of
+            // the first (hull) or second (domain) varying parameter.
+            std::vector<std::string> uniformArguments;
+            if (!arguments.empty()) {
+              for (const std::string& argument : SplitTopLevel(arguments, ',')) {
+                uniformArguments.push_back(Trim(argument));
+              }
+            }
+            const std::vector<std::string> varying = (stage == ShaderStage::Hull)
+              ? std::vector<std::string>{"faf_patch[0]", "faf_patch[1]", "faf_patch[2]"}
+              : std::vector<std::string>{"faf_weights", "faf_patch[0]", "faf_patch[1]", "faf_patch[2]"};
+            std::string callArguments;
+            std::string pointType;
+            std::size_t nextVarying = 0U;
+            std::size_t nextUniform = 0U;
+            for (const std::string& parameterText : function.parameters) {
+              const ParameterParts parts = SplitParameter(parameterText);
+              if (!callArguments.empty()) {
+                callArguments += ", ";
+              }
+              if (parts.isUniform) {
+                if (nextUniform < uniformArguments.size()) {
+                  callArguments += uniformArguments[nextUniform++];
+                } else {
+                  const std::size_t equals = parameterText.find('=');
+                  callArguments += (equals != std::string::npos) ? Trim(parameterText.substr(equals + 1U)) : std::string("0");
+                }
+                continue;
+              }
+              if (nextVarying == (stage == ShaderStage::Hull ? 0U : 1U)) {
+                pointType = parts.type;
+              }
+              callArguments += (nextVarying < varying.size()) ? varying[nextVarying] : std::string("0");
+              ++nextVarying;
+            }
+            if (nextVarying != varying.size() || pointType.empty()) {
+              modern.notes.push_back("technique " + technique.name + ": " + function.name + " needs " +
+                                     std::to_string(varying.size()) + " varying parameters");
+              reference->function.clear();
+              continue;
+            }
+            const std::string call = function.name + "(" + callArguments + ")";
+            const std::string patch = "InputPatch<" + pointType + ", 3> faf_patch";
+            if (stage == ShaderStage::Hull) {
+              char constants[64]{};
+              std::snprintf(constants, sizeof(constants), "faf_hsconst_%u", index);
+              wrappers += std::string("faf_tess_factors ") + constants + "(" + patch + ")\n{\n    float4 faf_f = " + call +
+                ";\n    faf_tess_factors faf_r;\n    faf_r.edges[0] = faf_f.x;\n    faf_r.edges[1] = faf_f.y;\n"
+                "    faf_r.edges[2] = faf_f.z;\n    faf_r.inside = faf_f.w;\n    return faf_r;\n}\n";
+              wrappers += std::string("[domain(\"tri\")]\n[partitioning(\"fractional_odd\")]\n[outputtopology(FAF_TESS_TOPOLOGY)]\n"
+                                      "[outputcontrolpoints(3)]\n[patchconstantfunc(\"") +
+                constants + "\")]\n[maxtessfactor(64.0)]\n" + pointType + " " + name + "(" + patch +
+                ", uint faf_id : SV_OutputControlPointID)\n{\n    return faf_patch[faf_id];\n}\n";
+            } else {
+              wrappers += "[domain(\"tri\")]\n" + function.returnType + " " + name +
+                "(faf_tess_factors faf_factors, float3 faf_weights : SV_DomainLocation, const OutputPatch<" + pointType +
+                ", 3> faf_patch)\n{\n    return " + call + ";\n}\n";
+            }
+            modern.entries.push_back(ShaderEntry{stage, function.name, arguments, name});
+            entryNames.emplace(key, name);
+            reference->entry = name;
             continue;
           }
           const std::string arguments = Squeeze(reference->arguments);
@@ -953,6 +1655,13 @@ float4 tex3Dlod(faf_sampler s, float4 uv) { return s.t3.SampleLevel(s.s, uv.xyz,
           modern.entries.push_back(ShaderEntry{stage, function.name, arguments, name});
           entryNames.emplace(key, name);
           reference->entry = name;
+        }
+        // A hull or domain function that couldn't be wrapped, or one named without the other, leaves the pass
+        // with neither, and it says so (ProgramEffect::TechniqueCompiles fails it).
+        if (namedTessellation && (pass.hullShader.function.empty() || pass.domainShader.function.empty())) {
+          pass.hullShader = ShaderReference{};
+          pass.domainShader = ShaderReference{};
+          pass.tessellationDropped = true;
         }
       }
     }

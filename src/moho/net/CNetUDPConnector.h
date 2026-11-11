@@ -93,7 +93,7 @@ namespace moho
      * Initializes connector runtime state, starts worker `Entry` thread, and
      * registers NAT traversal callback with provider.
      */
-    CNetUDPConnector(SOCKET sock, boost::weak_ptr<INetNATTraversalProvider>& prov);
+    CNetUDPConnector(platform::net::Socket sock, boost::weak_ptr<INetNATTraversalProvider>& prov);
 
     /**
      * In binary this does:
@@ -139,6 +139,12 @@ namespace moho
      * new outbound connection.
      */
     CNetUDPConnection* Connect(u_long address, u_short port) override;
+
+    /**
+     * Engine addition (issue #232): wakes this connector's thread for
+     * datagrams queued by an in-process transport (NetPeerTransport.h).
+     */
+    void SignalPeerTransportDelivery() noexcept;
 
     /**
      * Address: 0x0048B410
@@ -236,6 +242,11 @@ namespace moho
     void ReceiveData();
 
     /**
+     * Engine addition (issue #232): ReceiveData's per-datagram half.
+     */
+    void HandleReceivedDatagram(SNetPacket* packet, int n, uint32_t addrHost, uint16_t portHost);
+
+    /**
      * Address: 0x0048AA40 (FUN_0048AA40)
      *
      * What it does:
@@ -330,7 +341,7 @@ namespace moho
     // +0x04  vptr(INetNATTraversalHandler)
 
     boost::recursive_mutex lock_;
-    SOCKET socket_{INVALID_SOCKET};
+    platform::net::Socket socket_{platform::net::kInvalidSocket};
     HANDLE event_{nullptr};
     boost::weak_ptr<INetNATTraversalProvider> mNatTraversalProvider;
     gpg::DList<CNetUDPConnection> mConnections;
@@ -345,8 +356,8 @@ namespace moho
     bool mClosed{false};
     bool mIsPulling{false};
     // Outbound NAT traversal queue and inbound NAT traversal queue.
-    msvc8::deque<SReceivePacket> mOutboundPackets;
-    msvc8::deque<SReceivePacket> mInboundTraversalPackets;
+    fa::deque<SReceivePacket> mOutboundPackets;
+    fa::deque<SReceivePacket> mInboundTraversalPackets;
     // Optional externally provided wake event for select-style polling.
     HANDLE mSelectedEvent{nullptr};
     // Rolling send/recv stamp window for diagnostics/snapshot APIs.

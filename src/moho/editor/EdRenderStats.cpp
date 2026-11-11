@@ -16,7 +16,6 @@ namespace moho
   bool ren_WaterSkipDisabled = true;
   bool ui_CullOffscreen = true;
   bool ui_SkipTransparent = true;
-  bool ren_AtlasFastLookup = true;
 } // namespace moho
 
 namespace
@@ -50,11 +49,6 @@ namespace
     "ui_SkipTransparent",
     "1 = Maui bitmaps and borders with alpha 0 are not drawn",
     &moho::ui_SkipTransparent
-  );
-  moho::TConVar<bool> gTConVar_ren_AtlasFastLookup(
-    "ren_AtlasFastLookup",
-    "1 = the texture atlas of the prim batcher finds a texture it holds by its address before it walks its ordered set",
-    &moho::ren_AtlasFastLookup
   );
 
   void Put(lua_State* const L, const char* const key, const double value)

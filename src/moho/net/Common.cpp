@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <new>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 #include "CHostManager.h"
@@ -17,7 +18,6 @@
 #include "gpg/core/streams/BinaryReader.h"
 #include "gpg/core/utils/Global.h"
 #include "gpg/core/utils/Logging.h"
-#include "moho/render/d3d/CD3DPrimBatcher.h"
 #include "NetConVars.h"
 using namespace moho;
 
@@ -27,7 +27,7 @@ namespace moho
    * Address: 0x00BC4690 (FUN_00BC4690, dynamic initializer for `sProtocols`)
    * Address: 0x00BEF5B0 (FUN_00BEF5B0, dynamic atexit destructor for `sProtocols`)
    */
-  msvc8::vector<msvc8::string> sProtocols{};
+  fa::vector<fa::string> sProtocols{};
 } // namespace moho
 
 /**
@@ -160,7 +160,7 @@ void SSendStampWindow::AppendStamp(const SSendStamp& stamp)
   items.push_back(stamp);
 }
 
-void moho::ENetworkPlayerStateToStr(const ENetworkPlayerState state, msvc8::string& out)
+void moho::ENetworkPlayerStateToStr(const ENetworkPlayerState state, fa::string& out)
 {
   if (state >= ENetworkPlayerState::_Last) {
     out = gpg::STR_Printf("%d", static_cast<int32_t>(state));
@@ -192,7 +192,7 @@ void moho::ENetworkPlayerStateToStr(const ENetworkPlayerState state, msvc8::stri
   }
 }
 
-void moho::NetPacketTypeToStr(const EPacketType state, msvc8::string& out)
+void moho::NetPacketTypeToStr(const EPacketType state, fa::string& out)
 {
   switch (state) {
   case PT_Connect:
@@ -384,13 +384,13 @@ void SBandwidthUsageSeries::EnsureSampleCount(const uint32_t count)
 namespace
 {
   template <typename T>
-  [[nodiscard]] T* VectorData(msvc8::vector<T>& values) noexcept
+  [[nodiscard]] T* VectorData(fa::vector<T>& values) noexcept
   {
     return values.empty() ? nullptr : &values[0];
   }
 
   template <typename T>
-  [[nodiscard]] const T* VectorData(const msvc8::vector<T>& values) noexcept
+  [[nodiscard]] const T* VectorData(const fa::vector<T>& values) noexcept
   {
     return values.empty() ? nullptr : &values[0];
   }
@@ -402,7 +402,7 @@ namespace
   }
 
   template <typename T>
-  [[nodiscard]] size_t ClampVectorIndexFromPointer(const msvc8::vector<T>& values, const T* pointer) noexcept
+  [[nodiscard]] size_t ClampVectorIndexFromPointer(const fa::vector<T>& values, const T* pointer) noexcept
   {
     const T* const base = VectorData(values);
     if (!base || !pointer) {
@@ -454,16 +454,11 @@ namespace
   template <typename T>
   [[nodiscard]] T* CopyRangeBackward(T* destinationEnd, const T* const sourceBegin, const T* sourceEnd) noexcept
   {
-    while (sourceEnd != sourceBegin) {
-      --sourceEnd;
-      --destinationEnd;
-      *destinationEnd = *sourceEnd;
-    }
-    return destinationEnd;
+    return std::copy_backward(sourceBegin, sourceEnd, destinationEnd);
   }
 
   template <typename T>
-  [[nodiscard]] T* EraseRangeShiftLeft(msvc8::vector<T>& values, T* const destination, const T* const source)
+  [[nodiscard]] T* EraseRangeShiftLeft(fa::vector<T>& values, T* const destination, const T* const source)
   {
     T* const base = VectorData(values);
     if (!base) {
@@ -491,7 +486,7 @@ namespace
 
   template <typename T>
   [[nodiscard]] T* InsertValueCopies(
-    msvc8::vector<T>& values, T* const position, const uint32_t count, const T& value
+    fa::vector<T>& values, T* const position, const uint32_t count, const T& value
   )
   {
     if (count == 0u) {
@@ -532,7 +527,7 @@ namespace
   /**
    * Address: 0x0047E570 (FUN_0047E570, ExtractArgumentHighByteAlias)
    */
-  unsigned char ExtractArgumentHighByteAlias(const uint32_t value) noexcept
+  [[maybe_unused]] unsigned char ExtractArgumentHighByteAlias(const uint32_t value) noexcept
   {
     return ExtractArgumentHighByte(value);
   }
@@ -540,7 +535,7 @@ namespace
   /**
    * Address: 0x0047E5C0 (FUN_0047E5C0, ExtractArgumentHighByteAlias2)
    */
-  unsigned char ExtractArgumentHighByteAlias2(const uint32_t value) noexcept
+  [[maybe_unused]] unsigned char ExtractArgumentHighByteAlias2(const uint32_t value) noexcept
   {
     return ExtractArgumentHighByte(value);
   }
@@ -548,7 +543,7 @@ namespace
   /**
    * Address: 0x0047E630 (FUN_0047E630, ExtractArgumentHighByteAlias3)
    */
-  unsigned char ExtractArgumentHighByteAlias3(const uint32_t value) noexcept
+  [[maybe_unused]] unsigned char ExtractArgumentHighByteAlias3(const uint32_t value) noexcept
   {
     return ExtractArgumentHighByte(value);
   }
@@ -556,7 +551,7 @@ namespace
   /**
    * Address: 0x0047E6F0 (FUN_0047E6F0, ExtractArgumentHighByteAlias4)
    */
-  unsigned char ExtractArgumentHighByteAlias4(const uint32_t value) noexcept
+  [[maybe_unused]] unsigned char ExtractArgumentHighByteAlias4(const uint32_t value) noexcept
   {
     return ExtractArgumentHighByte(value);
   }
@@ -564,7 +559,7 @@ namespace
   /**
    * Address: 0x0047E930 (FUN_0047E930, ExtractArgumentHighByteAlias5)
    */
-  unsigned char ExtractArgumentHighByteAlias5(const uint32_t value) noexcept
+  [[maybe_unused]] unsigned char ExtractArgumentHighByteAlias5(const uint32_t value) noexcept
   {
     return ExtractArgumentHighByte(value);
   }
@@ -672,68 +667,13 @@ void moho::NET_BuildBandwidthUsageSeries(
   }
 }
 
-/**
- * Address: 0x007F3F20 (FUN_007F3F20, func_ren_BandwidthUsage_Line)
- *
- * What it does:
- * Draws outbound/inbound bandwidth samples as two connected line strips.
- */
-void moho::REN_DrawBandwidthUsageLinePair(
-  CD3DPrimBatcher& primBatcher,
-  const SBandwidthUsageSeries& series,
-  const std::int32_t xOffset,
-  const std::int32_t yBase,
-  const float yScale,
-  const std::uint32_t inboundColor,
-  const std::uint32_t outboundColor
-)
-{
-  const std::uint32_t sampleCount = series.SampleCount();
-  if (sampleCount == 0u) {
-    return;
-  }
 
-  CD3DPrimBatcher::Vertex previousOutbound{};
-  CD3DPrimBatcher::Vertex previousInbound{};
-  bool hasPrevious = false;
-
-  for (std::uint32_t sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
-    const SBandwidthUsageSample& sample = series.samples[sampleIndex];
-    const float x = static_cast<float>(xOffset + static_cast<std::int32_t>(sampleIndex));
-
-    CD3DPrimBatcher::Vertex currentOutbound{};
-    currentOutbound.mX = x;
-    currentOutbound.mY = static_cast<float>(yBase) - (sample.outboundBytesPerSec * yScale);
-    currentOutbound.mZ = 0.0f;
-    currentOutbound.mColor = outboundColor;
-    currentOutbound.mU = 0.0f;
-    currentOutbound.mV = 0.0f;
-
-    CD3DPrimBatcher::Vertex currentInbound{};
-    currentInbound.mX = x;
-    currentInbound.mY = static_cast<float>(yBase) - (sample.inboundBytesPerSec * yScale);
-    currentInbound.mZ = 0.0f;
-    currentInbound.mColor = inboundColor;
-    currentInbound.mU = 0.0f;
-    currentInbound.mV = 0.0f;
-
-    if (hasPrevious) {
-      primBatcher.DrawLine(previousOutbound, currentOutbound);
-      primBatcher.DrawLine(previousInbound, currentInbound);
-    }
-
-    previousOutbound = currentOutbound;
-    previousInbound = currentInbound;
-    hasPrevious = true;
-  }
-}
-
-msvc8::string moho::NET_ReadLengthPrefixedArgPayload(gpg::BinaryReader& reader)
+fa::string moho::NET_ReadLengthPrefixedArgPayload(gpg::BinaryReader& reader)
 {
   uint32_t payloadLen = 0;
   reader.ReadExact(payloadLen);
 
-  msvc8::string payload;
+  fa::string payload;
   if (payloadLen != 0) {
     std::vector<char> payloadBuffer(payloadLen);
     reader.Read(payloadBuffer.data(), payloadLen);
@@ -775,20 +715,15 @@ SNetCommandArg moho::NET_DecodeSocketArg(gpg::BinaryReader& reader)
  */
 bool moho::NET_Init()
 {
-#if defined(_WIN32)
   static bool sWinsockInitialized = false;
   if (!sWinsockInitialized) {
-    WSAData wsaData;
-    if (::WSAStartup(MAKEWORD(1, 1), &wsaData)) {
+    if (platform::net::Startup()) {
       gpg::Logf("Net_Init(): WSAStartup failed: %s", NET_GetWinsockErrorString());
     } else {
       sWinsockInitialized = true;
     }
   }
   return sWinsockInitialized;
-#else
-  return false;
-#endif
 }
 
 /**
@@ -844,25 +779,38 @@ INetConnector* moho::NET_MakeUDPConnector(const u_short port, boost::weak_ptr<IN
   // binary logs them only above 0, as the TCP connector does always). A game
   // port that cannot be bound makes InternalCreateLobby return nil, and without
   // these lines nothing said why the lobby never opened.
-  SOCKET sock = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-  if (sock == INVALID_SOCKET) {
+  platform::net::Socket sock = platform::net::OpenSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (sock == platform::net::kInvalidSocket) {
     gpg::Logf("NET_MakeUDPConnector: socket() failed: %s", NET_GetWinsockErrorString());
     return nullptr;
   }
-  u_long argp = 1;
-  if (::ioctlsocket(sock, FIONBIO, &argp) == SOCKET_ERROR) {
+  if (platform::net::SetNonBlocking(sock) == platform::net::kSocketError) {
     gpg::Logf("NET_MakeUDPConnector: ioctlsocket(FIONBIO) failed: %s", NET_GetWinsockErrorString());
-    ::closesocket(sock);
+    platform::net::CloseSocket(sock);
     return nullptr;
   }
   sockaddr_in name;
   name.sin_family = AF_INET;
   name.sin_port = ::htons(port);
-  name.sin_addr.S_un.S_addr = ::htonl(0);
-  if (::bind(sock, (SOCKADDR*)&name, sizeof(name)) == SOCKET_ERROR) {
+  name.sin_addr.s_addr = ::htonl(0);
+  if (platform::net::Bind(sock, name) == platform::net::kSocketError) {
     gpg::Logf("NET_MakeUDPConnector: bind(%d) failed: %s", port, NET_GetWinsockErrorString());
-    ::closesocket(sock);
+    platform::net::CloseSocket(sock);
     return nullptr;
+  }
+  // Engine addition (issue #236): socket buffer sizes, off (0) by default.
+  // A large order burst is sent in one frame and can overflow the system's
+  // default buffers on either side.
+  for (const auto& [option, bytes, label] : {std::tuple{SO_RCVBUF, net_SocketRecvBuffer, "SO_RCVBUF"},
+                                             std::tuple{SO_SNDBUF, net_SocketSendBuffer, "SO_SNDBUF"}}) {
+    if (bytes > 0) {
+      const int value = bytes;
+      if (platform::net::SetOption(sock, SOL_SOCKET, option, &value, sizeof(value)) == platform::net::kSocketError) {
+        gpg::Logf("NET_MakeUDPConnector: setsockopt(%s, %d) failed: %s", label, value, NET_GetWinsockErrorString());
+      } else {
+        gpg::Logf("NET_MakeUDPConnector: %s %d", label, value);
+      }
+    }
   }
   return new CNetUDPConnector{sock, prov};
 }
@@ -879,16 +827,15 @@ INetConnector* moho::NET_MakeTCPConnector(const u_short port)
     return nullptr;
   }
 
-  const SOCKET sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (sock == INVALID_SOCKET) {
+  const platform::net::Socket sock = platform::net::OpenSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (sock == platform::net::kInvalidSocket) {
     gpg::Logf("NET_MakeConnector: socket() failed: %s", NET_GetWinsockErrorString());
     return nullptr;
   }
 
-  u_long nonBlocking = 1;
-  if (::ioctlsocket(sock, FIONBIO, &nonBlocking) == SOCKET_ERROR) {
+  if (platform::net::SetNonBlocking(sock) == platform::net::kSocketError) {
     gpg::Logf("NET_MakeConnector: ioctlsocket(FIONBIO) failed: %s", NET_GetWinsockErrorString());
-    ::closesocket(sock);
+    platform::net::CloseSocket(sock);
     return nullptr;
   }
 
@@ -896,15 +843,15 @@ INetConnector* moho::NET_MakeTCPConnector(const u_short port)
   name.sin_family = AF_INET;
   name.sin_port = ::htons(port);
   name.sin_addr.s_addr = ::htonl(0);
-  if (::bind(sock, reinterpret_cast<const sockaddr*>(&name), sizeof(name)) == SOCKET_ERROR) {
+  if (platform::net::Bind(sock, name) == platform::net::kSocketError) {
     gpg::Logf("NET_MakeConnector: bind(%d) failed: %s", port, NET_GetWinsockErrorString());
-    ::closesocket(sock);
+    platform::net::CloseSocket(sock);
     return nullptr;
   }
 
-  if (::listen(sock, SOMAXCONN) == SOCKET_ERROR) {
+  if (platform::net::Listen(sock, SOMAXCONN) == platform::net::kSocketError) {
     gpg::Logf("NET_MakeConnector: listen() failed: %s", NET_GetWinsockErrorString());
-    ::closesocket(sock);
+    platform::net::CloseSocket(sock);
     return nullptr;
   }
 
@@ -936,7 +883,7 @@ CHostManager* moho::NET_GetHostManager()
  * What it does:
  * Resolves/caches a host-order IPv4 address through the global CHostManager cache.
  */
-msvc8::string moho::NET_GetHostName(const u_long address)
+fa::string moho::NET_GetHostName(const u_long address)
 {
   const auto manager = NET_GetHostManager();
   return manager->GetHostName(address);
@@ -950,127 +897,124 @@ msvc8::string moho::NET_GetHostName(const u_long address)
  */
 const char* moho::NET_GetWinsockErrorString() noexcept
 {
-#if defined(_WIN32)
-  const int e = ::WSAGetLastError();
+  // platform::net reports Winsock's numbers on every platform.
+  namespace error = platform::net::error;
+  const int e = platform::net::LastError();
   if (e == 0) {
     return "NOERROR";
   }
 
   // DNS/host resolution extended codes first (match original control flow)
   switch (e) {
-  case WSAHOST_NOT_FOUND:
+  case error::kHostNotFound:
     return "WSAHOST_NOT_FOUND"; // 11001
-  case WSATRY_AGAIN:
+  case error::kTryAgain:
     return "WSATRY_AGAIN"; // 11002
-  case WSANO_RECOVERY:
+  case error::kNoRecovery:
     return "WSANO_RECOVERY"; // 11003
-  case WSANO_DATA:
+  case error::kNoData:
     return "WSANO_DATA"; // 11004
   }
 
   // Core Winsock error set mirrored from the original switch
   switch (e) {
-  case WSAEINTR:
+  case error::kInterrupted:
     return "WSAEINTR"; // 10004 (0x2714)
-  case WSAEBADF:
+  case error::kBadFile:
     return "WSAEBADF"; // 10009 (0x2719)
-  case WSAEACCES:
+  case error::kAccess:
     return "WSAEACCES"; // 10013 (0x271D)
-  case WSAEFAULT:
+  case error::kFault:
     return "WSAEFAULT"; // 10014 (0x271E)
-  case WSAEINVAL:
+  case error::kInvalid:
     return "WSAEINVAL"; // 10022 (0x2726)
-  case WSAEMFILE:
+  case error::kTooManyFiles:
     return "WSAEMFILE"; // 10024 (0x2728)
-  case WSAEWOULDBLOCK:
+  case error::kWouldBlock:
     return "WSAEWOULDBLOCK"; // 10035 (0x2733)
-  case WSAEINPROGRESS:
+  case error::kInProgress:
     return "WSAEINPROGRESS"; // 10036 (0x2734)
-  case WSAEALREADY:
+  case error::kAlready:
     return "WSAEALREADY"; // 10037 (0x2735)
-  case WSAENOTSOCK:
+  case error::kNotSocket:
     return "WSAENOTSOCK"; // 10038 (0x2736)
-  case WSAEDESTADDRREQ:
+  case error::kDestinationRequired:
     return "WSAEDESTADDRREQ"; // 10039 (0x2737)
-  case WSAEMSGSIZE:
+  case error::kMessageSize:
     return "WSAEMSGSIZE"; // 10040 (0x2738)
-  case WSAEPROTOTYPE:
+  case error::kProtocolType:
     return "WSAEPROTOTYPE"; // 10041 (0x2739)
-  case WSAENOPROTOOPT:
+  case error::kNoProtocolOption:
     return "WSAENOPROTOOPT"; // 10042 (0x273A)
-  case WSAEPROTONOSUPPORT:
+  case error::kProtocolNotSupported:
     return "WSAEPROTONOSUPPORT"; // 10043 (0x273B)
-  case WSAESOCKTNOSUPPORT:
+  case error::kSocketTypeNotSupported:
     return "WSAESOCKTNOSUPPORT"; // 10044 (0x273C)
-  case WSAEOPNOTSUPP:
+  case error::kOperationNotSupported:
     return "WSAEOPNOTSUPP"; // 10045 (0x273D)
-  case WSAEPFNOSUPPORT:
+  case error::kFamilyNotSupported:
     return "WSAEPFNOSUPPORT"; // 10046 (0x273E)
-  case WSAEAFNOSUPPORT:
+  case error::kAddressFamily:
     return "WSAEAFNOSUPPORT"; // 10047 (0x273F)
-  case WSAEADDRINUSE:
+  case error::kAddressInUse:
     return "WSAEADDRINUSE"; // 10048 (0x2740)
-  case WSAEADDRNOTAVAIL:
+  case error::kAddressNotAvailable:
     return "WSAEADDRNOTAVAIL"; // 10049 (0x2741)
-  case WSAENETDOWN:
+  case error::kNetworkDown:
     return "WSAENETDOWN"; // 10050 (0x2742)
-  case WSAENETUNREACH:
+  case error::kNetworkUnreachable:
     return "WSAENETUNREACH"; // 10051 (0x2743)
-  case WSAENETRESET:
+  case error::kNetworkReset:
     return "WSAENETRESET"; // 10052 (0x2744)
-  case WSAECONNABORTED:
+  case error::kConnectionAborted:
     return "WSAECONNABORTED"; // 10053 (0x2745)
-  case WSAECONNRESET:
+  case error::kConnectionReset:
     return "WSAECONNRESET"; // 10054 (0x2746)
-  case WSAENOBUFS:
+  case error::kNoBuffers:
     return "WSAENOBUFS"; // 10055 (0x2747)
-  case WSAEISCONN:
+  case error::kIsConnected:
     return "WSAEISCONN"; // 10056 (0x2748)
-  case WSAENOTCONN:
+  case error::kNotConnected:
     return "WSAENOTCONN"; // 10057 (0x2749)
-  case WSAESHUTDOWN:
+  case error::kShutdown:
     return "WSAESHUTDOWN"; // 10058 (0x274A)
-  case WSAETOOMANYREFS:
+  case error::kTooManyReferences:
     return "WSAETOOMANYREFS"; // 10059 (0x274B)
-  case WSAETIMEDOUT:
+  case error::kTimedOut:
     return "WSAETIMEDOUT"; // 10060 (0x274C)
-  case WSAECONNREFUSED:
+  case error::kConnectionRefused:
     return "WSAECONNREFUSED"; // 10061 (0x274D)
-  case WSAELOOP:
+  case error::kLoop:
     return "WSAELOOP"; // 10062 (0x274E)
-  case WSAENAMETOOLONG:
+  case error::kNameTooLong:
     return "WSAENAMETOOLONG"; // 10063 (0x274F)
-  case WSAEHOSTDOWN:
+  case error::kHostDown:
     return "WSAEHOSTDOWN"; // 10064 (0x2750)
-  case WSAEHOSTUNREACH:
+  case error::kHostUnreachable:
     return "WSAEHOSTUNREACH"; // 10065 (0x2751)
-  case WSAENOTEMPTY:
+  case error::kNotEmpty:
     return "WSAENOTEMPTY"; // 10066 (0x2752)
-  case WSAEPROCLIM:
+  case error::kProcessLimit:
     return "WSAEPROCLIM"; // 10067 (0x2753)
-  case WSAEUSERS:
+  case error::kUsers:
     return "WSAEUSERS"; // 10068 (0x2754)
-  case WSAEDQUOT:
+  case error::kDiskQuota:
     return "WSAEDQUOT"; // 10069 (0x2755)
-  case WSAESTALE:
+  case error::kStale:
     return "WSAESTALE"; // 10070 (0x2756)
-  case WSAEREMOTE:
+  case error::kRemote:
     return "WSAEREMOTE"; // 10071 (0x2757)
-  case WSASYSNOTREADY:
+  case error::kSystemNotReady:
     return "WSASYSNOTREADY"; // 10091 (0x276B)
-  case WSAVERNOTSUPPORTED:
+  case error::kVersionNotSupported:
     return "WSAVERNOTSUPPORTED"; // 10092 (0x276C)
-  case WSANOTINITIALISED:
+  case error::kNotInitialised:
     return "WSANOTINITIALISED"; // 10093 (0x276D)
-  case WSAEDISCON:
+  case error::kDisconnected:
     return "WSAEDISCON"; // 10101 (0x2775)
   default:
     return "UNKNOWN";
   }
-#else
-  // Non-Windows build: no Winsock -> stable stub.
-  return "NO_WINSOCK";
-#endif
 }
 
 /**
@@ -1082,7 +1026,7 @@ const char* moho::NET_GetWinsockErrorString() noexcept
  * What it does:
  * Formats host-order IPv4 as "A.B.C.D".
  */
-msvc8::string moho::NET_GetDottedOctetFromUInt32(const uint32_t number)
+fa::string moho::NET_GetDottedOctetFromUInt32(const uint32_t number)
 {
   return gpg::STR_Printf(
     "%d.%d.%d.%d", (number >> 24) & 0xFF, (number >> 16) & 0xFF, (number >> 8) & 0xFF, number & 0xFF
@@ -1093,16 +1037,16 @@ msvc8::string moho::NET_GetDottedOctetFromUInt32(const uint32_t number)
  * Address: 0x00480200 (FUN_00480200)
  * Mangled: ?NET_GetUInt32FromDottedOcted@Moho@@YAIV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z
  *
- * msvc8::string
+ * fa::string
  *
  * What it does:
  * Splits dotted IPv4 text by '.' and folds tokens using (acc << 8) | atoi(token).
  */
-uint32_t moho::NET_GetUInt32FromDottedOcted(const msvc8::string& host)
+uint32_t moho::NET_GetUInt32FromDottedOcted(const fa::string& host)
 {
   uint32_t value = 0;
   const char* cursor = host.c_str();
-  msvc8::string token;
+  fa::string token;
 
   while (gpg::STR_GetToken(cursor, ".", token)) {
     value = (value << 8) | static_cast<uint32_t>(std::atoi(token.c_str()));
@@ -1118,20 +1062,20 @@ uint32_t moho::NET_GetUInt32FromDottedOcted(const msvc8::string& host)
  * Converts `ENetProtocolType` to canonical display text.
  * Unsupported enum values throw `std::domain_error`.
  */
-msvc8::string moho::NET_GetProtocolName(const ENetProtocolType protocol)
+fa::string moho::NET_GetProtocolName(const ENetProtocolType protocol)
 {
   switch (protocol) {
   case ENetProtocolType::kNone:
-    return msvc8::string("None");
+    return fa::string("None");
   case ENetProtocolType::kTcp:
-    return msvc8::string("TCP");
+    return fa::string("TCP");
   case ENetProtocolType::kUdp:
-    return msvc8::string("UDP");
+    return fa::string("UDP");
   default:
     break;
   }
 
-  const msvc8::string msg = gpg::STR_Printf("invalid protocol (%d)", static_cast<int32_t>(protocol));
+  const fa::string msg = gpg::STR_Printf("invalid protocol (%d)", static_cast<int32_t>(protocol));
   throw std::domain_error(msg.c_str());
 }
 
@@ -1154,6 +1098,6 @@ ENetProtocolType moho::NET_ProtocolFromString(const char* str)
     return ENetProtocolType::kUdp;
   }
 
-  const msvc8::string msg = gpg::STR_Printf("invalid protocol (\"%s\")", str);
+  const fa::string msg = gpg::STR_Printf("invalid protocol (\"%s\")", str);
   throw std::domain_error(msg.c_str());
 }

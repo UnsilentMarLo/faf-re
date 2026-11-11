@@ -2,6 +2,7 @@
 #include "legacy/math/X87Math.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +23,7 @@
 #include "gpg/gal/EffectVariable.hpp"
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/DeviceContext.hpp"
+#include "moho/console/CConCommand.h"
 #include "gpg/gal/DrawIndexedContext.hpp"
 #include "gpg/gal/Error.hpp"
 #include "gpg/gal/IndexBufferContext.hpp"
@@ -29,13 +31,20 @@
 #include "gpg/gal/Texture.hpp"
 #include "gpg/gal/TextureContext.h"
 #include "gpg/gal/VertexBufferContext.hpp"
+// The Direct3D 9 backend is Windows-only (the Linux client, issue #255).
+#if FAFRE_PLATFORM_WINDOWS
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
 #include "gpg/gal/backends/d3d9/EffectTechniqueD3D9.hpp"
+#endif
 #include "gpg/gal/EffectTechnique.hpp"
+#include "gpg/gal/MeshFormatter.h"
+// The Direct3D 9 backend is Windows-only (the Linux client, issue #255).
+#if FAFRE_PLATFORM_WINDOWS
 #include "gpg/gal/backends/d3d9/Float16HardwareVertexFormatterD3D9.hpp"
 #include "gpg/gal/backends/d3d9/IndexBufferD3D9.hpp"
 #include "gpg/gal/backends/d3d9/VertexBufferD3D9.hpp"
 #include "gpg/gal/backends/d3d9/VertexFormatD3D9.hpp"
+#endif
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/d3d/CD3DEffectTechnique.h"
 #include "moho/render/d3d/ShaderVar.h"
@@ -94,7 +103,7 @@ namespace moho
       const MeshInstance& meshInstance,
       const CAniPose& pose,
       const CAniSkel& skeleton,
-      const msvc8::vector<std::int32_t>& boneRemapIndices,
+      const fa::vector<std::int32_t>& boneRemapIndices,
       const std::int32_t boneCount,
       SkinPaletteEntry* const transPalette,
       SkinPaletteEntry* const rotPalette,
@@ -278,7 +287,7 @@ namespace moho
         const MeshInstance& meshInstance,
         const CAniPose& pose,
         const CAniSkel& skeleton,
-        const msvc8::vector<std::int32_t>& boneRemapIndices,
+        const fa::vector<std::int32_t>& boneRemapIndices,
         const std::int32_t boneCount
       )
       {
@@ -299,7 +308,7 @@ namespace moho
       }
 
       /// Records the bases just written for one bucket's instances, in order.
-      void RecordBucket(const msvc8::vector<MeshInstance*>& instances, const std::size_t firstBase)
+      void RecordBucket(const fa::vector<MeshInstance*>& instances, const std::size_t firstBase)
       {
         mPrepared[instances.end()] = PreparedBucket{instances.begin(), instances.size(), firstBase};
       }
@@ -452,6 +461,7 @@ namespace moho
           context.type_ = 3U;  // a per-instance stream
           context.usage_ = 2U; // dynamic
           mBuffer = gpg::gal::Device::GetInstance()->CreateVertexBuffer(&context);
+          gpg::gal::Device::GetInstance()->CopyLockedRangeOnly(*mBuffer); // a draw reads the run just appended
           mCapacity = capacity;
           mStride = stride;
           mCursor = capacity; // so the first append discards
@@ -499,6 +509,77 @@ namespace moho
       // Never destroyed, for the reason GetBoneTextureShaderVars gives.
       static InstanceRingBuffer* const ring = new InstanceRingBuffer();
       return *ring;
+    }
+
+    bool ren_MeshPackedVertices = true;
+    TConVar<bool> gTConVar_ren_MeshPackedVertices(
+      "ren_MeshPackedVertices",
+      "Direct3D 12 / Vulkan: a static mesh vertex takes 36 bytes where its values fit, 44 where its texture coordinates leave "
+      "0 to 1 (1, the default), or 72 (0). Read when a mesh's batch is created.",
+      &ren_MeshPackedVertices
+    );
+
+    /// The static vertex layout a mesh's values allow.
+    enum class PackedLayout
+    {
+      None,   ///< a direction is longer than one: `HardwareVertex`, 72 bytes
+      Wide,   ///< unit directions, a texture coordinate outside 0 to 1: `PackedWideUvHardwareVertex`, 44 bytes
+      Narrow, ///< unit directions, texture coordinates from 0 to 1: `PackedHardwareVertex`, 36 bytes
+    };
+
+    [[nodiscard]] PackedLayout LayoutVerticesFit(const SScmVertex* const vertices, const std::int32_t count)
+    {
+      constexpr float kDirectionLimit = 1.001f;
+      const auto directionFits = [](const float* const direction) {
+        return std::abs(direction[0]) <= kDirectionLimit && std::abs(direction[1]) <= kDirectionLimit && std::abs(direction[2]) <= kDirectionLimit;
+      };
+      const auto texCoordFits = [](const float value) { return value >= 0.0f && value <= 1.0f; };
+      bool texCoordsFit = true;
+      for (std::int32_t index = 0; index < count; ++index) {
+        const SScmVertex& vertex = vertices[index];
+        if (!directionFits(vertex.mNormal) || !directionFits(vertex.mTangent) || !directionFits(vertex.mBinormal)) {
+          return PackedLayout::None;
+        }
+        texCoordsFit = texCoordsFit && texCoordFits(vertex.mTexCoord0[0]) && texCoordFits(vertex.mTexCoord0[1]) &&
+          texCoordFits(vertex.mTexCoord1[0]) && texCoordFits(vertex.mTexCoord1[1]);
+      }
+      return texCoordsFit ? PackedLayout::Narrow : PackedLayout::Wide;
+    }
+
+    void PackDirection(std::int8_t* const packed, const float* const direction)
+    {
+      for (int axis = 0; axis < 3; ++axis) {
+        packed[axis] = static_cast<std::int8_t>(std::lround(std::clamp(direction[axis], -1.0f, 1.0f) * 127.0f));
+      }
+      packed[3] = 0;
+    }
+
+    [[nodiscard]] std::uint16_t PackTexCoord(const float value)
+    {
+      return static_cast<std::uint16_t>(std::lround(value * 65535.0f));
+    }
+
+    /// Every 256 meshes, how many vertices went in which format, for the memory this saves.
+    void NotePackedVertices(const PackedLayout layout, const std::int32_t vertexCount)
+    {
+      static std::uint32_t meshes[3] = {0U, 0U, 0U};
+      static std::uint64_t vertices[3] = {0U, 0U, 0U};
+      const auto slot = static_cast<std::size_t>(layout);
+      ++meshes[slot];
+      vertices[slot] += static_cast<std::uint64_t>(vertexCount);
+      if (((meshes[0] + meshes[1] + meshes[2]) & 0xFFU) == 0U) {
+        constexpr double kMegabyte = 1024.0 * 1024.0;
+        const double saved =
+          (static_cast<double>(vertices[2]) * (sizeof(gpg::gal::HardwareVertex) - sizeof(gpg::gal::PackedHardwareVertex)) +
+           static_cast<double>(vertices[1]) * (sizeof(gpg::gal::HardwareVertex) - sizeof(gpg::gal::PackedWideUvHardwareVertex))) /
+          kMegabyte;
+        gpg::Logf(
+          "Mesh vertices: %u meshes packed (%llu vertices), %u packed with float texture coordinates (%llu vertices), %.1f MB saved; "
+          "%u kept the original format (%llu vertices)",
+          meshes[2], static_cast<unsigned long long>(vertices[2]), meshes[1], static_cast<unsigned long long>(vertices[1]), saved,
+          meshes[0], static_cast<unsigned long long>(vertices[0])
+        );
+      }
     }
 
     /// The ring buffer record FillBatch put the current draw's first instance at.
@@ -633,13 +714,37 @@ namespace moho
       // Raw GPU upload: index blob into the locked index buffer.
       std::copy_n(scm_file::GetIndices(*mesh), indexBytes / sizeof(std::int16_t), mappedIndices);
       mIndexBuffer->Unlock();
+      device->ReleaseBufferCopy(*mIndexBuffer); // engine addition: nothing locks a mesh's buffers again
     }
 
     // --- Vertex declaration + static vertex buffer. ---
     gpg::gal::MeshFormatter* const formatter = gpg::gal::GetHardwareVertexFormatter();
-    mVertexFormat = formatter->CreateVertexFormat(0);
+    const SScmVertex* const sourceVertices = scm_file::GetVertices(*mesh);
 
-    const std::uint32_t vertexStride = formatter->GetVertexStride(0, 0);
+    // Engine change (ren_MeshPackedVertices): half the memory on the renderers that take the packed format.
+    // A mesh whose texture coordinates leave 0 to 1 keeps them as floats (44 bytes); one with a direction
+    // longer than one keeps the original format.
+    const gpg::gal::DeviceApi deviceApi = deviceContext->mDeviceType;
+    const PackedLayout layout = (ren_MeshPackedVertices &&
+                                 (deviceApi == gpg::gal::DeviceApi::Direct3D12 || deviceApi == gpg::gal::DeviceApi::Vulkan))
+      ? LayoutVerticesFit(sourceVertices, mVertexCount)
+      : PackedLayout::None;
+    NotePackedVertices(layout, mVertexCount);
+    std::uint32_t vertexStride = 0U;
+    switch (layout) {
+    case PackedLayout::Narrow:
+      mVertexFormat = device->CreateVertexFormat(gpg::gal::kPackedHardwareVertexFormat);
+      vertexStride = static_cast<std::uint32_t>(sizeof(gpg::gal::PackedHardwareVertex));
+      break;
+    case PackedLayout::Wide:
+      mVertexFormat = device->CreateVertexFormat(gpg::gal::kPackedWideUvHardwareVertexFormat);
+      vertexStride = static_cast<std::uint32_t>(sizeof(gpg::gal::PackedWideUvHardwareVertex));
+      break;
+    case PackedLayout::None:
+      mVertexFormat = formatter->CreateVertexFormat(0);
+      vertexStride = formatter->GetVertexStride(0, 0);
+      break;
+    }
 
     gpg::gal::VertexBufferContext vertexContext;
     vertexContext.vertexCount_ = static_cast<std::uint32_t>(mVertexCount);
@@ -652,9 +757,47 @@ namespace moho
     auto* mappedVertices =
       static_cast<std::uint8_t*>(mStaticVertexBuffer->Lock(0U, 0U, gpg::gal::MohoD3DLockFlags::None));
 
-    const SScmVertex* const sourceVertices = scm_file::GetVertices(*mesh);
     for (std::int32_t vertexIndex = 0; vertexIndex < mVertexCount; ++vertexIndex) {
       const SScmVertex& source = sourceVertices[vertexIndex];
+
+      if (layout == PackedLayout::Wide) {
+        auto& packed = *reinterpret_cast<gpg::gal::PackedWideUvHardwareVertex*>(mappedVertices);
+        packed.position[0] = source.mLocalPositionX;
+        packed.position[1] = source.mLocalPositionY;
+        packed.position[2] = source.mLocalPositionZ;
+        PackDirection(packed.normal, source.mNormal);
+        PackDirection(packed.tangent, source.mTangent);
+        PackDirection(packed.binormal, source.mBinormal);
+        packed.texCoords[0] = source.mTexCoord0[0];
+        packed.texCoords[1] = source.mTexCoord0[1];
+        packed.texCoords[2] = source.mTexCoord1[0];
+        packed.texCoords[3] = source.mTexCoord1[1];
+        packed.boneIndices[0] = source.mBoneIndex;
+        packed.boneIndices[1] = source.mBoneIndex1;
+        packed.boneIndices[2] = source.mBoneIndex2;
+        packed.boneIndices[3] = source.mBoneIndex3;
+        mappedVertices += vertexStride;
+        continue;
+      }
+      if (layout == PackedLayout::Narrow) {
+        auto& packed = *reinterpret_cast<gpg::gal::PackedHardwareVertex*>(mappedVertices);
+        packed.position[0] = source.mLocalPositionX;
+        packed.position[1] = source.mLocalPositionY;
+        packed.position[2] = source.mLocalPositionZ;
+        PackDirection(packed.normal, source.mNormal);
+        PackDirection(packed.tangent, source.mTangent);
+        PackDirection(packed.binormal, source.mBinormal);
+        packed.texCoords[0] = PackTexCoord(source.mTexCoord0[0]);
+        packed.texCoords[1] = PackTexCoord(source.mTexCoord0[1]);
+        packed.texCoords[2] = PackTexCoord(source.mTexCoord1[0]);
+        packed.texCoords[3] = PackTexCoord(source.mTexCoord1[1]);
+        packed.boneIndices[0] = source.mBoneIndex;
+        packed.boneIndices[1] = source.mBoneIndex1;
+        packed.boneIndices[2] = source.mBoneIndex2;
+        packed.boneIndices[3] = source.mBoneIndex3;
+        mappedVertices += vertexStride;
+        continue;
+      }
 
       gpg::gal::MeshVertex staging{};
       staging.position[0] = source.mLocalPositionX;
@@ -684,6 +827,7 @@ namespace moho
     }
 
     mStaticVertexBuffer->Unlock();
+    device->ReleaseBufferCopy(*mStaticVertexBuffer); // engine addition: as the index buffer above
   }
 
   /**
@@ -802,7 +946,10 @@ namespace moho
     // The two open-pass draws are FAF's; they keep the binary's fatal handling
     // of a failed draw, as the per-pass draw below does.
     if (sOpenPassTechnique != nullptr && technique == sOpenPassTechnique) {
+#if FAFRE_PLATFORM_WINDOWS
+      // Only the Direct3D 9 device keeps a pass open (below), so the technique is a D3D9 one.
       static_cast<gpg::gal::EffectTechniqueD3D9*>(technique)->CommitChanges();
+#endif
       try {
         device->DrawIndexedPrimitive(&drawContext);
       } catch (const gpg::gal::Error& error) {
@@ -890,6 +1037,17 @@ namespace moho
    * Returns the number of instances actually packed, which is what
    * `MeshBatch::Render` hands to `DrawBatch`.
    */
+  bool ren_MeshPaletteUsedOnly = true;
+  namespace
+  {
+    TConVar<bool> gTConVar_ren_MeshPaletteUsedOnly(
+      "ren_MeshPaletteUsedOnly",
+      "Direct3D 12 / Vulkan: a mesh batch sends only the bones its instances use (1, the default), or both whole bone "
+      "palettes (0). Read at each batch.",
+      &ren_MeshPaletteUsedOnly
+    );
+  } // namespace
+
   std::int32_t HardwareMeshBatch::FillBatch(
     MeshInstance**& current,
     MeshInstance** const end,
@@ -957,21 +1115,22 @@ namespace moho
 
       // The reflection pass only draws instances that are flagged reflectable.
       if (!reflectedOnly || meshInstance->isReflected != 0) {
-        boost::shared_ptr<CAniPose> pose;
-        CaptureMeshInstanceCurrentPose(&pose, meshInstance);
+        // Engine change: the instance holds its pose and the pose its skeleton through this draw, so
+        // they need no counted copies, which were over 1 % of a frame.
+        meshInstance->UpdateInterpolatedFields();
+        const CAniPose* const pose = meshInstance->curPose.get();
 
         // An instance whose pose (or whose pose's skeleton) has gone away is
         // skipped without consuming a slot in the draw.
-        const boost::shared_ptr<const CAniSkel> skeleton =
-          pose.get() != nullptr ? pose->GetSkeleton() : boost::shared_ptr<const CAniSkel>{};
+        const CAniSkel* const skeleton = pose != nullptr ? pose->mSkeleton.get() : nullptr;
 
-        if (pose.get() != nullptr && skeleton.get() != nullptr) {
+        if (pose != nullptr && skeleton != nullptr) {
           staging.instanceIndex = static_cast<std::uint8_t>(packedCount);
           staging.color = meshInstance->color;
           staging.meshColor = meshInstance->meshColor;
           // 0x007E8235..0x007E8242: `fmod(float, float)` (0x00422920 -> _CIfmod).
           staging.shaderTime = static_cast<float>(
-            msvc8::fmod(static_cast<float>(meshInstance->gameTick), kMeshShaderTimeWrapSeconds)
+            fa::fmod(static_cast<float>(meshInstance->gameTick), kMeshShaderTimeWrapSeconds)
           );
           staging.useSecondaryData = mUseSecondaryData;
           staging.parameter = (&meshInstance->parameters)[mParameterAnnotation];
@@ -1071,16 +1230,25 @@ namespace moho
     }
 
     if (!boneTexture) {
+      std::uint32_t transEntries = static_cast<std::uint32_t>(transPaletteVar.mPalette.size());
+      std::uint32_t rotEntries = static_cast<std::uint32_t>(rotPaletteVar.mPalette.size());
+      // Engine change (ren_MeshPaletteUsedOnly): this draw reads only the bones of the instances packed
+      // above. Direct3D 12 and Vulkan take just those; the older renderers keep their whole array.
+      const gpg::gal::DeviceApi deviceApi = gpg::gal::Device::GetInstance()->GetDeviceContext()->mDeviceType;
+      if (ren_MeshPaletteUsedOnly && deviceApi != gpg::gal::DeviceApi::Direct3D9 && deviceApi != gpg::gal::DeviceApi::Direct3D10 &&
+          deviceApi != gpg::gal::DeviceApi::Direct3D11) {
+        const std::uint32_t used = static_cast<std::uint32_t>(std::max(std::max(packedCount, 1) * mBoneCount, 1));
+        transEntries = std::min(transEntries, used);
+        rotEntries = std::min(rotEntries, used);
+      }
       if (transPaletteVar.Exists()) {
         transPaletteVar.mEffectVariable->SetValue(
-          transPaletteVar.mPalette.begin(),
-          static_cast<std::uint32_t>(transPaletteVar.mPalette.size()) * static_cast<std::uint32_t>(sizeof(SkinPaletteEntry))
+          transPaletteVar.mPalette.begin(), transEntries * static_cast<std::uint32_t>(sizeof(SkinPaletteEntry))
         );
       }
       if (rotPaletteVar.Exists()) {
         rotPaletteVar.mEffectVariable->SetValue(
-          rotPaletteVar.mPalette.begin(),
-          static_cast<std::uint32_t>(rotPaletteVar.mPalette.size()) * static_cast<std::uint32_t>(sizeof(SkinPaletteEntry))
+          rotPaletteVar.mPalette.begin(), rotEntries * static_cast<std::uint32_t>(sizeof(SkinPaletteEntry))
         );
       }
     }
@@ -1147,7 +1315,7 @@ namespace moho
    * `FillBatch` finds them by the bucket's end and the instance's position.
    * Instances without a pose (which `FillBatch` skips) record no base.
    */
-  void HardwareMeshBatch::PrepareBonePalettes(const msvc8::vector<MeshInstance*>& instances)
+  void HardwareMeshBatch::PrepareBonePalettes(const fa::vector<MeshInstance*>& instances)
   {
     if (mBoneCount <= 0 || instances.empty()) {
       return;
@@ -1156,13 +1324,13 @@ namespace moho
     BonePaletteTexture& palette = GetBonePaletteTexture();
     const std::size_t firstBase = palette.mBases.size();
     for (MeshInstance* const meshInstance : instances) {
-      boost::shared_ptr<CAniPose> pose;
-      CaptureMeshInstanceCurrentPose(&pose, meshInstance);
-      const boost::shared_ptr<const CAniSkel> skeleton =
-        pose.get() != nullptr ? pose->GetSkeleton() : boost::shared_ptr<const CAniSkel>{};
+      // No counted copies, as in FillBatch.
+      meshInstance->UpdateInterpolatedFields();
+      const CAniPose* const pose = meshInstance->curPose.get();
+      const CAniSkel* const skeleton = pose != nullptr ? pose->mSkeleton.get() : nullptr;
 
       std::uint32_t base = BonePaletteTexture::kNoBase;
-      if (pose.get() != nullptr && skeleton.get() != nullptr) {
+      if (pose != nullptr && skeleton != nullptr) {
         base = palette.WriteInstance(*meshInstance, *pose, *skeleton, mBoneRemapIndices, mBoneCount);
       }
       palette.mBases.push_back(base);
@@ -1226,4 +1394,79 @@ namespace moho
   {
     Initialize(lod, remapToReferenceResource, referenceResource, currentResource);
   }
+  /**
+   * FAF addition, not in the shipped binary (ren_RayTracedShadows, render/RayScene.cpp).
+   *
+   * The world transforms the mesh effect places `meshInstance` with under `batch`, as row-major 3x4
+   * matrices that take a column vector (the ray scene's form): one per skinned bone, or a single one for
+   * an unskinned batch. A skinned bone is mesh.fx's ComputeMatrix of the bone palette entry
+   * FillInstanceBonePalettes writes (scale, translation, rotation); a hidden bone gets a zero matrix.
+   * False when the instance has no pose or skeleton (FillBatch skips those too).
+   */
+  bool MeshInstanceRayTransforms(const MeshBatch& batch, MeshInstance& meshInstance, std::vector<std::array<float, 12>>& out)
+  {
+    out.clear();
+    const auto store = [&out](const float (&rows)[4][3]) {
+      std::array<float, 12> transform{};
+      for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+          transform[static_cast<std::size_t>(row * 4 + column)] = rows[column][row];
+        }
+        transform[static_cast<std::size_t>(row * 4 + 3)] = rows[3][row];
+      }
+      out.push_back(transform);
+    };
+    meshInstance.UpdateInterpolatedFields();
+    if (batch.mUseBoneRemap == 0) {
+      VMatrix4 instanceTransform;
+      instanceTransform.Set(meshInstance.curOrientation, meshInstance.interpolatedPosition);
+      ScaleTransformRows(instanceTransform, meshInstance.scale);
+      const float rows[4][3] = {
+        {instanceTransform.r[0].x, instanceTransform.r[0].y, instanceTransform.r[0].z},
+        {instanceTransform.r[1].x, instanceTransform.r[1].y, instanceTransform.r[1].z},
+        {instanceTransform.r[2].x, instanceTransform.r[2].y, instanceTransform.r[2].z},
+        {instanceTransform.r[3].x, instanceTransform.r[3].y, instanceTransform.r[3].z},
+      };
+      store(rows);
+      return true;
+    }
+    const CAniPose* const pose = meshInstance.curPose.get();
+    const CAniSkel* const skeleton = (pose != nullptr) ? pose->mSkeleton.get() : nullptr;
+    if (pose == nullptr || skeleton == nullptr || batch.mBoneCount <= 0) {
+      return false;
+    }
+    const auto boneCount = static_cast<std::size_t>(batch.mBoneCount);
+    std::vector<SkinPaletteEntry> translations(boneCount);
+    std::vector<SkinPaletteEntry> rotations(boneCount);
+    FillInstanceBonePalettes(
+      meshInstance, *pose, *skeleton, batch.mBoneRemapIndices, batch.mBoneCount, translations.data(), rotations.data(), 1U
+    );
+    for (std::size_t bone = 0U; bone < boneCount; ++bone) {
+      const SkinPaletteEntry& t = translations[bone];
+      const SkinPaletteEntry& q = rotations[bone];
+      const float s = t.w;
+      const float x2 = 2.0f * q.x;
+      const float y2 = 2.0f * q.y;
+      const float z2 = 2.0f * q.z;
+      const float w2 = 2.0f * q.w;
+      const float xx2 = q.x * x2;
+      const float yy2 = q.y * y2;
+      const float zz2 = q.z * z2;
+      const float xy2 = q.x * y2;
+      const float xz2 = q.x * z2;
+      const float xw2 = q.x * w2;
+      const float yz2 = q.y * z2;
+      const float yw2 = q.y * w2;
+      const float zw2 = q.z * w2;
+      const float rows[4][3] = {
+        {s * (1.0f - (yy2 + zz2)), s * (xy2 + zw2), s * (xz2 - yw2)},
+        {s * (xy2 - zw2), s * (1.0f - (xx2 + zz2)), s * (yz2 + xw2)},
+        {s * (xz2 + yw2), s * (yz2 - xw2), s * (1.0f - (xx2 + yy2))},
+        {t.x, t.y, t.z},
+      };
+      store(rows);
+    }
+    return true;
+  }
+
 } // namespace moho

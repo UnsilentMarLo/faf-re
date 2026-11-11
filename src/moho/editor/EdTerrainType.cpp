@@ -21,6 +21,7 @@
 #include "moho/editor/EdTerrainType.h"
 #include "moho/editor/EdTerrainTypeMath.h"
 #include "moho/sim/CWldMap.h"
+#include "moho/terrain/CWldTerrainRes.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/ISTIDriver.h"
 #include "moho/sim/STIMap.h"

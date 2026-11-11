@@ -8,8 +8,24 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#if !FAFRE_PLATFORM_WINDOWS
+#include <cstdio>
+
+#include <dlfcn.h>
+#endif
 
 #include "gpg/core/utils/Logging.h"
+#include "gpg/gal/PlacedResources.h"
+
+namespace gpg::gal
+{
+  bool gReleaseBufferCopies = true;
+  bool gLockedRangeOnly = true;
+  bool gCopyWrittenOnly = true;
+  int gUploadIdleMB = 32;
+  bool gVulkanScaledPresent = true;
+  bool gVulkanPreciseBarriers = true;
+} // namespace gpg::gal
 
 namespace gpg::gal::backend
 {
@@ -42,6 +58,17 @@ namespace gpg::gal::backend
         HMODULE module = nullptr;
         char name[MAX_PATH]{};
         std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(frames[index]);
+#if !FAFRE_PLATFORM_WINDOWS
+        // The Linux client (issue #255): the module and its load address from the dynamic linker.
+        (void)module;
+        Dl_info info{};
+        if (::dladdr(frames[index], &info) != 0 && info.dli_fname != nullptr) {
+          std::snprintf(name, sizeof(name), "%s", info.dli_fname);
+          offset -= reinterpret_cast<std::uintptr_t>(info.dli_fbase);
+        } else {
+          std::strcpy(name, "?");
+        }
+#else
         if (::GetModuleHandleExA(
               GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
               static_cast<LPCSTR>(frames[index]),
@@ -52,6 +79,7 @@ namespace gpg::gal::backend
         } else {
           std::strcpy(name, "?");
         }
+#endif
         const char* const base = std::max(std::strrchr(name, '\\'), std::strrchr(name, '/'));
         used += static_cast<std::size_t>(std::snprintf(
           line + used, sizeof(line) - used, " %s+0x%zX", (base != nullptr) ? base + 1 : name, static_cast<std::size_t>(offset)
@@ -98,6 +126,13 @@ namespace gpg::gal::backend
     mBytes.assign(static_cast<std::size_t>(byteWidth) + kGuardBytes, 0U);
     Account(previous);
     Arm(byteWidth);
+  }
+
+  void LockShadow::Release() noexcept
+  {
+    const std::size_t previous = mBytes.capacity();
+    std::vector<std::uint8_t>().swap(mBytes);
+    Account(previous);
   }
 
   void LockShadow::Arm(const std::size_t from)

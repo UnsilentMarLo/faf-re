@@ -33,7 +33,8 @@ namespace gpg::gal
     constexpr std::uint32_t kFirstTextureBinding = 5U;  // t4..t5
     constexpr std::uint32_t kFirstWriteBinding = 7U;    // u0..u1
     constexpr std::uint32_t kSamplerBinding = 9U;       // s0
-    constexpr std::uint32_t kBindingCount = 10U;
+    constexpr std::uint32_t kDepthBinding = 10U;        // t6, the bound depth target ([[vk::binding(10, 0)]] in HLSL)
+    constexpr std::uint32_t kBindingCount = 11U;
     constexpr VkDeviceSize kNullBufferBytes = 256U;
 
     /** The Vulkan device, while it exists (buffers and programs can outlive it at exit). */
@@ -116,7 +117,10 @@ namespace gpg::gal
       // packing (scalar block layout is on); the GpuDriven.h registers moved
       // to the set's bindings; D3D's clip-space y.
       std::vector<std::wstring> arguments{
-        L"-HV", L"2018", L"-spirv", L"-fvk-use-dx-layout", L"-fspv-target-env=vulkan1.1",
+        L"-HV", L"2018", L"-spirv", L"-fvk-use-dx-layout",
+        // Engine addition (ren_RayTracedShadows): ray queries need Vulkan 1.2's SPIR-V.
+        (std::string_view(desc.source, desc.sourceBytes).find("RayQuery<") != std::string_view::npos) ? L"-fspv-target-env=vulkan1.2"
+                                                                                                    : L"-fspv-target-env=vulkan1.1",
         L"-fvk-b-shift", L"0", L"0", L"-fvk-t-shift", L"1", L"0", L"-fvk-u-shift", L"7", L"0", L"-fvk-s-shift", L"9", L"0",
       };
       if (vertex) {
@@ -185,6 +189,7 @@ namespace gpg::gal
       bindings[binding].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
       bindings[binding].descriptorType = (binding == kConstantBinding)       ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
         : (binding >= kFirstTextureBinding && binding < kFirstWriteBinding) ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
+        : (binding == kDepthBinding)                                          ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
         : (binding == kSamplerBinding)                                        ? VK_DESCRIPTOR_TYPE_SAMPLER
                                                                               : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     }
@@ -195,8 +200,11 @@ namespace gpg::gal
     CheckVk("GpuDrivenVulkan.cpp", __LINE__, Vk().vkCreateDescriptorSetLayout(mDevice, &layout, nullptr, &mGpuSetLayout));
     VkPipelineLayoutCreateInfo pipelineLayout{};
     pipelineLayout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayout.setLayoutCount = 1U;
-    pipelineLayout.pSetLayouts = &mGpuSetLayout;
+    // Engine addition (ren_RayTracedShadows): the ray-traced scene as set 2, as for the effects; set 1 is unused
+    // and takes the program set's layout as a stand-in.
+    const VkDescriptorSetLayout sets[3] = {mGpuSetLayout, mGpuSetLayout, mRayLayout};
+    pipelineLayout.setLayoutCount = (mRayLayout != VK_NULL_HANDLE) ? 3U : 1U;
+    pipelineLayout.pSetLayouts = sets;
     CheckVk("GpuDrivenVulkan.cpp", __LINE__, Vk().vkCreatePipelineLayout(mDevice, &pipelineLayout, nullptr, &mGpuPipelineLayout));
 
     for (std::uint32_t kind = 0U; kind < 3U; ++kind) {
@@ -218,6 +226,10 @@ namespace gpg::gal
     mGpuNullBuffer = CreateDeviceBuffer(kNullBufferBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     // CopyVertexBufferRegion is vkCmdCopyBuffer between transfer barriers.
     mGpuFeatures = kGpuFeatureVertexPulling | kGpuFeatureCompute | kGpuFeatureIndirectDraw | kGpuFeatureBufferCopy;
+    // Tessellated effect passes draw only with the device's tessellationShader feature (BindPass).
+    if (mTessellationSupported) {
+      mGpuFeatures |= kGpuFeatureTessellation;
+    }
 
     // Timestamps, when the queue supports them in graphics and compute work.
     if (mProperties.limits.timestampComputeAndGraphics == VK_TRUE && mProperties.limits.timestampPeriod > 0.0f) {
@@ -320,8 +332,17 @@ namespace gpg::gal
     // paused A/B still shows extra particle specks with it on, as on Direct3D 11.
     // World shapes (ren_GpuShapes): a paused same-process A/B of FAF's shapes plus a 2,000-segment
     // UI_DrawLine stroke against the path off, pixel-identical outside two animated unit glows.
-    return kGpuPathStrategicIcons | kGpuPathIconClassify | kGpuPathFogOfWar | kGpuPathSelectBrackets | kGpuPathProjectileIcons |
-      kGpuPathWorldShapes;
+    // The GPU font cook (ren_GpuFontCook): GPU and CPU atlases compared per font, and a device reset during
+    // a cook, on NVIDIA only; other vendors keep the CPU cook until it has run there (issue #309).
+    const std::uint32_t fontCook = mProperties.vendorID == kPciVendorNvidia ? kGpuPathMsdfCook : 0U;
+    // Not the icon classification on a software rasterizer (llvmpipe, a Linux VM without 3D, issue
+    // #256): its compiled code faults in that path's compute and indirect draw within a game's first
+    // frames (skirmish bisect in the linux-faf VM: ren_GpuIconClassify 0 alone avoids it, every other
+    // GPU path on). ren_GpuIconClassify 1 still turns it on there.
+    const std::uint32_t iconClassify = mProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU ? 0U : kGpuPathIconClassify;
+    return kGpuPathStrategicIcons | iconClassify | kGpuPathFogOfWar | kGpuPathSelectBrackets | kGpuPathProjectileIcons |
+      // MSDF text and the interface's quads: 0 pixels differ in a same-process A/B of a panel of text.
+      kGpuPathWorldShapes | kGpuPathMsdfText | fontCook;
   }
 
   boost::shared_ptr<GpuBuffer> DeviceVulkan::CreateGpuBuffer(const GpuBufferDesc& desc)
@@ -495,9 +516,13 @@ namespace gpg::gal
     }
     VkPipelineColorBlendAttachmentState attachment{};
     attachment.blendEnable = (state.blend != GpuBlend::Opaque) ? VK_TRUE : VK_FALSE;
-    attachment.srcColorBlendFactor = (state.blend != GpuBlend::Opaque) ? VK_BLEND_FACTOR_SRC_ALPHA : VK_BLEND_FACTOR_ONE;
+    attachment.srcColorBlendFactor = (state.blend == GpuBlend::Opaque) ? VK_BLEND_FACTOR_ONE
+      : (state.blend == GpuBlend::Multiply)                                ? VK_BLEND_FACTOR_ZERO
+      : (state.blend == GpuBlend::Brighten)                                ? VK_BLEND_FACTOR_DST_COLOR
+                                                                           : VK_BLEND_FACTOR_SRC_ALPHA;
     attachment.dstColorBlendFactor = (state.blend == GpuBlend::AlphaBlend) ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
-      : (state.blend == GpuBlend::Additive)                                 ? VK_BLEND_FACTOR_ONE
+      : (state.blend == GpuBlend::Additive || state.blend == GpuBlend::Brighten) ? VK_BLEND_FACTOR_ONE
+      : (state.blend == GpuBlend::Multiply)                                 ? VK_BLEND_FACTOR_SRC_COLOR
                                                                             : VK_BLEND_FACTOR_ZERO;
     attachment.colorBlendOp = VK_BLEND_OP_ADD;
     attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -567,7 +592,7 @@ namespace gpg::gal
         const VkDescriptorPoolSize sizes[4] = {
           {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1024U},
           {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1024U * 6U},
-          {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024U * 2U},
+          {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024U * 3U},
           {VK_DESCRIPTOR_TYPE_SAMPLER, 1024U},
         };
         VkDescriptorPoolCreateInfo info{};
@@ -602,7 +627,7 @@ namespace gpg::gal
     }
 
     VkDescriptorBufferInfo buffers[1U + kGpuMaxReadBuffers + kGpuMaxWriteBuffers]{};
-    VkDescriptorImageInfo images[kGpuMaxTextures + 1U]{};
+    VkDescriptorImageInfo images[kGpuMaxTextures + 2U]{}; // the textures, the sampler, the bound depth
     VkWriteDescriptorSet writes[kBindingCount]{};
     for (std::uint32_t binding = 0U; binding < kBindingCount; ++binding) {
       writes[binding].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -629,6 +654,11 @@ namespace gpg::gal
       if (auto* const texture = static_cast<TextureVulkan*>(bindings.textures[slot])) {
         Transition(texture->Image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         info.imageView = texture->View();
+      } else if (auto* const target = static_cast<RenderTargetVulkan*>(bindings.targets[slot])) {
+        // BeginRendering moves it back to COLOR_ATTACHMENT_OPTIMAL when it is drawn into again.
+        RenderTargetVulkan::Buffer& buffer = target->Current();
+        Transition(buffer.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        info.imageView = buffer.view;
       } else {
         info.imageView = mNullViews[0];
       }
@@ -643,6 +673,19 @@ namespace gpg::gal
       writes[kFirstWriteBinding + slot].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
       writes[kFirstWriteBinding + slot].pBufferInfo = &info;
     }
+    VkDescriptorImageInfo& depthInfo = images[kGpuMaxTextures + 1U];
+    depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    depthInfo.imageView = mNullViews[0];
+    if (bindings.readBoundDepth && outputContext_.depthStencil != nullptr) {
+      // BeginRendering moves it back to DEPTH_STENCIL_ATTACHMENT_OPTIMAL for the next draw.
+      auto* const depth = static_cast<DepthStencilTargetVulkan*>(outputContext_.depthStencil.get());
+      if (depth->SampledView() != VK_NULL_HANDLE) {
+        Transition(depth->Image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        depthInfo.imageView = depth->SampledView();
+      }
+    }
+    writes[kDepthBinding].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    writes[kDepthBinding].pImageInfo = &depthInfo;
     images[kGpuMaxTextures].sampler = mGpuSamplers[static_cast<int>(sampler)];
     writes[kSamplerBinding].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
     writes[kSamplerBinding].pImageInfo = &images[kGpuMaxTextures];
@@ -677,6 +720,12 @@ namespace gpg::gal
 
     Vk().vkCmdBindPipeline(mCommands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     Vk().vkCmdBindDescriptorSets(mCommands, VK_PIPELINE_BIND_POINT_GRAPHICS, mGpuPipelineLayout, 0U, 1U, &set, 0U, nullptr);
+    if (mRaySet != VK_NULL_HANDLE) {
+      Vk().vkCmdBindDescriptorSets(mCommands, VK_PIPELINE_BIND_POINT_GRAPHICS, mGpuPipelineLayout, 2U, 1U, &mRaySet, 0U, nullptr);
+      if (mRayRecordsChunk != nullptr) {
+        mRayRecordsChunk->serial = RecordingSerial();
+      }
+    }
     // The engine's viewport with Direct3D 9's pixel centres, clipped as an effect draw is.
     VkViewport viewport{
       static_cast<float>(mViewport.X) + backend::Direct3D9PixelCentreShift(),
@@ -727,6 +776,12 @@ namespace gpg::gal
     GpuWriteBarrier();
     Vk().vkCmdBindPipeline(mCommands, VK_PIPELINE_BIND_POINT_COMPUTE, program->mComputePipeline);
     Vk().vkCmdBindDescriptorSets(mCommands, VK_PIPELINE_BIND_POINT_COMPUTE, mGpuPipelineLayout, 0U, 1U, &set, 0U, nullptr);
+    if (mRaySet != VK_NULL_HANDLE) {
+      Vk().vkCmdBindDescriptorSets(mCommands, VK_PIPELINE_BIND_POINT_COMPUTE, mGpuPipelineLayout, 2U, 1U, &mRaySet, 0U, nullptr);
+      if (mRayRecordsChunk != nullptr) {
+        mRayRecordsChunk->serial = RecordingSerial();
+      }
+    }
     Vk().vkCmdDispatch(mCommands, dispatch.groupsX, dispatch.groupsY, dispatch.groupsZ);
     RecordStateChange();
     // What it wrote is visible to the draws (and indirect arguments) after it.

@@ -34,6 +34,9 @@ namespace moho::editor
   /** Sim thread, between beats: applies the queued height edits to the sim's field and dirties its path caches. */
   std::size_t ApplyPendingHeightEdits(Sim* sim);
 
+  /** Puts ApplyPendingHeightEdits into the engine's per-beat hook (moho/sim/SimEditorHook.h); called once by the editor's start (EdBootstrap.cpp). */
+  void InstallSimBeatHook();
+
   /** Checksum of the sim's own height field over a rectangle, comparable with MapDocument::Checksum. */
   std::uint64_t SimFieldChecksum(Sim* sim, const CellRect& rect);
 

@@ -2,11 +2,16 @@
 #include "DeviceContext.hpp"
 #include "Error.hpp"
 // d3d11.h pulls in d3d10_1.h, which refuses to follow d3d10.h: D3D11 first.
+// The Linux client renders with Vulkan only (issue #255).
+#if FAFRE_PLATFORM_WINDOWS
 #include "gpg/gal/backends/d3d11/DeviceD3D11.h"
 #include "gpg/gal/backends/d3d12/DeviceD3D12.h"
+#endif
 #include "gpg/gal/backends/vulkan/DeviceVulkan.h"
+#if FAFRE_PLATFORM_WINDOWS
 #include "gpg/gal/backends/d3d10/DeviceD3D10.hpp"
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
+#endif
 #include "legacy/containers/AutoPtr.h"
 
 #include <Windows.h>
@@ -22,14 +27,14 @@ namespace gpg::gal
          * and its exit-time destructor (0x00C095F0) deletes whatever device is
          * still live.
          */
-        msvc8::auto_ptr<Device> sDeviceD3D;
+        fa::auto_ptr<Device> sDeviceD3D;
 
         [[noreturn]] void ThrowDeviceContextError(const int line, const char* const message)
         {
             throw Error(
-                msvc8::string("c:\\work\\rts\\main\\code\\src\\libs\\gpggal\\Device.cpp"),
+                fa::string("c:\\work\\rts\\main\\code\\src\\libs\\gpggal\\Device.cpp"),
                 line,
-                msvc8::string(message)
+                fa::string(message)
             );
         }
 
@@ -39,7 +44,7 @@ namespace gpg::gal
          * What it does:
          * Returns the number of `Head` elements currently stored in one vector lane.
          */
-        [[nodiscard]] int CountHeadVectorEntries(const msvc8::vector<Head>& heads) noexcept
+        [[nodiscard]] int CountHeadVectorEntries(const fa::vector<Head>& heads) noexcept
         {
             const Head* const start = heads.begin();
             if (start == nullptr)
@@ -172,6 +177,7 @@ namespace gpg::gal
 
         switch (context->mDeviceType)
         {
+#if FAFRE_PLATFORM_WINDOWS
         case DeviceApi::Direct3D9:
         {
             DeviceD3D9* const device = new DeviceD3D9();
@@ -205,6 +211,7 @@ namespace gpg::gal
             }
             break;
         }
+#endif
         case DeviceApi::Vulkan:
         {
             // FAF addition, not in the shipped binary: as Direct3D 11 above.
@@ -221,6 +228,7 @@ namespace gpg::gal
             }
             break;
         }
+#if FAFRE_PLATFORM_WINDOWS
         case DeviceApi::Direct3D12:
         {
             // FAF addition, not in the shipped binary: as Direct3D 11 above.
@@ -237,6 +245,7 @@ namespace gpg::gal
             }
             break;
         }
+#endif
         default:
             ThrowDeviceContextError(135, "unknown API requested");
         }
@@ -260,6 +269,7 @@ namespace gpg::gal
 
         switch (device->GetDeviceContext()->mDeviceType)
         {
+#if FAFRE_PLATFORM_WINDOWS
         case DeviceApi::Direct3D9:
             return static_cast<DeviceD3D9*>(device)->SupportsVertexTextureFormat(textureFormat);
         case DeviceApi::Direct3D10:
@@ -268,6 +278,7 @@ namespace gpg::gal
             return static_cast<DeviceD3D11*>(device)->SupportsVertexTextureFormat(textureFormat);
         case DeviceApi::Direct3D12:
             return static_cast<DeviceD3D12*>(device)->SupportsVertexTextureFormat(textureFormat);
+#endif
         case DeviceApi::Vulkan:
             return static_cast<DeviceVulkan*>(device)->SupportsVertexTextureFormat(textureFormat);
         default:
@@ -388,7 +399,7 @@ namespace gpg::gal
      * `insert(end(), 1, value)` into a conditional fast-path uninitialized fill
      * (`FUN_008E6F90`, taken when `size < capacity`) plus the `_Insert_n` grow
      * body (`FUN_008E71D0`); together they add exactly one element. Both cite
-     * `msvc8::vector<T>::insert` in Vector.h, along with the copy-construct
+     * `fa::vector<T>::insert` in Vector.h, along with the copy-construct
      * range (`FUN_008D7C20`) and its four calling-convention trampolines.
      * `Head` copies route through the recovered `Head` copy-ctor
      * (`FUN_004368B0`), never a raw byte copy.
@@ -458,5 +469,13 @@ namespace gpg::gal
     void Device::EndProfileRegion(std::uint32_t) {}
     bool Device::GetRuntimeInfo(DeviceRuntimeInfo&) { return false; }
     bool Device::ReadGpuBuffer(GpuBuffer&, std::uint32_t, std::uint32_t, void*) { return false; }
+    void Device::ReleaseBufferCopy(VertexBuffer&) {}
+    void Device::ReleaseBufferCopy(IndexBuffer&) {}
+    void Device::CopyLockedRangeOnly(VertexBuffer&) {}
+    void Device::CopyLockedRangeOnly(IndexBuffer&) {}
+    void Device::CopyWrittenOnly(VertexBuffer&) {}
     bool Device::CopyVertexBufferRegion(VertexBuffer&, std::uint32_t, VertexBuffer&, std::uint32_t, std::uint32_t) { return false; }
+    RayGeometryId Device::CreateRayGeometry(const RayGeometryDesc&) { return 0U; }
+    void Device::DestroyRayGeometry(RayGeometryId) {}
+    bool Device::SetRayInstances(const RayInstance*, std::uint32_t, const boost::shared_ptr<Texture>*, std::uint32_t) { return false; }
 }

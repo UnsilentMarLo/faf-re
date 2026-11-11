@@ -16,6 +16,9 @@
 #include <stdexcept>
 #include <thread>
 #include <windows.h>
+#if FAFRE_PLATFORM_POSIX
+#include "platform/posix/NativePath.h"
+#endif
 
 namespace moho::sfd
 {
@@ -82,10 +85,28 @@ namespace moho::sfd
       sink.reset();
       ReportError(("FAF SFD: " + filename + ": " + error.what()).c_str());
     }
-    void Decode()
+    // Only this thread uses the decoder between Open and Close, so a frame's decode leaves the
+    // mutex free for the render thread's CurrentFrame.
+    void Decode(
+      std::unique_lock<std::mutex>& lock
+    )
     {
+      struct Relock
+      {
+        std::unique_lock<std::mutex>& lock;
+        ~Relock()
+        {
+          lock.lock();
+        }
+      };
       DecodeBatch batch;
-      if (!decoder->Read(batch))
+      bool more;
+      {
+        lock.unlock();
+        Relock relock{lock};
+        more = decoder->Read(batch);
+      }
+      if (!more)
         eof = true;
       for (auto& frame : batch.video) {
         if (frame->width != metadata.header.width || frame->height != metadata.header.height)
@@ -142,25 +163,36 @@ namespace moho::sfd
         audioFinished = true;
       }
     }
-    void Tick()
+    void TakeDueFrames(
+      const double now
+    )
+    {
+      while (!video.empty() && (video.front()->pts <= now + 0.005 || !current)) {
+        current = std::move(video.front());
+        video.pop_front();
+      }
+    }
+    void Tick(
+      std::unique_lock<std::mutex>& lock
+    )
     {
       SupplyAudio();
       double now = Time();
       // Keep about half a second ready. A worker pumps independently of rendering,
       // including while the engine is loading or not requesting textures.
-      for (unsigned budget = 0; !eof && budget < 256; ++budget) {
+      for (unsigned budget = 0; !eof && !quitting && budget < 256; ++budget) {
         const bool needVideo = video.empty() || video.back()->pts < now + 0.5;
         const bool needAudio = sink && sink->Submitted() < now + 0.5;
         if (!needVideo && !needAudio)
           break;
-        Decode();
+        Decode(lock);
+        // Late frames go as they come: after a stall of this thread the catch-up would otherwise
+        // queue them all and pass Decode's limit, about 25 frames of a 1280x1024 movie.
+        TakeDueFrames(now);
         SupplyAudio();
       }
       now = Time();
-      while (!video.empty() && (video.front()->pts <= now + 0.005 || !current)) {
-        current = std::move(video.front());
-        video.pop_front();
-      }
+      TakeDueFrames(now);
       if (eof && video.empty() && (!sink || (audio.empty() && sink->Empty())) && now >= endTime)
         status = 3;
     }
@@ -170,7 +202,7 @@ namespace moho::sfd
       while (!quitting && status == 2) {
         if (!paused) {
           try {
-            Tick();
+            Tick(lock);
           } catch (const std::exception& error) {
             Fail(error);
           }
@@ -217,6 +249,12 @@ namespace moho::sfd
     const char* filename
   )
   {
+#if FAFRE_PLATFORM_POSIX
+    // The engine's native paths keep Windows' backslashes and case-insensitive spelling; the header
+    // reader and FFmpeg open the file directly (the Linux client, issue #255).
+    const std::string posixFilename = platform::posix::NativePath(filename);
+    filename = posixFilename.c_str();
+#endif
     Close();
     IDirectSound* device{};
     long attenuation{};
@@ -226,7 +264,7 @@ namespace moho::sfd
       attenuation = volume;
     }
     auto& s = *impl;
-    std::lock_guard lock(s.mutex);
+    std::unique_lock lock(s.mutex);
     s.filename = filename ? filename : "";
     s.quitting = false;
     s.eof = false;
@@ -264,7 +302,7 @@ namespace moho::sfd
       }
       // Prime while paused so OpenMovie can upload the first frame immediately.
       for (unsigned packets = 0; s.video.empty() && !s.eof && packets < 8192; ++packets) {
-        s.Decode();
+        s.Decode(lock);
         s.SupplyAudio();
       }
       if (s.video.empty())

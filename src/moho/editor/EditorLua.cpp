@@ -96,6 +96,7 @@
 #include "moho/render/CWldTerrainDecal.h"
 #include "moho/sim/CVFSImpl.h"
 #include "moho/sim/CWldMap.h"
+#include "moho/terrain/CWldTerrainRes.h"
 #include "moho/terrain/splat/CWldSplat.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/ISTIDriver.h"
@@ -652,7 +653,7 @@ namespace
       lua_pushnil(state);
       return 1;
     }
-    msvc8::string out;
+    fa::string out;
     (void)vfs->FindFile(&out, path, nullptr);
     if (out.empty()) {
       lua_pushnil(state);
@@ -675,7 +676,7 @@ namespace
       lua_pushboolean(state, 0);
       return 1;
     }
-    msvc8::string canonical;
+    fa::string canonical;
     gpg::STR_CanonizeFilename(&canonical, dir);
     moho::SVFSMountPoint mount;
     mount.mDir = gpg::STR_ToLower(canonical.c_str());
@@ -756,7 +757,7 @@ namespace
     const float z = static_cast<float>(luaL_checknumber(state, 4));
     const float heading = static_cast<float>(luaL_optnumber(state, 5, 0.0));
     moho::CWldPropEntry entry;
-    entry.mBlueprintPath = msvc8::string(blueprint);
+    entry.mBlueprintPath = fa::string(blueprint);
     entry.mTransform.pos_ = Wm3::Vec3f(x, y, z);
     entry.mTransform.orient_ = Wm3::Quatf(std::cos(heading * 0.5f), 0.0f, std::sin(heading * 0.5f), 0.0f);
     entry.mScale = ScaleArgs(state, 6);
@@ -803,7 +804,7 @@ namespace
       lua_pushboolean(state, 0);
       return 1;
     }
-    // msvc8::vector in this tree has no erase(): rebuild without the removed entry
+    // fa::vector in this tree has no erase(): rebuild without the removed entry
     std::vector<moho::CWldPropEntry> keep;
     keep.reserve(props->mEntries.size());
     for (std::size_t i = 0; i < props->mEntries.size(); ++i) {
@@ -930,7 +931,7 @@ namespace
       return 1;
     }
     decal->mType = static_cast<moho::EWldTerrainDecalType>(type);
-    decal->SetName(msvc8::string(name), 0);
+    decal->SetName(fa::string(name), 0);
     decal->SetParameters(rotation, position, scale);
     decal->SetCutoffLOD(cutoff);
     decal->mArmy = -1;

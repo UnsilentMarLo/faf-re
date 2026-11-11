@@ -1,7 +1,7 @@
 // EDITOR: bulk prop removal (docs/projects/editor/MAP_EDITOR_DESIGN.md 19.28).
 //
 //   ed_prop_remove_many(indices) -> removed     indices: a Lua array of 1-based prop numbers (any order, duplicates and numbers out of range are ignored). One pass over the
-//                                               map's prop list, instead of ed_prop_remove(i) once per prop: that rebuilds the whole list each time (msvc8::vector has no erase),
+//                                               map's prop list, instead of ed_prop_remove(i) once per prop: that rebuilds the whole list each time (fa::vector has no erase),
 //                                               17 ms per call on a map with 40000 props, so removing half of them took minutes (mirror of a half map, replace by blueprint, delete of
 //                                               a big selection). Returns how many props went. The numbers of the props behind a removed one shift down by one, as with ed_prop_remove.
 
@@ -14,6 +14,7 @@
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/lua/CScrLuaInitForm.h"
 #include "moho/sim/CWldMap.h"
+#include "moho/terrain/CWldTerrainRes.h"
 #include "moho/sim/CWldSession.h"
 
 namespace

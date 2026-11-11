@@ -7,7 +7,7 @@
 #     missing and moved when their pin changes, always with core.autocrlf=false.
 #     Git for Windows turns autocrlf on system-wide, and converted line endings
 #     break the CR-exact patches.
-#   * Downloads (boost 1.34.1, wxWindows 2.4.2, DXC): pinned by SHA256, cached in
+#   * Downloads (boost 1.34.1, wxWindows 2.4.2, DXC, DirectXTex, libjuice, libdatachannel and its deps): pinned by SHA256, cached in
 #     dependencies/.downloads and extracted into dependencies/<name>.
 #   * Patches (dependencies/patches): applied in order onto a fresh baseline. A
 #     stamp file in each tree records the patches (and their hashes) it carries,
@@ -19,6 +19,10 @@
 #
 #   * The DirectX SDK (June 2010): an installed one, else its headers and libraries
 #     extracted from Microsoft's installer (see faf_dependency_dxsdk).
+#
+# FAF_DEPENDENCIES_ONLY, a list of names (dxsdk for the DirectX SDK), limits a run to those;
+# the Linux build (cmake/FafLinux.cmake) needs three:
+#   cmake -DFAF_DEPENDENCIES_ONLY="WildMagic3p8;zlib-1.2.3;boost_1_34_1" -P cmake/FafDependencies.cmake
 #
 # FFmpeg (dependencies/ffmpeg, Draiget/ffmpeg-mirror) is the unmodified 7.1.3 source
 # with a faf/ CMake build; src/CMakeLists.txt compiles it into static libraries
@@ -83,6 +87,9 @@ endfunction()
 
 # Applies the patches of one tree, see the header.
 function(faf_dependency_patches name kind)
+  if(FAF_DEPENDENCIES_ONLY AND NOT name IN_LIST FAF_DEPENDENCIES_ONLY)
+    return()
+  endif()
   set(_dir "${FAF_DEPENDENCIES_DIR}/${name}")
   set(_stamp "${_dir}/.faf-patches")
   if(NOT CMAKE_SCRIPT_MODE_FILE)
@@ -131,6 +138,9 @@ endfunction()
 
 # --- Submodules -----------------------------------------------------------------------
 function(faf_dependency_submodule name)
+  if(FAF_DEPENDENCIES_ONLY AND NOT name IN_LIST FAF_DEPENDENCIES_ONLY)
+    return()
+  endif()
   set(_dir "${FAF_DEPENDENCIES_DIR}/${name}")
   if(EXISTS "${_dir}/.git")
     # Follow a pin change (a pull that moved the gitlink): back to the baseline,
@@ -170,10 +180,143 @@ set(_faf_download_wxWindows-2.4.2
     "https://github.com/wxWidgets/wxWidgets/releases/download/v2.4.2/wxMSW-2.4.2.zip"
     "081cb30347ed9092a50c39311b46586f4264fb125942652db168851be96ebf33"
     "wxWindows-2.4.2")
+# libjuice (MPL-2.0): the ICE agent behind src/netlink (issue #228). The tag's
+# source archive; cmake/deps/libjuice builds it.
+set(_faf_download_libjuice
+    "https://github.com/paullouisageneau/libjuice/archive/refs/tags/v1.7.4.tar.gz"
+    "95c088862aa1b88b73d62aa99577135010eb768fcafb252d13aa85a8515ef798"
+    "libjuice-1.7.4"
+    "libjuice-1.7.4.tar.gz")
+# libdatachannel (MPL-2.0) and what it needs for WebRTC data channels (issue
+# #238): usrsctp (BSD-3-Clause) and plog (MIT) at the commits libdatachannel
+# 0.24.6 pins as submodules, Mbed TLS 3.6 LTS (Apache-2.0) for DTLS. Its
+# libjuice submodule is the v1.7.4 tag above, so it uses faf_juice.
+# cmake/deps/libdatachannel builds them.
+set(_faf_download_libdatachannel
+    "https://github.com/paullouisageneau/libdatachannel/archive/refs/tags/v0.24.6.tar.gz"
+    "22a66aebebd8dae561d8e5181da96f2fcc203e067c5b2186c07b39af913464c0"
+    "libdatachannel-0.24.6"
+    "libdatachannel-0.24.6.tar.gz")
+set(_faf_download_usrsctp
+    "https://github.com/sctplab/usrsctp/archive/fec583d54493f879d2ae44a743423bf8a04371ab.tar.gz"
+    "e5c114afe73c9a0ec419fab5f5b3f63f3ce57b09b90d06ea85e63dca8aed3e7c"
+    "usrsctp-fec583d54493f879d2ae44a743423bf8a04371ab"
+    "usrsctp-fec583d5.tar.gz")
+set(_faf_download_plog
+    "https://github.com/SergiusTheBest/plog/archive/94899e0b926ac1b0f4750bfbd495167b4a6ae9ef.tar.gz"
+    "92a08bce559b5f28aa88d3fd9071567414b9f43a83fe2a05a6dd14f1da536072"
+    "plog-94899e0b926ac1b0f4750bfbd495167b4a6ae9ef"
+    "plog-94899e0b.tar.gz")
+set(_faf_download_mbedtls
+    "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2"
+    "a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6"
+    "mbedtls-3.6.7")
 set(_faf_download_dxc
     "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip"
     "ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1"
     "")
+# Monocypher 4.0.2 (BSD-2-Clause or CC0): the net channel's AEAD (src/remote/net,
+# issue #145). The tag's source archive; cmake/deps/monocypher builds it.
+set(_faf_download_monocypher
+    "https://github.com/LoupVaillant/Monocypher/archive/refs/tags/4.0.2.tar.gz"
+    "bc1ca30b1b2654e4e7daf2492c0d204200e55137f23fda6b7142fd7d523bd6b4"
+    "Monocypher-4.0.2")
+# Zstandard 1.5.7 (BSD-3-Clause): packs a returning player's save (issue #275). The release
+# archive; cmake/deps/zstd builds it.
+set(_faf_download_zstd
+    "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz"
+    "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3"
+    "zstd-1.5.7")
+
+# FreeType 2.15.0 (FTL): reads font outlines for MSDF text (moho/render/font, issue #306). The
+# release archive, checksum from the release announcement; cmake/deps/freetype builds it as a
+# static library with only what that needs.
+set(_faf_download_freetype
+    "https://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.gz"
+    "9186627467a616d9a9e3e574748ac0c45fa77398e6364edef3041a8ba8d92f64"
+    "freetype-2.15.0")
+# msdfgen 1.13 (MIT): generates MSDF glyphs from those outlines (issue #306). The tag's source
+# archive; cmake/deps/msdfgen builds the static library.
+set(_faf_download_msdfgen
+    "https://github.com/Chlumsky/msdfgen/archive/refs/tags/v1.13.tar.gz"
+    "93cd1ad8918c1a78c5c96e82d4f4c77f0eb86c2e7e8579a0967e54196c4b7167"
+    "msdfgen-1.13"
+    "msdfgen-1.13.tar.gz")
+# GoogleTest 1.15.2 (BSD-3-Clause): the tests' framework (tests/README.md). The tag's source
+# archive; cmake/deps/googletest builds gtest and gtest_main without gmock.
+set(_faf_download_googletest
+    "https://github.com/google/googletest/archive/refs/tags/v1.15.2.tar.gz"
+    "7b42b4d6ed48810c5362c265a17faebe90dc2373c885e5216439d37927f02926"
+    "googletest-1.15.2"
+    "googletest-1.15.2.tar.gz")
+
+# DirectXTex may2026 (MIT): decodes textures when d3dx11_43.dll is missing
+# (gpg/gal/backends/common/ImageCodecDirectXTex.cpp, issue #318). The tag's source archive;
+# cmake/deps/directxtex builds its CPU code.
+set(_faf_download_DirectXTex
+    "https://github.com/microsoft/DirectXTex/archive/refs/tags/may2026.tar.gz"
+    "204ae68a66fb15d87867d836efbac9ae5aa799ca2a1867024d96a8168fa3651f"
+    "DirectXTex-may2026"
+    "DirectXTex-may2026.tar.gz")
+
+# DirectX-Headers 1.619.5 (MIT): the DXGI format numbers (dxgiformat.h) the Vulkan backend and
+# the texture code use, and the D3D12 shader reflection structures DXC fills in, on Linux, which
+# has no Windows SDK (the Linux client, issue #255). The tag's source archive; headers only.
+# Windows builds use the Windows SDK's copies, so only a run that names it downloads it.
+set(_faf_download_DirectX-Headers
+    "https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v1.619.5.tar.gz"
+    "24a0b7d8079a2dbbc90753c0d8bc812040d052acce2302e69a97c5d873b313b8"
+    "DirectX-Headers-1.619.5"
+    "DirectX-Headers-1.619.5.tar.gz")
+
+# SDL 3.4.18 (zlib): the Linux client's window, input and audio output (issues #255, #256) and
+# FAudio's platform layer. The release archive; cmake/FafLinuxClient.cmake builds it static.
+# Linux only, like DirectX-Headers.
+set(_faf_download_SDL3
+    "https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz"
+    "9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3"
+    "SDL3-3.4.18")
+# FAudio 26.10 (zlib): XACT3 (FACT) and X3DAudio (F3DAudio) for the Linux client's sound (issue
+# #258), the same reimplementation Wine's XACT uses. The tag's source archive;
+# cmake/FafLinuxClient.cmake builds it static over SDL3. Linux only.
+set(_faf_download_FAudio
+    "https://github.com/FNA-XNA/FAudio/archive/refs/tags/26.10.tar.gz"
+    "c508f297ec8d065b456b2d9d74bab89ffc84ac3afbcb428bd54e40f09f8b901e"
+    "FAudio-26.10"
+    "FAudio-26.10.tar.gz")
+
+# DXC v1.9.2609 for Linux (the same release as the dxc entry above): libdxcompiler.so and libdxil.so
+# and the headers, for the Linux client's shader compiler (platform/posix/dxc/DxcGlue.cpp). The
+# release archive has no top folder. Linux only.
+set(_faf_download_dxc-linux
+    "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/linux_dxc_2026_09_28.x86_x64.tar.gz"
+    "96faadc7f5c282d2ffda49804beb4c3ee38127bc252b723234e3c5cdf7aa39a1"
+    "")
+
+# DirectXMath jun2026 (MIT): the math library DirectXTex needs off Windows, where the Windows SDK
+# doesn't provide it (the Linux client's textures, issue #255). The tag's source archive; headers
+# only. Linux only.
+set(_faf_download_DirectXMath
+    "https://github.com/microsoft/DirectXMath/archive/refs/tags/jun2026.tar.gz"
+    "cb46002679b16a25fd11d0a2a13f6a7c7bf9c51bf04258fb5485e5b839da8474"
+    "DirectXMath-jun2026"
+    "DirectXMath-jun2026.tar.gz")
+# stb at 003501f6 (public domain or MIT): stb_image and stb_image_write read and write the PNG, BMP
+# and JPG files WIC handles on Windows, for the Linux client (gpg/gal/backends/common/
+# ImageCodecDirectXTex.cpp). stb has no releases; a commit's archive. Linux only.
+set(_faf_download_stb
+    "https://github.com/nothings/stb/archive/003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5.tar.gz"
+    "a6c31950b3bdf05eb92258768ba2a11bd44449490574b1aac67028452288c40d"
+    "stb-003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5"
+    "stb-003501f6.tar.gz")
+
+# Dear ImGui 1.92.4, docking branch (MIT): the map editor's panels (src/editor, .plans/map-editor).
+# The tag's source archive; cmake/deps/imgui builds the core and the Win32 platform backend.
+set(_faf_download_imgui
+    "https://github.com/ocornut/imgui/archive/refs/tags/v1.92.4-docking.tar.gz"
+    "c5e2053afc707c70385431ed85c500b108b521784a3f6a7a31ea17583aab89a2"
+    "imgui-1.92.4-docking"
+    "imgui-v1.92.4-docking.tar.gz")
 
 function(_faf_download_tree name)
   list(GET _faf_download_${name} 0 _url)
@@ -183,7 +326,13 @@ function(_faf_download_tree name)
   if(_n GREATER 2)
     list(GET _faf_download_${name} 2 _root)
   endif()
-  get_filename_component(_file "${_url}" NAME)
+  # An optional fourth entry names the cached archive, for URLs whose file
+  # name says nothing (a tag archive is just "v1.7.4.tar.gz").
+  if(_n GREATER 3)
+    list(GET _faf_download_${name} 3 _file)
+  else()
+    get_filename_component(_file "${_url}" NAME)
+  endif()
   set(_archive "${_faf_downloads}/${_file}")
   if(EXISTS "${_archive}")
     file(SHA256 "${_archive}" _have)
@@ -212,6 +361,9 @@ function(_faf_download_tree name)
 endfunction()
 
 function(faf_dependency_download name)
+  if(FAF_DEPENDENCIES_ONLY AND NOT name IN_LIST FAF_DEPENDENCIES_ONLY)
+    return()
+  endif()
   if(EXISTS "${FAF_DEPENDENCIES_DIR}/${name}")
     return()  # downloaded earlier, or a tree made before this script
   endif()
@@ -222,6 +374,9 @@ endfunction()
 # What wx's makefile.vc and FAF's former Build-Deps step produced: the per-configuration
 # setup.h copies (Unicode for mswu) and the parser sources it copies from their DOS names.
 function(_faf_wx_generated)
+  if(FAF_DEPENDENCIES_ONLY AND NOT "wxWindows-2.4.2" IN_LIST FAF_DEPENDENCIES_ONLY)
+    return()
+  endif()
   set(_wx "${FAF_DEPENDENCIES_DIR}/wxWindows-2.4.2")
   file(READ "${_wx}/include/wx/msw/setup.h" _setup)
   if(NOT EXISTS "${_wx}/lib/msw/wx/setup.h")
@@ -261,6 +416,9 @@ function(_faf_dxsdk_is_june2010 dir out)
 endfunction()
 
 function(faf_dependency_dxsdk)
+  if(FAF_DEPENDENCIES_ONLY AND NOT "dxsdk" IN_LIST FAF_DEPENDENCIES_ONLY)
+    return()
+  endif()
   set(_candidates "")
   if(NOT FAF_DXSDK_FORCE_DOWNLOAD)  # FAF_DXSDK_FORCE_DOWNLOAD=ON tests the fallback
     if(FAF_DXSDK_DIR)
@@ -321,6 +479,35 @@ faf_dependency_submodule(ffmpeg)
 faf_dependency_download(boost_1_34_1)
 faf_dependency_download(wxWindows-2.4.2)
 faf_dependency_download(dxc)
+faf_dependency_download(libjuice)
+faf_dependency_download(libdatachannel)
+faf_dependency_download(usrsctp)
+faf_dependency_download(plog)
+faf_dependency_download(mbedtls)
+faf_dependency_download(monocypher)
+faf_dependency_download(DirectXTex)
+faf_dependency_download(imgui)
+if(FAF_DEPENDENCIES_ONLY)
+  # Linux only (see their entries above): a run that doesn't name them skips them.
+  faf_dependency_download(DirectX-Headers)
+  faf_dependency_download(SDL3)
+  faf_dependency_download(FAudio)
+  faf_dependency_download(dxc-linux)
+  faf_dependency_download(DirectXMath)
+  faf_dependency_download(stb)
+endif()
+if(NOT FAF_FREETYPE_DIR AND NOT DEFINED ENV{FAF_FREETYPE_DIR})
+  faf_dependency_download(freetype)
+endif()
+if(NOT FAF_MSDFGEN_DIR AND NOT DEFINED ENV{FAF_MSDFGEN_DIR})
+  faf_dependency_download(msdfgen)
+endif()
+if(NOT FAF_ZSTD_DIR)
+  faf_dependency_download(zstd)
+endif()
+if(NOT DEFINED ENV{FAF_GTEST_DIR} AND NOT (FAF_GTEST_DIR AND EXISTS "${FAF_GTEST_DIR}/CMakeLists.txt"))
+  faf_dependency_download(googletest)
+endif()
 
 faf_dependency_patches(WildMagic3p8 submodule
   wildmagic3p8_faf_required.patch)
@@ -328,6 +515,12 @@ faf_dependency_patches(zlib-1.2.3 submodule
   zlib_1_2_3_faf_required.patch)
 faf_dependency_patches(boost_1_34_1 download
   boost_1_34_1_faf_required.patch)
+faf_dependency_patches(libjuice download
+  libjuice_1_7_4_faf_turn_release.patch)
 faf_dependency_patches(wxWindows-2.4.2 download
   wxwindows_2_4_2_faf_required.patch wxwindows_2_4_2_faf_x64.patch wxwindows_2_4_2_faf_x64_pointers.patch)
+if(NOT FAF_FREETYPE_DIR AND NOT DEFINED ENV{FAF_FREETYPE_DIR})
+  faf_dependency_patches(freetype download
+    freetype_2_15_0_faf_oom.patch)
+endif()
 _faf_wx_generated()

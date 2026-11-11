@@ -1,22 +1,32 @@
 // FAF addition, not in the shipped binary: see ShaderCompiler.h.
 
 #include "ShaderCompiler.h"
+#include "gpg/core/utils/EmbeddedFiles.h"
 
 #include <windows.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#if FAFRE_PLATFORM_WINDOWS
 #include <wrl/client.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
+#if FAFRE_PLATFORM_WINDOWS
 #include <d3d12shader.h>
 
 #include "dxcapi.h"
+#else
+// The Linux client (issue #255): DXC through platform/posix/dxc/DxcGlue, which alone includes
+// DXC's headers; libdxcompiler.so from the executable's directory or FAF_DXC_DIR.
+#include "platform/posix/dxc/DxcGlue.h"
+#endif
 
 namespace gpg::gal::effects
 {
+#if FAFRE_PLATFORM_WINDOWS
   using Microsoft::WRL::ComPtr;
 
   struct ShaderCompiler::Library
@@ -27,9 +37,16 @@ namespace gpg::gal::effects
     ComPtr<IDxcUtils> utils;
     ComPtr<IDxcCompiler3> dxc;
   };
+#else
+  // DxcGlue holds the library; this only marks that it loaded.
+  struct ShaderCompiler::Library
+  {
+  };
+#endif
 
   namespace
   {
+#if FAFRE_PLATFORM_WINDOWS
     /**
      * Engine addition: a DXC compiler and utils object per thread. One object must not be used
      * by two threads at once, but separate objects compile in parallel, so the background
@@ -56,6 +73,7 @@ namespace gpg::gal::effects
       }
       return instance.dxc != nullptr ? &instance : nullptr;
     }
+#endif
 
     [[nodiscard]] std::wstring ExecutableDirectory()
     {
@@ -84,6 +102,30 @@ namespace gpg::gal::effects
     return compiler;
   }
 
+#if !FAFRE_PLATFORM_WINDOWS
+  ShaderCompiler::ShaderCompiler()
+  {
+    std::vector<std::string> directories;
+    {
+      // The POSIX GetModuleFileNameW gives the executable's path from /proc/self/exe.
+      const std::wstring executable = ExecutableDirectory();
+      std::string narrow;
+      for (const wchar_t c : executable) {
+        narrow.push_back(static_cast<char>(c));  // the install path is ASCII
+      }
+      directories.push_back(narrow);
+    }
+    if (const char* const configured = std::getenv("FAF_DXC_DIR"); configured != nullptr && configured[0] != '\0') {
+      directories.emplace_back(configured);
+    }
+    mLoadError = platform::posix::dxc::Load(directories, mVersion);
+    if (mLoadError.empty()) {
+      mLibrary = new Library();
+    }
+  }
+
+  ShaderCompiler::~ShaderCompiler() = default;
+#else
   ShaderCompiler::ShaderCompiler()
   {
     std::vector<std::wstring> directories{ExecutableDirectory()};
@@ -93,6 +135,10 @@ namespace gpg::gal::effects
         directory += L'\\';
       }
       directories.push_back(directory);
+    }
+    // Last, the copy the executable carries (issue #315): loose DLLs win.
+    if (std::wstring embedded = gpg::EmbeddedDxcDirectory(); !embedded.empty()) {
+      directories.push_back(std::move(embedded));
     }
 
     auto library = new Library();
@@ -110,7 +156,7 @@ namespace gpg::gal::effects
       }
     }
     if (library->compiler == nullptr) {
-      mLoadError = "dxcompiler.dll not found next to the executable or in FAF_DXC_DIR";
+      mLoadError = "dxcompiler.dll not found next to the executable, in FAF_DXC_DIR or in the executable";
       delete library;
       return;
     }
@@ -151,6 +197,7 @@ namespace gpg::gal::effects
       mLibrary->dxc.Reset();
     }
   }
+#endif
 
   bool ShaderCompiler::Available() const noexcept
   {
@@ -178,15 +225,42 @@ namespace gpg::gal::effects
     }
 
     const std::wstring entryName = Widen(entry.name);
+    const wchar_t* profile = L"ps_6_0";
+    const wchar_t* stageDefine = L"FAF_PIXEL_STAGE=1";
+    switch (entry.stage) {
+    case ShaderStage::Vertex:
+      profile = L"vs_6_0";
+      stageDefine = L"FAF_VERTEX_STAGE=1";
+      break;
+    case ShaderStage::Hull:
+      profile = L"hs_6_0";
+      stageDefine = L"FAF_HULL_STAGE=1";
+      break;
+    case ShaderStage::Domain:
+      profile = L"ds_6_0";
+      stageDefine = L"FAF_DOMAIN_STAGE=1";
+      break;
+    case ShaderStage::Pixel:
+      break;
+    }
+    // Engine addition (ren_RayTracedShadows): an effect with inline ray queries needs shader model 6.5 (DXR 1.1)
+    // and, for SPIR-V, Vulkan 1.2's ray query extension. Every stage of it, since they share the declarations.
+    const bool rayQueries = hlsl.find("RayQuery<") != std::string_view::npos;
+    std::wstring rayProfile;
+    if (rayQueries) {
+      rayProfile = profile;
+      rayProfile.replace(rayProfile.size() - 1U, 1U, L"5");
+      profile = rayProfile.c_str();
+    }
     std::vector<std::wstring> arguments{
       L"-E", entryName,
-      L"-T", entry.stage == ShaderStage::Vertex ? L"vs_6_0" : L"ps_6_0",
+      L"-T", profile,
       // HLSL 2018: the effects predate 2021's stricter vector logic.
       L"-HV", L"2018",
       // Row-major matrices: the parameter store keeps the engine's layout.
       L"-Zpr",
       L"-O3",
-      L"-D", entry.stage == ShaderStage::Vertex ? L"FAF_VERTEX_STAGE=1" : L"FAF_PIXEL_STAGE=1",
+      L"-D", stageDefine,
       // FXC accepted these silently.
       L"-Wno-conversion",
     };
@@ -194,10 +268,12 @@ namespace gpg::gal::effects
       // The Vulkan backend's descriptor model: textures t<n> and samplers
       // s<n> in set 0 at bindings n and 64+n, $Globals alone in set 1.
       // D3D's clip-space y points the other way.
-      arguments.insert(arguments.end(), {L"-spirv", L"-fvk-use-dx-layout", L"-fspv-reflect", L"-fspv-target-env=vulkan1.1",
+      arguments.insert(arguments.end(), {L"-spirv", L"-fvk-use-dx-layout", L"-fspv-reflect", rayQueries ? L"-fspv-target-env=vulkan1.2" : L"-fspv-target-env=vulkan1.1",
                                          L"-fvk-t-shift", L"0", L"0", L"-fvk-s-shift", L"64", L"0", L"-fvk-b-shift", L"0", L"0",
                                          L"-fvk-bind-globals", L"0", L"1"});
-      if (entry.stage == ShaderStage::Vertex) {
+      // SV_Position leaves the vertex shader, or in a tessellated pass the domain
+      // shader (its vertex shader writes control points, which have none).
+      if (entry.stage == ShaderStage::Vertex || entry.stage == ShaderStage::Domain) {
         arguments.push_back(L"-fvk-invert-y");
       }
     }
@@ -219,6 +295,31 @@ namespace gpg::gal::effects
     return Run(hlsl, arguments);
   }
 
+#if !FAFRE_PLATFORM_WINDOWS
+  CompiledShader ShaderCompiler::Run(const std::string_view hlsl, const std::vector<std::wstring>& arguments) const
+  {
+    platform::posix::dxc::Output output = platform::posix::dxc::Compile(hlsl, arguments);
+    CompiledShader result;
+    result.succeeded = output.succeeded;
+    result.code.assign(output.object.begin(), output.object.end());
+    result.messages = std::move(output.messages);
+    return result;
+  }
+
+  // DXIL reflection is the Direct3D 12 backend's; the Linux client compiles SPIR-V, whose
+  // reflection is SpirvReflect. The answers are the ones for an unreadable reflection.
+  std::uint64_t ShaderCompiler::ReflectTextureSlots(const std::vector<std::uint8_t>& dxil) const
+  {
+    (void)dxil;
+    return ~std::uint64_t{0};
+  }
+
+  std::vector<ShaderInput> ShaderCompiler::ReflectInputs(const std::vector<std::uint8_t>& dxil) const
+  {
+    (void)dxil;
+    return {};
+  }
+#else
   CompiledShader ShaderCompiler::Run(const std::string_view hlsl, const std::vector<std::wstring>& arguments) const
   {
     CompiledShader result;
@@ -270,6 +371,41 @@ namespace gpg::gal::effects
     return result;
   }
 
+  std::uint64_t ShaderCompiler::ReflectTextureSlots(const std::vector<std::uint8_t>& dxil) const
+  {
+    constexpr std::uint64_t kAll = ~std::uint64_t{0};
+    if (mLibrary == nullptr || dxil.empty()) {
+      return kAll;
+    }
+    DxcBuffer buffer{};
+    buffer.Ptr = dxil.data();
+    buffer.Size = dxil.size();
+    ThreadDxc* const dxc = ThisThreadDxc(mLibrary->create);
+    if (dxc == nullptr) {
+      return kAll;
+    }
+    ComPtr<ID3D12ShaderReflection> reflection;
+    D3D12_SHADER_DESC desc{};
+    if (FAILED(dxc->utils->CreateReflection(&buffer, IID_PPV_ARGS(&reflection))) || FAILED(reflection->GetDesc(&desc))) {
+      return kAll;
+    }
+    std::uint64_t slots = 0U;
+    for (UINT index = 0U; index < desc.BoundResources; ++index) {
+      D3D12_SHADER_INPUT_BIND_DESC binding{};
+      if (FAILED(reflection->GetResourceBindingDesc(index, &binding))) {
+        return kAll;
+      }
+      if (binding.Type != D3D_SIT_TEXTURE || binding.Space != 0U) {
+        continue;
+      }
+      const UINT count = (binding.BindCount == 0U) ? 64U : binding.BindCount; // 0: unbounded
+      for (UINT slot = binding.BindPoint; slot < binding.BindPoint + count && slot < 64U; ++slot) {
+        slots |= std::uint64_t{1} << slot;
+      }
+    }
+    return slots;
+  }
+
   std::vector<ShaderInput> ShaderCompiler::ReflectInputs(const std::vector<std::uint8_t>& dxil) const
   {
     std::vector<ShaderInput> inputs;
@@ -311,4 +447,5 @@ namespace gpg::gal::effects
     }
     return inputs;
   }
+#endif
 } // namespace gpg::gal::effects

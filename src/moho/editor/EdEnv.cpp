@@ -31,6 +31,7 @@
 #include "moho/editor/EdEnv.h"
 #include "moho/render/SkyDome.h"
 #include "moho/sim/CWldMap.h"
+#include "moho/terrain/CWldTerrainRes.h"
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
 #include "moho/terrain/splat/CWldSplat.h"
@@ -105,7 +106,7 @@ namespace
   struct TextField
   {
     const char* name;
-    msvc8::string* str;
+    fa::string* str;
     int owner;      // 0 sky, 1 water, 2 terrain (skycube / background: through their setters)
   };
 
@@ -276,13 +277,13 @@ namespace
     lua_pushstring(L, "skycube");
     lua_gettable(L, 1);
     if (lua_type(L, -1) == LUA_TSTRING) {
-      t->SetSkycube(msvc8::string(lua_tostring(L, -1)));
+      t->SetSkycube(fa::string(lua_tostring(L, -1)));
     }
     lua_settop(L, -2);
     lua_pushstring(L, "background");
     lua_gettable(L, 1);
     if (lua_type(L, -1) == LUA_TSTRING) {
-      t->SetBackground(msvc8::string(lua_tostring(L, -1)));
+      t->SetBackground(fa::string(lua_tostring(L, -1)));
     }
     lua_settop(L, -2);
     if (sky) {
@@ -390,7 +391,7 @@ namespace
     t->ClearEnvLookup();
     int count = 0;
     for (std::size_t i = 0; i + 1 < items.size(); i += 2) {
-      t->AddEnvLookup(msvc8::string(items[i].c_str()), msvc8::string(items[i + 1].c_str()));
+      t->AddEnvLookup(fa::string(items[i].c_str()), fa::string(items[i + 1].c_str()));
       ++count;
     }
     lua_pushnumber(L, count);

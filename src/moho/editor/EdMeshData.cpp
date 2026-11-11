@@ -192,7 +192,7 @@ namespace moho
         if (set == nullptr || set->mHandle == nullptr) {
           return out;
         }
-        msvc8::string resolved;
+        fa::string resolved;
         (void)set->mHandle->FindFile(&resolved, path.c_str(), nullptr);
         if (resolved.empty()) {
           return out;

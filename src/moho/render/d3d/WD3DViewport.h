@@ -120,8 +120,13 @@ namespace moho
      * What it does:
      * Answers WM_SETCURSOR over the client area itself, handing the cursor to
      * the D3D device; every other message goes to `wxWindow::MSWWindowProc`.
+     *
+     * Windows only: on Linux the window system (issue #256) delivers the cursor, the network
+     * panel's keys and the side mouse buttons itself.
      */
+#if FAFRE_PLATFORM_WINDOWS
     long MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lParam) override;
+#endif
 
     /**
      * Address: 0x00430AC0 (FUN_00430AC0)
@@ -133,6 +138,13 @@ namespace moho
      * or paints the background itself while there is no device yet.
      */
     void OnPaint(wxPaintEvent& event);
+
+    /**
+     * Engine addition (`ren_DirectPaint`): what OnPaint does once the device is ready, with no
+     * message and no wxPaintDC. Only for a frame the device asked for, as nothing validates the
+     * update region here.
+     */
+    void PaintWithoutMessage();
 
     /**
      * Address: 0x00430B70 (FUN_00430B70)

@@ -6,7 +6,10 @@
 #include "gpg/gal/Error.hpp"
 #include "gpg/gal/Effect.hpp"
 #include "gpg/gal/EffectVariable.hpp"
+// The Direct3D 9 backend is Windows-only (the Linux client, issue #255).
+#if FAFRE_PLATFORM_WINDOWS
 #include "gpg/gal/backends/d3d9/TextureD3D9.hpp"
+#endif
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/ID3DRenderTarget.h"
 #include "moho/render/ID3DTextureSheet.h"
@@ -44,6 +47,8 @@ namespace moho
    * The prim-batcher `AlphaMultiplier` shader-var (binary global 0x010A7888).
    */
   ShaderVar shaderVarPrimBatcherAlphaMultiplier;
+
+  ShaderVar shaderVarPrimBatcherMsdfPixelRange;
 
   /**
    * Address: 0x00C07480 (FUN_00C07480, dynamic atexit destructor for `shaderVarPrimBatcherTime`)
@@ -119,6 +124,7 @@ namespace
       moho::register_ShaderVarPrimBatcherTexture1();
       moho::register_ShaderVarPrimBatcherAlphaMultiplier();
       moho::register_ShaderVarPrimBatcherTime();
+      moho::register_ShaderVarPrimBatcherMsdfPixelRange();
     }
   };
 
@@ -399,6 +405,11 @@ namespace moho
   void register_ShaderVarPrimBatcherTime()
   {
     RegisterShaderVar("time", &shaderVarPrimBatcherTime, "primbatcher");
+  }
+
+  void register_ShaderVarPrimBatcherMsdfPixelRange()
+  {
+    RegisterShaderVar("MsdfPixelRange", &shaderVarPrimBatcherMsdfPixelRange, "primbatcher");
   }
 
   /**

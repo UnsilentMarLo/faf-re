@@ -1,6 +1,7 @@
 // EDITOR: start-up of the editor build without arguments. See EdBootstrap.h.
 
 #include "moho/editor/EdBootstrap.h"
+#include "moho/editor/EditorDocument.h"
 
 #include <windows.h>
 #include <winioctl.h>
@@ -347,6 +348,7 @@ namespace moho::editor
 
   BootResult PrepareEditorStart(const std::wstring& exePath, const std::vector<std::string>& args)
   {
+    InstallSimBeatHook();   // the engine's per-beat hook carries the editor's height edits into a running play (SimEditorHook.h)
     BootResult result;
     result.args = args;
 

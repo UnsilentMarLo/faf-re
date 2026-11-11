@@ -22,7 +22,7 @@
 
 namespace moho
 {
-  msvc8::string WIN_GetLastError();
+  fa::string WIN_GetLastError();
   std::uint32_t PLAT_GetCallStack(void* contextRecord, std::uint32_t maxFrames, std::uintptr_t* outFrames);
 }
 
@@ -32,20 +32,21 @@ namespace
 {
   std::mutex gDiskWatchInitMutex;
   CDiskWatch* gDiskWatch = nullptr;
-  constexpr std::uint8_t kWatchMapColorRed = 0u;
-  constexpr std::uint8_t kWatchMapColorBlack = 1u;
   constexpr std::size_t kDefaultReadBufferSize = 0x1000u;
+#if defined(_WIN32)
   constexpr DWORD kDirectoryNotifyFilter =
     FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE;
+#endif
   constexpr float kPendingEventDispatchDelayMs = 250.0f;
   constexpr const char* kEnablePrivilegesWarning =
     "CDiskWatch::EnablePrivileges: Unable to enable privilege: %s -- GetLastError(): %d "
     "Notifications may not work as intended due to insufficient access rights/process privileges.";
+#if FAFRE_PLATFORM_WINDOWS
   constexpr const char* kReadDirectoryChangesFailedWarning = "CDiskWatch::Read() failed: %s";
   constexpr const char* kGetOverlappedResultFailedWarning = "CDiskWatch::Check(): GetOverlappedResult() failed: %s";
+#endif
 
-  [[nodiscard]]
-  [[nodiscard]]
+#if FAFRE_PLATFORM_WINDOWS
   [[nodiscard]]
   int ComparePathViews(const std::string_view lhs, const std::string_view rhs)
   {
@@ -61,16 +62,17 @@ namespace
   }
 
   [[nodiscard]]
-  int CompareDirectoryKeys(const msvc8::string& lhs, const msvc8::string& rhs)
+  int CompareDirectoryKeys(const fa::string& lhs, const fa::string& rhs)
   {
     return ComparePathViews(lhs.view(), rhs.view());
   }
+#endif
 
   [[noreturn]] void ThrowFileWildError(const char* const message)
   {
     std::uintptr_t callstack[32]{};
     const std::uint32_t frameCount = moho::PLAT_GetCallStack(nullptr, 32u, callstack);
-    const msvc8::string fullMessage = gpg::STR_Printf(
+    const fa::string fullMessage = gpg::STR_Printf(
       "%s: %s", "Moho::FILE_Wild", message != nullptr ? message : "File error."
     );
     throw moho::XFileError(fullMessage.to_std(), callstack, frameCount);
@@ -112,13 +114,14 @@ namespace
     return FileWildMatch(path + 1, currentPattern);
   }
 
+#if defined(_WIN32)
   [[nodiscard]]
   OVERLAPPED* AsOverlapped(CDiskDirWatch& watch)
   {
     return reinterpret_cast<OVERLAPPED*>(&watch.mReadOverlapped);
   }
 
-  [[nodiscard]]
+  [[maybe_unused]] [[nodiscard]]
   const OVERLAPPED* AsOverlapped(const CDiskDirWatch& watch)
   {
     return reinterpret_cast<const OVERLAPPED*>(&watch.mReadOverlapped);
@@ -144,18 +147,21 @@ namespace
   }
 
   [[nodiscard]]
-  msvc8::string NotifyFileNameToUtf8(const FILE_NOTIFY_INFORMATION& notifyRecord)
+  fa::string NotifyFileNameToUtf8(const FILE_NOTIFY_INFORMATION& notifyRecord)
   {
     const std::wstring wideName(notifyRecord.FileName, notifyRecord.FileNameLength / sizeof(wchar_t));
     return gpg::STR_WideToUtf8(wideName.c_str());
   }
+#endif
 
+#if FAFRE_PLATFORM_WINDOWS
   void SetEventTimestampFromTimer(SDiskWatchEvent& event, const gpg::time::Timer& timer)
   {
     const std::uint64_t rawTimestamp = static_cast<std::uint64_t>(timer.mTime);
     event.mTimestampLow = static_cast<std::uint32_t>(rawTimestamp & 0xFFFFFFFFu);
     event.mTimestampHigh = static_cast<std::uint32_t>(rawTimestamp >> 32u);
   }
+#endif
 
   [[nodiscard]]
   std::uint64_t GetEventTimestamp(const SDiskWatchEvent& event)
@@ -172,10 +178,11 @@ namespace
     return gpg::time::CyclesToMilliseconds(static_cast<LONGLONG>(elapsedCycles)) >= kPendingEventDispatchDelayMs;
   }
 
+#if FAFRE_PLATFORM_WINDOWS
   [[nodiscard]]
   bool IsDuplicateEvent(
-    const msvc8::vector<SDiskWatchEvent>& queuedEvents,
-    const msvc8::string& eventPath,
+    const fa::vector<SDiskWatchEvent>& queuedEvents,
+    const fa::string& eventPath,
     const int actionCode
   )
   {
@@ -186,10 +193,12 @@ namespace
     }
     return false;
   }
+#endif
 
   [[nodiscard]]
   bool IsFileStillWriterLocked(const SDiskWatchEvent& event)
   {
+#if defined(_WIN32)
     if (event.mActionCode != FILE_ACTION_MODIFIED) {
       return false;
     }
@@ -210,19 +219,13 @@ namespace
       (void)::CloseHandle(fileHandle);
     }
     return locked;
+#else
+    // Engine addition (dedicated-server plan WPL.5): POSIX has no sharing violations to wait out.
+    (void)event;
+    return false;
+#endif
   }
 
-  [[nodiscard]]
-  [[nodiscard]]
-  [[nodiscard]]
-  [[nodiscard]]
-  [[nodiscard]]
-  [[nodiscard]]
-  [[nodiscard]]
-  [[nodiscard]]
-  [[nodiscard]]
-  [[nodiscard]]
-  [[nodiscard]]
   /**
    * Address: 0x00463220 (FUN_00463220, disk-watch singleton init helper)
    *
@@ -296,6 +299,7 @@ CDiskDirWatch::CDiskDirWatch(CDiskWatch* const owner, const gpg::StrArg director
   mReadBuffer.resize(kDefaultReadBufferSize, 0u);
 
   const char* const watchPath = mDirectoryPath.c_str();
+#if defined(_WIN32)
   const HANDLE watchHandle = ::CreateFileA(
     watchPath,
     FILE_READ_DATA,
@@ -308,13 +312,18 @@ CDiskDirWatch::CDiskDirWatch(CDiskWatch* const owner, const gpg::StrArg director
   mDirectoryHandle = watchHandle;
 
   if (watchHandle == INVALID_HANDLE_VALUE) {
-    const msvc8::string errorText = WIN_GetLastError();
+    const fa::string errorText = WIN_GetLastError();
     gpg::Warnf("CDiskWatch(\"%s\") failed: %s", watchPath, errorText.c_str());
     return;
   }
 
   gpg::Logf("Watching directory \"%s\"", directoryPath != nullptr ? directoryPath : "");
   DoRead();
+#else
+  // Engine addition (dedicated-server plan WPL.5): directories are not watched on POSIX; the
+  // handle stays invalid, so CDiskWatch::AddDirectory reports the directory as not added.
+  gpg::Warnf("CDiskWatch(\"%s\") failed: directory watching is not available on this platform", watchPath);
+#endif
 }
 
 /**
@@ -322,11 +331,13 @@ CDiskDirWatch::CDiskDirWatch(CDiskWatch* const owner, const gpg::StrArg director
  */
 CDiskDirWatch::~CDiskDirWatch()
 {
+#if defined(_WIN32)
   const HANDLE watchHandle = static_cast<HANDLE>(mDirectoryHandle);
   if (watchHandle != INVALID_HANDLE_VALUE) {
     (void)::CancelIo(watchHandle);
     (void)::CloseHandle(watchHandle);
   }
+#endif
   mDirectoryHandle = INVALID_HANDLE_VALUE;
 
   mReadBuffer.clear();
@@ -342,6 +353,7 @@ CDiskDirWatch::~CDiskDirWatch()
  */
 void CDiskDirWatch::DoRead()
 {
+#if defined(_WIN32)
   const HANDLE watchHandle = static_cast<HANDLE>(mDirectoryHandle);
   if (watchHandle == INVALID_HANDLE_VALUE || mReadBuffer.empty()) {
     return;
@@ -363,10 +375,11 @@ void CDiskDirWatch::DoRead()
     return;
   }
 
-  const msvc8::string errorText = WIN_GetLastError();
+  const fa::string errorText = WIN_GetLastError();
   gpg::Warnf(kReadDirectoryChangesFailedWarning, errorText.c_str());
   (void)::CloseHandle(watchHandle);
   mDirectoryHandle = INVALID_HANDLE_VALUE;
+#endif
 }
 
 /**
@@ -378,16 +391,17 @@ void CDiskDirWatch::DoRead()
  */
 void CDiskDirWatch::Update()
 {
+#if defined(_WIN32)
   HANDLE watchHandle = static_cast<HANDLE>(mDirectoryHandle);
   while (watchHandle != INVALID_HANDLE_VALUE) {
     DWORD transferredBytes = 0;
     if (::GetOverlappedResult(watchHandle, AsOverlapped(*this), &transferredBytes, FALSE) != FALSE) {
-      msvc8::vector<SDiskWatchEvent> queuedEvents{};
+      fa::vector<SDiskWatchEvent> queuedEvents{};
 
       if (!mReadBuffer.empty()) {
         auto* notifyRecord = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(mReadBuffer.data());
         while (notifyRecord != nullptr) {
-          const msvc8::string leafNameUtf8 = NotifyFileNameToUtf8(*notifyRecord);
+          const fa::string leafNameUtf8 = NotifyFileNameToUtf8(*notifyRecord);
 
           SDiskWatchEvent event{};
           event.mPath = gpg::STR_Printf("%s\\%s", mDirectoryPath.c_str(), leafNameUtf8.c_str());
@@ -420,13 +434,14 @@ void CDiskDirWatch::Update()
         break;
       }
 
-      const msvc8::string errorText = WIN_GetLastError();
+      const fa::string errorText = WIN_GetLastError();
       gpg::Warnf(kGetOverlappedResultFailedWarning, errorText.c_str());
       DoRead();
     }
 
     watchHandle = static_cast<HANDLE>(mDirectoryHandle);
   }
+#endif
 
   for (auto* eventIt = mPendingEvents.begin(); eventIt != mPendingEvents.end();) {
     if (!IsPendingEventReady(*eventIt)) {
@@ -458,7 +473,7 @@ CDiskWatchListener::CDiskWatchListener(const gpg::StrArg patterns)
   , mPatterns()
 {
   if (patterns && patterns[0] != '\0') {
-    mPatterns.push_back(msvc8::string(patterns));
+    mPatterns.push_back(fa::string(patterns));
     DISK_AddWatchListener(this);
   }
 }
@@ -530,9 +545,9 @@ bool CDiskWatchListener::AnyChangesPending()
  * Address: 0x00461E00 (FUN_00461E00,
  * ?CopyAndClearPendingChanges@CDiskWatchListener@Moho@@QAE?AV?$vector@USDiskWatchEvent@Moho@@V?$allocator@USDiskWatchEvent@Moho@@@std@@@std@@XZ)
  */
-void CDiskWatchListener::CopyAndClearPendingChanges(msvc8::vector<SDiskWatchEvent>& outEvents)
+void CDiskWatchListener::CopyAndClearPendingChanges(fa::vector<SDiskWatchEvent>& outEvents)
 {
-  outEvents = msvc8::vector<SDiskWatchEvent>{};
+  outEvents = fa::vector<SDiskWatchEvent>{};
 
   if (mWatch == nullptr) {
     std::swap(outEvents, mEvents);
@@ -602,7 +617,7 @@ bool CDiskWatch::AddDirectory(const gpg::StrArg directoryPath)
 {
   gpg::core::func_LockShared(&mLock);
 
-  const msvc8::string normalizedPath = gpg::STR_ToLower(directoryPath);
+  const fa::string normalizedPath = gpg::STR_ToLower(directoryPath);
   if (normalizedPath.empty()) {
     gpg::core::func_UnlockShared(&mLock);
     return false;
@@ -637,7 +652,7 @@ bool CDiskWatch::RemoveDirectoryW(const gpg::StrArg directoryPath)
 {
   gpg::core::func_LockShared(&mLock);
 
-  const msvc8::string normalizedPath = gpg::STR_ToLower(directoryPath);
+  const fa::string normalizedPath = gpg::STR_ToLower(directoryPath);
   const DiskWatchMap::iterator watched = mDirWatchMap.find(normalizedPath);
   if (watched == mDirWatchMap.end()) {
     gpg::Warnf("CDiskWatch::RemoveDirectory(): \"%s\" not being watched.", normalizedPath.c_str());
@@ -658,7 +673,7 @@ bool CDiskWatch::RemoveDirectoryW(const gpg::StrArg directoryPath)
  */
 bool CDiskWatch::EnablePrivileges() const
 {
-  msvc8::vector<msvc8::string> privilegeNames{};
+  fa::vector<fa::string> privilegeNames{};
   privilegeNames.push_back(gpg::STR_WideToUtf8(L"SeBackupPrivilege"));
   privilegeNames.push_back(gpg::STR_WideToUtf8(L"SeRestorePrivilege"));
   privilegeNames.push_back(gpg::STR_WideToUtf8(L"SeChangeNotifyPrivilege"));
@@ -680,8 +695,9 @@ bool CDiskWatch::EnablePrivileges() const
 /**
  * Address: 0x00463180 (FUN_00463180, ?EnablePrivilege@CDiskWatch@Moho@@ABE_NABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@_N@Z)
  */
-bool CDiskWatch::EnablePrivilege(const msvc8::string& privilegeName, const bool enable) const
+bool CDiskWatch::EnablePrivilege(const fa::string& privilegeName, const bool enable) const
 {
+#if defined(_WIN32)
   HANDLE tokenHandle = nullptr;
   const HANDLE currentProcess = ::GetCurrentProcess();
   if (!::OpenProcessToken(currentProcess, TOKEN_ADJUST_PRIVILEGES, &tokenHandle)) {
@@ -701,6 +717,12 @@ bool CDiskWatch::EnablePrivilege(const msvc8::string& privilegeName, const bool 
 
   (void)::CloseHandle(tokenHandle);
   return success;
+#else
+  // Engine addition (dedicated-server plan WPL.5): POSIX has no process privileges to enable.
+  (void)privilegeName;
+  (void)enable;
+  return true;
+#endif
 }
 
 /**

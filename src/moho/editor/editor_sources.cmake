@@ -1,6 +1,6 @@
 # The FAF Studio editor: the translation units added to the engine when it is configured with -DFAF_EDITOR=ON (src/CMakeLists.txt).
 # Generated from the list of main_ed.vcxproj of the MSBuild days; keep it in step with the files of src/moho/editor.
-set(FAF_EDITOR_SOURCES
+set(FAF_STUDIO_SOURCES
   moho/editor/EditorLua.cpp
   moho/editor/MapDocument.cpp
   moho/editor/EditorDocument.cpp

@@ -5,6 +5,7 @@
 
 #include "gpg/core/utils/BoostWrappers.h"
 #include "moho/editor/EdRenderStats.h"
+#include "moho/console/CConCommand.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/ID3DTextureSheet.h"
 #include "moho/render/d3d/CD3DDevice.h"
@@ -14,62 +15,39 @@
 
 namespace moho
 {
+  bool ren_TextureAtlasCache = true;
+
   namespace
   {
     using BatchTextureHandle = boost::shared_ptr<CD3DBatchTexture>;
 
-    // EDITOR: a pointer keyed shortcut in front of the atlas' ordered set (ren_AtlasFastLookup). AddTexture runs once per drawn Maui bitmap / border / glyph; the set walk costs
-    // a shared_ptr copy (two atomic operations) and ~10 comparisons each. A texture held by the atlas stays at one address until the atlas is reset (the entry holds a
-    // reference to it), and a set node does not move, so the UV rectangle can be found by the texture's address. Dropped on Reset and on destruction.
-    struct AtlasFastCache
+    // The atlas holds a shared handle to each of its textures, so an address here can't have been
+    // reused while the entry exists; Reset and the destructor, which free entries, clear the table.
+    struct AtlasCacheSlot
     {
-      const CD3DTextureBatcher* owner = nullptr;
-      std::unordered_map<const CD3DBatchTexture*, const gpg::Rect2f*> uv;
+      const CD3DTextureBatcher* mOwner;
+      const CD3DBatchTexture* mTexture;
+      const gpg::Rect2f* mUvRect;
     };
-    constexpr int kAtlasFastSlots = 4;
 
-    // function local: built on first use, whatever the order of the static initialisers
-    AtlasFastCache* AtlasFastSlots()
-    {
-      static AtlasFastCache slots[kAtlasFastSlots];
-      return slots;
-    }
+    constexpr std::size_t kAtlasCacheSlots = 1024u;
+    AtlasCacheSlot sAtlasCache[kAtlasCacheSlots]{};
 
-    AtlasFastCache* AtlasFastFor(const CD3DTextureBatcher* const atlas, const bool create)
-    {
-      AtlasFastCache* const slots = AtlasFastSlots();
-      AtlasFastCache* freeSlot = nullptr;
-      for (AtlasFastCache* slotPtr = slots; slotPtr != slots + kAtlasFastSlots; ++slotPtr) {
-        AtlasFastCache& slot = *slotPtr;
-        if (slot.owner == atlas) {
-          return &slot;
-        }
-        if (slot.owner == nullptr && freeSlot == nullptr) {
-          freeSlot = &slot;
-        }
-      }
-      if (create && freeSlot != nullptr) {
-        freeSlot->owner = atlas;
-        return freeSlot;
-      }
-      return nullptr;
-    }
+    TConVar<bool> gTConVar_ren_TextureAtlasCache(
+      "ren_TextureAtlasCache",
+      "The texture atlas finds a texture it holds through a table of recent lookups (1, the default), or always "
+      "searches its tree (0). Read at each lookup.",
+      &ren_TextureAtlasCache
+    );
 
-    void AtlasFastDrop(const CD3DTextureBatcher* const atlas)
+    [[nodiscard]] AtlasCacheSlot& AtlasCacheSlotFor(const CD3DBatchTexture* const texture) noexcept
     {
-      AtlasFastCache* const slots = AtlasFastSlots();
-      for (AtlasFastCache* slotPtr = slots; slotPtr != slots + kAtlasFastSlots; ++slotPtr) {
-        AtlasFastCache& slot = *slotPtr;
-        if (slot.owner == atlas) {
-          slot.uv.clear();
-          slot.owner = nullptr;
-        }
-      }
+      const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(texture);
+      return sAtlasCache[((address >> 4U) ^ (address >> 14U)) & (kAtlasCacheSlots - 1U)];
     }
 
     constexpr std::int32_t kCompositeWidth = 1024;
     constexpr std::int32_t kCompositeHeight = 1024;
-    constexpr std::uint32_t kCompositeBytes = 0x00100000u;
     constexpr std::int32_t kDynamicTextureFormat = 12;
 
     /**
@@ -119,7 +97,7 @@ namespace moho
      * Disposes one `sp_counted_impl_p<CD3DTextureBatcher>` payload by running
      * non-deleting `CD3DTextureBatcher` teardown and releasing owned storage.
      */
-    void DisposeCountedTextureBatcherStorage(
+    [[maybe_unused]] void DisposeCountedTextureBatcherStorage(
       boost::SpCountedImplStorage<CD3DTextureBatcher>* const countedStorage
     )
     {
@@ -167,6 +145,11 @@ namespace moho
    * Editor addition: same body as the retail constructor with a caller-chosen size and gal format token
    * (12 = DXT5, 1 byte per texel; 2 = A8R8G8B8, 4 bytes per texel).
    */
+  CD3DTextureBatcher::CD3DTextureBatcher(const std::int32_t width, const std::int32_t height)
+    : CD3DTextureBatcher(width, height, kDynamicTextureFormat)
+  {
+  }
+
   CD3DTextureBatcher::CD3DTextureBatcher(const std::int32_t width, const std::int32_t height, const std::int32_t format)
     : mWidth(width)
     , mHeight(height)
@@ -184,9 +167,8 @@ namespace moho
       }
     }
 
-    const std::size_t bytes = (format == 2)
-      ? static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u
-      : static_cast<std::size_t>(kCompositeBytes);
+    // One byte per texel, rows in blocks of four (GetCompositeTexture): 0x100000 bytes at 1024x1024; A8R8G8B8 holds four.
+    const std::size_t bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * ((format == 2) ? 4u : 1u);
     mPixels.resize(bytes);
     Reset();
   }
@@ -247,8 +229,9 @@ namespace moho
    */
   CD3DTextureBatcher::~CD3DTextureBatcher()
   {
-    AtlasFastDrop(this);   // EDITOR
     // FUN_00448B30: the explicit atlas-tree clear ahead of member teardown.
+    std::memset(sAtlasCache, 0, sizeof(sAtlasCache));
+    ++moho::editor::renderstats::gCur.atlasResets;   // EDITOR: ed_render_stats
     mMap.clear();
   }
 
@@ -265,19 +248,12 @@ namespace moho
       return nullptr;
     }
 
-    // EDITOR: shortcut by address (see AtlasFastCache)
-    AtlasFastCache* fast = nullptr;
-    moho::editor::renderstats::Frame& stats = moho::editor::renderstats::gCur;
+    AtlasCacheSlot& cacheSlot = AtlasCacheSlotFor(texture.get());
+    moho::editor::renderstats::Frame& stats = moho::editor::renderstats::gCur;   // EDITOR: ed_render_stats
     ++stats.atlasLookups;
-    if (moho::ren_AtlasFastLookup) {
-      fast = AtlasFastFor(this, true);
-      if (fast != nullptr) {
-        const auto hit = fast->uv.find(texture.get());
-        if (hit != fast->uv.end()) {
-          ++stats.atlasFastHits;
-          return hit->second;
-        }
-      }
+    if (ren_TextureAtlasCache && cacheSlot.mTexture == texture.get() && cacheSlot.mOwner == this) {
+      ++stats.atlasFastHits;
+      return cacheSlot.mUvRect;
     }
 
     TextureAtlasEntry lookupEntry{};
@@ -320,9 +296,7 @@ namespace moho
       mDirty = 1;
     }
 
-    if (fast != nullptr) {
-      fast->uv[texture.get()] = &found->mUvRect;
-    }
+    cacheSlot = AtlasCacheSlot{this, texture.get(), &found->mUvRect};
     return &found->mUvRect;
   }
 
@@ -335,8 +309,7 @@ namespace moho
    */
   void CD3DTextureBatcher::Reset()
   {
-    AtlasFastDrop(this);   // EDITOR: the rectangles it points to go with the set
-    ++moho::editor::renderstats::gCur.atlasResets;
+    std::memset(sAtlasCache, 0, sizeof(sAtlasCache));
     mMap.clear();
     mRects.clear();
 

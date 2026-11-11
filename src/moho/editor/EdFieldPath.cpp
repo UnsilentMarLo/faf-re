@@ -362,8 +362,8 @@ namespace moho::editor::field
       Loc L;
       if (!Prepare(a, P, out, L, err)) return false;
       const bool sgn = a.p.N("signed", 0.0) != 0.0;
-      const float far = static_cast<float>(a.p.N("far", P.maxReach));
-      EachCell(out, [&](const std::size_t i) { return L.Hit(i) ? (sgn ? L.sd[i] : L.bd[i]) : far; });
+      const float farValue = static_cast<float>(a.p.N("far", P.maxReach));
+      EachCell(out, [&](const std::size_t i) { return L.Hit(i) ? (sgn ? L.sd[i] : L.bd[i]) : farValue; });
       return true;
     }
 

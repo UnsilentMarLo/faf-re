@@ -6,6 +6,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#if !FAFRE_PLATFORM_WINDOWS
+#include <filesystem>
+#include <system_error>
+#endif
 
 #include <Windows.h>
 #include <psapi.h>
@@ -20,7 +24,9 @@
 #include "moho/misc/StartupHelpers.h"
 #include "moho/render/GpuPathSettings.h"
 
+#if FAFRE_PLATFORM_WINDOWS
 #pragma comment(lib, "psapi.lib")
+#endif
 
 namespace moho
 {
@@ -64,6 +70,17 @@ namespace moho
     {
       files = 0U;
       bytes = 0U;
+#if !FAFRE_PLATFORM_WINDOWS
+      // The Linux client (issue #255).
+      std::error_code error;
+      for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+        std::error_code entryError;
+        if (entry.is_regular_file(entryError)) {
+          ++files;
+          bytes += static_cast<std::uint64_t>(entry.file_size(entryError));
+        }
+      }
+#else
       WIN32_FIND_DATAA entry{};
       const HANDLE search = ::FindFirstFileA((directory + "\\*").c_str(), &entry);
       if (search == INVALID_HANDLE_VALUE) {
@@ -76,6 +93,7 @@ namespace moho
         }
       } while (::FindNextFileA(search, &entry) != FALSE);
       ::FindClose(search);
+#endif
     }
 
     /** Prints `text` to the console and the log, one line at a time. */
@@ -94,12 +112,12 @@ namespace moho
       }
     }
 
-    void RenInfo(const msvc8::vector<msvc8::string>&)
+    void RenInfo(const fa::vector<fa::string>&)
     {
       PrintRuntimeInfo(REN_FormatRuntimeInfo());
     }
 
-    void RenInfoDump(const msvc8::vector<msvc8::string>& args)
+    void RenInfoDump(const fa::vector<fa::string>& args)
     {
       if (args.size() < 2U) {
         CON_Printf("syntax: ren_InfoDump <file>");
@@ -189,7 +207,7 @@ namespace moho
       Megabytes(heap.committed), Megabytes(heap.reserved)
     );
 
-    const msvc8::string cacheDirectory = USER_GetAppCacheDir();
+    const fa::string cacheDirectory = USER_GetAppCacheDir();
     std::uint32_t cacheFiles = 0U;
     std::uint64_t cacheBytes = 0U;
     MeasureDirectory(cacheDirectory.c_str(), cacheFiles, cacheBytes);

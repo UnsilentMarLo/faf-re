@@ -1,3 +1,4 @@
+#include "moho/animation/AniPoseBones.h"
 #include "moho/ai/CBuilderArmManipulator.h"
 #include "legacy/math/X87Math.h"
 
@@ -7,11 +8,13 @@
 #include <typeinfo>
 
 #include "gpg/core/containers/ReadArchive.h"
+#include "gpg/core/utils/Global.h"
 #include "lua/LuaObject.h"
 #include "moho/ai/IAiBuilder.h"
 #include "moho/animation/CAniActor.h"
 #include "moho/animation/CAniPose.h"
 #include "moho/animation/CAniSkel.h"
+#include "moho/animation/PoseJobs.h"
 #include "moho/entity/Entity.h"
 #include "moho/math/QuaternionMath.h"
 #include "moho/script/CScriptObject.h"
@@ -36,26 +39,6 @@ namespace
   constexpr std::uint8_t kTrackingResultOutsideTolerance = 0x01;
   constexpr std::uint8_t kTrackingResultHeadingMotion = 0x02;
 
-  [[nodiscard]] gpg::RType* CachedIAniManipulatorType()
-  {
-    gpg::RType* type = moho::IAniManipulator::sType;
-    if (!type) {
-      type = gpg::LookupRType(typeid(moho::IAniManipulator));
-      moho::IAniManipulator::sType = type;
-    }
-    return type;
-  }
-
-  [[nodiscard]] gpg::RType* CachedWeakPtrUnitType()
-  {
-    gpg::RType* type = moho::WeakPtr<moho::Unit>::sType;
-    if (!type) {
-      type = gpg::LookupRType(typeid(moho::WeakPtr<moho::Unit>));
-      moho::WeakPtr<moho::Unit>::sType = type;
-    }
-    return type;
-  }
-
   // Addresses 0x00637190/0x00617AF0/0x0064B360 (deserialize "ThunkA", three
   // compiled addresses) and 0x00637300/0x006354C0/0x0064B4D0 (deserialize
   // "ThunkB", three more) and 0x006371A0 (serialize "ThunkA") and
@@ -66,26 +49,6 @@ namespace
   // class's ctor -- independently confirmed by the 2026-08-26
   // ArchiveSerialization audit) already call `CBuilderArmManipulator::
   // MemberDeserialize`/`MemberSerialize` directly.
-
-  [[nodiscard]] moho::CAniPoseBone* ResolvePoseBone(moho::CAniPose* const pose, const std::int32_t boneIndex) noexcept
-  {
-    if (pose == nullptr || boneIndex < 0) {
-      return nullptr;
-    }
-
-    moho::CAniPoseBone* const bonesBegin = pose->mBones.begin();
-    moho::CAniPoseBone* const bonesEnd = pose->mBones.end();
-    if (bonesBegin == nullptr || bonesEnd == nullptr || bonesBegin >= bonesEnd) {
-      return nullptr;
-    }
-
-    const std::ptrdiff_t boneCount = bonesEnd - bonesBegin;
-    if (boneIndex >= boneCount) {
-      return nullptr;
-    }
-
-    return &bonesBegin[boneIndex];
-  }
 
   [[nodiscard]] moho::CAniPoseBone* ResolveWatchBone(
     moho::CBuilderArmManipulator* const manipulator, const std::size_t watchSlot
@@ -98,7 +61,46 @@ namespace
     // 0x00635FE9..0x00635FEE: watch bones live in the pose being built this
     // frame (`[actor+0]`, CAniActor::mPose).
     moho::CAniActor* const actor = manipulator->mOwnerActor;
-    return ResolvePoseBone(actor != nullptr ? actor->mPose.get() : nullptr, manipulator->mWatchBones[watchSlot].mBoneIndex);
+    return moho::ResolvePoseBone(actor != nullptr ? actor->mPose.get() : nullptr, manipulator->mWatchBones[watchSlot].mBoneIndex);
+  }
+
+  /**
+   * The step `UpdateTrackingAxis` turns one tracked angle by this tick, limited by the arc and the
+   * slew (0x00636345..0x006363DA). Its own function so that
+   * `CBuilderArmManipulator::IsPoseJobQuiet` predicts the heading step with the same arithmetic.
+   */
+  [[nodiscard]] float ComputeTrackingStep(
+    const float desiredAngle,
+    const float currentAngle,
+    const float angleCenter,
+    const float angleHalfArc,
+    const float maxSlew
+  )
+  {
+    float step = 0.0f;
+    // 0x00636345..0x00636353: `comiss halfArc, 3.1405928; jb` -- an unordered
+    // (NaN) arc takes the clamped branch as well.
+    if (!(angleHalfArc >= kClampAngleLimit)) {
+      float constrained = moho::NormalizeAngleSignedRadians(desiredAngle - angleCenter);
+      // 0x00636393..0x006363A4: two independent clamps, `arc > x ? x : arc`
+      // then `-arc > x ? -arc : x`, so an unordered (NaN) angle takes `arc`.
+      if (!(angleHalfArc > constrained)) {
+        constrained = angleHalfArc;
+      }
+      if (-angleHalfArc > constrained) {
+        constrained = -angleHalfArc;
+      }
+      step = (constrained + angleCenter) - currentAngle;
+    } else {
+      step = moho::NormalizeAngleSignedRadians(desiredAngle - currentAngle);
+    }
+
+    // 0x006363B8..0x006363DA: `_copysign(slew, step)` is stored back over the
+    // same local, so the heading-motion test reads the slew-limited step.
+    if (std::fabs(step) > maxSlew) {
+      step = std::copysign(maxSlew, step);
+    }
+    return step;
   }
 } // namespace
 
@@ -123,8 +125,8 @@ namespace moho
     }
 
     const gpg::RRef owner{};
-    archive->Read(CachedIAniManipulatorType(), static_cast<IAniManipulator*>(this), owner);
-    archive->Read(CachedWeakPtrUnitType(), &mGoalUnit, owner);
+    archive->Read(gpg::RTypeOf<moho::IAniManipulator>(), static_cast<IAniManipulator*>(this), owner);
+    archive->Read(gpg::RTypeOf<moho::WeakPtr<moho::Unit>>(), &mGoalUnit, owner);
 
     archive->ReadFloat(&mHeading);
     archive->ReadFloat(&mPitch);
@@ -157,8 +159,8 @@ namespace moho
     }
 
     const gpg::RRef owner{};
-    archive->Write(CachedIAniManipulatorType(), this, owner);
-    archive->Write(CachedWeakPtrUnitType(), &mGoalUnit, owner);
+    archive->Write(gpg::RTypeOf<moho::IAniManipulator>(), this, owner);
+    archive->Write(gpg::RTypeOf<moho::WeakPtr<moho::Unit>>(), &mGoalUnit, owner);
 
     archive->WriteFloat(mHeading);
     archive->WriteFloat(mPitch);
@@ -272,7 +274,7 @@ namespace moho
         // atan2(m02, m22) - the same heading extraction the disassembly of
         // CRotateManipulator::MoveManipulator (0x00643860) spells out at
         // 0x006438CD..0x00643925.
-        mHeadingCenter = msvc8::atan2(
+        mHeadingCenter = fa::atan2(
           ((ori.w * ori.y) + (ori.x * ori.z)) * 2.0f,
           1.0f - (((ori.x * ori.x) + (ori.y * ori.y)) * 2.0f)
         );
@@ -314,7 +316,7 @@ namespace moho
    * (0x006364A5..0x006364DD, 0x00636516..0x0063654A: `_CIfmod` by 2*pi, then
    * the +-2*pi fix-up), the same body as `CAimManipulator::SetFiringArc`. The
    * sums, differences and halvings run on the x87 stack, so they go through
-   * `msvc8::HalfSumX87` / `HalfAbsDifferenceX87`, and the centre reaches
+   * `fa::HalfSumX87` / `HalfAbsDifferenceX87`, and the centre reaches
    * `_CIfmod` unrounded (`NormalizeAngleSignedRadiansX87`).
    */
   void CBuilderArmManipulator::SetAimingArc(
@@ -326,13 +328,13 @@ namespace moho
     const float pitchMaxSlew
   )
   {
-    mHeadingCenter = NormalizeAngleSignedRadiansX87(msvc8::HalfSumX87(minHeading, maxHeading));
+    mHeadingCenter = NormalizeAngleSignedRadiansX87(fa::HalfSumX87(minHeading, maxHeading));
     mHeadingMaxSlew = headingMaxSlew;
-    mHeadingHalfArc = msvc8::HalfAbsDifferenceX87(maxHeading, minHeading);
+    mHeadingHalfArc = fa::HalfAbsDifferenceX87(maxHeading, minHeading);
 
-    mPitchCenter = NormalizeAngleSignedRadiansX87(msvc8::HalfSumX87(minPitch, maxPitch));
+    mPitchCenter = NormalizeAngleSignedRadiansX87(fa::HalfSumX87(minPitch, maxPitch));
     mPitchMaxSlew = pitchMaxSlew;
-    mPitchHalfArc = msvc8::HalfAbsDifferenceX87(maxPitch, minPitch);
+    mPitchHalfArc = fa::HalfAbsDifferenceX87(maxPitch, minPitch);
   }
 
   /**
@@ -352,7 +354,7 @@ namespace moho
     // from where the unit is this tick, one tick ahead of the engine, and
     // shifted when a builder first reports on-target (replay 26935800 beat 516).
     const CAniPoseBone* const referenceBone =
-      ResolvePoseBone(mOwnerActor != nullptr ? mOwnerActor->mPriorPose.get() : nullptr, mReferenceBoneIdx);
+      moho::ResolvePoseBone(mOwnerActor != nullptr ? mOwnerActor->mPriorPose.get() : nullptr, mReferenceBoneIdx);
     if (referenceBone == nullptr) {
       outDirection->x = 0.0f;
       outDirection->y = 0.0f;
@@ -428,15 +430,15 @@ namespace moho
     float* currentAngleLane = nullptr;
     if ((trackingModeFlags & kTrackingModeHeading) != 0u) {
       currentAngleLane = &mHeading;
-      desiredAngle = msvc8::atan2(transformedTarget.x, transformedTarget.z);
+      desiredAngle = fa::atan2(transformedTarget.x, transformedTarget.z);
     } else {
       const float halfCenter = angleCenter * kHalfScale;
       // `(cos, sin, 0, 0)` in memory - a scalar-first rotation about X, the
       // same pitch basis `CAimManipulator::CheckTracking` builds at
       // 0x00630ADC..0x00630AF0.
       Wm3::Quaternionf pitchBasis{};
-      pitchBasis.w = msvc8::cos(halfCenter);
-      pitchBasis.x = msvc8::sin(halfCenter);
+      pitchBasis.w = fa::cos(halfCenter);
+      pitchBasis.x = fa::sin(halfCenter);
       pitchBasis.y = 0.0f;
       pitchBasis.z = 0.0f;
 
@@ -450,29 +452,7 @@ namespace moho
     }
 
     const float currentAngle = *currentAngleLane;
-    float step = 0.0f;
-    // 0x00636345..0x00636353: `comiss halfArc, 3.1405928; jb` -- an unordered
-    // (NaN) arc takes the clamped branch as well.
-    if (!(angleHalfArc >= kClampAngleLimit)) {
-      float constrained = NormalizeAngleSignedRadians(desiredAngle - angleCenter);
-      // 0x00636393..0x006363A4: two independent clamps, `arc > x ? x : arc`
-      // then `-arc > x ? -arc : x`, so an unordered (NaN) angle takes `arc`.
-      if (!(angleHalfArc > constrained)) {
-        constrained = angleHalfArc;
-      }
-      if (-angleHalfArc > constrained) {
-        constrained = -angleHalfArc;
-      }
-      step = (constrained + angleCenter) - currentAngle;
-    } else {
-      step = NormalizeAngleSignedRadians(desiredAngle - currentAngle);
-    }
-
-    // 0x006363B8..0x006363DA: `_copysign(slew, step)` is stored back over the
-    // same local, so the heading-motion test below reads the slew-limited step.
-    if (std::fabs(step) > maxSlew) {
-      step = std::copysign(maxSlew, step);
-    }
+    const float step = ComputeTrackingStep(desiredAngle, currentAngle, angleCenter, angleHalfArc, maxSlew);
 
     // 0x006363E5..0x00636427: `NormalizeAngleSignedRadians` inlined on the x87
     // sum. That sum keeps the extended exponent, so it differs from this float
@@ -528,9 +508,9 @@ namespace moho
 
       const float halfHeading = mHeading * kHalfScale;
       Wm3::Quaternionf headingRotation{};
-      headingRotation.w = msvc8::cos(halfHeading);
+      headingRotation.w = fa::cos(halfHeading);
       headingRotation.x = 0.0f;
-      headingRotation.y = msvc8::sin(halfHeading);
+      headingRotation.y = fa::sin(halfHeading);
       headingRotation.z = 0.0f;
       headingBone->Rotate(headingRotation);
     }
@@ -552,14 +532,18 @@ namespace moho
 
       const float halfPitch = (-mPitch) * kHalfScale;
       Wm3::Quaternionf pitchRotation{};
-      pitchRotation.w = msvc8::cos(halfPitch);
-      pitchRotation.x = msvc8::sin(halfPitch);
+      pitchRotation.w = fa::cos(halfPitch);
+      pitchRotation.x = fa::sin(halfPitch);
       pitchRotation.y = 0.0f;
       pitchRotation.z = 0.0f;
       pitchBone->Rotate(pitchRotation);
     }
 
     const bool isTracking = (trackingResult & kTrackingResultHeadingMotion) != 0u;
+    if (isTracking != mTrackingScriptActive && POSE_InJob()) {
+      // Engine addition (sim_ParallelPose): IsPoseJobQuiet queued this update as one without a script call.
+      gpg::Die("sim_ParallelPose: builder arm would call Lua inside a pose job");
+    }
     if (isTracking) {
       if (!mTrackingScriptActive) {
         if (Unit* const unit = mGoalUnit.GetObjectPtr(); unit != nullptr) {
@@ -586,11 +570,15 @@ namespace moho
   bool CBuilderArmManipulator::ManipulatorUpdate()
   {
     Unit* const unit = mGoalUnit.GetObjectPtr();
-    if (unit == nullptr || unit->AiBuilder == nullptr || unit->IsDead()) {
+    // Engine addition (sim_ParallelPose): inside a queued pose job, the inputs copied at queue time;
+    // a queued builder arm has no aim target (IsPoseJobQuiet).
+    const SPoseJobInputs* const jobInputs = POSE_JobInputsFor(unit);
+    if (unit == nullptr || unit->AiBuilder == nullptr || (jobInputs != nullptr ? jobInputs->mDead : unit->IsDead())) {
       return false;
     }
 
-    const Wm3::Vector3f aimTarget = unit->AiBuilder->BuilderGetAimTarget();
+    const Wm3::Vector3f aimTarget =
+      jobInputs != nullptr ? Wm3::Vector3f::ZERO : unit->AiBuilder->BuilderGetAimTarget();
     // 0x00636616..0x00636626: a 12-byte memcmp against `Vector3<float>::ZERO`
     // (0x00F3D21C) -- Wm3 `operator==` -- so a `-0` lane counts as a target.
     if (!(aimTarget == Wm3::Vector3f::ZERO)) {
@@ -612,6 +600,40 @@ namespace moho
     }
     mTriggered = false;
     return true;
+  }
+
+  /**
+   * Engine addition (sim_ParallelPose), not in the binary.
+   *
+   * Follows `ManipulatorUpdate`'s branches on the sim thread before the unit's pose update is
+   * queued. Quiet means the arm has no aim target (with one, the turn depends on this unit's pose)
+   * and `TrackAimDirection` will not call OnStartBuilderTracking or OnStopBuilderTracking. Without
+   * an aim target the arm turns toward the forward direction in world space with a quarter of its
+   * slew, where the heading step needs no pose: `ComputeTrackingStep`, as `UpdateTrackingAxis`
+   * computes it.
+   */
+  bool CBuilderArmManipulator::IsPoseJobQuiet(const Unit& owner) const
+  {
+    const Unit* const unit = mGoalUnit.GetObjectPtr();
+    if (unit != &owner) {
+      return false;
+    }
+    if (unit->AiBuilder == nullptr || unit->IsDead()) {
+      return true;
+    }
+    if (!(unit->AiBuilder->BuilderGetAimTarget() == Wm3::Vector3f::ZERO)) {
+      return false;
+    }
+
+    bool isTracking = false;
+    if (ResolveWatchBone(const_cast<CBuilderArmManipulator*>(this), 0u) != nullptr) {
+      float headingSlew = mHeadingMaxSlew;
+      headingSlew *= kQuarterScale;
+      const float desiredAngle = fa::atan2(0.0f, 1.0f);
+      const float step = ComputeTrackingStep(desiredAngle, mHeading, mHeadingCenter, mHeadingHalfArc, headingSlew);
+      isTracking = std::fabs(step) > kHeadingMotionEpsilon;
+    }
+    return isTracking == mTrackingScriptActive;
   }
 } // namespace moho
 

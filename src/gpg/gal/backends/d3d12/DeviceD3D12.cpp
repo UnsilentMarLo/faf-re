@@ -2,6 +2,7 @@
 
 #include "DeviceD3D12.h"
 
+#include <thread>
 #include <algorithm>
 #include <cctype>
 #include <cstdarg>
@@ -38,6 +39,9 @@
 #include "gpg/gal/backends/d3d11/D3D11VertexLayouts.h"
 #include "gpg/gal/backends/d3d11/EffectSourceD3D11.h"
 #include "gpg/gal/backends/dxgi/DxgiFormats.h"
+#include "gpg/gal/effects/RayTracedShadows.h"
+#include "gpg/gal/effects/ShadowCascades.h"
+#include "gpg/gal/effects/TextureFiltering.h"
 
 namespace gpg::gal
 {
@@ -106,12 +110,14 @@ namespace gpg::gal
 
     constexpr char kBlitSource[] = R"hlsl(
 struct BlitVertex { float4 position : SV_Position; float2 uv : TEXCOORD0; };
+// The source rect in texture coordinates: xy its top-left corner, zw its size.
+cbuffer BlitSource : register(b0) { float4 faf_sourceRect; };
 BlitVertex BlitVS(uint id : SV_VertexID)
 {
     BlitVertex o;
     float2 p = float2((id << 1) & 2, id & 2);
     o.position = float4(p * float2(2, -2) + float2(-1, 1), 0, 1);
-    o.uv = p;
+    o.uv = faf_sourceRect.xy + p * faf_sourceRect.zw;
     return o;
 }
 Texture2D faf_source : register(t0);
@@ -130,6 +136,38 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       lower(commandLine);
       lower(needle);
       return commandLine.find(needle) != std::string::npos;
+    }
+
+    /// Engine addition (ren_PrepareDeviceEarly): the device D3D12_PrepareDeviceEarly is creating.
+    struct SEarlyDevice
+    {
+      std::mutex lock;
+      std::thread builder;
+      Microsoft::WRL::ComPtr<ID3D12Device> device; // written by `builder`, read after joining it
+      LUID adapter{};
+    };
+
+    // Never destroyed: a builder still joinable at exit would terminate the process.
+    SEarlyDevice& EarlyDevice()
+    {
+      static auto* const early = new SEarlyDevice();
+      return *early;
+    }
+
+    /// The device made early for `adapter`, once its builder is done, or null; one for another adapter is released.
+    [[nodiscard]] Microsoft::WRL::ComPtr<ID3D12Device> TakeEarlyDevice(const LUID& adapter)
+    {
+      SEarlyDevice& early = EarlyDevice();
+      const std::lock_guard<std::mutex> guard(early.lock);
+      if (early.builder.joinable()) {
+        early.builder.join();
+      }
+      Microsoft::WRL::ComPtr<ID3D12Device> device = std::move(early.device);
+      early.device.Reset();
+      if (device != nullptr && (early.adapter.LowPart != adapter.LowPart || early.adapter.HighPart != adapter.HighPart)) {
+        device.Reset();
+      }
+      return device;
     }
 
     /** The command a DRED breadcrumb records, for the device-removed report. */
@@ -329,8 +367,13 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
   struct DeviceD3D12::ProgramState
   {
     D3D12_GPU_DESCRIPTOR_HANDLE samplers{};
+    int samplerAnisotropy = -1; // effects::gTextureAnisotropy the table was made for (ren_TextureAnisotropy)
     std::int32_t viewportParameter = -1;
     float lastViewport[4]{-1.0f, -1.0f, -1.0f, -1.0f};
+    std::int32_t shadowCascadeParameter = -1; // faf_ShadowCascades (ren_ShadowCascades)
+    std::uint64_t shadowCascadeVersion = 0;
+    std::int32_t rayShadowParameter = -1; // faf_RayShadows (ren_RayTracedShadows)
+    std::uint64_t rayShadowVersion = 0;
 
     std::uint64_t constantsVersion = 0;
     std::uint64_t constantsSerial = 0;
@@ -342,8 +385,25 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     std::uint64_t textureVersion = 0;
     const RenderTarget* tableSurface = nullptr; // the colour target bound when the table was built
     D3D12_GPU_DESCRIPTOR_HANDLE table{};
-    std::shared_ptr<const std::vector<effects::TextureBinding>> tableBindings;
+    std::vector<effects::TextureBinding> tableBindings;
   };
+
+  namespace
+  {
+    const effects::TextureBinding kNoTextureBinding{};
+
+    // A slot's handles are copied only when they changed: each copy is an atomic increment, and a
+    // decal draw keeps all but a few of its effect's textures.
+    void KeepBinding(effects::TextureBinding& slot, const effects::TextureBinding& binding)
+    {
+      if (slot.texture.get() != binding.texture.get()) {
+        slot.texture = binding.texture;
+      }
+      if (slot.renderTarget.get() != binding.renderTarget.get()) {
+        slot.renderTarget = binding.renderTarget;
+      }
+    }
+  } // namespace
 
   // ---------------------------------------------------------------------------
   // Construction and setup
@@ -377,14 +437,17 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     }
     mIndexBuffer.reset();
     mSwapChains.clear();
+    ReleaseRayTracing();
     mGarbage.clear();
     mPipelineCache.Close();
+    mPipelineMemo.Clear();
     mPipelines.clear();
     mBlitPipelines.clear();
     mPipelineState.reset();
     mCursor.Destroy();
     mUpload.Release();
     mPlacedTextures.Release();
+    mSharedBuffers.Release();
     mPlacedBuffers.Release();
     mRtvPool.Release();
     mDsvPool.Release();
@@ -456,9 +519,14 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
         gpg::Logf("D3D12: device removed extended data on");
       }
     }
-    CheckHresult(
-      "DeviceD3D12.cpp", __LINE__, mLibrary.createDevice(adapter.adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&mDevice))
-    );
+    // Engine addition (ren_PrepareDeviceEarly): the device made early for this adapter, never with
+    // the debug layer or DRED on.
+    mDevice = (debugLayer || mDredEnabled) ? nullptr : TakeEarlyDevice(adapter.desc.AdapterLuid);
+    if (mDevice == nullptr) {
+      CheckHresult(
+        "DeviceD3D12.cpp", __LINE__, mLibrary.createDevice(adapter.adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&mDevice))
+      );
+    }
     if (debugLayer) {
       static_cast<void>(mDevice.As(&mInfoQueue));
     }
@@ -500,6 +568,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     mUpload.Initialize(mDevice.Get());
     mPlacedTextures.Initialize(mDevice.Get(), D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, L"placed textures");
     mPlacedBuffers.Initialize(mDevice.Get(), D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS, L"placed buffers");
+    mSharedBuffers.Initialize(&mPlacedBuffers);
     mRtvPool.Initialize(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 256U);
     mDsvPool.Initialize(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 256U);
     mSrvPool.Initialize(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4096U);
@@ -537,6 +606,42 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     }
   }
 
+  std::uint32_t DeviceD3D12::AppendRayRootParameters(
+    D3D12_ROOT_PARAMETER* const parameters, const std::uint32_t first, D3D12_DESCRIPTOR_RANGE& textures, D3D12_STATIC_SAMPLER_DESC& sampler
+  )
+  {
+    // Engine addition (ren_RayAlphaShadows): the alpha-tested pieces' textures (t0.., space2), their indices and
+    // texture coordinates (t1, space1) and the scene's per-instance records (t2, space1), with a linear wrapping
+    // sampler (s0, space1) for the alpha (RayTracingD3D12.cpp).
+    textures.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    textures.NumDescriptors = kRayTextureSlots;
+    textures.BaseShaderRegister = 0U;
+    textures.RegisterSpace = 2U;
+    textures.OffsetInDescriptorsFromTableStart = 0U;
+    parameters[first].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    parameters[first].DescriptorTable.NumDescriptorRanges = 1U;
+    parameters[first].DescriptorTable.pDescriptorRanges = &textures;
+    parameters[first].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    for (std::uint32_t buffer = 0U; buffer < 2U; ++buffer) {
+      D3D12_ROOT_PARAMETER& parameter = parameters[first + 1U + buffer];
+      parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+      parameter.Descriptor.ShaderRegister = 1U + buffer;
+      parameter.Descriptor.RegisterSpace = 1U;
+      parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    }
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.MaxAnisotropy = 1U;
+    sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister = 0U;
+    sampler.RegisterSpace = 1U;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    return 3U;
+  }
+
   void DeviceD3D12::CreateRootSignature()
   {
     D3D12_DESCRIPTOR_RANGE textures{};
@@ -548,7 +653,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     samplers.NumDescriptors = effects::kMaxSamplerSlots;
     samplers.OffsetInDescriptorsFromTableStart = 0U;
 
-    D3D12_ROOT_PARAMETER parameters[3]{};
+    D3D12_ROOT_PARAMETER parameters[7]{};
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     parameters[0].Descriptor.ShaderRegister = 0U;
     parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -561,9 +666,20 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     parameters[2].DescriptorTable.pDescriptorRanges = &samplers;
     parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+    // Engine addition (ren_RayTracedShadows): the ray-traced scene at t0, space1 (RayTracingD3D12.cpp).
+    parameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    parameters[3].Descriptor.ShaderRegister = 0U;
+    parameters[3].Descriptor.RegisterSpace = 1U;
+    parameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    D3D12_DESCRIPTOR_RANGE rayTextures{};
+    D3D12_STATIC_SAMPLER_DESC raySampler{};
+    const std::uint32_t rayParameters = AppendRayRootParameters(parameters, 4U, rayTextures, raySampler);
+
     D3D12_ROOT_SIGNATURE_DESC desc{};
-    desc.NumParameters = 3U;
+    desc.NumParameters = mRayQuery ? 4U + rayParameters : 3U;
     desc.pParameters = parameters;
+    desc.NumStaticSamplers = mRayQuery ? 1U : 0U;
+    desc.pStaticSamplers = &raySampler;
     desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     ComPtr<ID3DBlob> serialized;
@@ -638,7 +754,8 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       auto* const target = new RenderTargetD3D12(std::move(buffers), &swapChain);
       output.surface.reset(target);
       const RenderTargetContext* const targetContext = target->GetContext();
-      const DepthStencilTargetContext depthContext(targetContext->width_, targetContext->height_, 3U, false);
+      // Engine change: readable by shaders, for ren_Ao (GpuBindings::readBoundDepth).
+      const DepthStencilTargetContext depthContext(targetContext->width_, targetContext->height_, 3U, true);
       output.depthStencil = CreateDepthStencilTarget(&depthContext);
       gpg::Logf("D3D12: head %u back buffer target %p (%ux%u)", static_cast<unsigned>(headIndex), target, targetContext->width_,
                 targetContext->height_);
@@ -741,6 +858,36 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     mBlitSamplers = SamplerTable({linearClamp});
   }
 
+  void D3D12_PrepareDeviceEarly()
+  {
+    if (CommandLineHas("/d3d12gbv") || CommandLineHas("/d3d12debug") || CommandLineHas("/d3d12dred") ||
+        backend::SetupFailureRequested("d3d12")) {
+      return;
+    }
+    SEarlyDevice& early = EarlyDevice();
+    const std::lock_guard<std::mutex> guard(early.lock);
+    if (early.builder.joinable() || early.device != nullptr) {
+      return;
+    }
+    early.builder = std::thread([&early] {
+      d3d12::Library library; // d3d12.dll stays loaded, as Setup's own load keeps it
+      dxgi::Factory factory;
+      if (!library.Load() || FAILED(factory.Create())) {
+        return;
+      }
+      factory.EnumerateAdapters(DXGI_FORMAT_B8G8R8A8_UNORM);
+      if (factory.Adapters().empty()) {
+        return;
+      }
+      const dxgi::AdapterInfo& adapter = factory.Adapters().front();
+      Microsoft::WRL::ComPtr<ID3D12Device> device;
+      if (SUCCEEDED(library.createDevice(adapter.adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+        early.device = std::move(device);
+        early.adapter = adapter.desc.AdapterLuid;
+      }
+    });
+  }
+
   void DeviceD3D12::Setup(DeviceContext* const context)
   {
     mCurThreadId = static_cast<int>(::GetCurrentThreadId());
@@ -750,6 +897,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       ThrowError("DeviceD3D12.cpp", __LINE__, "device creation failed on request (FAF_GAL_FAIL_SETUP)");
     }
     if (!mLibrary.Load()) {
+      (void)TakeEarlyDevice(LUID{}); // engine addition (ren_PrepareDeviceEarly): nothing will take it
       ThrowError("DeviceD3D12.cpp", __LINE__, "Direct3D 12 is not available (d3d12.dll)");
     }
     effects::ShaderCompiler& compiler = effects::ShaderCompiler::Instance();
@@ -770,12 +918,18 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
 
     CreateDevice();
     CreateQueueAndFrames();
+    CreateRayTracing();
     CreateRootSignature();
     mPipelineCache.Open(mDevice.Get(), effects::ShaderCacheDirectory());
     BeginRecording();
     CreateSwapChains(*context);
     CreateBuiltInPipelines();
     CreateGpuDrivenObjects();
+    if (mRayQuery) {
+      // An empty scene, so every effect draw has one to bind until the renderer hands its own.
+      mGpuFeatures |= kGpuFeatureRayQuery;
+      BuildRayScene();
+    }
 
     std::fill(std::begin(mStreamFrequencies), std::end(mStreamFrequencies), 0);
     mPipelineState.reset(new PipelineStateD3D12());
@@ -1280,6 +1434,31 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     FinishDraw();
   }
 
+  void DeviceD3D12::ReleaseBufferCopy(VertexBuffer& buffer)
+  {
+    static_cast<VertexBufferD3D12&>(buffer).Storage().ReleaseCopy();
+  }
+
+  void DeviceD3D12::ReleaseBufferCopy(IndexBuffer& buffer)
+  {
+    static_cast<IndexBufferD3D12&>(buffer).Storage().ReleaseCopy();
+  }
+
+  void DeviceD3D12::CopyWrittenOnly(VertexBuffer& buffer)
+  {
+    static_cast<VertexBufferD3D12&>(buffer).Storage().MarkWrittenOnly();
+  }
+
+  void DeviceD3D12::CopyLockedRangeOnly(VertexBuffer& buffer)
+  {
+    static_cast<VertexBufferD3D12&>(buffer).Storage().CopyLockedRangeOnly();
+  }
+
+  void DeviceD3D12::CopyLockedRangeOnly(IndexBuffer& buffer)
+  {
+    static_cast<IndexBufferD3D12&>(buffer).Storage().CopyLockedRangeOnly();
+  }
+
   bool DeviceD3D12::CopyVertexBufferRegion(
     VertexBuffer& destination, const std::uint32_t destinationOffset, VertexBuffer& source, const std::uint32_t sourceOffset,
     const std::uint32_t byteCount
@@ -1303,12 +1482,18 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     if (sourceResource == nullptr) {
       return false;
     }
+    // Two buffers sharing one large buffer: it cannot be source and destination at once.
+    if (target->resource.Get() == sourceResource) {
+      return false;
+    }
     // In command order: earlier draws reading the destination are recorded
     // before this barrier, and later draws move it back to VERTEX_AND_CONSTANT
     // in PrepareForDraw.
     Transition(*target, D3D12_RESOURCE_STATE_COPY_DEST);
     FlushBarriers();
-    mList->CopyBufferRegion(target->resource.Get(), destinationOffset, sourceResource, sourceBase + sourceOffset, byteCount);
+    mList->CopyBufferRegion(
+      target->resource.Get(), to.ResourceOffset() + destinationOffset, sourceResource, sourceBase + sourceOffset, byteCount
+    );
     return true;
   }
 
@@ -1479,6 +1664,15 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     mGarbage.push_back(std::move(garbage));
   }
 
+  void DeviceD3D12::RetireSharedRange(ComPtr<IUnknown> range)
+  {
+    const std::lock_guard<std::recursive_mutex> lock(mMutex);
+    Garbage garbage;
+    garbage.serial = RecordingSerial();
+    garbage.sharedRange = std::move(range);
+    mGarbage.push_back(std::move(garbage));
+  }
+
   void DeviceD3D12::RetireDescriptor(const D3D12_DESCRIPTOR_HEAP_TYPE type, const D3D12_CPU_DESCRIPTOR_HANDLE handle)
   {
     const std::lock_guard<std::recursive_mutex> lock(mMutex);
@@ -1545,12 +1739,17 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     if (found != mSamplerTables.end()) {
       return found->second;
     }
+    // Engine change (ren_TextureAnisotropy): a table takes only its effect's samplers. Each value of the switch
+    // adds tables, and 64 slots apiece filled the 2048-slot heap after about 32. The root signature's range is
+    // 64 wide, so a table starts only where those 64 lie inside the heap; tables may overlap, as each reads only
+    // its own effect's slots.
+    const std::uint32_t used = std::clamp<std::uint32_t>(static_cast<std::uint32_t>(samplers.size()), 1U, effects::kMaxSamplerSlots);
     D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
-    if (!mSamplerHeap.Allocate(effects::kMaxSamplerSlots, cpu, gpu)) {
+    if (mSamplerHeap.Remaining() < effects::kMaxSamplerSlots || !mSamplerHeap.Allocate(used, cpu, gpu)) {
       ThrowError("DeviceD3D12.cpp", __LINE__, "sampler heap exhausted");
     }
-    for (std::uint32_t index = 0U; index < effects::kMaxSamplerSlots; ++index) {
+    for (std::uint32_t index = 0U; index < used; ++index) {
       D3D12_CPU_DESCRIPTOR_HANDLE handle = cpu;
       handle.ptr += static_cast<SIZE_T>(index) * mSamplerHeap.Increment();
       mDevice->CreateSampler(&descs[index], handle);
@@ -1579,7 +1778,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
 
   void DeviceD3D12::Func1() const {}
 
-  void DeviceD3D12::GetModesForAdapter(msvc8::vector<HeadAdapterMode>& outModes, const int adapterIndex)
+  void DeviceD3D12::GetModesForAdapter(fa::vector<HeadAdapterMode>& outModes, const int adapterIndex)
   {
     outModes.clear();
     const auto& adapters = mFactory.Adapters();
@@ -1989,9 +2188,22 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     RenderTargetD3D12::Buffer& from = sourceTarget->Current();
     RenderTargetD3D12::Buffer& to = destinationTarget->Current();
 
-    if (sourceContext->width_ == destinationContext->width_ && sourceContext->height_ == destinationContext->height_ &&
-        sourceTarget->Format() == destinationTarget->Format()) {
-      // As D3D10: a direct copy; only the destination rect's corner is used.
+    // As D3D9 StretchRect: a null rect is the whole surface, and the source
+    // rect is stretched over the destination rect. The refraction copy of a
+    // split-screen view relies on this: it passes the view's rect and no
+    // destination rect, and the particle shaders sample the copy with
+    // view-relative coordinates.
+    const RECT fromRect =
+      (sourceRect != nullptr) ? *sourceRect
+                              : RECT{0, 0, static_cast<LONG>(sourceContext->width_), static_cast<LONG>(sourceContext->height_)};
+    const RECT toRect =
+      (destinationRect != nullptr)
+        ? *destinationRect
+        : RECT{0, 0, static_cast<LONG>(destinationContext->width_), static_cast<LONG>(destinationContext->height_)};
+
+    if (fromRect.right - fromRect.left == toRect.right - toRect.left &&
+        fromRect.bottom - fromRect.top == toRect.bottom - toRect.top && sourceTarget->Format() == destinationTarget->Format()) {
+      // Same size: a direct copy.
       Transition(from.resource, D3D12_RESOURCE_STATE_COPY_SOURCE);
       Transition(to.resource, D3D12_RESOURCE_STATE_COPY_DEST);
       FlushBarriers();
@@ -2002,33 +2214,38 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       origin.pResource = from.resource.resource.Get();
       origin.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
       D3D12_BOX box{};
-      const D3D12_BOX* boxPointer = nullptr;
-      if (sourceRect != nullptr) {
-        box.left = static_cast<UINT>(sourceRect->left);
-        box.top = static_cast<UINT>(sourceRect->top);
-        box.right = static_cast<UINT>(sourceRect->right);
-        box.bottom = static_cast<UINT>(sourceRect->bottom);
-        box.front = 0U;
-        box.back = 1U;
-        boxPointer = &box;
-      }
-      const UINT x = (destinationRect != nullptr) ? static_cast<UINT>(destinationRect->left) : 0U;
-      const UINT y = (destinationRect != nullptr) ? static_cast<UINT>(destinationRect->top) : 0U;
+      box.left = static_cast<UINT>(fromRect.left);
+      box.top = static_cast<UINT>(fromRect.top);
+      box.right = static_cast<UINT>(fromRect.right);
+      box.bottom = static_cast<UINT>(fromRect.bottom);
+      box.front = 0U;
+      box.back = 1U;
       MarkDraw("StretchRect copy");
-      mList->CopyTextureRegion(&target, x, y, 0U, &origin, boxPointer);
+      mList->CopyTextureRegion(&target, static_cast<UINT>(toRect.left), static_cast<UINT>(toRect.top), 0U, &origin, &box);
       FinishDraw();
       return;
     }
-    BlitTexture(from.shaderResourceView, from.resource, to, destinationTarget->Format(), destinationContext->width_, destinationContext->height_);
+    BlitTexture(
+      from.shaderResourceView,
+      from.resource,
+      sourceContext->width_,
+      sourceContext->height_,
+      fromRect,
+      to,
+      destinationTarget->Format(),
+      toRect
+    );
   }
 
   void DeviceD3D12::BlitTexture(
     const D3D12_CPU_DESCRIPTOR_HANDLE source,
     d3d12::TrackedResource& sourceResource,
+    const std::uint32_t sourceWidth,
+    const std::uint32_t sourceHeight,
+    const RECT& sourceRect,
     RenderTargetD3D12::Buffer& destination,
     const DXGI_FORMAT destinationFormat,
-    const std::uint32_t width,
-    const std::uint32_t height
+    const RECT& destinationRect
   )
   {
     ComPtr<ID3D12PipelineState>& pipeline = mBlitPipelines[destinationFormat];
@@ -2056,8 +2273,33 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       CheckHresult("DeviceD3D12.cpp", __LINE__, mDevice->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline)));
     }
 
+    // The draw covers the viewport, which is the destination rect, and its
+    // texture coordinates cover the source rect. Scaling the viewport instead
+    // would leave the viewport bounds (-32768..32767) for small rects.
+    // The table first: a full view heap hands the recorded commands to the GPU,
+    // waits, and frees the upload pages, constants uploaded before it included.
+    // The upload next, before any barrier: it may submit too, but leaves the
+    // view heap alone.
     D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
-    const D3D12_GPU_DESCRIPTOR_HANDLE table = AllocateTable(effects::kMaxTextureSlots, cpu);
+    D3D12_GPU_DESCRIPTOR_HANDLE table{};
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      table = AllocateTable(effects::kMaxTextureSlots, cpu);
+      const std::uint64_t epoch = mArenaEpoch;
+      EnsureRayTables();
+      if (epoch == mArenaEpoch) {
+        break; // the ray table didn't start the heap over: the blit's table still stands
+      }
+    }
+    const float sourceUv[4] = {
+      static_cast<float>(sourceRect.left) / static_cast<float>(sourceWidth),
+      static_cast<float>(sourceRect.top) / static_cast<float>(sourceHeight),
+      static_cast<float>(sourceRect.right - sourceRect.left) / static_cast<float>(sourceWidth),
+      static_cast<float>(sourceRect.bottom - sourceRect.top) / static_cast<float>(sourceHeight),
+    };
+    const d3d12::UploadAllocation constants =
+      AllocateUpload(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT);
+    std::memcpy(constants.cpu, sourceUv, sizeof(sourceUv));
+
     mDevice->CopyDescriptorsSimple(1U, cpu, source, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     D3D12_CPU_DESCRIPTOR_HANDLE rest = cpu;
     rest.ptr += mFrames[mFrameIndex].views.Increment();
@@ -2067,14 +2309,22 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     Transition(destination.resource, D3D12_RESOURCE_STATE_RENDER_TARGET);
     FlushBarriers();
     mList->OMSetRenderTargets(1U, &destination.renderTargetView, FALSE, nullptr);
-    const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
-    const D3D12_RECT scissor{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    const D3D12_VIEWPORT viewport{
+      static_cast<float>(destinationRect.left),
+      static_cast<float>(destinationRect.top),
+      static_cast<float>(destinationRect.right - destinationRect.left),
+      static_cast<float>(destinationRect.bottom - destinationRect.top),
+      0.0f,
+      1.0f
+    };
+    const D3D12_RECT scissor{destinationRect.left, destinationRect.top, destinationRect.right, destinationRect.bottom};
     mList->RSSetViewports(1U, &viewport);
     mList->RSSetScissorRects(1U, &scissor);
     mList->SetPipelineState(pipeline.Get());
-    mList->SetGraphicsRootConstantBufferView(0U, 0U);
+    mList->SetGraphicsRootConstantBufferView(0U, constants.gpu);
     mList->SetGraphicsRootDescriptorTable(1U, table);
     mList->SetGraphicsRootDescriptorTable(2U, mBlitSamplers);
+    BindRayRoot(false);
     mList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     MarkDraw("StretchRect blit");
     mList->DrawInstanced(3U, 1U, 0U, 0U);
@@ -2153,13 +2403,13 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     destinationTexture->DiscardCpuCopy();
   }
 
-  void DeviceD3D12::SaveCubeRenderTarget(const boost::shared_ptr<CubeRenderTarget>& cubeTarget, const msvc8::string& filePath)
+  void DeviceD3D12::SaveCubeRenderTarget(const boost::shared_ptr<CubeRenderTarget>& cubeTarget, const fa::string& filePath)
   {
     static_cast<void>(cubeTarget);
     static_cast<void>(filePath);
   }
 
-  void DeviceD3D12::SaveRenderTarget(const boost::shared_ptr<RenderTarget>& renderTarget, const msvc8::string& filePath, const int fileFormat)
+  void DeviceD3D12::SaveRenderTarget(const boost::shared_ptr<RenderTarget>& renderTarget, const fa::string& filePath, const int fileFormat)
   {
     const std::lock_guard<std::recursive_mutex> lock(mMutex);
     imaging::Image image;
@@ -2171,7 +2421,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
   }
 
   void DeviceD3D12::SaveTexture(
-    const boost::shared_ptr<Texture>& texture, const msvc8::string& filePath, const int fileFormat, gpg::MemBuffer<char>* const outBuffer
+    const boost::shared_ptr<Texture>& texture, const fa::string& filePath, const int fileFormat, gpg::MemBuffer<char>* const outBuffer
   )
   {
     const std::lock_guard<std::recursive_mutex> lock(mMutex);
@@ -2204,10 +2454,16 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     imaging::DecodeOptions options;
     options.format = DXGI_FORMAT_BC3_UNORM;
     options.mipLevels = 1U;
+    // Padded to whole blocks, not stretched over them: D3D9 converts with D3DX_FILTER_NONE.
+    options.filter = imaging::ResizeFilter::None;
     imaging::Image image;
     CheckHresult("DeviceD3D12.cpp", __LINE__, imaging::ImageCodec::Instance()->Decode(sourceData, sourceBytes, options, image));
-    *outWidth = image.width;
-    *outHeight = static_cast<int>(image.height);
+    // The file's size, as D3D9 reports it (0x008ECD20); `image` is padded to whole BC3 blocks.
+    std::uint32_t sourceHeight = 0U;
+    CheckHresult(
+      "DeviceD3D12.cpp", __LINE__, imaging::ImageCodec::Instance()->GetImageSize(sourceData, sourceBytes, *outWidth, sourceHeight)
+    );
+    *outHeight = static_cast<int>(sourceHeight);
     const imaging::Image::Subresource& top = image.subresources.front();
     const std::size_t requiredBytes = top.slicePitch;
     if (outTextureData->Size() != requiredBytes) {
@@ -2675,11 +2931,22 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     std::shared_ptr<void>& slot = program.BackendState();
     if (slot == nullptr) {
       auto state = std::make_shared<ProgramState>();
-      state->samplers = SamplerTable(program.Description().samplers);
       state->viewportParameter = program.FindParameter("faf_ViewportSize");
+      state->shadowCascadeParameter = program.FindParameter(effects::kShadowCascadeParameter);
+      state->rayShadowParameter = program.FindParameter(effects::kRayShadowParameter);
       slot = state;
     }
-    return *static_cast<ProgramState*>(slot.get());
+    ProgramState& state = *static_cast<ProgramState*>(slot.get());
+    // Engine addition (ren_TextureAnisotropy): the sampler table follows the switch (tables are cached by content).
+    if (state.samplerAnisotropy != effects::gTextureAnisotropy) {
+      state.samplerAnisotropy = effects::gTextureAnisotropy;
+      std::vector<effects::SamplerDesc> samplers = program.Description().samplers;
+      for (effects::SamplerDesc& sampler : samplers) {
+        sampler = effects::WithTextureAnisotropy(sampler);
+      }
+      state.samplers = SamplerTable(samplers);
+    }
+    return state;
   }
 
   void DeviceD3D12::BindPass(effects::EffectProgram& program, const std::uint32_t technique, const std::uint32_t pass)
@@ -2723,8 +2990,13 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     if (entries.pixel >= 0) {
       bound.pixelShader = &program.Shader(static_cast<std::uint32_t>(entries.pixel));
     }
+    if (entries.hull >= 0 && entries.domain >= 0) {
+      bound.hullShader = &program.Shader(static_cast<std::uint32_t>(entries.hull));
+      bound.domainShader = &program.Shader(static_cast<std::uint32_t>(entries.domain));
+    }
     bound.valid = bound.vertexShader != nullptr && bound.vertexShader->succeeded &&
-      (bound.pixelShader == nullptr || bound.pixelShader->succeeded);
+      (bound.pixelShader == nullptr || bound.pixelShader->succeeded) &&
+      (bound.hullShader == nullptr || (bound.hullShader->succeeded && bound.domainShader->succeeded));
 
     ProgramState& state = StateFor(program);
     effects::ParameterStore& parameters = program.Parameters();
@@ -2742,32 +3014,34 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
         parameters.SetVector(static_cast<std::uint32_t>(state.viewportParameter), size);
       }
     }
-
-    // $Globals, snapshotted as D3D9's BeginPass and Effects 11's Apply do.
-    const std::span<const std::uint8_t> constants = parameters.Constants();
-    if (!constants.empty()) {
-      if (state.constants == 0U || state.constantsVersion != parameters.Version() || state.constantsSerial != RecordingSerial()) {
-        const std::uint64_t bytes = (constants.size() + 255U) & ~static_cast<std::uint64_t>(255U);
-        const d3d12::UploadAllocation upload = AllocateUpload(bytes, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT);
-        std::memcpy(upload.cpu, constants.data(), constants.size());
-        state.constants = upload.gpu;
-        state.constantsCpu = upload.cpu;
-        state.constantsVersion = parameters.Version();
-        state.constantsSerial = RecordingSerial();
-      }
-      bound.constants = state.constants;
-      bound.constantsCpu = state.constantsCpu;
-      bound.constantsBytes = static_cast<std::uint32_t>(constants.size());
-      bound.constantsSerial = state.constantsSerial;
+    if (state.shadowCascadeParameter >= 0 && state.shadowCascadeVersion != effects::gShadowCascades.version) {
+      state.shadowCascadeVersion = effects::gShadowCascades.version;
+      parameters.SetVectorArray(
+        static_cast<std::uint32_t>(state.shadowCascadeParameter), &effects::gShadowCascades.vectors[0][0], effects::kShadowCascadeVectors
+      );
+    }
+    if (state.rayShadowParameter >= 0 && state.rayShadowVersion != effects::gRayShadows.version) {
+      state.rayShadowVersion = effects::gRayShadows.version;
+      parameters.SetVectorArray(
+        static_cast<std::uint32_t>(state.rayShadowParameter), &effects::gRayShadows.vectors[0][0], effects::kRayShadowVectors
+      );
     }
 
+    // Engine change (ren_UsedTextureTable): a change only in bindings the pass's shaders don't read keeps the
+    // table. The version is left as it is, so every later pass checks its own registers against the table again.
+    bool keepTable = false;
+    if (gUsedTextureTable && state.tableFrame == mFrameCount && state.tableEpoch == mArenaEpoch &&
+        state.tableSurface == outputContext_.surface.get() && state.textureVersion != parameters.TextureVersion()) {
+      keepTable =
+        UsedTextureBindingsKept(program, parameters, state.tableBindings, PassTextureSlots(bound.vertexShader, bound.pixelShader, bound.hullShader, bound.domainShader));
+    }
     // The texture table: rebuilt when a binding changed or the frame moved on.
-    if (state.tableFrame != mFrameCount || state.tableEpoch != mArenaEpoch || state.textureVersion != parameters.TextureVersion() ||
-        state.tableSurface != outputContext_.surface.get()) {
+    if (!keepTable && (state.tableFrame != mFrameCount || state.tableEpoch != mArenaEpoch ||
+                       state.textureVersion != parameters.TextureVersion() || state.tableSurface != outputContext_.surface.get())) {
       const auto& slots = program.Modern().textures;
       const auto& slotParameters = program.TextureSlotParameters();
-      auto bindings = std::make_shared<std::vector<effects::TextureBinding>>();
-      bindings->reserve(slots.size());
+      std::vector<effects::TextureBinding>& bindings = state.tableBindings;
+      bindings.resize(std::min<std::size_t>(slots.size(), effects::kMaxTextureSlots));
       D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
       const D3D12_GPU_DESCRIPTOR_HANDLE table = AllocateTable(effects::kMaxTextureSlots, cpu);
       const UINT increment = mFrames[mFrameIndex].views.Increment();
@@ -2775,8 +3049,8 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       for (std::size_t index = 0U; index < slots.size() && index < effects::kMaxTextureSlots; ++index) {
         const effects::TextureSlot& slot = slots[index];
         const std::int32_t parameter = slotParameters[index];
-        const effects::TextureBinding binding =
-          (parameter >= 0) ? parameters.Binding(static_cast<std::uint32_t>(parameter)) : effects::TextureBinding{};
+        const effects::TextureBinding& binding =
+          (parameter >= 0) ? parameters.Binding(static_cast<std::uint32_t>(parameter)) : kNoTextureBinding;
         D3D12_CPU_DESCRIPTOR_HANDLE view = mNullViews[static_cast<int>(slot.dimension)];
         if (binding.texture != nullptr) {
           auto* const texture = static_cast<TextureD3D12*>(binding.texture.get());
@@ -2795,7 +3069,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
             if (logged.size() < 32U && logged.insert(techniqueName).second) {
               gpg::Logf("D3D12: %s samples its own colour target; bound as a null view", techniqueName.c_str());
             }
-            bindings->push_back(effects::TextureBinding{});
+            KeepBinding(bindings[index], kNoTextureBinding);
             written = static_cast<std::uint32_t>(index + 1U);
             D3D12_CPU_DESCRIPTOR_HANDLE destination = cpu;
             destination.ptr += static_cast<SIZE_T>(index) * increment;
@@ -2807,7 +3081,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
         D3D12_CPU_DESCRIPTOR_HANDLE destination = cpu;
         destination.ptr += static_cast<SIZE_T>(index) * increment;
         mDevice->CopyDescriptorsSimple(1U, destination, view, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        bindings->push_back(binding);
+        KeepBinding(bindings[index], binding);
         written = static_cast<std::uint32_t>(index + 1U);
       }
       if (written < effects::kMaxTextureSlots) {
@@ -2816,16 +3090,36 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
         mDevice->CopyDescriptorsSimple(effects::kMaxTextureSlots - written, rest, mNullViewRun, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
       }
       state.table = table;
-      state.tableBindings = std::move(bindings);
       state.tableFrame = mFrameCount;
       state.tableEpoch = mArenaEpoch;
       state.textureVersion = parameters.TextureVersion();
       state.tableSurface = outputContext_.surface.get();
     }
+    // AllocateTable can submit and recycle upload pages on descriptor exhaustion.
+    // Snapshot this new pass only after that boundary; Submit carries mPass,
+    // not the local bound record being built here.
+    // $Globals, snapshotted as D3D9's BeginPass and Effects 11's Apply do.
+    const std::span<const std::uint8_t> constants = parameters.Constants();
+    if (!constants.empty()) {
+      if (state.constants == 0U || state.constantsVersion != parameters.Version() || state.constantsSerial != RecordingSerial()) {
+        const std::uint64_t bytes = (constants.size() + 255U) & ~static_cast<std::uint64_t>(255U);
+        const d3d12::UploadAllocation upload = AllocateUpload(bytes, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT);
+        std::memcpy(upload.cpu, constants.data(), constants.size());
+        state.constants = upload.gpu;
+        state.constantsCpu = upload.cpu;
+        state.constantsVersion = parameters.Version();
+        state.constantsSerial = RecordingSerial();
+      }
+      bound.constants = state.constants;
+      bound.constantsCpu = state.constantsCpu;
+      bound.constantsBytes = static_cast<std::uint32_t>(constants.size());
+      bound.constantsSerial = state.constantsSerial;
+    }
+
     bound.textures = state.table;
     bound.tableFrame = state.tableFrame;
     bound.tableEpoch = state.tableEpoch;
-    bound.sampled = state.tableBindings;
+    bound.sampled = &state.tableBindings;
     bound.samplers = state.samplers;
     bound.techniqueIndex = technique;
     bound.passIndex = pass;
@@ -2872,6 +3166,27 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       depthFormat = static_cast<DepthStencilTargetD3D12*>(outputContext_.depthStencil.get())->DepthFormat();
     }
 
+    // Engine change (ren_PipelineMemo): recent pipelines are found without building the string key below.
+    PipelineInputs inputs;
+    std::memset(static_cast<void*>(&inputs), 0, sizeof(inputs));
+    inputs.vertexKey = pass.vertexShader->key;
+    inputs.pixelKey = (pass.pixelShader != nullptr) ? pass.pixelShader->key : 0ULL;
+    inputs.hullKey = (pass.hullShader != nullptr) ? pass.hullShader->key : 0ULL;
+    inputs.domainKey = (pass.domainShader != nullptr) ? pass.domainShader->key : 0ULL;
+    inputs.format = mBoundFormat;
+    inputs.sampleMask = pass.state.sampleMask;
+    inputs.blend = pass.state.blend;
+    inputs.depth = pass.state.depthStencil;
+    inputs.rasterizer = pass.state.rasterizer;
+    inputs.renderFormat = renderFormat;
+    inputs.depthFormat = depthFormat;
+    inputs.topologyType = topologyType;
+    if (gPipelineMemo) {
+      if (ID3D12PipelineState* const known = mPipelineMemo.Find(inputs)) {
+        return known;
+      }
+    }
+
     KeyWriter key;
     key.Add(pass.vertexShader->key);
     key.Add((pass.pixelShader != nullptr) ? pass.pixelShader->key : 0ULL);
@@ -2883,8 +3198,14 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     key.Add(renderFormat);
     key.Add(depthFormat);
     key.Add(topologyType);
+    if (pass.hullShader != nullptr) {
+      // Only tessellated passes extend the key, so every other pipeline keeps its cached one.
+      key.Add(pass.hullShader->key);
+      key.Add(pass.domainShader->key);
+    }
     auto found = mPipelines.find(key.Key());
     if (found != mPipelines.end()) {
+      mPipelineMemo.Store(inputs, found->second.Get());
       return found->second.Get();
     }
 
@@ -2930,6 +3251,10 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     }
     if (!mSolidPixelShader.empty()) {
       desc.PS = {mSolidPixelShader.data(), mSolidPixelShader.size()};
+    }
+    if (pass.hullShader != nullptr) {
+      desc.HS = {pass.hullShader->code.data(), pass.hullShader->code.size()};
+      desc.DS = {pass.domainShader->code.data(), pass.domainShader->code.size()};
     }
     desc.BlendState.AlphaToCoverageEnable = blend.alphaToCoverage ? TRUE : FALSE;
     D3D12_RENDER_TARGET_BLEND_DESC& target = desc.BlendState.RenderTarget[0];
@@ -2986,6 +3311,11 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     // pipeline library on disk instead of a driver compile in this frame.
     effects::Fnv1a64 cacheKey;
     cacheKey.Add(key.Key().data(), key.Key().size());
+    // Engine addition (ren_RayTracedShadows): with ray queries the root signature has the scene's parameter,
+    // and a stored pipeline only loads with the root signature it was made with.
+    // 2: the ray root signature with the alpha-test parameters (ren_RayAlphaShadows); bump on any layout change.
+    const std::uint8_t rootSignature = mRayQuery ? 2U : 0U;
+    cacheKey.Add(&rootSignature, sizeof(rootSignature));
     ComPtr<ID3D12PipelineState> pipeline = mPipelineCache.Load(cacheKey.Value(), desc);
     if (pipeline != nullptr) {
       return mPipelines.emplace(std::move(key.Key()), pipeline).first->second.Get();
@@ -3016,7 +3346,17 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       ++mSkippedDraws;
       return false;
     }
-    const D3D_PRIMITIVE_TOPOLOGY topology = kTopologyByToken[topologyToken];
+    D3D_PRIMITIVE_TOPOLOGY topology = kTopologyByToken[topologyToken];
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE topologyType = TopologyType(topology);
+    if (mPass.hullShader != nullptr) {
+      // A tessellated pass draws each triangle of a list as one 3-point patch.
+      if (topology != D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) {
+        ++mSkippedDraws;
+        return false;
+      }
+      topology = D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
+      topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+    }
     if (mTracing) {
       Trace(
         "draw topology %u format %u rt %p ds %p viewport %lu,%lu %lux%lu z %g..%g", topologyToken, mBoundFormat,
@@ -3028,7 +3368,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     if (mPass.sampled != nullptr) {
       TransitionSampled(*mPass.sampled);
     }
-    ID3D12PipelineState* const pipeline = PipelineFor(mPass, TopologyType(topology));
+    ID3D12PipelineState* const pipeline = PipelineFor(mPass, topologyType);
     if (pipeline == nullptr) {
       ++mSkippedDraws;
       return false;
@@ -3062,6 +3402,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     mList->SetGraphicsRootConstantBufferView(0U, mPass.constants);
     mList->SetGraphicsRootDescriptorTable(1U, mPass.textures);
     mList->SetGraphicsRootDescriptorTable(2U, mPass.samplers);
+    BindRayRoot(false);
     mList->IASetPrimitiveTopology(topology);
     mList->OMSetBlendFactor(mPass.state.blendFactor);
     mList->OMSetStencilRef(mPass.state.stencilRef);
@@ -3077,7 +3418,14 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     if (mIndexBuffer == nullptr) {
       return;
     }
-    RefreshStalePass(); // before anything is prepared: binding may submit
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      RefreshStalePass(); // before anything is prepared: binding may submit
+      const std::uint64_t epoch = mArenaEpoch;
+      EnsureRayTables();
+      if (epoch == mArenaEpoch) {
+        break; // the ray table didn't start the view heap over: the pass's table still stands
+      }
+    }
     const DrawPreparation preparing(mPreparingDraw);
     auto* const indexBuffer = static_cast<IndexBufferD3D12*>(mIndexBuffer.get());
     const D3D12_GPU_VIRTUAL_ADDRESS indexAddress = indexBuffer->Storage().PrepareForDraw(*this);
@@ -3096,7 +3444,14 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
   void DeviceD3D12::DrawPrimitive(const DrawContext* const context)
   {
     const std::lock_guard<std::recursive_mutex> lock(mMutex);
-    RefreshStalePass(); // before anything is prepared: binding may submit
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      RefreshStalePass(); // before anything is prepared: binding may submit
+      const std::uint64_t epoch = mArenaEpoch;
+      EnsureRayTables();
+      if (epoch == mArenaEpoch) {
+        break; // the ray table didn't start the view heap over: the pass's table still stands
+      }
+    }
     const DrawPreparation preparing(mPreparingDraw);
     if (!PrepareDraw(static_cast<std::uint32_t>(context->topology_))) {
       return;

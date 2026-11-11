@@ -116,6 +116,8 @@ namespace gpg::gal::d3d12
     /** False when `count` more do not fit. */
     [[nodiscard]] bool Allocate(std::uint32_t count, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, D3D12_GPU_DESCRIPTOR_HANDLE& gpu);
     void Reset() noexcept { mUsed = 0U; }
+    /** Descriptors still free. */
+    [[nodiscard]] std::uint32_t Remaining() const noexcept { return mCapacity - mUsed; }
 
     [[nodiscard]] ID3D12DescriptorHeap* Heap() const noexcept { return mHeap.Get(); }
     [[nodiscard]] std::uint32_t Increment() const noexcept { return mIncrement; }
@@ -168,5 +170,36 @@ namespace gpg::gal::d3d12
   {
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
     D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
+  };
+
+  /**
+   * Small static buffers at offsets inside large placed buffers (gal::gSharedBuffers). Their state
+   * is the large buffer's, so a read asks for kSharedBufferRead, which every kind of reader shares.
+   */
+  inline constexpr D3D12_RESOURCE_STATES kSharedBufferRead = static_cast<D3D12_RESOURCE_STATES>(
+    D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_COPY_SOURCE
+  );
+
+  class SharedBufferAllocator
+  {
+  public:
+    SharedBufferAllocator();
+    ~SharedBufferAllocator();
+    SharedBufferAllocator(const SharedBufferAllocator&) = delete;
+    SharedBufferAllocator& operator=(const SharedBufferAllocator&) = delete;
+
+    void Initialize(PlacedHeapAllocator* placed);
+    /** The large buffers go once the last range in them is given back. */
+    void Release() noexcept;
+
+    /** A range of `size` bytes; false when the buffer should have a resource of its own. */
+    [[nodiscard]] bool Take(
+      std::uint64_t size, TrackedResource*& outResource, std::uint64_t& outOffset, Microsoft::WRL::ComPtr<IUnknown>& outOwner
+    );
+
+  private:
+    struct State;
+    class RangeOwner;
+    std::shared_ptr<State> mState;
   };
 } // namespace gpg::gal::d3d12

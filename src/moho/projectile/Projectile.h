@@ -98,7 +98,7 @@ namespace moho
       const VTransform& launchTransform,
       float damage,
       float damageRadius,
-      const msvc8::string& damageTypeName,
+      const fa::string& damageTypeName,
       const CAiTarget& target,
       bool isChildProjectile
     );
@@ -111,6 +111,14 @@ namespace moho
      * member and base teardown (`InstanceCounter<Projectile>`'s -1 among it).
      */
     ~Projectile() override;
+
+    // Projectiles share their blocks with formations, whose addresses are sim state (see SimBlockLane). x64 takes
+    // them from SimBlockLane; x86 from the engine allocator's 896-byte class, as the binary does. Either way they
+    // stay out of Entity's own operator new, so no entity pool can take them.
+    [[nodiscard]] static void* operator new(std::size_t size);
+    [[nodiscard]] static void* operator new(std::size_t, void* const place) noexcept { return place; }
+    static void operator delete(void* block, std::size_t size) noexcept;
+    static void operator delete(void*, void*) noexcept {}
 
     /**
      * Address: 0x0069A610 (FUN_0069A610, Moho::Projectile::IsProjectile)
@@ -237,7 +245,7 @@ namespace moho
 
     float mDamage;                 // +0x2C8
     float mDamageRadius;           // +0x2CC
-    msvc8::string mDamageTypeName; // +0x2D0
+    fa::string mDamageTypeName; // +0x2D0
     CAiTarget mTargetPosData;      // +0x2EC
 
     /**
@@ -327,7 +335,7 @@ namespace moho
     const VTransform& launchTransform,
     float damage,
     float damageRadius,
-    const msvc8::string& damageTypeName,
+    const fa::string& damageTypeName,
     const CAiTarget& target,
     bool isChildProjectile
   );

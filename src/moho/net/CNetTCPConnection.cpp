@@ -8,6 +8,7 @@
 #include "ELobbyMsg.h"
 #include "NetMessageRanges.h"
 #include "gpg/core/containers/String.h"
+#include "gpg/core/utils/Global.h"
 #include "gpg/core/utils/Logging.h"
 #include "moho/misc/WeakPtr.h"
 
@@ -51,7 +52,7 @@ namespace
     }
 
     if (connection.mScheduleDestroy) {
-      delete &connection;
+      GPG_NONVIRTUAL_DESTROY(delete &connection);
       return true;
     }
     return false;
@@ -85,7 +86,7 @@ u_short CNetTCPConnection::GetPort()
 /**
  * Address: 0x00483580 (FUN_00483580, Moho::CNetTCPConnection::GetSocket)
  */
-SOCKET CNetTCPConnection::GetSocket() const noexcept
+platform::net::Socket CNetTCPConnection::GetSocket() const noexcept
 {
   return mSocket;
 }
@@ -104,7 +105,7 @@ ENetConnectionState CNetTCPConnection::GetState() const noexcept
  * What it does:
  * Attaches an accepted socket and transitions state to establishing.
  */
-void CNetTCPConnection::AdoptSocketAndSetEstablishing(const SOCKET socket) noexcept
+void CNetTCPConnection::AdoptSocketAndSetEstablishing(const platform::net::Socket socket) noexcept
 {
   mSocket = socket;
   mState = kNetStateEstablishing;
@@ -167,7 +168,7 @@ void CNetTCPConnection::Close()
  * What it does:
  * Returns "host:port" textual identity for logs/debug.
  */
-msvc8::string CNetTCPConnection::ToString()
+fa::string CNetTCPConnection::ToString()
 {
   const auto host = NET_GetHostName(mAddr);
   return gpg::STR_Printf("%s:%d", host.c_str(), mPort);
@@ -193,7 +194,7 @@ void CNetTCPConnection::ScheduleDestroy()
  */
 CNetTCPConnection::CNetTCPConnection(
   CNetTCPConnector* const connector,
-  const SOCKET socket,
+  const platform::net::Socket socket,
   const u_long address,
   const u_short port,
   const ENetConnectionState state
@@ -224,7 +225,9 @@ CNetTCPConnection::CNetTCPConnection(
   mConnector->mConnections.push_back(this);
   const HANDLE connectorEvent = mConnector->GetSelectedEventHandle();
   if (connectorEvent) {
-    ::WSAEventSelect(mSocket, connectorEvent, FD_READ | FD_CONNECT | FD_CLOSE);
+    platform::net::SelectSocketEvents(
+      mSocket, connectorEvent, platform::net::kEventRead | platform::net::kEventConnect | platform::net::kEventClose
+    );
   }
 }
 
@@ -239,8 +242,8 @@ CNetTCPConnection::CNetTCPConnection(
  */
 CNetTCPConnection::~CNetTCPConnection()
 {
-  if (mSocket != INVALID_SOCKET) {
-    ::closesocket(mSocket);
+  if (mSocket != platform::net::kInvalidSocket) {
+    platform::net::CloseSocket(mSocket);
   }
 }
 
@@ -259,33 +262,25 @@ void CNetTCPConnection::Pull()
   const WeakPtr<CNetTCPConnector> connector{mConnector};
 
   if (mScheduleDestroy) {
-    delete this;
+    GPG_NONVIRTUAL_DESTROY(delete this);
     return;
   }
 
   switch (mState) {
   case kNetStateConnecting: {
-    fd_set writeFds{};
-    writeFds.fd_count = 1;
-    writeFds.fd_array[0] = mSocket;
-
-    fd_set exceptFds = writeFds;
-    timeval timeout{};
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 0;
-
-    const int selected = ::select(0, nullptr, &writeFds, &exceptFds, &timeout);
-    if (selected == 0) {
+    // select() on the socket's write and exception sets, zero timeout.
+    const platform::net::ConnectPoll polled = platform::net::PollConnect(mSocket);
+    if (polled == platform::net::ConnectPoll::kPending) {
       return;
     }
 
-    if (FD_ISSET(mSocket, &writeFds)) {
+    if (polled == platform::net::ConnectPoll::kConnected) {
       gpg::Logf("CNetTCPConnection<%s:%d>::Pull(): connection succeeded", NET_GetHostName(mAddr).c_str(), mPort);
       mState = kNetStateEstablishing;
 
       CMessage connMade{ELobbyMsg::LOBMSG_ConnMade};
       mInputStream.Write(connMade.mBuff);
-    } else if (FD_ISSET(mSocket, &exceptFds)) {
+    } else if (polled == platform::net::ConnectPoll::kFailed) {
       gpg::Logf("CNetTCPConnection<%s:%d>::Pull(): connection failed", NET_GetHostName(mAddr).c_str(), mPort);
       mState = kNetStateErrored;
       DispatchConnectionEvent(*this, ELobbyMsg::LOBMSG_ConnFailed);
@@ -315,9 +310,9 @@ void CNetTCPConnection::Pull()
   bool recvFailedWithError = false;
   char recvBuf[kNetTcpIoChunkSize];
   while (!mPullFailed) {
-    const int received = ::recv(mSocket, recvBuf, static_cast<int>(sizeof(recvBuf)), 0);
+    const int received = platform::net::Recv(mSocket, recvBuf, static_cast<int>(sizeof(recvBuf)));
     if (received < 0) {
-      if (::WSAGetLastError() == WSAEWOULDBLOCK) {
+      if (platform::net::LastError() == platform::net::error::kWouldBlock) {
         break;
       }
 
@@ -410,7 +405,7 @@ void CNetTCPConnection::Pull()
 void CNetTCPConnection::Push()
 {
   if (mScheduleDestroy) {
-    delete this;
+    GPG_NONVIRTUAL_DESTROY(delete this);
     return;
   }
 
@@ -438,15 +433,15 @@ void CNetTCPConnection::Push()
 
     if (mSendBufferSize == 0) {
       if (mOutputStream.Empty()) {
-        ::shutdown(mSocket, SD_SEND);
+        platform::net::Shutdown(mSocket, platform::net::ShutdownHow::kSend);
         mHasShutdownOutput = 1;
       }
       return;
     }
 
-    const int sent = ::send(mSocket, mSendBuffer, static_cast<int>(mSendBufferSize), 0);
+    const int sent = platform::net::Send(mSocket, mSendBuffer, static_cast<int>(mSendBufferSize));
     if (sent < 0) {
-      if (::WSAGetLastError() == WSAEWOULDBLOCK) {
+      if (platform::net::LastError() == platform::net::error::kWouldBlock) {
         return;
       }
 
@@ -472,5 +467,7 @@ void CNetTCPConnection::Push()
  */
 int CNetTCPConnection::SelectSocket(void* const eventHandle)
 {
-  return ::WSAEventSelect(mSocket, static_cast<WSAEVENT>(eventHandle), FD_READ | FD_CONNECT | FD_CLOSE);
+  return platform::net::SelectSocketEvents(
+    mSocket, eventHandle, platform::net::kEventRead | platform::net::kEventConnect | platform::net::kEventClose
+  );
 }

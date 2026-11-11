@@ -31,7 +31,7 @@ namespace gpg::gal
       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     constexpr D3D12_RESOURCE_STATES kTextureRead =
       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    constexpr std::uint32_t kReadSlots = kGpuMaxReadBuffers + kGpuMaxTextures; // t0..t5
+    constexpr std::uint32_t kReadSlots = kGpuMaxReadBuffers + kGpuMaxTextures + 1U; // t0..t6, t6 the bound depth
 
     /** The Direct3D 12 device, while it exists (buffers can outlive it at exit). */
     [[nodiscard]] DeviceD3D12* ActiveDevice() noexcept
@@ -83,8 +83,13 @@ namespace gpg::gal
       const effects::ShaderCompiler& compiler = effects::ShaderCompiler::Instance();
       // HLSL 2018 and no row-major default: the sources are written for FXC
       // (the D3D11 backend compiles them with d3dcompiler).
-      const effects::CompiledShader compiled =
-        compiler.CompileRaw(std::string_view(desc.source, desc.sourceBytes), entry, profile, {L"-HV", L"2018"});
+      // Engine addition (ren_RayTracedShadows): a program with inline ray queries needs shader model 6.5.
+      const std::string_view source(desc.source, desc.sourceBytes);
+      std::wstring rayProfile = profile;
+      if (source.find("RayQuery<") != std::string_view::npos) {
+        rayProfile.back() = L'5';
+      }
+      const effects::CompiledShader compiled = compiler.CompileRaw(source, entry, rayProfile.c_str(), {L"-HV", L"2018"});
       if (!compiled.succeeded) {
         gpg::Warnf("D3D12: GPU program %s, %ls %s does not compile: %s", desc.name, profile, entry, compiled.messages.c_str());
         return {};
@@ -173,9 +178,25 @@ namespace gpg::gal
     }
   }
 
-  // Programs are created once by their renderers and live as long as the
-  // device; their pipelines are released with them.
-  GpuProgramD3D12::~GpuProgramD3D12() = default;
+  // A program can go while the command list being recorded still draws with it (the map editor
+  // drops its UI program before the device shuts down, with the last frame recorded and not yet
+  // submitted). Its pipelines wait in the garbage until the GPU is past that list, as a buffer's
+  // resource does and as the Vulkan backend's programs do (DeviceVulkan::RetireProgram); released
+  // at once, closing the list touched the freed pipeline state in the driver.
+  GpuProgramD3D12::~GpuProgramD3D12()
+  {
+    if (DeviceD3D12* const device = ActiveDevice()) {
+      if (mCompute != nullptr) {
+        device->RetireSharedRange(Microsoft::WRL::ComPtr<IUnknown>(mCompute));
+      }
+      for (auto& [key, pipeline] : mPipelines) {
+        (void)key;
+        if (pipeline != nullptr) {
+          device->RetireSharedRange(Microsoft::WRL::ComPtr<IUnknown>(pipeline));
+        }
+      }
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Device set-up
@@ -189,7 +210,12 @@ namespace gpg::gal
     D3D12_DESCRIPTOR_RANGE writes{};
     writes.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     writes.NumDescriptors = kGpuMaxWriteBuffers;
-    D3D12_ROOT_PARAMETER parameters[3]{};
+    D3D12_ROOT_PARAMETER parameters[7]{};
+    // Engine addition (ren_RayTracedShadows): the ray-traced scene at t0, space1, as for the effects.
+    parameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    parameters[3].Descriptor.ShaderRegister = 0U;
+    parameters[3].Descriptor.RegisterSpace = 1U;
+    parameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     parameters[0].Descriptor.ShaderRegister = 0U;
     parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -217,11 +243,14 @@ namespace gpg::gal
       sampler.ShaderRegister = 0U;
       sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+      D3D12_DESCRIPTOR_RANGE rayTextures{};
+      D3D12_STATIC_SAMPLER_DESC samplers[2]{sampler, {}};
+      const std::uint32_t rayParameters = AppendRayRootParameters(parameters, 4U, rayTextures, samplers[1]);
       D3D12_ROOT_SIGNATURE_DESC desc{};
-      desc.NumParameters = 3U;
+      desc.NumParameters = mRayQuery ? 4U + rayParameters : 3U;
       desc.pParameters = parameters;
-      desc.NumStaticSamplers = 1U;
-      desc.pStaticSamplers = &sampler;
+      desc.NumStaticSamplers = mRayQuery ? 2U : 1U;
+      desc.pStaticSamplers = samplers;
       ComPtr<ID3DBlob> serialized;
       ComPtr<ID3DBlob> errors;
       if (FAILED(mLibrary.serializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors))) {
@@ -264,6 +293,8 @@ namespace gpg::gal
 
     // CopyVertexBufferRegion is CopyBufferRegion on the direct list.
     mGpuFeatures = kGpuFeatureVertexPulling | kGpuFeatureCompute | kGpuFeatureIndirectDraw | kGpuFeatureBufferCopy;
+    // Hull and domain shaders are part of every feature level this device is created at (11_0 and up).
+    mGpuFeatures |= kGpuFeatureTessellation;
 
     // Timestamps: two per region (and two for the frame) in each of kProfileFrames frames.
     UINT64 frequency = 0U;
@@ -326,7 +357,16 @@ namespace gpg::gal
     // World shapes (ren_GpuShapes): a paused same-process A/B of FAF's shapes plus a 2,000-segment
     // UI_DrawLine stroke against the path off, pixel-identical outside two animated unit glows.
     return kGpuPathStrategicIcons | kGpuPathIconClassify | kGpuPathFogOfWar | kGpuPathSelectBrackets | kGpuPathProjectileIcons |
-      kGpuPathWorldShapes;
+      // MSDF text and the interface's quads: 0 pixels differ in a same-process A/B of a panel of text.
+      kGpuPathWorldShapes | kGpuPathMsdfText | MsdfCookVerified();
+  }
+
+  std::uint32_t DeviceD3D12::MsdfCookVerified() const
+  {
+    // The GPU font cook (ren_GpuFontCook): GPU and CPU atlases compared per font, and a device reset during
+    // a cook, on NVIDIA only; other vendors keep the CPU cook until it has run there (issue #309).
+    const bool nvidia = mAdapterIndex < mFactory.Adapters().size() && mFactory.Adapters()[mAdapterIndex].desc.VendorId == kPciVendorNvidia;
+    return nvidia ? kGpuPathMsdfCook : 0U;
   }
 
   boost::shared_ptr<GpuBuffer> DeviceD3D12::CreateGpuBuffer(const GpuBufferDesc& desc)
@@ -456,9 +496,13 @@ namespace gpg::gal
     desc.PS = {program.mPixelCode.data(), program.mPixelCode.size()};
     D3D12_RENDER_TARGET_BLEND_DESC& target = desc.BlendState.RenderTarget[0];
     target.BlendEnable = (state.blend != GpuBlend::Opaque) ? TRUE : FALSE;
-    target.SrcBlend = (state.blend != GpuBlend::Opaque) ? D3D12_BLEND_SRC_ALPHA : D3D12_BLEND_ONE;
+    target.SrcBlend = (state.blend == GpuBlend::Opaque) ? D3D12_BLEND_ONE
+      : (state.blend == GpuBlend::Multiply)               ? D3D12_BLEND_ZERO
+      : (state.blend == GpuBlend::Brighten)               ? D3D12_BLEND_DEST_COLOR
+                                                          : D3D12_BLEND_SRC_ALPHA;
     target.DestBlend = (state.blend == GpuBlend::AlphaBlend) ? D3D12_BLEND_INV_SRC_ALPHA
-      : (state.blend == GpuBlend::Additive)                   ? D3D12_BLEND_ONE
+      : (state.blend == GpuBlend::Additive || state.blend == GpuBlend::Brighten) ? D3D12_BLEND_ONE
+      : (state.blend == GpuBlend::Multiply)                   ? D3D12_BLEND_SRC_COLOR
                                                               : D3D12_BLEND_ZERO;
     target.BlendOp = D3D12_BLEND_OP_ADD;
     target.SrcBlendAlpha = D3D12_BLEND_ONE;
@@ -517,7 +561,26 @@ namespace gpg::gal
     D3D12_GPU_DESCRIPTOR_HANDLE& writeTable
   )
   {
-    // Uploads first: an allocation may hand the recorded commands to the GPU.
+    // Both tables first, in one allocation: a full view heap hands the recorded
+    // commands to the GPU, waits, and starts the heap over, which would free
+    // constants already uploaded and a read table already allocated.
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      readTable = AllocateTable(kReadSlots + kGpuMaxWriteBuffers, cpu);
+      const std::uint64_t epoch = mArenaEpoch;
+      EnsureRayTables();
+      if (epoch == mArenaEpoch) {
+        break; // the ray table didn't start the view heap over: the read table still stands
+      }
+    }
+    const UINT increment = mFrames[mFrameIndex].views.Increment();
+    D3D12_CPU_DESCRIPTOR_HANDLE writeCpu = cpu;
+    writeCpu.ptr += static_cast<SIZE_T>(kReadSlots) * increment;
+    writeTable = readTable;
+    writeTable.ptr += static_cast<UINT64>(kReadSlots) * increment;
+
+    // Then the upload, before any barrier: it may hand the recorded commands
+    // to the GPU too, but leaves the view heap alone.
     constants = 0U;
     if (bindings.constants != nullptr && bindings.constantBytes != 0U) {
       const std::uint32_t bytes = std::min(bindings.constantBytes, kGpuMaxConstantBytes);
@@ -531,9 +594,6 @@ namespace gpg::gal
       constants = upload.gpu;
     }
 
-    D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
-    readTable = AllocateTable(kReadSlots, cpu);
-    const UINT increment = mFrames[mFrameIndex].views.Increment();
     const D3D12_RESOURCE_STATES bufferRead = compute ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE : kBufferRead;
     for (std::uint32_t slot = 0U; slot < kReadSlots; ++slot) {
       D3D12_CPU_DESCRIPTOR_HANDLE view = (slot < kGpuMaxReadBuffers) ? mNullBufferView : mNullViews[0];
@@ -542,16 +602,32 @@ namespace gpg::gal
           view = buffer->ShaderView();
           Transition(buffer->Resource(), bufferRead);
         }
-      } else if (auto* const texture = static_cast<TextureD3D12*>(bindings.textures[slot - kGpuMaxReadBuffers])) {
-        view = texture->View();
-        Transition(texture->Resource(), kTextureRead);
+      } else if (slot < kGpuMaxReadBuffers + kGpuMaxTextures) {
+        if (auto* const texture = static_cast<TextureD3D12*>(bindings.textures[slot - kGpuMaxReadBuffers])) {
+          view = texture->View();
+          Transition(texture->Resource(), kTextureRead);
+        } else if (auto* const target = static_cast<RenderTargetD3D12*>(bindings.targets[slot - kGpuMaxReadBuffers])) {
+          // The next bind of it as a target moves it back to RENDER_TARGET (BindTargets).
+          RenderTargetD3D12::Buffer& buffer = target->Current();
+          if (buffer.shaderResourceView.ptr != 0U) {
+            view = buffer.shaderResourceView;
+            Transition(buffer.resource, kTextureRead);
+          }
+        }
+      } else if (bindings.readBoundDepth && outputContext_.depthStencil != nullptr) {
+        // The next target bind moves it back to DEPTH_WRITE (BindTargets).
+        auto* const depth = static_cast<DepthStencilTargetD3D12*>(outputContext_.depthStencil.get());
+        if (depth->ShaderView().ptr != 0U) {
+          view = depth->ShaderView();
+          Transition(depth->Resource(), kTextureRead);
+        }
       }
       D3D12_CPU_DESCRIPTOR_HANDLE destination = cpu;
       destination.ptr += static_cast<SIZE_T>(slot) * increment;
       mDevice->CopyDescriptorsSimple(1U, destination, view, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
-    writeTable = AllocateTable(kGpuMaxWriteBuffers, cpu);
+    cpu = writeCpu;
     for (std::uint32_t slot = 0U; slot < kGpuMaxWriteBuffers; ++slot) {
       D3D12_CPU_DESCRIPTOR_HANDLE view = mNullWriteView;
       if (auto* const buffer = static_cast<GpuBufferD3D12*>(bindings.writeBuffers[slot]); buffer != nullptr && compute) {
@@ -609,6 +685,7 @@ namespace gpg::gal
     mList->SetGraphicsRootConstantBufferView(0U, constants);
     mList->SetGraphicsRootDescriptorTable(1U, readTable);
     mList->SetGraphicsRootDescriptorTable(2U, writeTable);
+    BindRayRoot(false);
     mList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     mList->OMSetStencilRef(program->mDesc.inheritDepthStencil ? mCurrent.stencilRef : program->mDesc.stencil.reference);
     RecordStateChange();
@@ -654,6 +731,7 @@ namespace gpg::gal
     mList->SetComputeRootConstantBufferView(0U, constants);
     mList->SetComputeRootDescriptorTable(1U, readTable);
     mList->SetComputeRootDescriptorTable(2U, writeTable);
+    BindRayRoot(true);
     MarkDraw(program->mName.c_str());
     mList->Dispatch(dispatch.groupsX, dispatch.groupsY, dispatch.groupsZ);
     FinishDraw();

@@ -15,7 +15,12 @@ namespace gpg::gal::vulkan
     if (module != nullptr) {
       return true;
     }
+#if FAFRE_PLATFORM_WINDOWS
     module = ::LoadLibraryA("vulkan-1.dll");
+#else
+    // The Linux client (issue #255): the Vulkan loader's soname; LoadLibraryA is dlopen there.
+    module = ::LoadLibraryA("libvulkan.so.1");
+#endif
     if (module == nullptr) {
       return false;
     }
@@ -52,6 +57,17 @@ namespace gpg::gal::vulkan
   complete = complete && (name != nullptr);
     FAF_VK_DEVICE_FUNCTIONS(FAF_VK_LOAD_DEVICE)
 #undef FAF_VK_LOAD_DEVICE
+    return complete;
+  }
+
+  bool Functions::LoadRay(const VkDevice device)
+  {
+    bool complete = true;
+#define FAF_VK_LOAD_RAY(name)                                                          \
+  name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(device, #name));             \
+  complete = complete && (name != nullptr);
+    FAF_VK_RAY_FUNCTIONS(FAF_VK_LOAD_RAY)
+#undef FAF_VK_LOAD_RAY
     return complete;
   }
 

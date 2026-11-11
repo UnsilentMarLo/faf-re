@@ -127,7 +127,7 @@ namespace moho
     };
 
     // Counters for `ed_text_stats()` (cost measurements of P2).
-    struct Stats
+    struct TextStats
     {
       std::uint64_t runs = 0;
       std::uint64_t quads = 0;
@@ -137,14 +137,14 @@ namespace moho
       std::uint64_t renderTicks = 0;
     };
 
-    Stats gStats;
+    TextStats gStats;
     // The render timing costs two QueryPerformanceCounter reads per drawn string; it only runs once ed_text_stats has been asked for (perf report, tests).
     bool gStatsTiming = false;
 
-    Stats GetTextStatsAndReset()
+    TextStats GetTextStatsAndReset()
     {
-      const Stats snapshot = gStats;
-      gStats = Stats{};
+      const TextStats snapshot = gStats;
+      gStats = TextStats{};
       return snapshot;
     }
 
@@ -508,7 +508,7 @@ namespace
   int __cdecl cfunc_EdTextStats(lua_State* const state)
   {
     moho::gStatsTiming = true;
-    const moho::Stats snapshot = moho::GetTextStatsAndReset();
+    const moho::TextStats snapshot = moho::GetTextStatsAndReset();
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
     const double toMs = 1000.0 / static_cast<double>(frequency.QuadPart);
