@@ -32,8 +32,8 @@
 //   ed_tex_bake_start(id, { size, albedo = path, normal = path, textures = bool }) -> job     the graph at `size`, Albedo as a BC3 file (`albedo`), Normal as a BC1 file (`normal`)
 //   ed_tex_bake_poll(job)                  -> { done, progress, error, albedoBytes, normalBytes, hasMask, millis }
 //   ed_tex_bake_cancel(job) / ed_tex_bake_free(job)
-//   ed_tex_bake_mask(job, stratum)         -> true | nil, message     the finished bake's Mask output into stratum 1..8 of the map, resampled to the map's mask grid (the Lua side
-//                                             keeps the undo: it reads the mask before)
+//   ed_tex_bake_mask(job, w, h, x0, z0, x1, z1) -> bytes | nil, message    the finished bake's Mask output resampled to the map's mask grid (w x h, ed_stratum_info), the rectangle as
+//                                             bytes 0..255 row major: strata.lua EditMask writes them tile by tile with its undo
 //   ed_tex_dds_info(path)                  -> { width, height, mips, format } | nil, message       what a written file is (the tests read it back through the engine's own decoder)
 
 #include <algorithm>
@@ -920,35 +920,32 @@ namespace
 
   int __cdecl cfunc_BakeMask(lua_State* const L)
   {
+    // The finished bake's Mask output over the map's mask grid (w x h), the rectangle x0..x1, z0..z1 as bytes, row major: what a tile of the stratum's mask is made of.
     const int job = static_cast<int>(luaL_checknumber(L, 1));
-    const int stratum = static_cast<int>(luaL_checknumber(L, 2));
-    if (stratum < 1 || stratum > 8) {
-      return up::Fail(L, "the stratum is 1 to 8");
+    const int w = static_cast<int>(luaL_checknumber(L, 2));
+    const int h = static_cast<int>(luaL_checknumber(L, 3));
+    const int x0 = std::clamp(static_cast<int>(luaL_checknumber(L, 4)), 0, std::max(w - 1, 0));
+    const int z0 = std::clamp(static_cast<int>(luaL_checknumber(L, 5)), 0, std::max(h - 1, 0));
+    const int x1 = std::clamp(static_cast<int>(luaL_checknumber(L, 6)), x0, std::max(w - 1, 0));
+    const int z1 = std::clamp(static_cast<int>(luaL_checknumber(L, 7)), z0, std::max(h - 1, 0));
+    if (w <= 0 || h <= 0) {
+      return up::Fail(L, "the mask grid has no size");
     }
     const std::optional<BakeResult> result = Bakes().Get(job);
     if (!result || result->mask == nullptr) {
       return up::Fail(L, "the bake made no mask (link something to the output's Mask)");
     }
-    std::vector<std::uint8_t> current;
-    int w = 0;
-    int h = 0;
-    if (!moho::editor::StratumMaskRead(stratum - 1, current, w, h) || w <= 0 || h <= 0) {
-      return up::Fail(L, "the map has no stratum masks");
-    }
     const TexImage& mask = *result->mask;
-    std::vector<std::uint8_t> values(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
-    for (int y = 0; y < h; ++y) {
-      for (int x = 0; x < w; ++x) {
+    lua_newtable(L);
+    int index = 0;
+    for (int z = z0; z <= z1; ++z) {
+      for (int x = x0; x <= x1; ++x) {
         float c[4];
-        mask.Sample((static_cast<float>(x) + 0.5f) / static_cast<float>(w), (static_cast<float>(y) + 0.5f) / static_cast<float>(h), c);
-        values[static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] =
-            static_cast<std::uint8_t>(std::lround(std::clamp(c[0], 0.0f, 1.0f) * 255.0f));
+        mask.Sample((static_cast<float>(x) + 0.5f) / static_cast<float>(w), (static_cast<float>(z) + 0.5f) / static_cast<float>(h), c);
+        lua_pushnumber(L, static_cast<lua_Number>(std::lround(std::clamp(c[0], 0.0f, 1.0f) * 255.0f)));
+        lua_rawseti(L, -2, ++index);
       }
     }
-    if (!moho::editor::StratumMaskWrite(stratum - 1, values.data(), w, h)) {
-      return up::Fail(L, "the mask could not be written");
-    }
-    lua_pushboolean(L, 1);
     return 1;
   }
 
@@ -1013,7 +1010,7 @@ namespace
       {"ed_tex_bake_poll", &cfunc_BakePoll, "ed_tex_bake_poll(job) -> status"},
       {"ed_tex_bake_cancel", &cfunc_BakeCancel, "ed_tex_bake_cancel(job)"},
       {"ed_tex_bake_free", &cfunc_BakeFree, "ed_tex_bake_free(job)"},
-      {"ed_tex_bake_mask", &cfunc_BakeMask, "ed_tex_bake_mask(job, stratum) -> true | nil, message"},
+      {"ed_tex_bake_mask", &cfunc_BakeMask, "ed_tex_bake_mask(job, w, h, x0, z0, x1, z1) -> bytes | nil, message"},
       {"ed_tex_dds_info", &cfunc_DdsInfo, "ed_tex_dds_info(path) -> info"},
   }};
 } // namespace
