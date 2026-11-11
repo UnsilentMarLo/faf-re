@@ -267,7 +267,12 @@ namespace faf::editor
     /** The ground (terrain or water) under a point of the viewport, in its pixels; false off the map. */
     bool GroundAt(float x, float y, float& outX, float& outZ) const;
     void MoveWithKeys(float frameSeconds);
-    /** The map's props as mesh instances, from the kept rules' blueprints once they are ready. */
+    /**
+     * The game's rules the view draws props, units and deposits with: the kept ones between plays; in front of a play,
+     * the ones lent to it (the same object, kept again when it ends; WPE.51). Null while neither is ready.
+     */
+    [[nodiscard]] moho::RRuleGameRules* Rules() const;
+    /** The map's props as mesh instances, from the rules' blueprints once they are ready. */
     void CreateProps();
     void DeleteProps();
 
@@ -515,6 +520,10 @@ namespace faf::editor
     std::string mTestHover;
     bool mOverPlay = false;
     bool mLiveMaskSizeWarned = false;
+    std::uint32_t mWaterErodeSeed = 0;
+    /** The camera left by the last Detach, and the map it was on (kept for that map's next Attach). */
+    bool mCameraKept = false;
+    std::string mCameraKeptFor;
     moho::CWldMap* mSessionMap = nullptr;
     bool mUiWas = true;
     /** In front of a play: its units now, the ones selected (entity ids), and a drag of them (ground from / to). */

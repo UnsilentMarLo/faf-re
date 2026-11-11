@@ -852,7 +852,15 @@ namespace faf::editor
     mMap = &map;
     mWidth = 0;
     mHeight = 0;
-    FrameWholeMap();
+    // The same map again (the editor's view back in front of a play, or the play over): the camera where it was left
+    // (user ask 2026-11-11); another map starts framed whole.
+    if (mCameraKept && mCameraKeptFor == mDocument.Path()) {
+      ApplyCamera();
+      gpg::Logf("editor: the editor's camera as it was left: at %.1f,%.1f, %.1f away", static_cast<double>(mTargetX),
+                static_cast<double>(mTargetZ), static_cast<double>(mDistance));
+    } else {
+      FrameWholeMap();
+    }
     mWorldView = std::make_unique<moho::SimpleRenderWorldView>(const_cast<moho::GeomCamera3*>(&mCamera->CameraGetView()));
     moho::ren_Viewport->AddWorldView(mWorldView.get(), 0, 0);
     if (mRingHook == nullptr) {
@@ -872,6 +880,9 @@ namespace faf::editor
     if (mMap == nullptr) {
       return;
     }
+    // The camera (mTargetX/Z, mHeading, mPitch, mDistance) stays for this map's next Attach.
+    mCameraKept = true;
+    mCameraKeptFor = mDocument.Path();
     // A stroke in progress ends here, so undo has it whole.
     EndStroke();
     EndMaskStroke();
@@ -926,6 +937,7 @@ namespace faf::editor
     }
     HeightBrush brush = mTools->CurrentHeightBrush();
     brush.flattenTo = mFlattenTo;
+    brush.seed = ++mWaterErodeSeed; // Water erode: new droplets every step
     // A right-button stroke does the opposite: Raise lowers, Lower raises.
     if (mPaintInverted) {
       brush.mode = brush.mode == HeightBrushMode::Raise ? HeightBrushMode::Lower
@@ -970,6 +982,7 @@ namespace faf::editor
         mDocument.Heights().EndStroke(field->data);
         if (mDocument.Heights().UndoCount() > before) {
           mDocument.EditEnded(EdDocument::EditKind::Heights);
+          gpg::Logf("editor: height stroke changed %zu samples", mDocument.Heights().NewestChangedSamples());
         }
         // A check that was made is kept up to date as the map changes.
         if (mCheckDone) {
@@ -2149,10 +2162,18 @@ namespace faf::editor
     moho::CAM_GetManager()->Frame(0.0f, frameSeconds);
   }
 
+  moho::RRuleGameRules* EdMapScene::Rules() const
+  {
+    if (moho::RRuleGameRules* const kept = moho::RULE_PeekKept(); kept != nullptr) {
+      return kept;
+    }
+    return mOverPlay ? moho::RULE_PeekLent() : nullptr;
+  }
+
   void EdMapScene::CreateProps()
   {
     // The rules every play uses, kept between plays and built at startup; until they are ready, next frame.
-    moho::RRuleGameRules* const rules = moho::RULE_PeekKept();
+    moho::RRuleGameRules* const rules = Rules();
     moho::MeshRenderer* const renderer = moho::MeshRenderer::GetInstance();
     if (rules == nullptr || renderer == nullptr || mMap == nullptr) {
       return;
@@ -2173,7 +2194,7 @@ namespace faf::editor
 
   void EdMapScene::CreateUnits()
   {
-    moho::RRuleGameRules* const rules = moho::RULE_PeekKept();
+    moho::RRuleGameRules* const rules = Rules();
     moho::MeshRenderer* const renderer = moho::MeshRenderer::GetInstance();
     if (rules == nullptr || renderer == nullptr) {
       return;
@@ -2242,7 +2263,7 @@ namespace faf::editor
 
   moho::MeshInstance* EdMapScene::MakePropInstance(const moho::CWldPropEntry& entry) const
   {
-    moho::RRuleGameRules* const rules = moho::RULE_PeekKept();
+    moho::RRuleGameRules* const rules = Rules();
     moho::MeshRenderer* const renderer = moho::MeshRenderer::GetInstance();
     if (rules == nullptr || renderer == nullptr) {
       return nullptr;
@@ -4518,7 +4539,7 @@ namespace faf::editor
 
   void EdMapScene::UpdateDeposits()
   {
-    moho::RRuleGameRules* const rules = moho::RULE_PeekKept();
+    moho::RRuleGameRules* const rules = Rules();
     moho::MeshRenderer* const renderer = moho::MeshRenderer::GetInstance();
     if (rules == nullptr || renderer == nullptr || mMap == nullptr) {
       return;
@@ -5228,7 +5249,7 @@ namespace faf::editor
     }
     mDetailsFor = path;
     mDetails.clear();
-    moho::RRuleGameRules* const rules = moho::RULE_PeekKept();
+    moho::RRuleGameRules* const rules = Rules();
     if (rules == nullptr || path.empty()) {
       return mDetails;
     }
