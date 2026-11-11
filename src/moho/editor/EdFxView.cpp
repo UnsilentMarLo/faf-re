@@ -4,7 +4,7 @@
 // (CD3DBatchTexture::FromFile hook, CD3DBatchTexture.h), so any Maui Bitmap of a panel or of a pop-out window shows it with `bitmap:SetTexture('/ed_dyn/fxview')`.
 // Direct3D 11 only, like the rest of the editor.
 //
-//   ed_fxv_view(opts)          -> info     opens / updates the viewport.  opts: width, height (the target, default 512 x 384), background (0 night, 1 grey, 2 sky, 3 black), ground, grid,
+//   ed_fxv_view(opts)          -> info     opens / updates the viewport.  opts: pictureWidth, pictureHeight (the target, default 512 x 384), background (0 night, 1 grey, 2 sky, 3 black), ground, grid,
 //                                          height (the emitter above the ground), turn (the camera circles the effect), playing, loop, scale, show (true: render now)
 //   ed_fxv_view_close()                    stops rendering and forgets the texture
 //   ed_fxv_emitter(emitter[, restart])     the emitter the viewport plays (the Lua table of ed_fx_emitter_*); its curves and settings count from the next frame on
@@ -465,8 +465,8 @@ namespace
   int __cdecl cfunc_View(lua_State* const L)
   {
     Viewport& v = View();
-    const int width = std::clamp(up::FieldInt(L, 1, "width", v.width), 64, 2048);
-    const int height = std::clamp(up::FieldInt(L, 1, "height", v.height2), 64, 2048);
+    const int width = std::clamp(up::FieldInt(L, 1, "pictureWidth", v.width), 64, 2048);
+    const int height = std::clamp(up::FieldInt(L, 1, "pictureHeight", v.height2), 64, 2048);
     if (!v.open || width != v.width || height != v.height2 || !gPicture) {
       v.width = width;
       v.height2 = height;

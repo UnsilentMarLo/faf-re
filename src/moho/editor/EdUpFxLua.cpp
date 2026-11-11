@@ -12,13 +12,17 @@
 //                                              flags = { names }, blendModes = { names }, factions = { names }, kinds = { names } }
 //   ed_fx_emitter_new()                   -> emitter      retail's editor's new emitter
 //   ed_fx_emitter_parse(text)             -> emitter | nil, message       (message names the line)
-//   ed_fx_emitter_write(emitter)          -> text         as retail's emitter editor writes it (so a file it wrote reads back byte for byte)
-//   ed_fx_emitter_roundtrip(text)         -> { ok, identical, error, written }     parse + write + parse + compare: what the retail audit runs over every file
+//   ed_fx_emitter_write(emitter[, original]) -> text, patched     as retail's emitter editor writes it; with `original` (the file's text as it was opened) the file's own text is edited
+//                                         instead: only the keys that changed are replaced, comments, layout and line endings stay (patched = false: the plain write was used)
+//   ed_fx_emitter_roundtrip(text)         -> { ok, identical, preserved, error, written }     parse + write + parse + compare: what the retail audit runs over every file.
+//                                         ok: reads back as the same emitter (upstream's Same); identical: the writer's text equals the file's (CRs aside); preserved: writing the
+//                                         unedited model back into the file's text gives the file's bytes
 //   ed_fx_emitter_type_tag(emitter)       -> string       the particle technique's type tag (TRamp, TRampFlat, TRampAlign, ...)
 //   ed_fx_curve_samples(keys, xRange, n)  -> { mid = {n y}, lo = {n}, hi = {n} }     SEfxCurve::GetValue at n points from 0 to xRange (lo / hi: the spread's edges)
 //   ed_fx_flat_info(kind)                 -> { { key, kind, initial, color = {r,g,b,a}, help, texture }, ... }       kind 'BeamBlueprint' | 'TrailEmitterBlueprint'
 //   ed_fx_flat_parse(text)                -> flat | nil, message         flat = { kind, fields = { { key, kind = 'number'|'bool'|'text'|'color'|'raw', number, flag, text, color = {r,g,b,a} }, ... } }
-//   ed_fx_flat_write(flat)                -> text
+//   ed_fx_flat_write(flat[, original])    -> text, patched          (as ed_fx_emitter_write)
+//   ed_fx_flat_roundtrip(text)            -> { ok, identical, preserved, error }
 //   ed_fx_effect_class(path)              -> factionIndex, kindIndex     the browser's grouping of a game file name (0 = "all", index into ed_fx_info().factions / kinds, 0-based)
 //   ed_fx_list_files()                    -> { { path, name, faction, kind }, ... }     every /effects/**/*.bp of the game's file system, sorted by name
 //   ed_fx_templates(luaText)              -> { { name, paths = { ... } }, ... }          the templates of an EffectTemplates.lua that are plain lists of emitter paths
@@ -32,6 +36,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -39,6 +45,7 @@
 #include <vector>
 
 #include "editor/doc/EdEmitter.h"
+#include "editor/doc/EdLuaText.h"
 #include "editor/doc/EdSaveFile.h"
 #include "editor/graph/EdEffectGraph.h"
 #include "editor/graph/EdNodeGraph.h"
@@ -312,11 +319,250 @@ namespace
     return 1;
   }
 
+  // ---- writing back into the file's own text ------------------------------------------------------------------------------------------------------
+  //
+  // WriteEmitter / WriteFlatBlueprint write the layout of retail's own editor. A file made by an older version of it, or by hand, differs in layout (a key missing, another order,
+  // 'x' quotes, another number of decimals: 550 of the 2,437 emitters of the game's effects.scd), and a plain write would turn a file the user only opened into a different file.
+  // So the file's text is edited instead of replaced: each key whose value the writer would write differently for the edited model than for the model read from the text is
+  // replaced by the writer's text of that value (a key the file lacks is added before the closing brace); everything else, comments, layout, line endings, stays as it was.
+  // The result is read back and must equal the edited model, else the plain write is used (reported as `patched = false`).
+
+  [[nodiscard]] std::string WithoutCr(std::string text)
+  {
+    text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+    return text;
+  }
+
+  /**
+   * The text with its `# comment` lines blanked (same length, so positions stay): the game's Lua takes `#` for a line comment, EdLuaText only knows `--`. Strings are left alone
+   * (a quote or a long bracket opens one, `--` comments are skipped whole).
+   */
+  [[nodiscard]] std::string BlankHashComments(std::string text)
+  {
+    constexpr char kQuote = '\'';
+    constexpr char kNewline = '\n';
+    constexpr char kReturn = '\r';
+    constexpr char kBackslash = static_cast<char>(92);
+    std::size_t i = 0;
+    while (i < text.size()) {
+      const char c = text[i];
+      if (c == kQuote || c == '"') {
+        ++i;
+        while (i < text.size() && text[i] != c && text[i] != kNewline) {
+          i += text[i] == kBackslash ? 2 : 1;
+        }
+        ++i;
+      } else if (c == '[' && i + 1 < text.size() && text[i + 1] == '[') {
+        const std::size_t end = text.find("]]", i + 2);
+        i = end == std::string::npos ? text.size() : end + 2;
+      } else if (c == '-' && i + 1 < text.size() && text[i + 1] == '-') {
+        const std::size_t end = text.find(kNewline, i);
+        i = end == std::string::npos ? text.size() : end;
+      } else if (c == '#') {
+        while (i < text.size() && text[i] != kNewline) {
+          if (text[i] != kReturn) {
+            text[i] = ' ';
+          }
+          ++i;
+        }
+      } else {
+        ++i;
+      }
+    }
+    return text;
+  }
+
+  /** The table of a blueprint file (`EmitterBlueprint { ... }`): its fields with the positions of their values. */
+  [[nodiscard]] bool ReadBlueprintTable(const std::string& raw, LuaText& table)
+  {
+    const std::string text = BlankHashComments(raw);
+    const std::size_t name = text.find("Blueprint");
+    if (name == std::string::npos) {
+      return false;
+    }
+    const std::size_t brace = text.find('{', name);
+    std::string error;
+    return brace != std::string::npos && ReadLuaValue(text, brace, table, error) && table.isTable;
+  }
+
+  [[nodiscard]] std::string ValueText(const std::string& text, const LuaText& value)
+  {
+    return text.substr(value.start, value.end - value.start);
+  }
+
+  /**
+   * `original` with the keys the edit changed replaced. `w0` is the writer's text of the model read from `original`, `w1` its text of the edited model.
+   * Empty when the files' tables cannot be read (the caller then writes `w1`).
+   */
+  [[nodiscard]] std::string PatchBlueprintText(const std::string& original, const std::string& w0, const std::string& w1)
+  {
+    LuaText orig, base, edit;
+    if (!ReadBlueprintTable(original, orig) || !ReadBlueprintTable(w0, base) || !ReadBlueprintTable(w1, edit)) {
+      return {};
+    }
+    const bool crlf = original.find("\r\n") != std::string::npos;
+    const auto convert = [&](const std::string& value) {
+      if (!crlf) {
+        return value;
+      }
+      std::string out;
+      for (const char c : value) {
+        if (c == '\n') {
+          out += '\r';
+        }
+        out += c;
+      }
+      return out;
+    };
+    struct Edit
+    {
+      std::size_t from;
+      std::size_t to;
+      std::string text;
+    };
+    std::vector<Edit> edits;
+    std::string added;
+    for (const auto& [key, value] : edit.fields) {
+      const std::string now = ValueText(w1, value);
+      const LuaText* const was = base.Field(key);
+      if (was != nullptr && ValueText(w0, *was) == now) {
+        continue; // the writer says the same of it: it stays as the file has it
+      }
+      if (const LuaText* const there = orig.Field(key); there != nullptr) {
+        edits.push_back({there->start, there->end, convert(now)});
+      } else {
+        added += "\t" + key + " = " + convert(now) + (crlf ? ",\r\n" : ",\n");
+      }
+    }
+    std::string out = original;
+    if (!added.empty()) {
+      // before the closing brace's line (or at the brace, on a line of its own)
+      const std::size_t close = orig.end - 1;
+      std::size_t lineStart = original.rfind('\n', close);
+      lineStart = lineStart == std::string::npos ? 0 : lineStart + 1;
+      bool onlySpace = true;
+      for (std::size_t i = lineStart; i < close; ++i) {
+        onlySpace = onlySpace && std::isspace(static_cast<unsigned char>(original[i])) != 0;
+      }
+      const std::size_t at = onlySpace ? lineStart : close;
+      if (!onlySpace) {
+        added += crlf ? "\r\n" : "\n";
+      }
+      // the last field needs its comma
+      std::size_t last = at;
+      while (last > 0 && std::isspace(static_cast<unsigned char>(original[last - 1])) != 0) {
+        --last;
+      }
+      if (last > 0 && original[last - 1] != ',' && original[last - 1] != '{') {
+        edits.push_back({last, last, ","});
+      }
+      edits.push_back({at, at, added});
+    }
+    std::stable_sort(edits.begin(), edits.end(), [](const Edit& a, const Edit& b) { return a.from > b.from; });
+    for (const Edit& e : edits) {
+      out.replace(e.from, e.to - e.from, e.text);
+    }
+    return out;
+  }
+
+  /** The upstream tests' notion of the same emitter: settings and keys as the file keeps its numbers (two decimals, keys three). */
+  [[nodiscard]] bool SameEmitter(const EmitterBlueprint& a, const EmitterBlueprint& b)
+  {
+    if (a.blueprintId != b.blueprintId || a.texture != b.texture || a.rampTexture != b.rampTexture || a.flags != b.flags || a.lowFidelity != b.lowFidelity ||
+        a.medFidelity != b.medFidelity || a.highFidelity != b.highFidelity || a.extra != b.extra) {
+      return false;
+    }
+    const auto within = [](const float x, const float y, const float step) { return std::fabs(x - y) <= step * 0.51f; };
+    const float values[2][7] = {{a.lifetime, a.repeatTime, a.textureFrameCount, a.blendMode, a.lodCutoff, a.textureStripCount, a.sortOrder},
+                                {b.lifetime, b.repeatTime, b.textureFrameCount, b.blendMode, b.lodCutoff, b.textureStripCount, b.sortOrder}};
+    for (int i = 0; i < 7; ++i) {
+      if (!within(values[0][i], values[1][i], 0.01f)) {
+        return false;
+      }
+    }
+    for (int c = 0; c < kEmitterCurveCount; ++c) {
+      const EmitterCurve& x = a.curves[static_cast<std::size_t>(c)];
+      const EmitterCurve& y = b.curves[static_cast<std::size_t>(c)];
+      if (!within(x.xRange, y.xRange, 0.01f) || x.keys.size() != y.keys.size()) {
+        return false;
+      }
+      for (std::size_t k = 0; k < x.keys.size(); ++k) {
+        if (!within(x.keys[k].x, y.keys[k].x, 0.001f) || !within(x.keys[k].y, y.keys[k].y, 0.001f) || !within(x.keys[k].z, y.keys[k].z, 0.001f)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  [[nodiscard]] bool SameFlat(const FlatBlueprint& a, const FlatBlueprint& b)
+  {
+    if (a.kind != b.kind || a.fields.size() != b.fields.size()) {
+      return false;
+    }
+    for (std::size_t i = 0; i < a.fields.size(); ++i) {
+      const FlatValue& x = a.fields[i].second;
+      const FlatValue& y = b.fields[i].second;
+      if (a.fields[i].first != b.fields[i].first || x.kind != y.kind || std::fabs(x.number - y.number) > 0.0051f || x.flag != y.flag || x.text != y.text) {
+        return false;
+      }
+      for (std::size_t c = 0; c < 4; ++c) {
+        if (std::fabs(x.color[c] - y.color[c]) > 0.0051f) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /** The text of the edited emitter written into `original` (when there is one); `patched` says whether the file's own text was kept. */
+  [[nodiscard]] std::string WriteEmitterInto(const EmitterBlueprint& edited, const std::string& original, bool& patched)
+  {
+    patched = false;
+    const std::string plain = WriteEmitter(edited);
+    if (original.empty()) {
+      return plain;
+    }
+    EmitterBlueprint base;
+    std::string error;
+    if (!ParseEmitter(WithoutCr(original), base, error)) {
+      return plain;
+    }
+    const std::string text = PatchBlueprintText(original, WriteEmitter(base), plain);
+    EmitterBlueprint check;
+    if (text.empty() || !ParseEmitter(WithoutCr(text), check, error) || !SameEmitter(check, edited)) {
+      return plain;
+    }
+    patched = true;
+    return text;
+  }
+
+  [[nodiscard]] std::string WriteFlatInto(const FlatBlueprint& edited, const std::string& original, bool& patched)
+  {
+    patched = false;
+    const std::string plain = WriteFlatBlueprint(edited);
+    if (original.empty()) {
+      return plain;
+    }
+    FlatBlueprint base;
+    std::string error;
+    if (!ParseFlatBlueprint(WithoutCr(original), base, error)) {
+      return plain;
+    }
+    const std::string text = PatchBlueprintText(original, WriteFlatBlueprint(base), plain);
+    FlatBlueprint check;
+    if (text.empty() || !ParseFlatBlueprint(WithoutCr(text), check, error) || !SameFlat(check, edited)) {
+      return plain;
+    }
+    patched = true;
+    return text;
+  }
+
   int __cdecl cfunc_EmitterParse(lua_State* const L)
   {
     EmitterBlueprint emitter;
     std::string error;
-    if (!ParseEmitter(up::ArgString(L, 1, "ed_fx_emitter_parse"), emitter, error)) {
+    if (!ParseEmitter(WithoutCr(up::ArgString(L, 1, "ed_fx_emitter_parse")), emitter, error)) {
       return up::Fail(L, error);
     }
     PushEmitter(L, emitter);
@@ -325,40 +571,18 @@ namespace
 
   int __cdecl cfunc_EmitterWrite(lua_State* const L)
   {
-    const std::string text = WriteEmitter(ReadEmitter(L, 1));
+    bool patched = false;
+    const std::string original = lua_type(L, 2) == LUA_TSTRING ? std::string(lua_tostring(L, 2), lua_strlen(L, 2)) : std::string();
+    const std::string text = WriteEmitterInto(ReadEmitter(L, 1), original, patched);
     lua_pushlstring(L, text.data(), text.size());
-    return 1;
-  }
-
-  /** The two emitters hold the same (what upstream's tests call Same: every setting, texture, key and unknown key). */
-  [[nodiscard]] bool SameEmitter(const EmitterBlueprint& a, const EmitterBlueprint& b)
-  {
-    if (a.blueprintId != b.blueprintId || a.lifetime != b.lifetime || a.repeatTime != b.repeatTime || a.textureFrameCount != b.textureFrameCount ||
-        a.blendMode != b.blendMode || a.lodCutoff != b.lodCutoff || a.textureStripCount != b.textureStripCount || a.sortOrder != b.sortOrder ||
-        a.flags != b.flags || a.lowFidelity != b.lowFidelity || a.medFidelity != b.medFidelity || a.highFidelity != b.highFidelity ||
-        a.texture != b.texture || a.rampTexture != b.rampTexture || a.extra != b.extra) {
-      return false;
-    }
-    for (int i = 0; i < kEmitterCurveCount; ++i) {
-      const EmitterCurve& ca = a.curves[static_cast<std::size_t>(i)];
-      const EmitterCurve& cb = b.curves[static_cast<std::size_t>(i)];
-      if (ca.xRange != cb.xRange || ca.keys.size() != cb.keys.size()) {
-        return false;
-      }
-      for (std::size_t k = 0; k < ca.keys.size(); ++k) {
-        if (ca.keys[k].x != cb.keys[k].x || ca.keys[k].y != cb.keys[k].y || ca.keys[k].z != cb.keys[k].z) {
-          return false;
-        }
-      }
-    }
-    return true;
+    lua_pushboolean(L, patched ? 1 : 0);
+    return 2;
   }
 
   int __cdecl cfunc_EmitterRoundTrip(lua_State* const L)
   {
-    std::string text = up::ArgString(L, 1, "ed_fx_emitter_roundtrip");
-    // the files are read as text with LF (the game's own files have no CR: if one does, it is dropped before the comparison, as upstream's test does)
-    text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+    const std::string raw = up::ArgString(L, 1, "ed_fx_emitter_roundtrip");
+    const std::string text = WithoutCr(raw);
     EmitterBlueprint first;
     std::string error;
     lua_newtable(L);
@@ -367,11 +591,16 @@ namespace
       up::SetString(L, "error", error);
       return 1;
     }
+    // the writer's own text, read back (ok: the same emitter within the file's precision; identical: also the same bytes as the file, CRs aside)
     const std::string written = WriteEmitter(first);
     EmitterBlueprint second;
     const bool again = ParseEmitter(written, second, error);
     up::SetBool(L, "ok", again && SameEmitter(first, second));
     up::SetBool(L, "identical", written == text);
+    // the file written back through its own text: the bytes of the file, CRs and all
+    bool patched = false;
+    const std::string kept = WriteEmitterInto(first, raw, patched);
+    up::SetBool(L, "preserved", patched && kept == raw);
     if (!again) {
       up::SetString(L, "error", error);
     }
@@ -468,7 +697,7 @@ namespace
   {
     FlatBlueprint flat;
     std::string error;
-    if (!ParseFlatBlueprint(up::ArgString(L, 1, "ed_fx_flat_parse"), flat, error)) {
+    if (!ParseFlatBlueprint(WithoutCr(up::ArgString(L, 1, "ed_fx_flat_parse")), flat, error)) {
       return up::Fail(L, error);
     }
     lua_newtable(L);
@@ -508,8 +737,32 @@ namespace
 
   int __cdecl cfunc_FlatWrite(lua_State* const L)
   {
-    const std::string text = WriteFlatBlueprint(ReadFlat(L, 1));
+    bool patched = false;
+    const std::string original = lua_type(L, 2) == LUA_TSTRING ? std::string(lua_tostring(L, 2), lua_strlen(L, 2)) : std::string();
+    const std::string text = WriteFlatInto(ReadFlat(L, 1), original, patched);
     lua_pushlstring(L, text.data(), text.size());
+    lua_pushboolean(L, patched ? 1 : 0);
+    return 2;
+  }
+
+  int __cdecl cfunc_FlatRoundTrip(lua_State* const L)
+  {
+    const std::string raw = up::ArgString(L, 1, "ed_fx_flat_roundtrip");
+    FlatBlueprint first;
+    std::string error;
+    lua_newtable(L);
+    if (!ParseFlatBlueprint(WithoutCr(raw), first, error)) {
+      up::SetBool(L, "ok", false);
+      up::SetString(L, "error", error);
+      return 1;
+    }
+    const std::string written = WriteFlatBlueprint(first);
+    FlatBlueprint second;
+    up::SetBool(L, "ok", ParseFlatBlueprint(written, second, error) && SameFlat(first, second));
+    up::SetBool(L, "identical", written == WithoutCr(raw));
+    bool patched = false;
+    const std::string kept = WriteFlatInto(first, raw, patched);
+    up::SetBool(L, "preserved", patched && kept == raw);
     return 1;
   }
 
@@ -765,13 +1018,14 @@ namespace
     {"ed_fx_info", &cfunc_Info, "ed_fx_info() -> { curves, flags, blendModes, factions, kinds }"},
     {"ed_fx_emitter_new", &cfunc_EmitterNew, "ed_fx_emitter_new() -> emitter"},
     {"ed_fx_emitter_parse", &cfunc_EmitterParse, "ed_fx_emitter_parse(text) -> emitter | nil, message"},
-    {"ed_fx_emitter_write", &cfunc_EmitterWrite, "ed_fx_emitter_write(emitter) -> text"},
-    {"ed_fx_emitter_roundtrip", &cfunc_EmitterRoundTrip, "ed_fx_emitter_roundtrip(text) -> { ok, identical, error, written }"},
+    {"ed_fx_emitter_write", &cfunc_EmitterWrite, "ed_fx_emitter_write(emitter[, original]) -> text, patched"},
+    {"ed_fx_emitter_roundtrip", &cfunc_EmitterRoundTrip, "ed_fx_emitter_roundtrip(text) -> { ok, identical, preserved, error, written }"},
     {"ed_fx_emitter_type_tag", &cfunc_EmitterTypeTag, "ed_fx_emitter_type_tag(emitter) -> string"},
     {"ed_fx_curve_samples", &cfunc_CurveSamples, "ed_fx_curve_samples(keys, xRange, n) -> { mid, lo, hi }"},
     {"ed_fx_flat_info", &cfunc_FlatInfo, "ed_fx_flat_info(kind) -> { { key, kind, initial, color, help, texture }, ... }"},
     {"ed_fx_flat_parse", &cfunc_FlatParse, "ed_fx_flat_parse(text) -> flat | nil, message"},
-    {"ed_fx_flat_write", &cfunc_FlatWrite, "ed_fx_flat_write(flat) -> text"},
+    {"ed_fx_flat_write", &cfunc_FlatWrite, "ed_fx_flat_write(flat[, original]) -> text, patched"},
+    {"ed_fx_flat_roundtrip", &cfunc_FlatRoundTrip, "ed_fx_flat_roundtrip(text) -> { ok, identical, preserved }"},
     {"ed_fx_effect_class", &cfunc_EffectClass, "ed_fx_effect_class(path) -> factionIndex, kindIndex"},
     {"ed_fx_list_files", &cfunc_ListFiles, "ed_fx_list_files() -> { { path, name, faction, kind }, ... }"},
     {"ed_fx_templates", &cfunc_Templates, "ed_fx_templates(luaText) -> { { name, paths }, ... }"},
