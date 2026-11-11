@@ -24,7 +24,7 @@
 //   ed_fx_flat_write(flat[, original])    -> text, patched          (as ed_fx_emitter_write)
 //   ed_fx_flat_roundtrip(text)            -> { ok, identical, preserved, error }
 //   ed_fx_effect_class(path)              -> factionIndex, kindIndex     the browser's grouping of a game file name (0 = "all", index into ed_fx_info().factions / kinds, 0-based)
-//   ed_fx_list_files()                    -> { { path, name, faction, kind }, ... }     every /effects/**/*.bp of the game's file system, sorted by name
+//   ed_fx_list_files([roots])             -> { { path, name, faction, kind }, ... }     every /effects/**/*.bp of the game's file system and of the extra virtual folders `roots` names, sorted by name
 //   ed_fx_templates(luaText)              -> { { name, paths = { ... } }, ... }          the templates of an EffectTemplates.lua that are plain lists of emitter paths
 //   ed_fx_script_effects(script, on)      -> text         the map's _script.lua with the editor's MapEditorEffects function and its call in OnPopulate (on) or both taken out (off)
 //   ed_fx_graph_node_types()              -> { { name, title, category, help, output, inputs = { { name, type } }, outputs = { ... },
@@ -791,18 +791,35 @@ namespace
       std::string sortKey;
     };
     std::vector<Entry> entries;
-    if (moho::CVirtualFileSystem* const vfs = moho::DISK_GetVFS(); vfs != nullptr) {
-      fa::vector<fa::string> found;
-      vfs->EnumerateFiles("/effects", "*.bp", true, &found);
-      for (const fa::string& file : found) {
-        Entry entry;
-        entry.path = file.c_str();
-        entry.name = entry.path.substr(entry.path.find_last_of('/') + 1);
-        if (const std::size_t dot = entry.name.rfind(".bp"); dot != std::string::npos) {
-          entry.name.resize(dot);
+    // the game's /effects, and the folders the caller names (a mod project's `/mods/<name>/effects`, the map's own `effects`)
+    std::vector<std::string> roots{"/effects"};
+    if (lua_type(L, 1) == LUA_TTABLE) {
+      for (int i = 1;; ++i) {
+        lua_rawgeti(L, 1, i);
+        const int type = lua_type(L, -1);
+        if (type == LUA_TSTRING) {
+          roots.emplace_back(lua_tostring(L, -1), lua_strlen(L, -1));
         }
-        entry.sortKey = Lower(entry.name);
-        entries.push_back(std::move(entry));
+        lua_settop(L, -2);
+        if (type == LUA_TNIL) {
+          break;
+        }
+      }
+    }
+    if (moho::CVirtualFileSystem* const vfs = moho::DISK_GetVFS(); vfs != nullptr) {
+      for (const std::string& root : roots) {
+        fa::vector<fa::string> found;
+        vfs->EnumerateFiles(root.c_str(), "*.bp", true, &found);
+        for (const fa::string& file : found) {
+          Entry entry;
+          entry.path = file.c_str();
+          entry.name = entry.path.substr(entry.path.find_last_of('/') + 1);
+          if (const std::size_t dot = entry.name.rfind(".bp"); dot != std::string::npos) {
+            entry.name.resize(dot);
+          }
+          entry.sortKey = Lower(entry.name);
+          entries.push_back(std::move(entry));
+        }
       }
     }
     std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.sortKey < b.sortKey; });
@@ -1027,7 +1044,7 @@ namespace
     {"ed_fx_flat_write", &cfunc_FlatWrite, "ed_fx_flat_write(flat[, original]) -> text, patched"},
     {"ed_fx_flat_roundtrip", &cfunc_FlatRoundTrip, "ed_fx_flat_roundtrip(text) -> { ok, identical, preserved }"},
     {"ed_fx_effect_class", &cfunc_EffectClass, "ed_fx_effect_class(path) -> factionIndex, kindIndex"},
-    {"ed_fx_list_files", &cfunc_ListFiles, "ed_fx_list_files() -> { { path, name, faction, kind }, ... }"},
+    {"ed_fx_list_files", &cfunc_ListFiles, "ed_fx_list_files([roots]) -> { { path, name, faction, kind }, ... }"},
     {"ed_fx_templates", &cfunc_Templates, "ed_fx_templates(luaText) -> { { name, paths }, ... }"},
     {"ed_fx_graph_node_types", &cfunc_GraphNodeTypes, "ed_fx_graph_node_types() -> { { name, title, category, inputs, outputs, params }, ... }"},
     {"ed_fx_graph_build", &cfunc_GraphBuild, "ed_fx_graph_build(name, { { name, emitter }, ... }) -> graph"},

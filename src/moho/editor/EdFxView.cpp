@@ -4,9 +4,9 @@
 // (CD3DBatchTexture::FromFile hook, CD3DBatchTexture.h), so any Maui Bitmap of a panel or of a pop-out window shows it with `bitmap:SetTexture('/ed_dyn/fxview')`.
 // Direct3D 11 only, like the rest of the editor.
 //
-//   ed_fxv_view(opts)          -> info     opens / updates the viewport.  opts: pictureWidth, pictureHeight (the target, default 512 x 384), background (0 night, 1 grey, 2 sky, 3 black), ground, grid,
+//   ed_fxv_view(opts)          -> info     opens / updates the viewport.  opts: pictureWidth, pictureHeight (the target, default 1024 x 640: a Maui texture narrower than 1024 is copied once into the UI's texture atlas and never updated, one of 1024 or more is drawn from its own sheet), background (0 night, 1 grey, 2 sky, 3 black), ground, grid,
 //                                          height (the emitter above the ground), turn (the camera circles the effect), playing, loop, scale, show (true: render now)
-//   ed_fxv_view_close()                    stops rendering and forgets the texture
+//   ed_fxv_view_close()                    stops rendering and frees the render target (the texture object stays: panels hold it)
 //   ed_fxv_emitter(emitter[, restart])     the emitter the viewport plays (the Lua table of ed_fx_emitter_*); its curves and settings count from the next frame on
 //   ed_fxv_flat(flat[, restart])           a beam or trail instead
 //   ed_fxv_restart()                       starts over at tick 0 at a fresh spot (the particles already out live on beyond the view)
@@ -71,7 +71,11 @@ namespace
 
   // ---- the viewport's picture as a Maui texture ---------------------------------------------------------------------------------------------------
 
-  /** A B8G8R8A8 picture offered to Maui under a name; `Set` replaces the pixels (and the dynamic sheet's, when it exists). */
+  /**
+   * A B8G8R8A8 picture offered to Maui under a name; `Set` replaces the pixels (and the dynamic sheet's, when it exists). The picture must be 1024 wide or tall (or more):
+   * CD3DPrimBatcher::SetTexture packs smaller textures into the shared atlas once, by address, and never looks at them again; a texture of at least half the atlas (1024 of 2048)
+   * is drawn from its own sheet every frame.
+   */
   class CPictureTexture final : public moho::CD3DBatchTexture
   {
   public:
@@ -82,6 +86,7 @@ namespace
 
     void BuildTextureData(void* const destination, const std::uint32_t destinationPitchBytes) override
     {
+      ++mBuilds;
       auto* row = static_cast<std::uint8_t*>(destination);
       for (std::uint32_t y = 0; y < mHeight; ++y) {
         std::memcpy(row, &mPixels[static_cast<std::size_t>(y) * mWidth], static_cast<std::size_t>(mWidth) * 4u);
@@ -101,23 +106,34 @@ namespace
       for (std::uint32_t& pixel : mPixels) {
         pixel |= 0xFF000000u;
       }
+      ++mSets;
       if (mTextureSheet) {
         D3DLOCKED_RECT locked{};
         if (mTextureSheet->Lock(reinterpret_cast<std::uint32_t*>(&locked.Pitch), &locked.pBits)) {
           BuildTextureData(locked.pBits, static_cast<std::uint32_t>(locked.Pitch));
           (void)mTextureSheet->Unlock();
+          ++mUploads;
+        } else {
+          ++mLockFailures;
         }
       }
     }
+
+    std::uint32_t mBuilds = 0;      // times a dynamic sheet was filled (by the renderer or by Set)
+    std::uint32_t mSets = 0;        // pictures handed over
+    std::uint32_t mUploads = 0;     // of them written into the dynamic sheet
+    std::uint32_t mLockFailures = 0;
 
     std::vector<std::uint32_t> mPixels;
   };
 
   boost::shared_ptr<moho::CD3DBatchTexture> gPicture; // what the name resolves to (null when closed)
+  std::uint32_t gLookups = 0;
 
   boost::shared_ptr<moho::CD3DBatchTexture> LookupDynamic(const char* const name)
   {
     if (name != nullptr && std::strcmp(name, kTextureName) == 0) {
+      ++gLookups;
       return gPicture;
     }
     return {};
@@ -156,8 +172,8 @@ namespace
     bool turn = false;
     float scale = 1.0f;
     // the picture
-    int width = 512;
-    int height2 = 384;
+    int width = 1024;
+    int height2 = 640;
     // the camera
     float heading = 2.4f;
     float pitch = 0.45f;
@@ -180,8 +196,11 @@ namespace
     int stagingWidth = 0;
     int stagingHeight = 0;
 
-    [[nodiscard]] float PlaceX() const noexcept { return -6000.0f - 3000.0f * static_cast<float>(spot); }
-    [[nodiscard]] float PlaceZ() const noexcept { return -6000.0f; }
+    bool placeOverride = false; // test runs: the effect plays at (overrideX, overrideZ) instead of far off the map
+    float overrideX = 0.0f;
+    float overrideZ = 0.0f;
+    [[nodiscard]] float PlaceX() const noexcept { return placeOverride ? overrideX : -6000.0f - 3000.0f * static_cast<float>(spot); }
+    [[nodiscard]] float PlaceZ() const noexcept { return placeOverride ? overrideZ : -6000.0f; }
     [[nodiscard]] bool Active() const
     {
       return open && (shownAlways || std::chrono::steady_clock::now() - touched < std::chrono::milliseconds(1000));
@@ -443,6 +462,14 @@ namespace
 
   // ---- natives --------------------------------------------------------------------------------------------------------------------------------------
 
+  /** Whether t[key] is a number (the stack is left as it was). */
+  bool PushField2(lua_State* const L, const int index, const char* const key)
+  {
+    const bool is = up::PushField(L, index, key) == LUA_TNUMBER;
+    lua_settop(L, -2);
+    return is;
+  }
+
   void ApplyViewOptions(lua_State* const L, const int index, Viewport& v)
   {
     v.background = std::clamp(up::FieldInt(L, index, "background", v.background), 0, 3);
@@ -455,6 +482,13 @@ namespace
     v.preview.SetPlaying(up::FieldBool(L, index, "playing", true));
     v.preview.SetLoop(up::FieldBool(L, index, "loop", true));
     v.shownAlways = up::FieldBool(L, index, "show", v.shownAlways);
+    if (PushField2(L, index, "placeX")) {
+      v.placeOverride = true;
+      v.overrideX = static_cast<float>(up::FieldNumber(L, index, "placeX", 0.0));
+      v.overrideZ = static_cast<float>(up::FieldNumber(L, index, "placeZ", 0.0));
+    } else if (up::FieldBool(L, index, "placeFar", false)) {
+      v.placeOverride = false;
+    }
   }
 
   void PlaceViewPreview(Viewport& v)
@@ -467,7 +501,8 @@ namespace
     Viewport& v = View();
     const int width = std::clamp(up::FieldInt(L, 1, "pictureWidth", v.width), 64, 2048);
     const int height = std::clamp(up::FieldInt(L, 1, "pictureHeight", v.height2), 64, 2048);
-    if (!v.open || width != v.width || height != v.height2 || !gPicture) {
+    // The texture object is made once and kept (Maui bitmaps hold it: a new object would leave them showing a picture nobody updates); only another size makes a new one.
+    if (width != v.width || height != v.height2 || !gPicture) {
       v.width = width;
       v.height2 = height;
       gPicture.reset(new CPictureTexture(static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)));
@@ -488,7 +523,6 @@ namespace
     Viewport& v = View();
     v.open = false;
     v.shownAlways = false;
-    gPicture.reset();
     v.target.reset();
     v.depth.reset();
     v.staging.Reset();
@@ -572,6 +606,15 @@ namespace
     up::SetNumber(L, "height", v.height2);
     up::SetNumber(L, "lit", v.lit);
     up::SetBool(L, "texture", static_cast<bool>(gPicture));
+    if (const auto* const picture = static_cast<CPictureTexture*>(gPicture.get()); picture != nullptr) {
+      up::SetNumber(L, "pictures", picture->mSets);
+      up::SetNumber(L, "uploads", picture->mUploads);
+      up::SetNumber(L, "lockFailures", picture->mLockFailures);
+      up::SetNumber(L, "builds", picture->mBuilds);
+      up::SetBool(L, "sheet", static_cast<bool>(picture->mTextureSheet));
+      up::SetNumber(L, "lookups", gLookups);
+      up::SetNumber(L, "refs", static_cast<double>(gPicture.use_count()));
+    }
     up::SetNumber(L, "decorations", static_cast<double>(Decorations().size()));
     return 1;
   }
