@@ -42,6 +42,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <iterator>
@@ -49,6 +50,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -612,6 +614,8 @@ namespace
 
   bool WriteFile(const std::string& path, const std::vector<std::uint8_t>& bytes)
   {
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec); // like ed_write_file: the folders above the file are made
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     return static_cast<bool>(out);
