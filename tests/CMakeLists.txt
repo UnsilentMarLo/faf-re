@@ -338,68 +338,58 @@ set_target_properties(faf_occupation_manager_tests PROPERTIES FOLDER "Tests/Sim"
 add_test(NAME occupation_manager COMMAND faf_occupation_manager_tests)
 set_tests_properties(occupation_manager PROPERTIES LABELS "Sim")
 
-# The map editor height brush, symmetry check, height files and undo (src/editor/tools, src/editor/undo): exact symmetry,
-# byte-exact undo, height images read back as written.
+# The map editor's engine-independent logic (src/editor/{doc,tools,graph,undo}, built as faf_editor_logic by src/editor/logic.cmake): height brush, symmetry check,
+# height files, undo, save files, the vault, packages, presets, adaptive maps, particle emitters, texture graph ... Each test file checks one module of the library
+# (exact symmetry, byte-exact undo, files read back as written). The library carries the zlib, WIC, WinHTTP and CryptoAPI libraries the modules need.
+# EdWaterBodies is not in the library (it needs the engine's moho/sim/WaterBodies); this target compiles it with the engine's WaterBodies.cpp.
 add_executable(faf_editor_brush_tests EXCLUDE_FROM_ALL editor/HeightBrushTests.cpp editor/HeightHistoryTests.cpp editor/SymmetryCheckTests.cpp editor/HeightFileTests.cpp
-  editor/NewMapTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdNewMap.cpp
-  editor/MaskBrushTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdMaskBrush.cpp
-  editor/SaveFileTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdSaveFile.cpp
-  editor/MarkerTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdMarkers.cpp
-  editor/DecalShapeTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdDecalShape.cpp
-  editor/UnitTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdUnits.cpp
-  editor/UnitFateTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdUnitFate.cpp
-  editor/GroupOptionsTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdGroupOptions.cpp
-  editor/LuaSyntaxTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdLuaSyntax.cpp
-  editor/ViewStateTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdViewState.cpp
-  editor/AdaptiveModelTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdAdaptiveModel.cpp
-  editor/CheckTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdChecks.cpp
-  editor/ShaderSlotTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdShaderSlots.cpp
-  editor/NodeGraphTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/graph/EdNodeGraph.cpp
-  editor/EmitterTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdEmitter.cpp
-  editor/EffectGraphTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/graph/EdEffectGraph.cpp
-  editor/TextureGraphTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/graph/EdTextureGraph.cpp
-  editor/PathingTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdPathing.cpp
-  editor/PackageTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdPackage.cpp
-  editor/WaterPresetTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdWaterPreset.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdJson.cpp
-  editor/LightingTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdLighting.cpp
-  editor/MarkerPresetTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdMarkerPreset.cpp
-  editor/UnitPresetTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdUnitPreset.cpp
-  editor/LayerPresetTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdLayerPreset.cpp
-  editor/PropPaintTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdPropPaint.cpp
-  editor/SkyboxTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdSkybox.cpp
-  editor/WaveTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdWaves.cpp
-  editor/TerrainTypeTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdTerrainTypes.cpp
-  editor/ImageChunkTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdImageChunks.cpp
-  editor/ViewAidTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdViewAids.cpp
-  editor/ArmySlotTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdArmySlots.cpp
-  editor/AdaptiveTablesTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdAdaptiveTables.cpp
-  editor/RecentMapsTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdRecentMaps.cpp
-  editor/VaultTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdVault.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdHttp.cpp
-  editor/FafApiTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdFafApi.cpp
-  editor/WaterBodiesEditTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdWaterBodies.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdLuaText.cpp
-  ${CMAKE_SOURCE_DIR}/src/moho/sim/WaterBodies.cpp
-  ${CMAKE_SOURCE_DIR}/src/editor/tools/EdHeightBrush.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdSymmetryCheck.cpp
-  ${CMAKE_SOURCE_DIR}/src/editor/tools/EdHeightFile.cpp
-  ${CMAKE_SOURCE_DIR}/src/editor/undo/EdHeightHistory.cpp)
+  editor/NewMapTests.cpp
+  editor/MaskBrushTests.cpp
+  editor/SaveFileTests.cpp
+  editor/MarkerTests.cpp
+  editor/DecalShapeTests.cpp
+  editor/UnitTests.cpp
+  editor/UnitFateTests.cpp
+  editor/GroupOptionsTests.cpp
+  editor/LuaSyntaxTests.cpp
+  editor/ViewStateTests.cpp
+  editor/AdaptiveModelTests.cpp
+  editor/CheckTests.cpp
+  editor/ShaderSlotTests.cpp
+  editor/NodeGraphTests.cpp
+  editor/EmitterTests.cpp
+  editor/EffectGraphTests.cpp
+  editor/TextureGraphTests.cpp
+  editor/PathingTests.cpp
+  editor/PackageTests.cpp
+  editor/WaterPresetTests.cpp
+  editor/LightingTests.cpp
+  editor/MarkerPresetTests.cpp
+  editor/UnitPresetTests.cpp
+  editor/LayerPresetTests.cpp
+  editor/PropPaintTests.cpp
+  editor/SkyboxTests.cpp
+  editor/WaveTests.cpp
+  editor/TerrainTypeTests.cpp
+  editor/ImageChunkTests.cpp
+  editor/ViewAidTests.cpp
+  editor/ArmySlotTests.cpp
+  editor/AdaptiveTablesTests.cpp
+  editor/RecentMapsTests.cpp
+  editor/VaultTests.cpp
+  editor/FafApiTests.cpp
+  editor/WaterBodiesEditTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdWaterBodies.cpp
+  ${CMAKE_SOURCE_DIR}/src/moho/sim/WaterBodies.cpp)
 target_include_directories(faf_editor_brush_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-# The zlib the engine links: 1.2.3 on x64, wx's 1.1.4 on x86 (src/CMakeLists.txt); x86 has no zlib123 target.
-if(TARGET zlib123)
-  set(_faf_editor_tests_zlib zlib123)
-else()
-  set(_faf_editor_tests_zlib wx_zlib)
-  # As the engine: zlib 1.2.3's headers, wx's library (which has no include folder of its own to hand on).
-  target_include_directories(faf_editor_brush_tests PRIVATE "${FAF_DEPENDENCIES_DIR}/zlib-1.2.3")
-endif()
-target_link_libraries(faf_editor_brush_tests PRIVATE gtest_main ole32 windowscodecs ${_faf_editor_tests_zlib} winhttp crypt32 shell32)
+target_link_libraries(faf_editor_brush_tests PRIVATE faf_editor_logic gtest_main)
 set_target_properties(faf_editor_brush_tests PROPERTIES FOLDER "Tests/Editor")
 add_test(NAME editor_height_brush COMMAND faf_editor_brush_tests)
 set_tests_properties(editor_height_brush PROPERTIES LABELS "Editor")
 
 # The material editor's DDS files, read back by the engine's own decoder (so it links the engine).
-add_executable(faf_editor_bake_tests EXCLUDE_FROM_ALL editor/TextureBakeTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/graph/EdTextureBake.cpp
-  ${CMAKE_SOURCE_DIR}/src/editor/graph/EdTextureGraph.cpp ${CMAKE_SOURCE_DIR}/src/editor/graph/EdNodeGraph.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdJson.cpp)
+add_executable(faf_editor_bake_tests EXCLUDE_FROM_ALL editor/TextureBakeTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/graph/EdTextureBake.cpp)
 target_include_directories(faf_editor_bake_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(faf_editor_bake_tests PRIVATE faf_engine gtest_main)
+target_link_libraries(faf_editor_bake_tests PRIVATE faf_editor_logic faf_engine gtest_main)
 set_target_properties(faf_editor_bake_tests PROPERTIES FOLDER "Tests/Editor")
 add_test(NAME editor_texture_bake COMMAND faf_editor_bake_tests)
 set_tests_properties(editor_texture_bake PROPERTIES LABELS "Editor")
