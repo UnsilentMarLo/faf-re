@@ -347,6 +347,10 @@ namespace moho
     );
   }
 
+  // EDITOR: a texture the editor makes at run time and offers under a name (the particle editor's view, moho/editor/EdFxView.cpp: `/ed_dyn/fxview`). FromFile asks this
+  // first; it returns the texture for a name it owns and null for any other. Null (the default) in the game. Declared where it is used (a header would recompile the engine).
+  boost::shared_ptr<CD3DBatchTexture> (*sDynamicBatchTextureLookup)(const char* name) = nullptr;
+
   /**
    * Address: 0x004486F0 (FUN_004486F0, Moho::CD3DBatchTexture::FromFile)
    * Address: 0x0044DF30 (FUN_0044DF30, shared_ptr assignment helper lane)
@@ -357,6 +361,14 @@ namespace moho
   {
     boost::shared_ptr<CD3DBatchTexture> outTexture;
     const char* const normalizedPath = filename != nullptr ? filename : "";
+
+    // EDITOR: a texture the editor offers by name (sDynamicBatchTextureLookup above).
+    if (sDynamicBatchTextureLookup != nullptr) {
+      outTexture = sDynamicBatchTextureLookup(normalizedPath);
+      if (outTexture) {
+        return outTexture;
+      }
+    }
 
     std::lock_guard<std::recursive_mutex> scopedLock(sResourceLock);
 
