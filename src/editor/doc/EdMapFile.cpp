@@ -226,27 +226,36 @@ namespace faf::editor
 
       // The props, in CWldProps::Save's layout (0x00891D50): count, then each path with its NUL and 15
       // floats. An unchanged prop gets its stored record back, so saving leaves it bit for bit as it was.
+      // STUDIO: the scale lanes (the engine here keeps them per prop, CWldPropEntry::mScale: the editor edits them) are written from the entry, never from the
+      // stored record and never as 1: a scale edit survives the save, an unedited scale is the stored bits (the entry read them) and a new prop has its own.
       const auto& entries = map.mProps->mEntries;
       writer.Write(static_cast<std::int32_t>(entries.size()));
       for (std::size_t i = 0; i < entries.size(); ++i) {
         const moho::CWldPropEntry& entry = entries[i];
         writer.Write(entry.mBlueprintPath.c_str(), entry.mBlueprintPath.size() + 1u);
+        const auto writeScale = [&writer, &entry]() {
+          writer.Write(entry.mScale.x);
+          writer.Write(entry.mScale.y);
+          writer.Write(entry.mScale.z);
+        };
         if (i < props.size() && props[i].path == entry.mBlueprintPath.c_str() &&
             std::memcmp(&props[i].loaded, &entry.mTransform, sizeof(entry.mTransform)) == 0) {
-          for (const float value : props[i].values) {
-            writer.Write(value);
+          for (std::size_t value = 0; value < kPropFloats - 3; ++value) {
+            writer.Write(props[i].values[value]);
           }
+          writeScale();
           continue;
         }
-        // Moved but not turned: the new position with the rotation and scale floats as read.
+        // Moved but not turned: the new position with the rotation floats as read.
         if (i < props.size() && props[i].path == entry.mBlueprintPath.c_str() &&
             std::memcmp(&props[i].loaded.orient_, &entry.mTransform.orient_, sizeof(entry.mTransform.orient_)) == 0) {
           writer.Write(entry.mTransform.pos_.x);
           writer.Write(entry.mTransform.pos_.y);
           writer.Write(entry.mTransform.pos_.z);
-          for (std::size_t value = 3; value < kPropFloats; ++value) {
+          for (std::size_t value = 3; value < kPropFloats - 3; ++value) {
             writer.Write(props[i].values[value]);
           }
+          writeScale();
           continue;
         }
         writer.Write(entry.mTransform.pos_.x);
@@ -258,9 +267,7 @@ namespace faf::editor
           writer.Write(row->y);
           writer.Write(row->z);
         }
-        writer.Write(1.0f);
-        writer.Write(1.0f);
-        writer.Write(1.0f);
+        writeScale();
       }
       stream->VirtClose(gpg::Stream::ModeBoth);
       if (!preview || !terrain) {

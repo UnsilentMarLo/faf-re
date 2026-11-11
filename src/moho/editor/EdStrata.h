@@ -12,4 +12,10 @@ namespace moho::editor
 
   /** Replaces the whole mask of engine stratum 0..7 and uploads it; w x h must be the mask size. */
   bool StratumMaskWrite(int stratum, const std::uint8_t* data, int w, int h);
+
+  /**
+   * Counts the changes made to the stratum masks since the process started (a write, a resize). The exact map save (EdUpMapFileLua.cpp) compares it with the
+   * value it noted when the map was loaded: unchanged masks go back into the file as the file had them. Conservative: a write that stores the same bytes counts.
+   */
+  std::uint64_t StratumMaskRevision();
 } // namespace moho::editor

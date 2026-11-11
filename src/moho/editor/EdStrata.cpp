@@ -150,6 +150,7 @@ namespace
   };
 
   MaskShadow gShadow;
+  std::uint64_t gMaskRevision = 0;      // EDITOR: bumped by every change of a mask (StratumMaskRevision)
 
   moho::CD3DDynamicTextureSheet* MaskSheet(moho::StratumMaterial& m, const int which)
   {
@@ -345,6 +346,7 @@ namespace
           static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, value)));
       }
     }
+    ++gMaskRevision;
     if (lua_toboolean(L, 7) != 0) {
       gShadow.dirty[stratum / 4] = true;
     } else {
@@ -544,6 +546,7 @@ namespace
     for (int i = 0; i < 8; ++i) {
       lanes[i] = ResampleMask(gShadow.lane[i], sw, sh, tx, tz, w, h);
     }
+    ++gMaskRevision;
     AdoptMaskSheet(m.mStratumMask0, sheet0);
     AdoptMaskSheet(m.mStratumMask1, sheet1);
     m.mStratumMaskWidth = static_cast<std::uint32_t>(w);
@@ -623,7 +626,13 @@ namespace moho::editor
       return false;
     }
     gShadow.lane[stratum].assign(data, data + static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
+    ++gMaskRevision;
     UploadShadow(res, stratum / 4);
     return true;
+  }
+
+  std::uint64_t StratumMaskRevision()
+  {
+    return gMaskRevision;
   }
 } // namespace moho::editor
