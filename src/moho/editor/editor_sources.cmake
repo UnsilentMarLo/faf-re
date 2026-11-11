@@ -57,4 +57,5 @@ set(FAF_STUDIO_SOURCES
   # upstream's classic .scmap writer: needs CWldMap, so it is not in faf_editor_logic (src/editor/logic.cmake); compiled here, edits marked // STUDIO:
   editor/doc/EdMapFile.cpp
   moho/editor/EdUpVaultLua.cpp
+  moho/editor/EdUpAdaptiveLua.cpp
 )
