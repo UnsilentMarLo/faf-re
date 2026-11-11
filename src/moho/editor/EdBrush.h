@@ -1,4 +1,4 @@
-// EDITOR: the math of one round terrain brush dab (raise, lower, plateau, flatten, smooth, noise) on a grid of 16-bit height words.
+// EDITOR: the math of one round terrain brush dab (raise, lower, plateau, flatten, smooth, noise, terrace, plane) on a grid of 16-bit height words.
 //
 // This is a port of the sample loop of editor/runtime/lua/editor/terrain.lua (DabOne, Weight, Noise, BoxBlur) so a dab costs one native call
 // instead of a few ten thousand Lua operations. It is a header-only pure function (no engine types) so it can be tested on its own
@@ -148,6 +148,10 @@ namespace moho::editor::brush
     Flatten,
     Smooth,
     Noise,
+    /** Towards the nearest step of `Dab::step` (upstream's HeightBrushMode::Terrace, WP7). */
+    Terrace,
+    /** Towards the plane height = planeX * x + planeZ * z + planeC in words (upstream's HeightBrushMode::Plane, WP7). */
+    Plane,
   };
 
   /** Mode from the name terrain.lua uses; false for a mode this file does not do (the Lua path keeps it). */
@@ -164,6 +168,7 @@ namespace moho::editor::brush
     static const Entry kModes[] = {
       {"raise", Mode::Raise},   {"lower", Mode::Lower},   {"plateau", Mode::Plateau},
       {"flatten", Mode::Flatten}, {"smooth", Mode::Smooth}, {"noise", Mode::Noise},
+      {"terrace", Mode::Terrace}, {"plane", Mode::Plane},
     };
     for (const Entry& e : kModes) {
       if (std::strcmp(name, e.name) == 0) {
@@ -191,6 +196,11 @@ namespace moho::editor::brush
     float noiseRoughness = 0.5f;  // noise: the share of the amplitude the next octave keeps (0..1)
     const Shape* shape = nullptr;  // optional brush shape mask: replaces the round falloff profile (falloff is then unused)
     float shapeAngle = 0.0f;       // degrees the mask is turned (brushes.lua Angle + the stroke's random turn)
+    float step = 5.0f;             // terrace: the step height in world units (upstream's default is 640 words = 5 units)
+    bool planeSet = false;         // plane: the plane below is valid (a dab of the plane mode with it unset changes nothing)
+    double planeX = 0.0;           // plane: height words = planeX * x + planeZ * z + planeC at sample (x, z) (faf::editor::PlaneThrough makes them from three points)
+    double planeZ = 0.0;
+    double planeC = 0.0;
   };
 
   /** Inclusive sample window of a dab (what the Lua path read: one sample beyond the brush on every side), clamped to a width x height grid. */
@@ -400,6 +410,25 @@ namespace moho::editor::brush
     }
   } // namespace detail
 
+  /**
+   * The terrace and plane kernels of upstream's HeightBrush (src/editor/tools/EdHeightBrush.cpp, BrushedHeight): the height a sample is pulled towards. The pull itself is
+   * `old + (target - old) * k` as for flatten; k is min(1, strength * 0.2 * weight) here (upstream's blend is min(1, strength * 8 * seconds) times the weight).
+   * EdBrushUpTest compares both against ApplyHeightBrush.
+   */
+  [[nodiscard]] inline float TerraceTarget(const float old, const float stepWords)
+  {
+    const float step = std::max(1.0f, stepWords);
+    float t = old / step;
+    t = t + 0.5f;
+    t = std::floor(t);
+    return t * step;
+  }
+
+  [[nodiscard]] inline float PlaneTarget(const double planeX, const double planeZ, const double planeC, const int x, const int z)
+  {
+    return static_cast<float>(planeX * x + planeZ * z + planeC);
+  }
+
   /** The window a dab reads and may write, clamped to the grid (empty when the brush is off the map). */
   [[nodiscard]] inline Window WindowOf(const Dab& dab, const int gridWidth, const int gridHeight)
   {
@@ -551,6 +580,29 @@ namespace moho::editor::brush
           t = t * weight;
           t = t * word;
           value = old + t;
+          break;
+        }
+        case Mode::Terrace: {
+          // dir is ignored: "away from the nearest step" has no meaning
+          float s = strength * 0.2f;
+          s = s * weight;
+          const float k = std::min(1.0f, s);
+          const float target = TerraceTarget(old, dab.step * static_cast<float>(detail::kWord));
+          float pull = target - old;
+          pull = pull * k;
+          value = old + pull;
+          break;
+        }
+        case Mode::Plane: {
+          if (!dab.planeSet) {
+            break;
+          }
+          float s = strength * 0.2f;
+          s = s * weight;
+          const float k = std::min(1.0f, s);
+          float pull = PlaneTarget(dab.planeX, dab.planeZ, dab.planeC, x, z) - old;
+          pull = pull * k;
+          value = old + pull;
           break;
         }
         }

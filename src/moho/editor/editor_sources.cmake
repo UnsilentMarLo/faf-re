@@ -61,4 +61,5 @@ set(FAF_STUDIO_SOURCES
   moho/editor/EdUpAdaptiveLua.cpp
   # upstream's water bodies text logic: includes the engine's moho/sim/WaterBodies.h (the engine's own class, linked once in the exe), so it is not in faf_editor_logic
   editor/doc/EdWaterBodies.cpp
+  moho/editor/EdUpChecksLua.cpp
 )
