@@ -52,4 +52,7 @@ set(FAF_STUDIO_SOURCES
   moho/editor/EdMeshDraw.cpp
   moho/editor/EdMeshLua.cpp
   moho/editor/EdUpCore.cpp
+  moho/editor/EdUpMapFileLua.cpp
+  # upstream's classic .scmap writer: needs CWldMap, so it is not in faf_editor_logic (src/editor/logic.cmake); compiled here, edits marked // STUDIO:
+  editor/doc/EdMapFile.cpp
 )
