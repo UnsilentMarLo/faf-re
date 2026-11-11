@@ -46,6 +46,7 @@
 //     ed_wreck_value_of(bpText, buildMass, buildEnergy, underwater) -> { exists, mass, energy }
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <exception>
 #include <map>
@@ -652,24 +653,54 @@ namespace
     std::string text;
   };
 
-  /** A blueprint's build costs and `.bp` text, read once per id; null while the rules are not built (not cached then). */
-  const BlueprintFacts* FactsOf(const std::string& id)
+  /**
+   * A blueprint's build costs and `.bp` text, read once per id: from the kept rules when they are built (upstream's editor builds them), else from the Lua state's `__blueprints`
+   * (the editor session's blueprint table: Economy.BuildCostMass / BuildCostEnergy and Source, the file the blueprint came from). Null when neither knows the unit (and nothing is cached).
+   */
+  const BlueprintFacts* FactsOf(lua_State* const L, const std::string& id)
   {
     static std::map<std::string, BlueprintFacts> cache;
     if (const auto found = cache.find(id); found != cache.end()) {
       return &found->second;
     }
-    moho::RRuleGameRules* const rules = moho::RULE_PeekKept();
-    if (rules == nullptr) {
-      return nullptr;
-    }
     BlueprintFacts facts;
-    moho::RResId resId{};
-    resId.name.assign(id.c_str());
-    if (const moho::RUnitBlueprint* const blueprint = rules->GetUnitBlueprint(resId); blueprint != nullptr) {
-      facts.mass = blueprint->Economy.BuildCostMass;
-      facts.energy = blueprint->Economy.BuildCostEnergy;
-      facts.found = ReadGameText(blueprint->mSource.c_str(), facts.text);
+    bool known = false;
+    if (moho::RRuleGameRules* const rules = moho::RULE_PeekKept(); rules != nullptr) {
+      moho::RResId resId{};
+      resId.name.assign(id.c_str());
+      if (const moho::RUnitBlueprint* const blueprint = rules->GetUnitBlueprint(resId); blueprint != nullptr) {
+        facts.mass = blueprint->Economy.BuildCostMass;
+        facts.energy = blueprint->Economy.BuildCostEnergy;
+        facts.found = ReadGameText(blueprint->mSource.c_str(), facts.text);
+        known = true;
+      }
+    }
+    if (!known) {
+      lua_pushstring(L, "__blueprints");
+      lua_gettable(L, LUA_GLOBALSINDEX);
+      if (lua_type(L, -1) == LUA_TTABLE) {
+        const std::string lowerText = [&] { std::string t = id; std::transform(t.begin(), t.end(), t.begin(), [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); }); return t; }();
+        for (const std::string* const name : {&id, &lowerText}) {
+          if (known) {
+            break;
+          }
+          if (up::PushField(L, -1, name->c_str()) == LUA_TTABLE) {
+            const std::string source = up::FieldString(L, -1, "Source");
+            if (up::PushField(L, -1, "Economy") == LUA_TTABLE) {
+              facts.mass = up::FieldNumber(L, -1, "BuildCostMass");
+              facts.energy = up::FieldNumber(L, -1, "BuildCostEnergy");
+            }
+            lua_settop(L, -2); // Economy
+            facts.found = !source.empty() && ReadGameText(source, facts.text);
+            known = facts.found;
+          }
+          lua_settop(L, -2); // the blueprint
+        }
+      }
+      lua_settop(L, -2);
+    }
+    if (!known && moho::RULE_PeekKept() == nullptr) {
+      return nullptr;
     }
     return &cache.emplace(id, std::move(facts)).first->second;
   }
@@ -678,9 +709,9 @@ namespace
   {
     const std::string id = up::ArgString(L, 1, "ed_wreck_value");
     const bool underwater = lua_toboolean(L, 2) != 0;
-    const BlueprintFacts* const facts = FactsOf(id);
+    const BlueprintFacts* const facts = FactsOf(L, id);
     if (facts == nullptr) {
-      return up::Fail(L, "the rules are not built");
+      return up::Fail(L, "no blueprint " + id + " (the rules are not built and the Lua state has none)");
     }
     lua_newtable(L);
     up::SetBool(L, "known", facts->found);
