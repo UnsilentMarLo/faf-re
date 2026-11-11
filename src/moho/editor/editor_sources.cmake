@@ -56,9 +56,12 @@ set(FAF_STUDIO_SOURCES
   moho/editor/EdUpMapFileLua.cpp
   moho/editor/EdUpWaterLua.cpp
   moho/editor/EdUpFxLua.cpp
+  moho/editor/EdUpTexGraphLua.cpp
   moho/editor/EdFxView.cpp
   # upstream's particle preview: emits a blueprint into the game's world particles, no ImGui, compiled as it is
   editor/view/EdParticlePreview.cpp
+  # upstream's DDS encoder of the texture graph (DirectXTex + the engine's image codec, so it is not in faf_editor_logic; WP10)
+  editor/graph/EdTextureBake.cpp
   # upstream's classic .scmap writer: needs CWldMap, so it is not in faf_editor_logic (src/editor/logic.cmake); compiled here, edits marked // STUDIO:
   editor/doc/EdMapFile.cpp
   moho/editor/EdUpVaultLua.cpp
