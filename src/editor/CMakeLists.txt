@@ -7,6 +7,13 @@
 # The editor runs the game's own app (CScApp) inside its own (editor/EdApp.cpp), limited to
 # Direct3D 12 and Vulkan (moho::gAppRenderers); the other backends are linked but never created.
 
+# The FAF Studio editor (-DFAF_EDITOR=ON) is linked into the engine and fixes the renderer to Direct3D 11 (FAF_STUDIO_EDITOR in moho/app/CScApp.cpp); this
+# program, with its own main() and Direct3D 12 / Vulkan heads, cannot be built or run in that configuration. It stays in the FAF_EDITOR=OFF tree.
+if(FAF_EDITOR)
+  message(STATUS "faf_editor: not built with FAF_EDITOR=ON (the FAF Studio editor is part of the engine executable)")
+  return()
+endif()
+
 if(NOT TARGET faf_imgui)
   message(STATUS "faf_editor: Dear ImGui not found; the map editor is not built")
   return()

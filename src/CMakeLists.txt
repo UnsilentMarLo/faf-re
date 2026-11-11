@@ -21,6 +21,11 @@ set(FAF_OUTPUT_NAME "${_faf_default_name}" CACHE STRING "Engine executable name,
 
 add_library(faf_engine OBJECT ${FAF_ENGINE_SOURCES})
 
+# --- The editor's engine-independent logic ----------------------------------------------
+# faf_editor_logic: the pure translation units of src/editor/{doc,tools,graph,undo} as a static library (logic.cmake). The FAF Studio editor below and the
+# editor tests (tests/) link it; it is only built when one of them is.
+include(editor/logic.cmake)
+
 # --- The FAF Studio editor ------------------------------------------------------------
 # -DFAF_EDITOR=ON builds the map and mission editor into the executable: the translation
 # units of moho/editor (editor_sources.cmake), the FAF_STUDIO_EDITOR define the engine
@@ -32,6 +37,8 @@ if(FAF_EDITOR)
   target_sources(faf_engine PRIVATE ${FAF_STUDIO_SOURCES})
   target_compile_definitions(faf_engine PUBLIC FAF_STUDIO_EDITOR)
   target_link_libraries(faf_engine PUBLIC windowscodecs ole32 comdlg32 uuid)
+  # Upstream's engine-independent editor logic (src/editor/logic.cmake), bound to Lua by the EdUp*.cpp units of moho/editor.
+  target_link_libraries(faf_engine PUBLIC faf_editor_logic)
 endif()
 # The git commit for gpg/core/diagnostics/BuildInfo.cpp, read on every build.
 include(FafBuildInfo)
