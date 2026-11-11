@@ -52,4 +52,5 @@ set(FAF_STUDIO_SOURCES
   moho/editor/EdMeshDraw.cpp
   moho/editor/EdMeshLua.cpp
   moho/editor/EdUpCore.cpp
+  moho/editor/EdUpImportLua.cpp
 )
