@@ -127,14 +127,20 @@ namespace
     std::vector<std::uint32_t> mPixels;
   };
 
-  boost::shared_ptr<moho::CD3DBatchTexture> gPicture; // what the name resolves to (null when closed)
+  // Everything below that holds engine objects (textures, the particle renderer's textures) is allocated and never freed: a destructor at process exit would run after the engine's own
+  // teardown (the device, the texture caches) and crash it.
+  boost::shared_ptr<moho::CD3DBatchTexture>& Picture() // what the name resolves to (null before the first ed_fxv_view)
+  {
+    static auto* const picture = new boost::shared_ptr<moho::CD3DBatchTexture>();
+    return *picture;
+  }
   std::uint32_t gLookups = 0;
 
   boost::shared_ptr<moho::CD3DBatchTexture> LookupDynamic(const char* const name)
   {
     if (name != nullptr && std::strcmp(name, kTextureName) == 0) {
       ++gLookups;
-      return gPicture;
+      return Picture();
     }
     return {};
   }
@@ -209,8 +215,8 @@ namespace
 
   Viewport& View()
   {
-    static Viewport view;
-    return view;
+    static Viewport* const view = new Viewport();
+    return *view;
   }
 
   /** The picture of the render target, read back and given to the texture. */
@@ -252,7 +258,7 @@ namespace
     if (FAILED(ctx->Map(v.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
       return;
     }
-    if (auto* const picture = static_cast<CPictureTexture*>(gPicture.get()); picture != nullptr && picture->mWidth == static_cast<std::uint32_t>(v.width) &&
+    if (auto* const picture = static_cast<CPictureTexture*>(Picture().get()); picture != nullptr && picture->mWidth == static_cast<std::uint32_t>(v.width) &&
                                                                               picture->mHeight == static_cast<std::uint32_t>(v.height2)) {
       picture->Set(static_cast<const std::uint8_t*>(mapped.pData), mapped.RowPitch);
       const std::uint32_t background = Background(v.background);
@@ -376,21 +382,21 @@ namespace
 
   std::map<std::string, Decoration>& Decorations()
   {
-    static std::map<std::string, Decoration> list;
-    return list;
+    static auto* const list = new std::map<std::string, Decoration>();
+    return *list;
   }
 
   std::unique_ptr<EdParticlePreview>& TestPreview()
   {
-    static std::unique_ptr<EdParticlePreview> preview;
-    return preview;
+    static auto* const preview = new std::unique_ptr<EdParticlePreview>();
+    return *preview;
   }
 
   /** The game's emitter files already read: a path -> its parsed emitter (nullopt when it is no emitter: a beam, a missing file). */
   std::map<std::string, std::unique_ptr<EmitterBlueprint>>& EmitterCache()
   {
-    static std::map<std::string, std::unique_ptr<EmitterBlueprint>> cache;
-    return cache;
+    static auto* const cache = new std::map<std::string, std::unique_ptr<EmitterBlueprint>>();
+    return *cache;
   }
 
   const EmitterBlueprint* CachedEmitter(const std::string& path)
@@ -502,10 +508,10 @@ namespace
     const int width = std::clamp(up::FieldInt(L, 1, "pictureWidth", v.width), 64, 2048);
     const int height = std::clamp(up::FieldInt(L, 1, "pictureHeight", v.height2), 64, 2048);
     // The texture object is made once and kept (Maui bitmaps hold it: a new object would leave them showing a picture nobody updates); only another size makes a new one.
-    if (width != v.width || height != v.height2 || !gPicture) {
+    if (width != v.width || height != v.height2 || !Picture()) {
       v.width = width;
       v.height2 = height;
-      gPicture.reset(new CPictureTexture(static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)));
+      Picture().reset(new CPictureTexture(static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)));
     }
     ApplyViewOptions(L, 1, v);
     PlaceViewPreview(v);
@@ -605,15 +611,15 @@ namespace
     up::SetNumber(L, "width", v.width);
     up::SetNumber(L, "height", v.height2);
     up::SetNumber(L, "lit", v.lit);
-    up::SetBool(L, "texture", static_cast<bool>(gPicture));
-    if (const auto* const picture = static_cast<CPictureTexture*>(gPicture.get()); picture != nullptr) {
+    up::SetBool(L, "texture", static_cast<bool>(Picture()));
+    if (const auto* const picture = static_cast<CPictureTexture*>(Picture().get()); picture != nullptr) {
       up::SetNumber(L, "pictures", picture->mSets);
       up::SetNumber(L, "uploads", picture->mUploads);
       up::SetNumber(L, "lockFailures", picture->mLockFailures);
       up::SetNumber(L, "builds", picture->mBuilds);
       up::SetBool(L, "sheet", static_cast<bool>(picture->mTextureSheet));
       up::SetNumber(L, "lookups", gLookups);
-      up::SetNumber(L, "refs", static_cast<double>(gPicture.use_count()));
+      up::SetNumber(L, "refs", static_cast<double>(Picture().use_count()));
     }
     up::SetNumber(L, "decorations", static_cast<double>(Decorations().size()));
     return 1;
