@@ -426,6 +426,8 @@ namespace
    * lake gets its depth and shoreline as the sea does, and a dry body none. Only the texels
    * `RebuildWaterMapRect` would write are written, with the same packing.
    */
+  void MarkWaterHiResDirty(const moho::CWldTerrainRes* res, std::int32_t x0, std::int32_t z0, std::int32_t x1, std::int32_t z1);
+
   void RebuildWaterMapRectWithBodies(moho::CWldTerrainRes& terrainRes, const gpg::Rect2i& updateRect)
   {
     const moho::STIMap& map = *terrainRes.mMap;
@@ -434,6 +436,9 @@ namespace
     const std::int32_t halfZ0 = std::max(updateRect.z0, 0) >> 1;
     const std::int32_t halfX1 = std::min(updateRect.x1, field.width - 1) >> 1;
     const std::int32_t halfZ1 = std::min(updateRect.z1, field.height - 1) >> 1;
+    // EDITOR: the finer water map follows the same cells (it reads each cell's own water: FillWaterHiRes)
+    MarkWaterHiResDirty(&terrainRes, std::max(updateRect.x0, 0), std::max(updateRect.z0, 0), std::min(updateRect.x1, field.width - 1),
+                        std::min(updateRect.z1, field.height - 1));
     const auto halfMapWidth = static_cast<std::uint32_t>(static_cast<std::uint32_t>(field.width - 1) >> 1u);
     // The pixel buffer exists only between EnterEditMode and the end of the load; outside it
     // there is nothing to write into (the caller enters edit mode first).
@@ -494,6 +499,7 @@ namespace
     bool dirtyAll = true;
     bool dirty = false;
     std::int32_t x0 = 0, z0 = 0, x1 = 0, z1 = 0;   // dirty cells, inclusive
+    std::uint32_t bodies = 0;   // WaterBodiesGeneration the texels were made for (0: the sea only): other bodies, other levels, all texels again
   };
 
   std::unordered_map<const moho::CWldTerrainRes*, WaterHiRes> gWaterHiRes;
@@ -549,6 +555,9 @@ namespace
     const float waterElevation = map->mWaterEnabled != 0u ? map->mWaterElevation : kNoWaterElevation;
     const float waterAbyssElevation = map->mWaterEnabled != 0u ? map->mWaterElevationAbyss : kNoWaterElevation;
     const float depthDenominator = waterElevation - waterAbyssElevation;
+    // With water bodies every 2 x 2 cell block has the water of its own body (the sea's, a lake's, none for a dry body), as the half resolution map takes it
+    // (RebuildWaterMapRectWithBodies): the shore of a lake is where the ground crosses the lake's level, not the sea's.
+    const bool hasBodies = map->HasWaterBodies();
     const std::int32_t halfWidth = std::max(1, cellsX >> 1);
     const std::int32_t halfHeight = std::max(1, cellsZ >> 1);
 
@@ -571,6 +580,9 @@ namespace
       const float fz = z - static_cast<float>(iz);
       const std::int32_t halfZ = std::min(halfHeight - 1, iz >> 1);
       auto* const out = reinterpret_cast<std::uint32_t*>(bits + static_cast<std::size_t>(tz) * pitchBytes);
+      std::int32_t blockX = -1;
+      float level = waterElevation;
+      float denominator = depthDenominator;
       for (std::int32_t tx = tx0; tx <= tx1; ++tx) {
         const float x = (static_cast<float>(tx) + 0.5f) * inv;
         const std::int32_t ix = static_cast<std::int32_t>(std::floor(x));
@@ -580,14 +592,20 @@ namespace
         const float h01 = SampleTerrainHeightWordScaled(*field, ix, iz + 1);
         const float h11 = SampleTerrainHeightWordScaled(*field, ix + 1, iz + 1);
         const float h = (h00 * (1.0f - fx) + h10 * fx) * (1.0f - fz) + (h01 * (1.0f - fx) + h11 * fx) * fz;
-        float depthByte = ((waterElevation - h) / depthDenominator) * 255.0f;
+        const std::int32_t halfX = std::min(halfWidth - 1, ix >> 1);
+        if (hasBodies && halfX != blockX) {
+          blockX = halfX;
+          const moho::SWaterOfBlock water = moho::WaterOfBlock(*map, halfX * 2, halfZ * 2);
+          level = water.level;
+          denominator = water.level - water.abyss;
+        }
+        float depthByte = ((level - h) / denominator) * 255.0f;
         if (depthByte >= 255.0f) {
           depthByte = 255.0f;
         }
-        if (depthByte < 0.0f) {
+        if (!(depthByte > 0.0f)) {
           depthByte = 0.0f;
         }
-        const std::int32_t halfX = std::min(halfWidth - 1, ix >> 1);
         const std::size_t maskIndex = static_cast<std::size_t>(halfX) + static_cast<std::size_t>(halfZ) * static_cast<std::size_t>(halfWidth);
         std::uint32_t packed = 0;
         if (res.mWaterFoam != nullptr) {
@@ -597,7 +615,7 @@ namespace
           packed |= static_cast<std::uint32_t>(res.mWaterFlatness[maskIndex]) << 16u;
         }
         packed |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(depthByte)) << 8u;
-        if (h > waterElevation) {
+        if (h > level) {
           packed |= 0xFFu;
         }
         out[tx] = packed;
@@ -641,6 +659,10 @@ namespace
     }
     if (cellsX * k > 4096 || cellsZ * k > 4096 || cellsX < 2 || cellsZ < 2) {
       return {};    // a map this big keeps its half resolution water map
+    }
+    if (const std::uint32_t bodies = WaterBodiesGeneration(*res.mMap); bodies != st.bodies) {
+      st.bodies = bodies;
+      st.dirtyAll = true;
     }
     if (st.sheet.get() == nullptr || st.texelsPerCell != k) {
       moho::CD3DDevice* const device = moho::D3D_GetDevice();
@@ -3378,7 +3400,19 @@ namespace moho
     // 0x008A3D49: the water map is stored as a one-element sheet array.
     constexpr std::int32_t kWaterMapSheetCount = 1;
     writer.Write(kWaterMapSheetCount);
+    // EDITOR: a map with water bodies (ScenarioInfo.WaterBodies, put on the map by the editor) keeps the sea's water map in its file, as a map without bodies has it:
+    // the bodies are in the scenario and the game fills them again when the map loads. The sheet holds the bodies' depth and shore while they are on the map, so they
+    // are taken off for the write and put back after it.
+    std::unique_ptr<CWaterBodies> onTheMap;
+    if (map.HasWaterBodies() && mEditWordBuffer.begin != nullptr) {
+      onTheMap = std::move(map.mWaterBodies);
+      UpdateWaterMap();
+    }
     SaveTerrainSheetToArchive(writer, mWaterMapTexture.get(), kTerrainRawSheetFormat);
+    if (onTheMap) {
+      map.mWaterBodies = std::move(onTheMap);
+      UpdateWaterMap();
+    }
 
     // 0x008A3E90-0x008A3F2C: the three per-texel water byte planes are sized
     // from the water map's own dimensions.

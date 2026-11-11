@@ -54,8 +54,11 @@ set(FAF_STUDIO_SOURCES
   moho/editor/EdUpCore.cpp
   moho/editor/EdUpImportLua.cpp
   moho/editor/EdUpMapFileLua.cpp
+  moho/editor/EdUpWaterLua.cpp
   # upstream's classic .scmap writer: needs CWldMap, so it is not in faf_editor_logic (src/editor/logic.cmake); compiled here, edits marked // STUDIO:
   editor/doc/EdMapFile.cpp
   moho/editor/EdUpVaultLua.cpp
   moho/editor/EdUpAdaptiveLua.cpp
+  # upstream's water bodies text logic: includes the engine's moho/sim/WaterBodies.h (the engine's own class, linked once in the exe), so it is not in faf_editor_logic
+  editor/doc/EdWaterBodies.cpp
 )
