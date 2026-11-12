@@ -2165,6 +2165,18 @@ void moho::WIN_AppRequestExit()
 }
 
 /**
+ * Address: 0x004F25B0 (FUN_004F25B0, ?WIN_GetMainWindow@Moho@@YAPAVwxWindow@@XZ)
+ *
+ * What it does:
+ * Returns the
+ * process-global main-window owner pointer.
+ */
+wxWindow* moho::WIN_GetMainWindow()
+{
+  return sMainWindow;
+}
+
+/**
  * Address: 0x004F25C0 (FUN_004F25C0, ?WIN_SetMainWindow@Moho@@YAXPAVwxWindow@@@Z)
  *
  * What it does:

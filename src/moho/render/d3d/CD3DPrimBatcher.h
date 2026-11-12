@@ -148,6 +148,15 @@ namespace moho
     void DrawQuad(const Vertex& topLeft, const Vertex& topRight, const Vertex& bottomRight, const Vertex& bottomLeft);
 
     /**
+     * Address: 0x00438F50 (?DrawTri@CD3DPrimBatcher@Moho@@QAEXABUVertex@12@00@Z)
+     *
+     * What it does:
+     * Emits one textured/color triangle from three prebuilt vertices. (Upstream removed it as unused; the editor's
+     * UI clip cuts quads into triangles through it.)
+     */
+    void DrawTri(const Vertex& v0, const Vertex& v1, const Vertex& v2);
+
+    /**
      * Address: 0x00438DA0 (?DrawQuad@CD3DPrimBatcher@Moho@@QAEXABV?$Vector3@M@Wm3@@000I@Z)
      *
      * What it does:

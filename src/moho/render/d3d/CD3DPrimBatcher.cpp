@@ -659,6 +659,46 @@ namespace moho
     return true;
   }
 
+  /**
+   * Address: 0x00438F50 (?DrawTri@CD3DPrimBatcher@Moho@@QAEXABUVertex@12@00@Z)
+   *
+   * What it does:
+   * Emits
+   * one textured/color triangle and flushes first when mode/capacity lanes
+   * would overflow.
+   */
+  void CD3DPrimBatcher::DrawTri(
+    const Vertex& v0,
+    const Vertex& v1,
+    const Vertex& v2
+  )
+  {
+    auto* const runtime = this;
+
+    if (!runtime->mVertices.empty()) {
+      const std::uint32_t vertexCount = static_cast<std::uint32_t>(runtime->mVertices.size());
+      const std::uint32_t primitiveCount = static_cast<std::uint32_t>(runtime->mPrimitives.size());
+      if (
+        runtime->mMode != static_cast<std::uint32_t>(kTriangleListPrimitiveType) ||
+        (vertexCount + 3u) > kPrimQueueCapacity || (primitiveCount + 3u) > kPrimQueueCapacity
+      ) {
+        Flush();
+      }
+    }
+
+    runtime->mMode = static_cast<std::uint32_t>(kTriangleListPrimitiveType);
+
+    const std::uint16_t baseVertexIndex = static_cast<std::uint16_t>(runtime->mVertices.size());
+
+    AddVert(v0);
+    AddVert(v1);
+    AddVert(v2);
+
+    AppendPrimitiveIndex(*runtime, baseVertexIndex);
+    AppendPrimitiveIndex(*runtime, static_cast<std::uint16_t>(baseVertexIndex + 1u));
+    AppendPrimitiveIndex(*runtime, static_cast<std::uint16_t>(baseVertexIndex + 2u));
+  }
+
   void CD3DPrimBatcher::DrawQuadRaw(
     const Vertex& topLeft,
     const Vertex& topRight,
