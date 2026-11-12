@@ -486,7 +486,6 @@ namespace gpg
   // First exemplar of the RVectorType<T> family (22 element types). Vtable
   // @ 0x00E34778 (primary) / 0x00E347A8 (RIndexed subobject @ +0x64).
   // ---------------------------------------------------------------------------
-
 }
 
 namespace gpg
