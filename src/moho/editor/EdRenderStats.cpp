@@ -8,15 +8,9 @@
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/lua/CScrLuaInitForm.h"
 
-namespace moho
-{
-  bool ren_ShadowCache = true;
-  bool ren_ShadowCacheTrees = false;
-  int ren_ShadowCacheMaxAge = 300;
-  bool ren_WaterSkipDisabled = true;
-  bool ui_CullOffscreen = true;
-  bool ui_SkipTransparent = true;
-} // namespace moho
+// The six switches (ren_ShadowCache, ren_ShadowCacheTrees, ren_ShadowCacheMaxAge, ren_WaterSkipDisabled,
+// ui_CullOffscreen, ui_SkipTransparent) are defined by the engine (moho/app/EditorHooks.cpp), off;
+// moho::editor::InstallEngineHooks turns them on, and the console variables below point at them.
 
 namespace
 {

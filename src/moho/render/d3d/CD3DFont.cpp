@@ -25,7 +25,7 @@
 #include "gpg/gal/EffectTechnique.hpp"
 #include "gpg/gal/EffectVariable.hpp"
 #include "moho/console/CConCommand.h"
-#include "moho/editor/EdTextBackend.h"
+#include "moho/app/EditorHooks.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/d3d/CD3DEffectTechnique.h"
@@ -1535,7 +1535,7 @@ namespace moho
   )
   {
     const std::int32_t whole = static_cast<std::int32_t>(pointSize);
-    if (!edtext::IsEdFace(faceName) || static_cast<float>(whole) == pointSize) {
+    if (!ehook::text::IsEdFace(faceName) || static_cast<float>(whole) == pointSize) {
       return Create(whole, faceName);
     }
     return CreateScaled(-static_cast<std::int32_t>(std::lround(pointSize * 16.0f)), pointSize, faceName);
@@ -1561,8 +1561,8 @@ namespace moho
 
     // Editor: an `ed:` face goes through the DirectWrite backend; GDI still gets the plain family (it builds the
     // base metrics and is the fallback when edtext.dll is missing).
-    const bool edFace = edtext::IsEdFace(lookup.mFace.c_str());
-    const std::string gdiFace = edFace ? edtext::FamilyOf(lookup.mFace.c_str()) : lookup.mFace;
+    const bool edFace = ehook::text::IsEdFace(lookup.mFace.c_str());
+    const std::string gdiFace = edFace ? ehook::text::FamilyOf(lookup.mFace.c_str()) : lookup.mFace;
     // A mod's family never reaches GDI; its name means nothing there anyway, and its file was never loaded there.
     const bool isModFace = lookup.mFace.compare(0u, 4u, "mod:") == 0;
     const HFONT createdWin32Font = CreateFontA(
@@ -1594,7 +1594,7 @@ namespace moho
       float ascent = 0.0f;
       float descent = 0.0f;
       float lineGap = 0.0f;
-      createdFont->mEdBackend = edtext::Attach(lookup.mFace.c_str(), pixelSize, ascent, descent, lineGap);
+      createdFont->mEdBackend = ehook::text::Attach(lookup.mFace.c_str(), pixelSize, ascent, descent, lineGap);
       if (createdFont->mEdBackend != nullptr) {
         // Integer metrics keep Lua `Text.Height` / layout pixel aligned.
         createdFont->mAscent = std::round(ascent);
@@ -1739,7 +1739,7 @@ namespace moho
 
     // FUN_004272F0: the member-empty `operator=` release of the kerning vector.
     if (mEdBackend != nullptr) {
-      edtext::Destroy(mEdBackend);
+      ehook::text::Destroy(mEdBackend);
       mEdBackend = nullptr;
     }
     mKerningPairs = CD3DFont::KerningPairVector{};
@@ -1773,7 +1773,7 @@ namespace moho
   )
   {
     if (mEdBackend != nullptr) {
-      return edtext::GetCharInfo(mEdBackend, chText);
+      return ehook::text::GetCharInfo(mEdBackend, chText);
     }
 
     constexpr int kGlyphScratchWidth = 128;
@@ -2126,7 +2126,7 @@ namespace moho
   {
     PollModFont();
     if (mEdBackend != nullptr) {
-      return edtext::Render(mEdBackend, text, primBatcher, origin, xAxis, yAxis, color, maxAdvance);
+      return ehook::text::Render(mEdBackend, text, primBatcher, origin, xAxis, yAxis, color, maxAdvance);
     }
 
     Vector3f cursor = origin;
@@ -2197,7 +2197,7 @@ namespace moho
   {
     PollModFont();
     if (mEdBackend != nullptr) {
-      return edtext::GetAdvance(mEdBackend, text);
+      return ehook::text::GetAdvance(mEdBackend, text);
     }
 
     float advance = 0.0f;
@@ -2222,7 +2222,7 @@ namespace moho
   )
   {
     if (mEdBackend != nullptr) {
-      return edtext::GetNearestCharacterIndex(mEdBackend, text, targetAdvance);
+      return ehook::text::GetNearestCharacterIndex(mEdBackend, text, targetAdvance);
     }
 
     std::int32_t index = 0;

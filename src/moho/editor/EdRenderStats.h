@@ -21,15 +21,7 @@
 #include <chrono>
 #include <cstdint>
 
-namespace moho
-{
-  extern bool ren_ShadowCache;
-  extern bool ren_ShadowCacheTrees;
-  extern int ren_ShadowCacheMaxAge;
-  extern bool ren_WaterSkipDisabled;
-  extern bool ui_CullOffscreen;
-  extern bool ui_SkipTransparent;
-} // namespace moho
+#include "moho/app/EditorHooks.h" // the six switches ren_ShadowCache ... ui_SkipTransparent
 
 namespace moho::editor::renderstats
 {

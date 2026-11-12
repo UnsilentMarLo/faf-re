@@ -1,4 +1,5 @@
 #include "moho/ui/UiPrivate.h"
+#include "moho/app/EditorHooks.h"
 #include "moho/editor/EdUiClip.h"
 #include "moho/editor/EdUiCull.h"
 #include "moho/editor/EdRenderStats.h"
@@ -301,9 +302,9 @@ void moho::CMauiFrame::RenderChildControls(
   }
 
   // EDITOR: controls below a clipping control (EdUiClip.h) are drawn through the batcher's clip rectangle
-  const bool clipping = moho::editor::uiclip::Any();
+  const bool clipping = moho::ehook::uiclip::Any();
   if (clipping) {
-    moho::editor::uiclip::BeginFrame();
+    moho::ehook::uiclip::BeginFrame();
   }
 
   for (std::uint32_t childIndex = 0;; ++childIndex) {
@@ -328,7 +329,7 @@ void moho::CMauiFrame::RenderChildControls(
 
     if (clipping) {
       moho::editor::uiclip::Rect clip;
-      if (moho::editor::uiclip::EffectiveRect(childControl, clip)) {
+      if (moho::ehook::uiclip::EffectiveRect(childControl, clip)) {
         if (moho::editor::uiclip::Empty(clip)) {
           continue; // nothing of it can be seen: not even built
         }

@@ -46,7 +46,7 @@
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/resource/ResourceManager.h"
 #include "moho/core/Thread.h"
-#include "moho/editor/EdPerf.h"
+#include "moho/app/EditorHooks.h"
 
 #include "gpg/core/reflection/StaticInitPhase.h"
 #if FAFRE_PLATFORM_POSIX
@@ -2295,13 +2295,13 @@ void moho::WIN_AppExecute(
     // EDITOR: the frame rate cap (moho/editor/EdPerf.cpp, ed_fps_limit and friends). The original loop has no pacing at
     // all besides the swap chain's vsync. The wait is cut short by any window message: then the message is dispatched
     // first (this iteration ends here, `success` stays false) and the cap is asked again.
-    if (moho::editor::perf::ThrottleBeforeFrame(editorMainWindowHandle())) {
+    if (moho::ehook::perf::ThrottleBeforeFrame(editorMainWindowHandle())) {
       continue;
     }
 
-    moho::editor::perf::FrameBegin();
+    moho::ehook::perf::FrameBegin();
     app->Main();
-    moho::editor::perf::FrameEnd();
+    moho::ehook::perf::FrameEnd();
     success = true;
     acceptNewEvent = true;
 
@@ -2310,9 +2310,9 @@ void moho::WIN_AppExecute(
     const DWORD timeoutMs = ComputeWaitTimeoutMs();
     wakeupTimerDur = kInfiniteWakeupMs;
     // Engine addition: no paint message wakes this wait for a frame that draws without one.
-    const std::int64_t idleWaitStartNs = moho::editor::perf::NowNs();
+    const std::int64_t idleWaitStartNs = moho::ehook::perf::NowNs();
     WIN_GetWaitHandleSet()->MsgWaitEx(moho::D3D_IsDirectPaintPending() ? 0u : timeoutMs);
-    moho::editor::perf::NoteIdleWait(idleWaitStartNs);
+    moho::ehook::perf::NoteIdleWait(idleWaitStartNs);
   }
 
   app->Destroy();

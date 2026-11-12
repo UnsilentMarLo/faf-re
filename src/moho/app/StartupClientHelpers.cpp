@@ -56,7 +56,7 @@
 #include "gpg/core/reflection/Reflection.h"
 #include "lua/LuaTableIterator.h"
 #include "moho/app/WinApp.h"
-#include "moho/editor/EdLaunch.h"
+#include "moho/app/EditorHooks.h"
 #include "moho/app/WxRuntimeTypes.h"
 #include "moho/client/Localization.h"
 #include "moho/console/CConCommand.h"
@@ -2179,10 +2179,10 @@ bool moho::StartCommandLineSession(
     startCommandLineSession(effectiveMapName, isPerfTest);
     return true;
   } catch (const std::exception& exception) {
-    if (moho::editor::launch::Active()) {
+    if (moho::ehook::launch::Active()) {
       // Engine addition (editor): no modal box, which stopped the main loop until somebody clicked it (and looked like
       // a freeze); the error is logged, kept for ed_launch_error() and the start screen opens (moho/editor/EdLaunch.h).
-      moho::editor::launch::ReportFailure(effectiveMapName, exception.what());
+      moho::ehook::launch::ReportFailure(effectiveMapName, exception.what());
       return false;
     }
     const fa::string message = gpg::STR_Printf(
@@ -2191,8 +2191,8 @@ bool moho::StartCommandLineSession(
     WIN_OkBox("Ack!", message.c_str());
     return false;
   } catch (...) {
-    if (moho::editor::launch::Active()) {
-      moho::editor::launch::ReportFailure(effectiveMapName, "unknown error");
+    if (moho::ehook::launch::Active()) {
+      moho::ehook::launch::ReportFailure(effectiveMapName, "unknown error");
       return false;
     }
     const fa::string message = gpg::STR_Printf("Unable to launch %s:\nunknown error", effectiveMapName);

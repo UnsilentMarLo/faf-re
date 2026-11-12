@@ -2,9 +2,10 @@
 #include "gpg/gal/Error.hpp"
 #include "gpg/gal/DrawStatistics.h"
 #include "moho/editor/EdRenderStats.h"
-#include "moho/editor/EdFxaa.h"
+#include "moho/app/EditorHooks.h"
+#if defined(FAF_STUDIO_EDITOR)
 #include "moho/editor/EdIcon.h"
-#include "moho/editor/EdPopout.h"
+#endif
 #include "gpg/gal/PipelineDefer.h"
 #include "moho/app/NetworkPanel.h"
 #include "moho/app/WxPrivate.h"
@@ -1545,8 +1546,8 @@ void moho::WRenViewport::D3DWindowOnDeviceExit(
 
   mVisionRenderer.ResetRenderResources();
   mThumbnailRenderer.ReleaseTargets();
-  moho::edfxaa::ReleaseDeviceResources(); // EDITOR: ed_fxaa's off-screen scene target and quad (default pool: a Reset
-                                          // fails while they live)
+  moho::ehook::FxaaReleaseDeviceResources(); // EDITOR: ed_fxaa's off-screen scene target and quad (default pool: a
+                                             // Reset fails while they live)
 
   mBloomRenderers[0].ResetRenderTargets();
   mBloomRenderers[1].ResetRenderTargets();
@@ -1649,6 +1650,7 @@ void moho::WRenViewport::D3DWindowOnDeviceRender()
     }
   }
 
+#if defined(FAF_STUDIO_EDITOR)
   // EDITOR: unit icon pass (docs/projects/MOD_UNIT_EDITOR_DESIGN.md, S5). On request (ed_icon_request) the scene is
   // rendered twice through a throwaway camera into the top left of the window - terrain, sky, water, effects, UI and
   // bloom off, once cleared to black and once to white - and each picture is saved as a BMP the Lua side reads back
@@ -1770,6 +1772,7 @@ void moho::WRenViewport::D3DWindowOnDeviceRender()
     }
     moho::edicon::Complete(iconOk, iconMessage);
   }
+#endif // FAF_STUDIO_EDITOR (the icon pass)
 
   for (int head = 0; head < mNumHeads; ++head) {
     if (!onlyView.empty()) {
@@ -1787,7 +1790,7 @@ void moho::WRenViewport::D3DWindowOnDeviceRender()
   }
 
   // Editor: draw the pop-out panel windows (moho/editor/EdPopout.cpp) after the main frame's scene is closed.
-  moho::edpopout::RenderAll();
+  moho::ehook::PopoutRenderAll(); // EDITOR:
 
   ++moho::snd_index;
   gRenderLock = false;
@@ -1997,7 +2000,7 @@ namespace
   // on a map whose water is switched on. A map without water has its surface at -10000, under the terrain
   // (HighFidelityWater::RenderWaterSurface). ren_WaterSkipDisabled 0 brings every pass back. EDITOR: the FXAA scope of
   // the frame being drawn (Render creates it; RenderWorldView adds each view's rectangle to it).
-  moho::edfxaa::FrameScope* gEditorFxaaScope = nullptr;
+  moho::ehook::FxaaScope* gEditorFxaaScope = nullptr;
 
   [[nodiscard]] bool WaterPassesWanted()
   {
@@ -2629,12 +2632,12 @@ void moho::WRenViewport::Render(
   // EDITOR: ed_fxaa (EdFxaa.h). From here the head's render target is an off-screen scene target; fxaaScope.Resolve()
   // below copies it to the back buffer, smooths the world view rectangles and leaves the UI passes (DrawUI, RenderUI)
   // to draw on top, unfiltered. The icon pass needs hard edges against its matte colours: no FXAA there.
-  moho::edfxaa::FrameScope fxaaScope(device, head, !moho::edicon::gActive);
+  moho::ehook::FxaaScope fxaaScope(device, head, !moho::ehook::IconPassActive());
   gEditorFxaaScope = &fxaaScope;
 
   // EDITOR: the icon pass clears to black and to white (alpha matting); every other frame clears to 0 as in the binary.
   device->SetRenderTarget2(
-    mHead, true, moho::edicon::gActive ? static_cast<int>(moho::edicon::gClearArgb) : 0, 1.0f, 0
+    mHead, true, moho::ehook::IconPassActive() ? static_cast<int>(moho::ehook::IconClearArgb()) : 0, 1.0f, 0
   );
 
   if (uiManager != nullptr) {

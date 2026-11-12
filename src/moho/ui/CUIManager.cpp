@@ -3,7 +3,7 @@
 #include "gpg/core/profiling/Profiler.h"
 
 #include <Windows.h>
-#include "moho/editor/EdPerf.h"
+#include "moho/app/EditorHooks.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -652,9 +652,9 @@ void moho::CUIManager::UpdateFrameRate(
         // (the editor's modules and catalogs: est. tens to hundreds of ms). It runs when the heap grew by ed_ui_gc_kb
         // or after ed_gc_max_seconds, not every 5 s whatever happens (moho/editor/EdPerf.cpp; `ed_ui_gc_kb 0` = always,
         // as before). Lua's own threshold (heap doubled) stays in force.
-        if (moho::editor::perf::UiGcDue(lua_getgccount(mLuaState->m_state), 5.0f)) {
+        if (moho::ehook::perf::UiGcDue(lua_getgccount(mLuaState->m_state), 5.0f)) {
           lua_setgcthreshold(mLuaState->m_state, 0);
-          moho::editor::perf::UiGcDone(lua_getgccount(mLuaState->m_state));
+          moho::ehook::perf::UiGcDone(lua_getgccount(mLuaState->m_state));
         }
       }
     }

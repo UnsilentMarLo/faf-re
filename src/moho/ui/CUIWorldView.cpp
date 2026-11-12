@@ -13,7 +13,7 @@
 #include "moho/math/Wm3Queries.h"
 #include "moho/mesh/Mesh.h"
 #include "moho/render/ProjectileArcRenderer.h"
-#include "moho/editor/EdOverlay.h"
+#include "moho/app/EditorHooks.h"
 #include "moho/render/camera/CameraImpl.h"
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/d3d/CD3DPrimBatcher.h"
@@ -86,7 +86,7 @@ namespace moho
 
     // Editor addition: retained world-space line overlay (areas, brush ring, placement ghosts), main view only.
     if (!IsMiniMap()) {
-      edoverlay::Render(const_cast<GeomCamera3*>(&mCamera->CameraGetView()), batcher);
+      ehook::OverlayRender(const_cast<GeomCamera3*>(&mCamera->CameraGetView()), batcher);
     }
 
     if (UI_RenProjectileArcs) {

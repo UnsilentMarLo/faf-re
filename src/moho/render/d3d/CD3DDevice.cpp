@@ -51,7 +51,7 @@
 #include "moho/render/d3d/D3DSingletonCleanup.h"
 #include "moho/render/SParticleBuffer.h"
 #include "moho/render/WRenViewport.h"
-#include "moho/editor/EdPerf.h"
+#include "moho/app/EditorHooks.h"
 #include "moho/render/ID3DIndexSheet.h"
 #include "moho/render/ID3DDepthStencil.h"
 #include "moho/render/ID3DRenderTarget.h"
@@ -2015,21 +2015,21 @@ namespace moho
 
       const auto presentStart = std::chrono::steady_clock::now();
       const std::int64_t presentStartNs =
-        moho::editor::perf::NowNs(); // EDITOR: ed_perf_loop timing (moho/editor/EdPerf.cpp)
+        moho::ehook::perf::NowNs(); // EDITOR: ed_perf_loop timing (moho/editor/EdPerf.cpp)
       {
         FAF_PROFILE_ZONE_NAMED("Present");
         device->Present();
       }
-      moho::editor::perf::NotePresent(presentStartNs);
+      moho::ehook::perf::NotePresent(presentStartNs);
       sPresentSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - presentStart).count();
       (void)AddToStatCounter(EnsureEngineIntStat(sEngineStatRenderPresentCount, "Render_PresentCount"), 1);
 
       if (mClearEnabled != 0) {
         Clear();
       } else {
-        const std::int64_t renderStartNs = moho::editor::perf::NowNs();
+        const std::int64_t renderStartNs = moho::ehook::perf::NowNs();
         mViewport->D3DWindowOnDeviceRender();
-        moho::editor::perf::NoteRender(renderStartNs);
+        moho::ehook::perf::NoteRender(renderStartNs);
       }
     } catch (const gpg::gal::Error& error) {
       gpg::Warnf("%s(%d) %s", error.GetFile(), error.GetLine(), error.what());

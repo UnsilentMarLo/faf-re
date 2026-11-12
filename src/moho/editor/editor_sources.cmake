@@ -5,6 +5,7 @@ set(FAF_STUDIO_SOURCES
   moho/editor/MapDocument.cpp
   moho/editor/EditorDocument.cpp
   moho/editor/EdBootstrap.cpp
+  moho/editor/EdEngineHooks.cpp
   moho/editor/EdTextBackend.cpp
   moho/editor/EdPopout.cpp
   moho/editor/EdLaunch.cpp

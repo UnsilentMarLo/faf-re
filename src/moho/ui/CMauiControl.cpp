@@ -1,4 +1,5 @@
 #include "moho/ui/UiPrivate.h"
+#include "moho/app/EditorHooks.h"
 #include "moho/editor/EdUiClip.h"
 #include "moho/editor/EdUiCull.h"
 #include "moho/editor/EdRenderStats.h"
@@ -792,7 +793,7 @@ int moho::cfunc_CMauiControlSetClipChildrenL(
   LuaPlus::LuaObject controlObject(LuaPlus::LuaStackObject(state, 1));
   CMauiControl* const control = SCR_FromLua_CMauiControl(controlObject, state);
   LuaPlus::LuaStackObject onArg(state, 2);
-  moho::editor::uiclip::SetClipChildren(control, LuaPlus::LuaStackObject::GetBoolean(&onArg));
+  moho::ehook::uiclip::SetClipChildren(control, LuaPlus::LuaStackObject::GetBoolean(&onArg));
   control->Invalidate();
   return 0;
 }
@@ -831,7 +832,7 @@ int moho::cfunc_CMauiControlGetClipChildrenL(
 
   LuaPlus::LuaObject controlObject(LuaPlus::LuaStackObject(state, 1));
   CMauiControl* const control = SCR_FromLua_CMauiControl(controlObject, state);
-  lua_pushboolean(state->m_state, moho::editor::uiclip::GetClipChildren(control));
+  lua_pushboolean(state->m_state, moho::ehook::uiclip::GetClipChildren(control));
   return 1;
 }
 
@@ -2117,7 +2118,7 @@ moho::CMauiControl::~CMauiControl()
   // flag (kept in a side table, see SetCustomRender), so a control allocated
   // at the same address later does not inherit it.
   SetCustomRender(false);
-  moho::editor::uiclip::Forget(this); // EDITOR: the clip flag is kept in a side table (EdUiClip.h)
+  moho::ehook::uiclip::Forget(this); // EDITOR: the clip flag is kept in a side table (EdUiClip.h)
 
   // And drop any input-capture entry naming this control. The capture stack is
   // the hit-test root - ResolveTopInputCaptureControl feeds GetTopmostControl -
@@ -2722,7 +2723,7 @@ moho::CMauiControl* moho::CMauiControl::GetTopmostControl(
     if (controlCursor->IsHidden() || controlCursor->IsHitTestDisabled() || !controlCursor->HitTest(x, y)) {
       continue;
     }
-    if (!moho::editor::uiclip::PointVisible(controlCursor, x, y)) {
+    if (!moho::ehook::uiclip::PointVisible(controlCursor, x, y)) {
       continue; // EDITOR: cut away by a clipping ancestor (EdUiClip.h)
     }
 

@@ -24,7 +24,7 @@
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/DeviceContext.hpp"
 #include "gpg/gal/Error.hpp"
-#include "moho/editor/EdPopout.h"
+#include "moho/app/EditorHooks.h"
 #if FAFRE_PLATFORM_WINDOWS // the Direct3D 12 backend: Windows only (issue #255)
 #include "gpg/gal/backends/d3d12/DeviceD3D12.h"
 #endif
@@ -1627,7 +1627,7 @@ void CScApp::Main()
  */
 void CScApp::Destroy()
 {
-  moho::edpopout::DestroyAll(); // editor: pop-out windows hold swap chains and UI root frames; they must go first
+  moho::ehook::PopoutDestroyAll(); // EDITOR: pop-out windows hold swap chains and UI root frames; they must go first
   if (!::SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, usingScreensaver, nullptr, 0)) {
     gpg::Warnf("unable to reset screensaver");
   }

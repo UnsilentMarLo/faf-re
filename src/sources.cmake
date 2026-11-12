@@ -152,6 +152,7 @@ set(FAF_ENGINE_SOURCES
   moho/app/WSupComFrame.cpp
   moho/app/CBloomRenderer.cpp
   moho/app/WRenViewport.cpp
+  moho/app/EditorHooks.cpp
   moho/app/NetworkPanel.cpp
   moho/app/NetworkTray.cpp
   moho/app/WxUrl.cpp

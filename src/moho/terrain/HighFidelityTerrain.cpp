@@ -1,5 +1,5 @@
 #include "moho/terrain/HighFidelityTerrain.h"
-#include "moho/editor/EdMeshTerrain.h"
+#include "moho/app/EditorHooks.h"
 #include "gpg/core/utils/Logging.h"
 #include "moho/render/WRenViewport.h"
 #include "moho/terrain/SplatChunkRenderer.h"
@@ -681,7 +681,7 @@ namespace moho
 
     mCamera = camera;
     if (!minimapPass) {
-      edmesh::NoteCamera(*camera); // editor: picking rays against the mesh terrain
+      ehook::mesh::NoteCamera(*camera); // editor: picking rays against the mesh terrain
     }
     mViewportOriginX = viewportBlock[0];
     mViewportOriginY = viewportBlock[1];
@@ -1427,11 +1427,11 @@ namespace moho
 
     LoadShaderVars(terrainNormalTexture);
     // editor: a mesh terrain map (EdMeshTerrain) is drawn in place of (or over) the height field's surface
-    if (edmesh::MeshWanted()) {
-      if (edmesh::HeightFieldWanted()) {
+    if (ehook::mesh::MeshWanted()) {
+      if (ehook::mesh::HeightFieldWanted()) {
         DrawTriangles();
       }
-      if (!edmesh::DrawSurface(*mCamera, shadowContext, waterProperties) && !edmesh::HeightFieldWanted()) {
+      if (!ehook::mesh::DrawSurface(*mCamera, shadowContext, waterProperties) && !ehook::mesh::HeightFieldWanted()) {
         DrawTriangles();
       }
     } else {
@@ -1656,11 +1656,11 @@ namespace moho
     }
 
     // editor: the mesh terrain is the shadow caster of a mesh map
-    if (edmesh::MeshWanted()) {
-      if (edmesh::HeightFieldWanted()) {
+    if (ehook::mesh::MeshWanted()) {
+      if (ehook::mesh::HeightFieldWanted()) {
         DrawTriangles();
       }
-      if (!edmesh::DrawDepth(camera) && !edmesh::HeightFieldWanted()) {
+      if (!ehook::mesh::DrawDepth(camera) && !ehook::mesh::HeightFieldWanted()) {
         DrawTriangles();
       }
       return;
@@ -1682,7 +1682,7 @@ namespace moho
       return;
     }
     // editor: no height field skirt around a mesh terrain
-    if (edmesh::MeshWanted() && !edmesh::HeightFieldWanted()) {
+    if (ehook::mesh::MeshWanted() && !ehook::mesh::HeightFieldWanted()) {
       return;
     }
 
