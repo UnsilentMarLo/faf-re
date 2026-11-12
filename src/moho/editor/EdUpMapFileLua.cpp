@@ -160,11 +160,18 @@ namespace
       water.deep = terrain.mMap->mWaterElevationDeep;
       water.abyss = terrain.mMap->mWaterElevationAbyss;
     }
-    Wm3::Vector3f size{};
-    if (terrain.mWaterMapTexture.get() != nullptr) {
-      (void)terrain.mWaterMapTexture->GetDimensions(&size);
+    // The three planes are allocated at half the height field's resolution, (width - 1) >> 1 by (height - 1) >> 1
+    // (CWldTerrainRes::CreateWaterMasks, as the loader and the editor's blank map call it). The water map TEXTURE's
+    // dimensions are not that size on every map, and hashing past the allocation was an access violation (nightly
+    // 2026-11-12, map 1.v0001, ed_mapfile_capture).
+    std::size_t bytes = 0;
+    if (terrain.mMap != nullptr && terrain.mMap->mHeightField.get() != nullptr) {
+      const std::int32_t planeWidth = (terrain.mMap->mHeightField.get()->width - 1) >> 1;
+      const std::int32_t planeHeight = (terrain.mMap->mHeightField.get()->height - 1) >> 1;
+      if (planeWidth > 0 && planeHeight > 0) {
+        bytes = static_cast<std::size_t>(planeWidth) * static_cast<std::size_t>(planeHeight);
+      }
     }
-    const std::size_t bytes = static_cast<std::size_t>(static_cast<std::int32_t>(size.x * size.y));
     std::uint64_t hash = 14695981039346656037ULL;
     for (std::uint8_t* const plane :
          {terrain.GetWaterFoam(), terrain.GetWaterFlatness(), terrain.GetWaterDepthBias()}) {
