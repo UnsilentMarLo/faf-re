@@ -28,7 +28,9 @@ namespace moho::editor::uiclip
       return map;
     }
 
-    Rect RectOf(const CMauiControl* const control)
+    Rect RectOf(
+      const CMauiControl* const control
+    )
     {
       CMauiControl* const c = const_cast<CMauiControl*>(control);
       Rect r;
@@ -40,7 +42,10 @@ namespace moho::editor::uiclip
     }
 
     // what cuts the drawing of `control`: its parent's clip plus the parent's own rectangle when the parent clips
-    Memo Work(const CMauiControl* const control, const bool remember)
+    Memo Work(
+      const CMauiControl* const control,
+      const bool remember
+    )
     {
       const CMauiControl* const parent = control != nullptr ? control->mParent : nullptr;
       if (parent == nullptr) {
@@ -65,7 +70,10 @@ namespace moho::editor::uiclip
     }
   } // namespace
 
-  void SetClipChildren(const CMauiControl* const control, const bool on)
+  void SetClipChildren(
+    const CMauiControl* const control,
+    const bool on
+  )
   {
     if (control == nullptr) {
       return;
@@ -78,12 +86,16 @@ namespace moho::editor::uiclip
     Memos().clear();
   }
 
-  bool GetClipChildren(const CMauiControl* const control)
+  bool GetClipChildren(
+    const CMauiControl* const control
+  )
   {
     return Clippers().count(control) != 0u;
   }
 
-  void Forget(const CMauiControl* const control)
+  void Forget(
+    const CMauiControl* const control
+  )
   {
     if (Clippers().empty()) {
       return;
@@ -105,7 +117,10 @@ namespace moho::editor::uiclip
     }
   }
 
-  bool EffectiveRect(const CMauiControl* const control, Rect& out)
+  bool EffectiveRect(
+    const CMauiControl* const control,
+    Rect& out
+  )
   {
     if (Clippers().empty()) {
       return false;
@@ -117,7 +132,11 @@ namespace moho::editor::uiclip
     return m.clipped;
   }
 
-  bool PointVisible(const CMauiControl* const control, const float x, const float y)
+  bool PointVisible(
+    const CMauiControl* const control,
+    const float x,
+    const float y
+  )
   {
     if (Clippers().empty()) {
       return true;

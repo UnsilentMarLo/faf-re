@@ -10,15 +10,15 @@ namespace on = moho::editor::overlaynodes;
 
 static int gFailures = 0;
 static int gChecks = 0;
-#define CHECK(cond, ...)                               \
-  do {                                                 \
-    ++gChecks;                                         \
-    if (!(cond)) {                                     \
-      ++gFailures;                                     \
-      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-      std::printf(__VA_ARGS__);                        \
-      std::printf("\n");                               \
-    }                                                  \
+#define CHECK(cond, ...)                                                                                               \
+  do {                                                                                                                 \
+    ++gChecks;                                                                                                         \
+    if (!(cond)) {                                                                                                     \
+      ++gFailures;                                                                                                     \
+      std::printf("FAIL %s:%d: ", __FILE__, __LINE__);                                                                 \
+      std::printf(__VA_ARGS__);                                                                                        \
+      std::printf("\n");                                                                                               \
+    }                                                                                                                  \
   } while (0)
 
 int main()
@@ -43,9 +43,13 @@ int main()
     CHECK(ok && cells == 20, "runs cover all 20 cells");
   }
   {
-    std::vector<std::uint8_t> v(20 * 2, 255);   // 19 cells in one row: runs of at most 8
+    std::vector<std::uint8_t> v(20 * 2, 255); // 19 cells in one row: runs of at most 8
     on::CollectRuns(v.data(), 20, 2, 255, runs);
-    CHECK(runs.size() == 3 && runs[0].len == 8 && runs[1].len == 8 && runs[2].len == 3, "long rows are cut (%zu runs)", runs.size());
+    CHECK(
+      runs.size() == 3 && runs[0].len == 8 && runs[1].len == 8 && runs[2].len == 3,
+      "long rows are cut (%zu runs)",
+      runs.size()
+    );
   }
   {
     // one node set: the four cells around it are drawn (their corners differ), the rest is not
@@ -54,13 +58,14 @@ int main()
     on::CollectRuns(v.data(), 5, 5, 200, runs);
     CHECK(runs.size() == 4, "a single node touches four cells (%zu)", runs.size());
     bool ok = true;
-    for (const auto& r : runs) ok = ok && r.len == 1 && r.i >= 1 && r.i <= 2 && r.j >= 1 && r.j <= 2;
+    for (const auto& r : runs)
+      ok = ok && r.len == 1 && r.i >= 1 && r.i <= 2 && r.j >= 1 && r.j <= 2;
     CHECK(ok, "and those are the cells around it");
   }
   {
     // an alpha that rounds to zero draws nothing
     std::vector<std::uint8_t> v(4 * 4, 1);
-    on::CollectRuns(v.data(), 4, 4, 100, runs);   // 1 * 100 / 255 = 0
+    on::CollectRuns(v.data(), 4, 4, 100, runs); // 1 * 100 / 255 = 0
     CHECK(runs.empty(), "alpha 0 after scaling is skipped");
     on::CollectRuns(v.data(), 4, 4, 0, runs);
     CHECK(runs.empty(), "max alpha 0 draws nothing");
@@ -68,10 +73,14 @@ int main()
   {
     // a fade (different corner alphas) is never merged
     std::vector<std::uint8_t> v(4 * 2);
-    for (int i = 0; i < 4; ++i) { v[i] = static_cast<std::uint8_t>(i * 60); v[4 + i] = static_cast<std::uint8_t>(i * 60); }
+    for (int i = 0; i < 4; ++i) {
+      v[i] = static_cast<std::uint8_t>(i * 60);
+      v[4 + i] = static_cast<std::uint8_t>(i * 60);
+    }
     on::CollectRuns(v.data(), 4, 2, 255, runs);
     bool ok = !runs.empty();
-    for (const auto& r : runs) ok = ok && r.len == 1;
+    for (const auto& r : runs)
+      ok = ok && r.len == 1;
     CHECK(ok, "a gradient keeps its cells");
   }
   std::printf("EdOverlayNodesTest: %d checks, %d failures\n", gChecks, gFailures);

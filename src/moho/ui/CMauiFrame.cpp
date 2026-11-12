@@ -61,7 +61,7 @@ namespace
     *destination = owner;
     return destination;
   }
-}
+} // namespace
 
 gpg::RType* moho::CMauiFrame::sType = nullptr;
 
@@ -330,11 +330,19 @@ void moho::CMauiFrame::RenderChildControls(
       moho::editor::uiclip::Rect clip;
       if (moho::editor::uiclip::EffectiveRect(childControl, clip)) {
         if (moho::editor::uiclip::Empty(clip)) {
-          continue;          // nothing of it can be seen: not even built
+          continue; // nothing of it can be seen: not even built
         }
-        // a control that lies completely outside its clip rectangle (a scrolled-away row; 64 px of margin for borders and shadows) is not built, not queued, its texture not put into the atlas
-        if (moho::editor::uiclip::Outside(clip, CScriptLazyVar_float::GetValue(&childControl->mLeftLV) - 64.0f, CScriptLazyVar_float::GetValue(&childControl->mTopLV) - 64.0f,
-                                          CScriptLazyVar_float::GetValue(&childControl->mRightLV) + 64.0f, CScriptLazyVar_float::GetValue(&childControl->mBottomLV) + 64.0f)) {
+        // a control that lies completely outside its clip rectangle (a scrolled-away row; 64 px of margin for borders
+        // and shadows) is not built, not queued, its texture not put into the atlas
+        if (
+          moho::editor::uiclip::Outside(
+            clip,
+            CScriptLazyVar_float::GetValue(&childControl->mLeftLV) - 64.0f,
+            CScriptLazyVar_float::GetValue(&childControl->mTopLV) - 64.0f,
+            CScriptLazyVar_float::GetValue(&childControl->mRightLV) + 64.0f,
+            CScriptLazyVar_float::GetValue(&childControl->mBottomLV) + 64.0f
+          )
+        ) {
           continue;
         }
         primBatcher->SetClipRect(clip.left, clip.top, clip.right, clip.bottom);
@@ -430,8 +438,7 @@ void moho::CMauiFrame::PurgeDeleted()
     return;
   }
 
-  auto* const deletedListHead =
-    static_cast<CMauiControlListNode*>(&mDeletedControlList);
+  auto* const deletedListHead = static_cast<CMauiControlListNode*>(&mDeletedControlList);
   while (deletedListHead->mNext != deletedListHead) {
     CMauiControlListNode* const deletedNode = deletedListHead->mPrev;
     deletedNode->ListUnlink();
@@ -453,8 +460,7 @@ float moho::CMauiFrame::GetTopmostDepth()
   float topmostDepth = gpg::nInf;
   for (CMauiControl* controlCursor = DepthFirstSuccessor(this); controlCursor != nullptr;
        controlCursor = controlCursor->DepthFirstSuccessor(this)) {
-    const float controlDepth =
-      CScriptLazyVar_float::GetValue(&controlCursor->mDepthLV);
+    const float controlDepth = CScriptLazyVar_float::GetValue(&controlCursor->mDepthLV);
     if (topmostDepth <= controlDepth) {
       topmostDepth = controlDepth;
     }
@@ -485,9 +491,7 @@ void moho::CMauiFrame::DumpGraph()
 void moho::CMauiFrame::Dump()
 {
   CMauiControl::Dump();
-  gpg::Logf(
-    "Root Frame, head=%p\n", static_cast<const void*>(mEventHandler)
-  );
+  gpg::Logf("Root Frame, head=%p\n", static_cast<const void*>(mEventHandler));
 }
 
 /**

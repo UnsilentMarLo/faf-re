@@ -1,8 +1,10 @@
-// Stand-alone test of the Fields panel's "Generate" ops (EdFieldLand.cpp: fractal, amplitude, terrain_mix, keep_side) and of the `rotate` option of the core noise ops (no engine needed).
+// Stand-alone test of the Fields panel's "Generate" ops (EdFieldLand.cpp: fractal, amplitude, terrain_mix, keep_side)
+// and of the `rotate` option of the core noise ops (no engine needed).
 //   build + run: python scripts/ed_native_tests.py
 //   EdLandTest.exe
-// Property tests only (no golden checksums): bit identical results for any thread count, the exact size of an `amplitude` result, the maths of terrain_mix (blend modes, strength, mask)
-// and keep_side (water level), noise that depends on the world position only, and the absence of the lattice artefacts that `rotate` removes.
+// Property tests only (no golden checksums): bit identical results for any thread count, the exact size of an
+// `amplitude` result, the maths of terrain_mix (blend modes, strength, mask) and keep_side (water level), noise that
+// depends on the world position only, and the absence of the lattice artefacts that `rotate` removes.
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -17,20 +19,26 @@
 using namespace moho::editor::field;
 
 static int gFailures = 0;
-#define CHECK(cond, ...)                               \
-  do {                                                 \
-    if (!(cond)) {                                     \
-      ++gFailures;                                     \
-      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-      std::printf(__VA_ARGS__);                        \
-      std::printf("\n");                               \
-    }                                                  \
+#define CHECK(cond, ...)                                                                                               \
+  do {                                                                                                                 \
+    if (!(cond)) {                                                                                                     \
+      ++gFailures;                                                                                                     \
+      std::printf("FAIL %s:%d: ", __FILE__, __LINE__);                                                                 \
+      std::printf(__VA_ARGS__);                                                                                        \
+      std::printf("\n");                                                                                               \
+    }                                                                                                                  \
   } while (0)
 
 using Num = std::map<std::string, double>;
 using Str = std::map<std::string, std::string>;
 
-static GridPtr Run(const std::string& op, const Num& nums, const Str& strs = {}, const std::map<std::string, GridPtr>& in = {}, std::string* errOut = nullptr)
+static GridPtr Run(
+  const std::string& op,
+  const Num& nums,
+  const Str& strs = {},
+  const std::map<std::string, GridPtr>& in = {},
+  std::string* errOut = nullptr
+)
 {
   OpArgs a;
   a.p.num = nums;
@@ -39,19 +47,29 @@ static GridPtr Run(const std::string& op, const Num& nums, const Str& strs = {},
   auto g = std::make_shared<Grid>();
   std::string err;
   if (!RunOp(op, a, *g, err)) {
-    if (errOut != nullptr) *errOut = err;
-    else std::printf("op %s failed: %s\n", op.c_str(), err.c_str());
+    if (errOut != nullptr)
+      *errOut = err;
+    else
+      std::printf("op %s failed: %s\n", op.c_str(), err.c_str());
     return nullptr;
   }
   return g;
 }
 
-static GridPtr Const(const int w, const int h, const float v, const float cell = 1.0f)
+static GridPtr Const(
+  const int w,
+  const int h,
+  const float v,
+  const float cell = 1.0f
+)
 {
   return std::make_shared<Grid>(w, h, cell, 0.0f, 0.0f, v);
 }
 
-static bool Same(const Grid& a, const Grid& b)
+static bool Same(
+  const Grid& a,
+  const Grid& b
+)
 {
   return a.w == b.w && a.h == b.h && a.v == b.v;
 }
@@ -59,7 +77,13 @@ static bool Same(const Grid& a, const Grid& b)
 static const int kThreads[] = {1, 2, 3, 5, 8};
 
 /** The checksum of an op at every thread count must be the same. */
-static void CheckThreads(const char* const label, const std::string& op, const Num& nums, const Str& strs, const std::map<std::string, GridPtr>& in)
+static void CheckThreads(
+  const char* const label,
+  const std::string& op,
+  const Num& nums,
+  const Str& strs,
+  const std::map<std::string, GridPtr>& in
+)
 {
   std::uint64_t first = 0;
   bool have = false;
@@ -67,7 +91,8 @@ static void CheckThreads(const char* const label, const std::string& op, const N
     SetThreads(t);
     const GridPtr g = Run(op, nums, strs, in);
     CHECK(g != nullptr, "%s: op failed", label);
-    if (g == nullptr) continue;
+    if (g == nullptr)
+      continue;
     const std::uint64_t sum = Checksum(*g);
     if (!have) {
       first = sum;
@@ -82,26 +107,64 @@ static void TestDeterminism()
 {
   const Num base = {{"width", 97}, {"height", 83}, {"seed", 5}, {"scale", 40}, {"octaves", 7}};
   CheckThreads("fractal fbm", "fractal", base, {}, {});
-  CheckThreads("fractal billow warp", "fractal", {{"width", 97}, {"height", 83}, {"seed", 6}, {"scale", 50}, {"octaves", 6}, {"warp", 12}}, {{"kind", "billow"}}, {});
-  CheckThreads("fractal ridged slope", "fractal", {{"width", 97}, {"height", 83}, {"seed", 7}, {"scale", 60}, {"octaves", 8}, {"slope_detail", 0.7}, {"sharpness", 3}, {"finest", 4}}, {{"kind", "ridged"}}, {});
+  CheckThreads(
+    "fractal billow warp",
+    "fractal",
+    {{"width", 97}, {"height", 83}, {"seed", 6}, {"scale", 50}, {"octaves", 6}, {"warp", 12}},
+    {{"kind", "billow"}},
+    {}
+  );
+  CheckThreads(
+    "fractal ridged slope",
+    "fractal",
+    {{"width", 97},
+     {"height", 83},
+     {"seed", 7},
+     {"scale", 60},
+     {"octaves", 8},
+     {"slope_detail", 0.7},
+     {"sharpness", 3},
+     {"finest", 4}},
+    {{"kind", "ridged"}},
+    {}
+  );
   const GridPtr a = Run("fractal", base);
   const GridPtr b = Run("fractal", {{"width", 97}, {"height", 83}, {"seed", 9}, {"scale", 30}, {"octaves", 3}});
   CheckThreads("amplitude", "amplitude", {{"amplitude", 17}}, {}, {{"a", a}});
-  CheckThreads("terrain_mix add", "terrain_mix", {{"strength", 0.7}}, {{"mode", "add"}}, {{"a", a}, {"b", b}, {"mask", b}});
+  CheckThreads(
+    "terrain_mix add", "terrain_mix", {{"strength", 0.7}}, {{"mode", "add"}}, {{"a", a}, {"b", b}, {"mask", b}}
+  );
   CheckThreads("terrain_mix multiply", "terrain_mix", {{"strength", 1}}, {{"mode", "multiply"}}, {{"a", a}, {"b", b}});
   CheckThreads("keep_side", "keep_side", {{"level", 0.5}, {"margin", 0.01}, {"soft", 0.05}}, {}, {{"a", b}, {"b", a}});
   for (const char* op : {"perlin", "simplex", "ridged", "billow"}) {
-    CheckThreads(op, op, {{"width", 97}, {"height", 83}, {"seed", 3}, {"scale", 30}, {"octaves", 6}, {"rotate", 1}}, {}, {});
+    CheckThreads(
+      op, op, {{"width", 97}, {"height", 83}, {"seed", 3}, {"scale", 30}, {"octaves", 6}, {"rotate", 1}}, {}, {}
+    );
   }
-  CheckThreads("musgrave rotate", "musgrave", {{"width", 97}, {"height", 83}, {"seed", 3}, {"scale", 30}, {"octaves", 6}, {"rotate", 1}}, {}, {});
-  CheckThreads("fbm_damped rotate", "fbm_damped", {{"width", 97}, {"height", 83}, {"seed", 3}, {"scale", 30}, {"octaves", 6}, {"rotate", 1}}, {}, {});
+  CheckThreads(
+    "musgrave rotate",
+    "musgrave",
+    {{"width", 97}, {"height", 83}, {"seed", 3}, {"scale", 30}, {"octaves", 6}, {"rotate", 1}},
+    {},
+    {}
+  );
+  CheckThreads(
+    "fbm_damped rotate",
+    "fbm_damped",
+    {{"width", 97}, {"height", 83}, {"seed", 3}, {"scale", 30}, {"octaves", 6}, {"rotate", 1}},
+    {},
+    {}
+  );
 }
 
-/** Noise depends on the world position and the seed only: a coarse grid (cell 4) samples the same values as the fine one at the same places. */
+/** Noise depends on the world position and the seed only: a coarse grid (cell 4) samples the same values as the fine
+ * one at the same places. */
 static void TestWorldPosition()
 {
   for (const std::string kind : {"fbm", "billow", "ridged"}) {
-    const Num fine = {{"width", 129}, {"height", 129}, {"seed", 4}, {"scale", 90}, {"octaves", 6}, {"warp", 10}, {"slope_detail", 0.5}};
+    const Num fine = {
+      {"width", 129}, {"height", 129}, {"seed", 4}, {"scale", 90}, {"octaves", 6}, {"warp", 10}, {"slope_detail", 0.5}
+    };
     Num coarse = fine;
     coarse["width"] = 33;
     coarse["height"] = 33;
@@ -110,17 +173,24 @@ static void TestWorldPosition()
     const GridPtr c = Run("fractal", coarse, {{"kind", kind}});
     bool ok = f != nullptr && c != nullptr;
     for (int z = 0; ok && z < 33; ++z) {
-      for (int x = 0; ok && x < 33; ++x) ok = f->At(x * 4, z * 4) == c->At(x, z);
+      for (int x = 0; ok && x < 33; ++x)
+        ok = f->At(x * 4, z * 4) == c->At(x, z);
     }
     CHECK(ok, "fractal %s: a coarse grid does not sample the same noise as the fine one", kind.c_str());
   }
 }
 
-static GridPtr Ramp(const int w, const int h, const float lo, const float hi)
+static GridPtr Ramp(
+  const int w,
+  const int h,
+  const float lo,
+  const float hi
+)
 {
   auto g = std::make_shared<Grid>(w, h, 1.0f, 0.0f, 0.0f);
   for (int z = 0; z < h; ++z) {
-    for (int x = 0; x < w; ++x) g->At(x, z) = lo + (hi - lo) * static_cast<float>(x + z) / static_cast<float>(w + h - 2);
+    for (int x = 0; x < w; ++x)
+      g->At(x, z) = lo + (hi - lo) * static_cast<float>(x + z) / static_cast<float>(w + h - 2);
   }
   return g;
 }
@@ -136,10 +206,21 @@ static void TestAmplitude()
     CHECK(std::fabs(s.mean) < 1e-5 * amp, "amplitude peak %g: the mean is %.9f, not zero", amp, s.mean);
     const GridPtr range = Run("amplitude", {{"amplitude", amp}}, {{"mode", "range"}}, {{"a", noise}});
     const Stats r = Measure(*range);
-    CHECK(std::fabs((static_cast<double>(r.max) - static_cast<double>(r.min)) - amp) < 1e-5 * amp + 1e-6, "amplitude range %g: highest minus lowest is %.7f", amp, static_cast<double>(r.max) - static_cast<double>(r.min));
+    CHECK(
+      std::fabs((static_cast<double>(r.max) - static_cast<double>(r.min)) - amp) < 1e-5 * amp + 1e-6,
+      "amplitude range %g: highest minus lowest is %.7f",
+      amp,
+      static_cast<double>(r.max) - static_cast<double>(r.min)
+    );
     const GridPtr lift = Run("amplitude", {{"amplitude", amp}}, {{"mode", "range"}, {"centre", "min"}}, {{"a", noise}});
     const Stats l = Measure(*lift);
-    CHECK(std::fabs(static_cast<double>(l.min)) < 1e-6 && std::fabs(static_cast<double>(l.max) - amp) < 1e-5 * amp + 1e-6, "amplitude min centre %g: runs %.7f .. %.7f", amp, l.min, l.max);
+    CHECK(
+      std::fabs(static_cast<double>(l.min)) < 1e-6 && std::fabs(static_cast<double>(l.max) - amp) < 1e-5 * amp + 1e-6,
+      "amplitude min centre %g: runs %.7f .. %.7f",
+      amp,
+      l.min,
+      l.max
+    );
     const GridPtr sd = Run("amplitude", {{"amplitude", amp}}, {{"mode", "sd"}}, {{"a", noise}});
     const Stats d = Measure(*sd);
     CHECK(std::fabs(d.sd - amp) < 1e-4 * amp + 1e-6, "amplitude sd %g: the standard deviation is %.7f", amp, d.sd);
@@ -152,23 +233,28 @@ static void TestAmplitude()
   const GridPtr a1 = Run("amplitude", {{"amplitude", 20}}, {}, {{"a", noise}});
   const GridPtr a2 = Run("amplitude", {{"amplitude", 20}}, {}, {{"a", shifted}});
   double worst = 0.0;
-  for (std::size_t i = 0; i < a1->v.size(); ++i) worst = std::max(worst, static_cast<double>(std::fabs(a1->v[i] - a2->v[i])));
+  for (std::size_t i = 0; i < a1->v.size(); ++i)
+    worst = std::max(worst, static_cast<double>(std::fabs(a1->v[i] - a2->v[i])));
   CHECK(worst < 1e-3, "amplitude depends on the offset of the input (%.6f)", worst);
   std::string err;
-  CHECK(Run("amplitude", {{"amplitude", 1}}, {{"mode", "bogus"}}, {{"a", noise}}, &err) == nullptr, "a bad mode is accepted");
+  CHECK(
+    Run("amplitude", {{"amplitude", 1}}, {{"mode", "bogus"}}, {{"a", noise}}, &err) == nullptr, "a bad mode is accepted"
+  );
 }
 
 static void TestMix()
 {
   const int w = 20, h = 12;
-  const GridPtr ter = Ramp(w, h, 10.0f, 50.0f);                   // 10 .. 50
-  auto rel = std::make_shared<Grid>(w, h, 1.0f, 0.0f, 0.0f);        // +-4 checkerboard
+  const GridPtr ter = Ramp(w, h, 10.0f, 50.0f);              // 10 .. 50
+  auto rel = std::make_shared<Grid>(w, h, 1.0f, 0.0f, 0.0f); // +-4 checkerboard
   for (int z = 0; z < h; ++z) {
-    for (int x = 0; x < w; ++x) rel->At(x, z) = ((x + z) & 1) ? 4.0f : -4.0f;
+    for (int x = 0; x < w; ++x)
+      rel->At(x, z) = ((x + z) & 1) ? 4.0f : -4.0f;
   }
-  auto mask = std::make_shared<Grid>(w, h, 1.0f, 0.0f, 0.0f);       // left half 0, right half 1, one column 0.5
+  auto mask = std::make_shared<Grid>(w, h, 1.0f, 0.0f, 0.0f); // left half 0, right half 1, one column 0.5
   for (int z = 0; z < h; ++z) {
-    for (int x = 0; x < w; ++x) mask->At(x, z) = x < 9 ? 0.0f : (x == 9 ? 0.5f : 1.0f);
+    for (int x = 0; x < w; ++x)
+      mask->At(x, z) = x < 9 ? 0.0f : (x == 9 ? 0.5f : 1.0f);
   }
   const Stats ts = Measure(*ter);
   const std::map<std::string, GridPtr> in = {{"a", ter}, {"b", rel}};
@@ -186,14 +272,16 @@ static void TestMix()
   CHECK(okAdd, "add is not terrain + relief");
   CHECK(okHalf, "strength 0.5 is not the midpoint");
   // mask: 0 keeps the terrain bit for bit, 1 applies the relief, 0.5 half
-  const GridPtr masked = Run("terrain_mix", {{"strength", 1}}, {{"mode", "add"}}, {{"a", ter}, {"b", rel}, {"mask", mask}});
+  const GridPtr masked =
+    Run("terrain_mix", {{"strength", 1}}, {{"mode", "add"}}, {{"a", ter}, {"b", rel}, {"mask", mask}});
   bool okMask = true;
   for (int z = 0; z < h; ++z) {
     for (int x = 0; x < w; ++x) {
       const float m = mask->At(x, z);
       const float want = ter->At(x, z) + rel->At(x, z) * m;
       okMask = okMask && std::fabs(masked->At(x, z) - want) < 1e-4f;
-      if (m == 0.0f) okMask = okMask && masked->At(x, z) == ter->At(x, z);
+      if (m == 0.0f)
+        okMask = okMask && masked->At(x, z) == ter->At(x, z);
     }
   }
   CHECK(okMask, "the mask does not scale the change (or changes where it is 0)");
@@ -210,17 +298,27 @@ static void TestMix()
   // multiply: the lowest point does not move, the highest takes the whole relief
   const GridPtr mul = Run("terrain_mix", {}, {{"mode", "multiply"}}, in);
   CHECK(std::fabs(mul->At(0, 0) - ter->At(0, 0)) < 1e-5f, "multiply moved the lowest point");
-  CHECK(std::fabs(mul->At(w - 1, h - 1) - (ter->At(w - 1, h - 1) + rel->At(w - 1, h - 1))) < 1e-4f, "multiply did not apply the whole relief at the highest point");
-  CHECK(std::fabs(mul->At(w / 2, h / 2) - ter->At(w / 2, h / 2)) <= std::fabs(rel->At(w / 2, h / 2)) + 1e-4f, "multiply changed the middle by more than the relief");
+  CHECK(
+    std::fabs(mul->At(w - 1, h - 1) - (ter->At(w - 1, h - 1) + rel->At(w - 1, h - 1))) < 1e-4f,
+    "multiply did not apply the whole relief at the highest point"
+  );
+  CHECK(
+    std::fabs(mul->At(w / 2, h / 2) - ter->At(w / 2, h / 2)) <= std::fabs(rel->At(w / 2, h / 2)) + 1e-4f,
+    "multiply changed the middle by more than the relief"
+  );
   // replace: mean + relief
   const GridPtr rep = Run("terrain_mix", {}, {{"mode", "replace"}}, in);
   bool okRep = true;
-  for (int i = 0; i < w * h; ++i) okRep = okRep && std::fabs(rep->v[i] - (static_cast<float>(ts.mean) + rel->v[i])) < 1e-3f;
+  for (int i = 0; i < w * h; ++i)
+    okRep = okRep && std::fabs(rep->v[i] - (static_cast<float>(ts.mean) + rel->v[i])) < 1e-3f;
   CHECK(okRep, "replace is not mean + relief");
   // errors
   std::string err;
   CHECK(Run("terrain_mix", {}, {{"mode", "bogus"}}, in, &err) == nullptr, "a bad mode is accepted");
-  CHECK(Run("terrain_mix", {}, {}, {{"a", ter}, {"b", Const(5, 5, 0)}}, &err) == nullptr, "a relief of another size is accepted");
+  CHECK(
+    Run("terrain_mix", {}, {}, {{"a", ter}, {"b", Const(5, 5, 0)}}, &err) == nullptr,
+    "a relief of another size is accepted"
+  );
 }
 
 static void TestKeepSide()
@@ -239,17 +337,20 @@ static void TestKeepSide()
     after->v[i] = before->v[i] + (rnd() - 0.5f) * 40.0f; // a violent change
   }
   for (const float soft : {0.0f, 1.0f}) {
-    const GridPtr out = Run("keep_side", {{"level", level}, {"margin", 0.25}, {"soft", soft}}, {}, {{"a", after}, {"b", before}});
+    const GridPtr out =
+      Run("keep_side", {{"level", level}, {"margin", 0.25}, {"soft", soft}}, {}, {{"a", after}, {"b", before}});
     bool landDry = true, seaWet = true, untouched = true, neverPast = true;
     for (int i = 0; i < w * h; ++i) {
       const float h0 = before->v[i], r = after->v[i], o = out->v[i];
       if (h0 >= level) {
         landDry = landDry && o >= level - 1e-5f && o >= level + std::min(0.25f, h0 - level) - 1e-5f;
-        if (r >= h0) untouched = untouched && o == r;
+        if (r >= h0)
+          untouched = untouched && o == r;
         neverPast = neverPast && o <= std::max(r, h0) + 1e-5f;
       } else {
         seaWet = seaWet && o <= level + 1e-5f && o <= level - std::min(0.25f, level - h0) + 1e-5f;
-        if (r <= h0) untouched = untouched && o == r;
+        if (r <= h0)
+          untouched = untouched && o == r;
         neverPast = neverPast && o >= std::min(r, h0) - 1e-5f;
       }
     }
@@ -260,15 +361,23 @@ static void TestKeepSide()
   }
   // a result that keeps its side is returned unchanged
   const GridPtr gentle = Run("affine", {{"mul", 1}, {"add", 0.01}}, {}, {{"a", before}});
-  const GridPtr same = Run("keep_side", {{"level", 4}, {"margin", 0.25}, {"soft", 1}}, {}, {{"a", gentle}, {"b", before}});    // the water is below everything
+  const GridPtr same = Run(
+    "keep_side", {{"level", 4}, {"margin", 0.25}, {"soft", 1}}, {}, {{"a", gentle}, {"b", before}}
+  ); // the water is below everything
   CHECK(Same(*same, *gentle), "keep_side changed a terrain that never reaches the water");
 }
 
-/** The mean |value - 0.5| at the coarse lattice points against the mean at the same number of other points: plain octaves all vanish at the lattice points, `rotate` ones do not. */
-static double LatticeRatio(const std::string& op, const Num& nums, const double scale)
+/** The mean |value - 0.5| at the coarse lattice points against the mean at the same number of other points: plain
+ * octaves all vanish at the lattice points, `rotate` ones do not. */
+static double LatticeRatio(
+  const std::string& op,
+  const Num& nums,
+  const double scale
+)
 {
   const GridPtr g = Run(op, nums);
-  if (g == nullptr) return -1.0;
+  if (g == nullptr)
+    return -1.0;
   const int step = static_cast<int>(scale);
   double onLattice = 0.0, other = 0.0;
   int n1 = 0, n2 = 0;
@@ -285,13 +394,18 @@ static double LatticeRatio(const std::string& op, const Num& nums, const double 
 
 static void TestLattice()
 {
-  // octave 0 only: at the lattice points gradient noise is exactly 0 (the mean value 0.5); every octave of a plain sum shares those points when the lacunarity is 2
+  // octave 0 only: at the lattice points gradient noise is exactly 0 (the mean value 0.5); every octave of a plain sum
+  // shares those points when the lacunarity is 2
   const Num plain = {{"width", 513}, {"height", 513}, {"seed", 3}, {"scale", 32}, {"octaves", 4}};
   Num rot = plain;
   rot["rotate"] = 1;
   const double rPlain = LatticeRatio("perlin", plain, 32);
   const double rRot = LatticeRatio("perlin", rot, 32);
-  CHECK(rPlain >= 0.0 && rPlain < 0.3, "the plain sum is expected to vanish at the lattice points (ratio %.3f): the test no longer shows the artefact", rPlain);
+  CHECK(
+    rPlain >= 0.0 && rPlain < 0.3,
+    "the plain sum is expected to vanish at the lattice points (ratio %.3f): the test no longer shows the artefact",
+    rPlain
+  );
   CHECK(rRot > 0.7 && rRot < 1.4, "rotated octaves still show the lattice (ratio %.3f)", rRot);
   for (const std::string op : {"ridged", "billow", "simplex"}) {
     Num r = rot;
@@ -299,7 +413,8 @@ static void TestLattice()
     CHECK(v > 0.6 && v < 1.5, "%s with rotate: lattice ratio %.3f", op.c_str(), v);
   }
   for (const std::string kind : {"fbm", "billow", "ridged"}) {
-    const GridPtr g = Run("fractal", {{"width", 513}, {"height", 513}, {"seed", 3}, {"scale", 32}, {"octaves", 4}}, {{"kind", kind}});
+    const GridPtr g =
+      Run("fractal", {{"width", 513}, {"height", 513}, {"seed", 3}, {"scale", 32}, {"octaves", 4}}, {{"kind", kind}});
     double onLattice = 0.0, other = 0.0;
     int n = 0;
     for (int z = 0; z + 16 < g->h; z += 32) {
@@ -309,12 +424,14 @@ static void TestLattice()
         ++n;
       }
     }
-    if (kind == "fbm") CHECK(onLattice / other > 0.7 && onLattice / other < 1.4, "fractal fbm: lattice ratio %.3f", onLattice / other);
+    if (kind == "fbm")
+      CHECK(onLattice / other > 0.7 && onLattice / other < 1.4, "fractal fbm: lattice ratio %.3f", onLattice / other);
     (void)n;
   }
 }
 
-/** The variance of the slope along a direction must not depend on the direction (the 8 gradient noise prefers the axes). */
+/** The variance of the slope along a direction must not depend on the direction (the 8 gradient noise prefers the
+ * axes). */
 static void TestIsotropy()
 {
   const GridPtr g = Run("fractal", {{"width", 513}, {"height", 513}, {"seed", 11}, {"scale", 70}, {"octaves", 6}});
@@ -343,10 +460,12 @@ static void TestFractalOptions()
 {
   // finest = scale: one octave only, the same as octaves = 1
   const GridPtr one = Run("fractal", {{"width", 65}, {"height", 65}, {"seed", 2}, {"scale", 40}, {"octaves", 1}});
-  const GridPtr cut = Run("fractal", {{"width", 65}, {"height", 65}, {"seed", 2}, {"scale", 40}, {"octaves", 8}, {"finest", 40}});
+  const GridPtr cut =
+    Run("fractal", {{"width", 65}, {"height", 65}, {"seed", 2}, {"scale", 40}, {"octaves", 8}, {"finest", 40}});
   CHECK(Same(*one, *cut), "finest = scale does not reduce the noise to one octave");
   const GridPtr three = Run("fractal", {{"width", 65}, {"height", 65}, {"seed", 2}, {"scale", 40}, {"octaves", 3}});
-  const GridPtr cut3 = Run("fractal", {{"width", 65}, {"height", 65}, {"seed", 2}, {"scale", 40}, {"octaves", 8}, {"finest", 10}});
+  const GridPtr cut3 =
+    Run("fractal", {{"width", 65}, {"height", 65}, {"seed", 2}, {"scale", 40}, {"octaves", 8}, {"finest", 10}});
   CHECK(Same(*three, *cut3), "finest = scale / 4 does not give three octaves");
   // the seed changes the result, the same seed repeats it
   const GridPtr s1 = Run("fractal", {{"width", 65}, {"height", 65}, {"seed", 1}, {"scale", 40}});
@@ -355,9 +474,26 @@ static void TestFractalOptions()
   CHECK(Same(*s1, *s1b) && !Same(*s1, *s2), "seeds");
   // every kind stays inside 0..1 and has a spread (not a flat field)
   for (const std::string kind : {"fbm", "billow", "ridged"}) {
-    const GridPtr g = Run("fractal", {{"width", 257}, {"height", 257}, {"seed", 4}, {"scale", 80}, {"octaves", 6}, {"warp", 20}, {"slope_detail", 0.8}}, {{"kind", kind}});
+    const GridPtr g = Run(
+      "fractal",
+      {{"width", 257},
+       {"height", 257},
+       {"seed", 4},
+       {"scale", 80},
+       {"octaves", 6},
+       {"warp", 20},
+       {"slope_detail", 0.8}},
+      {{"kind", kind}}
+    );
     const Stats s = Measure(*g);
-    CHECK(s.min >= 0.0f && s.max <= 1.0f && s.sd > 0.08 && s.sd < 0.3, "fractal %s: range %.3f .. %.3f sd %.3f", kind.c_str(), s.min, s.max, s.sd);
+    CHECK(
+      s.min >= 0.0f && s.max <= 1.0f && s.sd > 0.08 && s.sd < 0.3,
+      "fractal %s: range %.3f .. %.3f sd %.3f",
+      kind.c_str(),
+      s.min,
+      s.max,
+      s.sd
+    );
   }
   // the warp moves the pattern: not equal to the unwarped one, but still the same statistics
   const GridPtr nowarp = Run("fractal", {{"width", 65}, {"height", 65}, {"seed", 2}, {"scale", 40}});
@@ -365,13 +501,17 @@ static void TestFractalOptions()
   CHECK(!Same(*nowarp, *warped), "warp has no effect");
   // slope_detail 0 is the same as not giving it; a positive value changes the field
   const GridPtr sd0 = Run("fractal", {{"width", 65}, {"height", 65}, {"seed", 2}, {"scale", 40}, {"slope_detail", 0}});
-  const GridPtr sd1 = Run("fractal", {{"width", 65}, {"height", 65}, {"seed", 2}, {"scale", 40}, {"slope_detail", 0.8}});
+  const GridPtr sd1 =
+    Run("fractal", {{"width", 65}, {"height", 65}, {"seed", 2}, {"scale", 40}, {"slope_detail", 0.8}});
   CHECK(Same(*nowarp, *sd0) && !Same(*sd0, *sd1), "slope_detail");
   std::string err;
-  CHECK(Run("fractal", {{"width", 8}, {"height", 8}}, {{"kind", "bogus"}}, {}, &err) == nullptr, "a bad kind is accepted");
+  CHECK(
+    Run("fractal", {{"width", 8}, {"height", 8}}, {{"kind", "bogus"}}, {}, &err) == nullptr, "a bad kind is accepted"
+  );
 }
 
-/** The old ops keep their results when `rotate` is not given (saved graphs and the golden cases of EdFieldTest keep working). */
+/** The old ops keep their results when `rotate` is not given (saved graphs and the golden cases of EdFieldTest keep
+ * working). */
 static void TestLegacyUnchanged()
 {
   for (const char* op : {"perlin", "simplex", "ridged", "billow"}) {
@@ -388,7 +528,8 @@ static void TestLegacyUnchanged()
   }
 }
 
-/** The options added with the GPU version: style erosive, warp_levels, antialias (all off by default: the old results are unchanged, see TestLegacyUnchanged and the golden cases). */
+/** The options added with the GPU version: style erosive, warp_levels, antialias (all off by default: the old results
+ * are unchanged, see TestLegacyUnchanged and the golden cases). */
 static void TestFractalQualityOptions()
 {
   const Num base = {{"width", 129}, {"height", 129}, {"seed", 2}, {"scale", 60}, {"octaves", 8}};
@@ -402,24 +543,48 @@ static void TestFractalQualityOptions()
     const GridPtr e = Run("fractal", base, {{"kind", kind}, {"style", "erosive"}});
     CHECK(c != nullptr && e != nullptr && !Same(*c, *e), "erosive %s has no effect", kind.c_str());
     const Stats s = Measure(*e);
-    CHECK(s.min >= 0.0f && s.max <= 1.0f && s.sd > 0.05, "erosive %s: range %.3f .. %.3f sd %.3f", kind.c_str(), s.min, s.max, s.sd);
+    CHECK(
+      s.min >= 0.0f && s.max <= 1.0f && s.sd > 0.05,
+      "erosive %s: range %.3f .. %.3f sd %.3f",
+      kind.c_str(),
+      s.min,
+      s.max,
+      s.sd
+    );
     // erosion 0 damps nothing: the same field as classic
-    const GridPtr z = Run("fractal", {{"width", 129}, {"height", 129}, {"seed", 2}, {"scale", 60}, {"octaves", 8}, {"erosion", 0}}, {{"kind", kind}, {"style", "erosive"}});
+    const GridPtr z = Run(
+      "fractal",
+      {{"width", 129}, {"height", 129}, {"seed", 2}, {"scale", 60}, {"octaves", 8}, {"erosion", 0}},
+      {{"kind", kind}, {"style", "erosive"}}
+    );
     CHECK(Same(*c, *z), "erosive %s with erosion 0 differs from classic", kind.c_str());
   }
-  // the erosive style removes detail on steep ground: the mean slope of the finest octaves is lower than the classic one
+  // the erosive style removes detail on steep ground: the mean slope of the finest octaves is lower than the classic
+  // one
   const GridPtr big1 = Run("fractal", {{"width", 257}, {"height", 257}, {"seed", 5}, {"scale", 120}, {"octaves", 9}});
-  const GridPtr big2 = Run("fractal", {{"width", 257}, {"height", 257}, {"seed", 5}, {"scale", 120}, {"octaves", 9}}, {{"style", "erosive"}});
+  const GridPtr big2 = Run(
+    "fractal", {{"width", 257}, {"height", 257}, {"seed", 5}, {"scale", 120}, {"octaves", 9}}, {{"style", "erosive"}}
+  );
   const auto roughness = [](const Grid& g) {
     double sum = 0.0;
     for (int z = 1; z + 1 < g.h; ++z) {
-      for (int x = 1; x + 1 < g.w; ++x) sum += std::fabs(g.At(x + 1, z) + g.At(x - 1, z) + g.At(x, z + 1) + g.At(x, z - 1) - 4.0f * g.At(x, z));
+      for (int x = 1; x + 1 < g.w; ++x)
+        sum += std::fabs(g.At(x + 1, z) + g.At(x - 1, z) + g.At(x, z + 1) + g.At(x, z - 1) - 4.0f * g.At(x, z));
     }
     return sum;
   };
   CHECK(roughness(*big2) < roughness(*big1), "the erosive style is not smoother than the classic one");
   // world position: a coarse grid samples the same noise as the fine one, also with the new options
-  Num fine = {{"width", 129}, {"height", 129}, {"seed", 4}, {"scale", 90}, {"octaves", 6}, {"warp", 10}, {"warp_levels", 2}, {"slope_detail", 0.3}};
+  Num fine = {
+    {"width", 129},
+    {"height", 129},
+    {"seed", 4},
+    {"scale", 90},
+    {"octaves", 6},
+    {"warp", 10},
+    {"warp_levels", 2},
+    {"slope_detail", 0.3}
+  };
   Num coarse = fine;
   coarse["width"] = 33;
   coarse["height"] = 33;
@@ -428,24 +593,35 @@ static void TestFractalQualityOptions()
   const GridPtr c = Run("fractal", coarse, {{"style", "erosive"}});
   bool ok = f != nullptr && c != nullptr;
   for (int z = 0; ok && z < 33; ++z) {
-    for (int x = 0; ok && x < 33; ++x) ok = f->At(x * 4, z * 4) == c->At(x, z);
+    for (int x = 0; ok && x < 33; ++x)
+      ok = f->At(x * 4, z * 4) == c->At(x, z);
   }
   CHECK(ok, "erosive + warp_levels 2: a coarse grid does not sample the same noise as the fine one");
   // warp_levels 2 differs from 1 and keeps the statistics
   const GridPtr w1 = Run("fractal", {{"width", 129}, {"height", 129}, {"seed", 2}, {"scale", 60}, {"warp", 20}});
-  const GridPtr w2 = Run("fractal", {{"width", 129}, {"height", 129}, {"seed", 2}, {"scale", 60}, {"warp", 20}, {"warp_levels", 2}});
+  const GridPtr w2 =
+    Run("fractal", {{"width", 129}, {"height", 129}, {"seed", 2}, {"scale", 60}, {"warp", 20}, {"warp_levels", 2}});
   CHECK(!Same(*w1, *w2) && std::fabs(Measure(*w1).sd - Measure(*w2).sd) < 0.05, "warp_levels 2");
-  // antialias: a coarse preview is a low pass of the fine result: the finest octaves (shorter than 2 samples) are gone, the others stay
-  Num aaBase = {{"width", 65}, {"height", 65}, {"seed", 3}, {"scale", 200}, {"octaves", 10}, {"cell", 8}};   // octave wavelengths 200 .. 0.4
+  // antialias: a coarse preview is a low pass of the fine result: the finest octaves (shorter than 2 samples) are gone,
+  // the others stay
+  Num aaBase = {
+    {"width", 65}, {"height", 65}, {"seed", 3}, {"scale", 200}, {"octaves", 10}, {"cell", 8}
+  }; // octave wavelengths 200 .. 0.4
   const GridPtr aa = Run("fractal", aaBase, {}, {});
   Num aaOn = aaBase;
   aaOn["antialias"] = 1;
   const GridPtr on = Run("fractal", aaOn);
-  CHECK(aa != nullptr && on != nullptr && !Same(*aa, *on), "antialias has no effect when octaves are finer than the samples");
-  Num fineAa = {{"width", 33}, {"height", 33}, {"seed", 3}, {"scale", 200}, {"octaves", 3}, {"antialias", 1}};   // cell 1: 200, 100, 50 are all well resolved
+  CHECK(
+    aa != nullptr && on != nullptr && !Same(*aa, *on), "antialias has no effect when octaves are finer than the samples"
+  );
+  Num fineAa = {
+    {"width", 33}, {"height", 33}, {"seed", 3}, {"scale", 200}, {"octaves", 3}, {"antialias", 1}
+  }; // cell 1: 200, 100, 50 are all well resolved
   Num fineOff = fineAa;
   fineOff["antialias"] = 0;
-  CHECK(Same(*Run("fractal", fineAa), *Run("fractal", fineOff)), "antialias changes a field whose octaves are all resolved");
+  CHECK(
+    Same(*Run("fractal", fineAa), *Run("fractal", fineOff)), "antialias changes a field whose octaves are all resolved"
+  );
 }
 
 int main()
@@ -460,7 +636,9 @@ int main()
   TestFractalOptions();
   TestLegacyUnchanged();
   TestFractalQualityOptions();
-  if (gFailures == 0) std::printf("EdLandTest PASS\n");
-  else std::printf("EdLandTest FAIL (%d)\n", gFailures);
+  if (gFailures == 0)
+    std::printf("EdLandTest PASS\n");
+  else
+    std::printf("EdLandTest FAIL (%d)\n", gFailures);
   return gFailures == 0 ? 0 : 1;
 }

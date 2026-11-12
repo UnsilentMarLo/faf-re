@@ -13,22 +13,22 @@ using namespace moho::editor::perf;
 
 static int gFailures = 0;
 static int gChecks = 0;
-#define CHECK(cond, ...)                               \
-  do {                                                 \
-    ++gChecks;                                         \
-    if (!(cond)) {                                     \
-      ++gFailures;                                     \
-      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-      std::printf(__VA_ARGS__);                        \
-      std::printf("\n");                               \
-    }                                                  \
+#define CHECK(cond, ...)                                                                                               \
+  do {                                                                                                                 \
+    ++gChecks;                                                                                                         \
+    if (!(cond)) {                                                                                                     \
+      ++gFailures;                                                                                                     \
+      std::printf("FAIL %s:%d: ", __FILE__, __LINE__);                                                                 \
+      std::printf(__VA_ARGS__);                                                                                        \
+      std::printf("\n");                                                                                               \
+    }                                                                                                                  \
   } while (0)
 
 static constexpr std::int64_t kMs = 1000000;
 
 static void TestCaps()
 {
-  Caps caps;     // defaults: active 300, loading 60, background 60, idle off
+  Caps caps; // defaults: active 300, loading 60, background 60, idle off
   Situation s;
 
   CHECK(EffectiveCap(caps, s) == 300.0f, "active default cap is 300, got %f", EffectiveCap(caps, s));
@@ -96,16 +96,22 @@ static void TestStateName()
 }
 
 // A model of the loop: each frame takes `work` of CPU, then waits for the pacer.
-static std::vector<std::int64_t> Simulate(const float cap, const std::int64_t work, const int frames, const std::int64_t stallAt = -1, const std::int64_t stall = 0)
+static std::vector<std::int64_t> Simulate(
+  const float cap,
+  const std::int64_t work,
+  const int frames,
+  const std::int64_t stallAt = -1,
+  const std::int64_t stall = 0
+)
 {
   Pacer pacer;
   std::int64_t now = 1000 * kMs;
   std::vector<std::int64_t> starts;
   for (int i = 0; i < frames; ++i) {
-    now += pacer.Remaining(now, cap);          // the wait
+    now += pacer.Remaining(now, cap); // the wait
     pacer.FrameStarted(now, cap);
     starts.push_back(now);
-    now += work + (i == stallAt ? stall : 0);   // the frame
+    now += work + (i == stallAt ? stall : 0); // the frame
   }
   return starts;
 }
@@ -124,7 +130,9 @@ static void TestPacer()
   {
     const auto s = Simulate(100.0f, 25 * kMs, 50);
     for (std::size_t i = 1; i < s.size(); ++i) {
-      CHECK(s[i] - s[i - 1] == 25 * kMs, "slow frame %zu: interval %lld ns", i, static_cast<long long>(s[i] - s[i - 1]));
+      CHECK(
+        s[i] - s[i - 1] == 25 * kMs, "slow frame %zu: interval %lld ns", i, static_cast<long long>(s[i] - s[i - 1])
+      );
     }
   }
   // a stall (a 500 ms hitch) is not made up for with a burst of frames
@@ -156,7 +164,7 @@ static void TestPacer()
     p.FrameStarted(0, 60.0f);
     const std::int64_t early = 4 * kMs;
     CHECK(p.Remaining(early, 60.0f) > 0, "still waiting after 4 ms");
-    p.FrameStarted(early, 60.0f);   // ran early
+    p.FrameStarted(early, 60.0f); // ran early
     CHECK(p.Remaining(early, 60.0f) == Pacer::Period(60.0f), "next frame one period after the early one");
   }
   // switching the cap on the fly (focus lost): the new period applies to the next frame
@@ -185,10 +193,10 @@ static void TestGcGate()
   // an idle state: heap constant, nothing to find; due only at the time limit
   {
     GcGate g;
-    g.Done(100000);   // 100 MB after the last collection
+    g.Done(100000); // 100 MB after the last collection
     int due = 0;
     double t = 0;
-    for (int i = 0; i < 40; ++i) {   // 40 calls of 5 s = 200 s idle
+    for (int i = 0; i < 40; ++i) { // 40 calls of 5 s = 200 s idle
       t += 5.0;
       if (g.Due(100000, 5.0, 8192, 60.0)) {
         ++due;

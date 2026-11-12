@@ -39,7 +39,8 @@ namespace
     WSupComFrame& frame
   )
   {
-    // EDITOR: a minimized window has no client area worth a back buffer; the restore that follows sends its own size message.
+    // EDITOR: a minimized window has no client area worth a back buffer; the restore that follows sends its own size
+    // message.
     if (::IsIconic(reinterpret_cast<HWND>(static_cast<std::uintptr_t>(frame.GetHandle()))) != FALSE) {
       return;
     }
@@ -56,8 +57,8 @@ namespace
     }
 
     frame.SetClientSize(width, height);
-    // EDITOR: this wx 2.4.2 frame can end up with a client area that differs from the size asked for; the back buffer and the
-    // viewport must follow the live client rect (see CScApp.cpp, same quirk at start-up).
+    // EDITOR: this wx 2.4.2 frame can end up with a client area that differs from the size asked for; the back buffer
+    // and the viewport must follow the live client rect (see CScApp.cpp, same quirk at start-up).
     frame.GetClientSize(&width, &height);
     if (moho::ren_Viewport != nullptr) {
       moho::ren_Viewport->SetSize(-1, -1, width, height, wxSIZE_USE_EXISTING);
@@ -74,7 +75,8 @@ namespace
     }
 
     gpg::gal::DeviceContext context(*activeContext);
-    const bool sameSize = context.GetHeadCount() > 0 && context.GetHead(0).mWidth == width && context.GetHead(0).mHeight == height;
+    const bool sameSize =
+      context.GetHeadCount() > 0 && context.GetHead(0).mWidth == width && context.GetHead(0).mHeight == height;
     if (context.GetHeadCount() > 0) {
       gpg::gal::Head& head = context.GetHead(0);
       head.mWidth = width;
@@ -86,8 +88,8 @@ namespace
       return;
     }
 
-    // EDITOR: restoring or maximizing a window whose back buffer already has this size changes nothing for the device; a reset anyway releases and recreates every
-    // render target, shadow map and dynamic texture.
+    // EDITOR: restoring or maximizing a window whose back buffer already has this size changes nothing for the device;
+    // a reset anyway releases and recreates every render target, shadow map and dynamic texture.
     if (sameSize && d3dDevice->mInitialized != 0) {
       return;
     }
@@ -137,8 +139,7 @@ namespace
     ::ClipCursor(clipRectPtr);
   }
 #endif // FAFRE_PLATFORM_WINDOWS
-}
-
+} // namespace
 
 /**
  * Address: 0x008CD8C0 (FUN_008CD8C0)
@@ -168,9 +169,16 @@ WSupComFrame::WSupComFrame(
 // Table 0x00DFE4EC = {&wxFrame::sm_eventTable (0x00D56F70), rows 0x00F5BB4C};
 // GetEventTable (0x008CE090) comes with it. The deleting destructor
 // (0x008CE060) is the compiler's.
-BEGIN_EVENT_TABLE(WSupComFrame, wxFrame)
-  EVT_CLOSE(WSupComFrame::OnCloseWindow)
-  EVT_MOVE(WSupComFrame::OnMove)
+BEGIN_EVENT_TABLE(
+  WSupComFrame,
+  wxFrame
+)
+EVT_CLOSE(
+  WSupComFrame::OnCloseWindow
+)
+EVT_MOVE(
+  WSupComFrame::OnMove
+)
 END_EVENT_TABLE()
 
 /**

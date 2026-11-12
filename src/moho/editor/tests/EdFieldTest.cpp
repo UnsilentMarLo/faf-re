@@ -1,6 +1,7 @@
 // Stand-alone test of the field engine core (no engine needed).
-//   build + run: python scripts/ed_native_tests.py          (extra arguments after the exe name are passed through by `python scripts/ed_native_tests.py -- <args>`)
-//   EdFieldTest.exe <cases.lua> [--update]      the golden cases live in editor/runtime/lua/editor/selftest_fields_cases.lua (shared with the Lua self test);
+//   build + run: python scripts/ed_native_tests.py          (extra arguments after the exe name are passed through by
+//   `python scripts/ed_native_tests.py -- <args>`) EdFieldTest.exe <cases.lua> [--update]      the golden cases live in
+//   editor/runtime/lua/editor/selftest_fields_cases.lua (shared with the Lua self test);
 //                                               --update rewrites the golden column from this run
 //   EdFieldTest.exe <cases.lua> --bench         timings on a 1025 x 1025 map
 #include <algorithm>
@@ -21,26 +22,32 @@ using namespace moho::editor::field;
 
 static int gFailures = 0;
 static int gDefaultThreads = 1;
-#define CHECK(cond, ...)                               \
-  do {                                                 \
-    if (!(cond)) {                                     \
-      ++gFailures;                                     \
-      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-      std::printf(__VA_ARGS__);                        \
-      std::printf("\n");                               \
-    }                                                  \
+#define CHECK(cond, ...)                                                                                               \
+  do {                                                                                                                 \
+    if (!(cond)) {                                                                                                     \
+      ++gFailures;                                                                                                     \
+      std::printf("FAIL %s:%d: ", __FILE__, __LINE__);                                                                 \
+      std::printf(__VA_ARGS__);                                                                                        \
+      std::printf("\n");                                                                                               \
+    }                                                                                                                  \
   } while (0)
 
-static std::string Hex(const std::uint64_t v)
+static std::string Hex(
+  const std::uint64_t v
+)
 {
   char b[32];
   std::snprintf(b, sizeof(b), "%016llx", static_cast<unsigned long long>(v));
   return b;
 }
 
-// ---- param strings: k=v,k=v ; v is a number, a word, or a list a:b;c:d (flattened) ------------------------------------------------------------------
+// ---- param strings: k=v,k=v ; v is a number, a word, or a list a:b;c:d (flattened)
+// ------------------------------------------------------------------
 
-static std::vector<std::string> Split(const std::string& s, const char sep)
+static std::vector<std::string> Split(
+  const std::string& s,
+  const char sep
+)
 {
   std::vector<std::string> out;
   std::string cur;
@@ -56,20 +63,29 @@ static std::vector<std::string> Split(const std::string& s, const char sep)
   return out;
 }
 
-static bool ToNumber(const std::string& s, double& v)
+static bool ToNumber(
+  const std::string& s,
+  double& v
+)
 {
-  if (s.empty()) return false;
+  if (s.empty())
+    return false;
   char* end = nullptr;
   v = std::strtod(s.c_str(), &end);
   return end != nullptr && *end == '\0';
 }
 
-static void ParseParams(const std::string& text, Params& p)
+static void ParseParams(
+  const std::string& text,
+  Params& p
+)
 {
-  if (text.empty()) return;
+  if (text.empty())
+    return;
   for (const std::string& kv : Split(text, ',')) {
     const std::size_t eq = kv.find('=');
-    if (eq == std::string::npos) continue;
+    if (eq == std::string::npos)
+      continue;
     const std::string key = kv.substr(0, eq);
     const std::string val = kv.substr(eq + 1);
     double n = 0.0;
@@ -77,7 +93,8 @@ static void ParseParams(const std::string& text, Params& p)
       std::vector<double> flat;
       for (const std::string& pt : Split(val, ';')) {
         for (const std::string& c : Split(pt, ':')) {
-          if (ToNumber(c, n)) flat.push_back(n);
+          if (ToNumber(c, n))
+            flat.push_back(n);
         }
       }
       p.arr[key] = flat;
@@ -91,7 +108,12 @@ static void ParseParams(const std::string& text, Params& p)
 
 static std::map<std::string, GridPtr> gFix;
 
-static GridPtr Make(const std::string& op, const std::string& params, const std::map<std::string, GridPtr>& in, std::string* err = nullptr)
+static GridPtr Make(
+  const std::string& op,
+  const std::string& params,
+  const std::map<std::string, GridPtr>& in,
+  std::string* err = nullptr
+)
 {
   OpArgs a;
   ParseParams(params, a.p);
@@ -99,8 +121,10 @@ static GridPtr Make(const std::string& op, const std::string& params, const std:
   auto g = std::make_shared<Grid>();
   std::string e;
   if (!RunOp(op, a, *g, e)) {
-    if (err) *err = e;
-    else std::printf("op %s(%s) failed: %s\n", op.c_str(), params.c_str(), e.c_str());
+    if (err)
+      *err = e;
+    else
+      std::printf("op %s(%s) failed: %s\n", op.c_str(), params.c_str(), e.c_str());
     return nullptr;
   }
   return g;
@@ -120,17 +144,21 @@ struct Case
   std::string label, op, params, inputs, golden;
 };
 
-static std::vector<std::string> gLines;   // the whole cases file, to rewrite
+static std::vector<std::string> gLines; // the whole cases file, to rewrite
 static std::vector<Case> gCases;
 static std::size_t gBegin = 0, gEnd = 0;
 
-static bool LoadCases(const std::string& path)
+static bool LoadCases(
+  const std::string& path
+)
 {
   std::ifstream in(path, std::ios::binary);
-  if (!in) return false;
+  if (!in)
+    return false;
   std::string line;
   while (std::getline(in, line)) {
-    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
     gLines.push_back(line);
   }
   bool inside = false;
@@ -147,27 +175,35 @@ static bool LoadCases(const std::string& path)
       gEnd = i;
       break;
     }
-    if (l.empty() || l[0] == '#') continue;
+    if (l.empty() || l[0] == '#')
+      continue;
     const std::vector<std::string> f = Split(l, '|');
-    if (f.size() < 5) continue;
+    if (f.size() < 5)
+      continue;
     gCases.push_back({f[0], f[1], f[2], f[3], f[4]});
   }
   return !gCases.empty();
 }
 
-static std::map<std::string, GridPtr> InputsOf(const std::string& spec)
+static std::map<std::string, GridPtr> InputsOf(
+  const std::string& spec
+)
 {
   std::map<std::string, GridPtr> in;
   for (const std::string& kv : Split(spec, ',')) {
     const std::size_t eq = kv.find('=');
-    if (eq != std::string::npos) in[kv.substr(0, eq)] = gFix[kv.substr(eq + 1)];
+    if (eq != std::string::npos)
+      in[kv.substr(0, eq)] = gFix[kv.substr(eq + 1)];
   }
   return in;
 }
 
-// ---- tests ------------------------------------------------------------------------------------------------------------------------------------------
+// ---- tests
+// ------------------------------------------------------------------------------------------------------------------------------------------
 
-static void TestGoldens(const bool update)
+static void TestGoldens(
+  const bool update
+)
 {
   const int orig = Threads();
   const int counts[] = {1, 2, 3, 5, 8};
@@ -181,14 +217,17 @@ static void TestGoldens(const bool update)
       const GridPtr g = Make(c.op, c.params, InputsOf(c.inputs), &err);
       if (!g) {
         CHECK(false, "case %s: %s", c.label.c_str(), err.c_str());
-        if (tc == counts[0]) now.push_back("0");
+        if (tc == counts[0])
+          now.push_back("0");
         continue;
       }
       const std::string hex = Hex(Checksum(*g));
       if (tc == counts[0]) {
         now.push_back(hex);
       } else {
-        CHECK(hex == now[i], "case %s differs with %d threads (%s vs %s)", c.label.c_str(), tc, hex.c_str(), now[i].c_str());
+        CHECK(
+          hex == now[i], "case %s differs with %d threads (%s vs %s)", c.label.c_str(), tc, hex.c_str(), now[i].c_str()
+        );
       }
     }
   }
@@ -197,7 +236,8 @@ static void TestGoldens(const bool update)
   for (std::size_t i = 0; i < gCases.size(); ++i) {
     if (gCases[i].golden != now[i]) {
       ++wrong;
-      if (!update) std::printf("golden %s: file %s, now %s\n", gCases[i].label.c_str(), gCases[i].golden.c_str(), now[i].c_str());
+      if (!update)
+        std::printf("golden %s: file %s, now %s\n", gCases[i].label.c_str(), gCases[i].golden.c_str(), now[i].c_str());
     }
   }
   if (update) {
@@ -205,9 +245,11 @@ static void TestGoldens(const bool update)
     std::size_t ci = 0;
     for (std::size_t i = gBegin; i < gEnd; ++i) {
       std::string& l = gLines[i];
-      if (l.empty() || l[0] == '#') continue;
+      if (l.empty() || l[0] == '#')
+        continue;
       std::vector<std::string> f = Split(l, '|');
-      if (f.size() < 5) continue;
+      if (f.size() < 5)
+        continue;
       f[4] = now[ci++];
       l = f[0] + "|" + f[1] + "|" + f[2] + "|" + f[3] + "|" + f[4];
     }
@@ -217,7 +259,11 @@ static void TestGoldens(const bool update)
   }
 }
 
-static GridPtr Run(const char* op, const char* params, std::map<std::string, GridPtr> in = {})
+static GridPtr Run(
+  const char* op,
+  const char* params,
+  std::map<std::string, GridPtr> in = {}
+)
 {
   GridPtr g = Make(op, params, in);
   CHECK(g != nullptr, "op %s failed", op);
@@ -238,7 +284,8 @@ static void TestThreadsLarge()
     const GridPtr s = Run("slope", "mode=rating,window=2", {{"a", t}});
     const GridPtr m = Run("blend", "mode=overlay,opacity=0.7", {{"a", d}, {"b", s}});
     const std::uint64_t cs = Checksum(*m);
-    if (tc == 1) first = cs;
+    if (tc == 1)
+      first = cs;
     CHECK(cs == first, "pipeline differs with %d threads", tc);
   }
   SetThreads(gDefaultThreads);
@@ -268,9 +315,11 @@ static void TestProperties()
     const GridPtr part = Run("crop", "x0=7,z0=5,x1=46,z1=44", {{"a", big}});
     const GridPtr shifted = Run("perlin", "width=40,height=40,seed=1,scale=10,ox=7,oz=5");
     float maxd = 0;
-    for (std::size_t i = 0; i < part->Count(); ++i) maxd = std::max(maxd, std::fabs(part->v[i] - shifted->v[i]));
+    for (std::size_t i = 0; i < part->Count(); ++i)
+      maxd = std::max(maxd, std::fabs(part->v[i] - shifted->v[i]));
     CHECK(maxd == 0.0f, "noise depends on the grid origin: %g", maxd);
-    // a coarse preview samples the same noise: the value at world (8, 8) is the same on a 1 unit grid and on a 4 unit grid
+    // a coarse preview samples the same noise: the value at world (8, 8) is the same on a 1 unit grid and on a 4 unit
+    // grid
     const GridPtr coarse = Run("perlin", "width=17,height=17,seed=1,scale=10,cell=4");
     const GridPtr fine = Run("perlin", "width=65,height=65,seed=1,scale=10,cell=1");
     CHECK(coarse->At(2, 2) == fine->At(8, 8), "preview grid samples different noise");
@@ -278,8 +327,11 @@ static void TestProperties()
   // simplex range
   {
     float lo = 1e9f, hi = -1e9f;
-    const GridPtr n = Run("simplex", "width=1024,height=1024,seed=5,scale=7,octaves=1");   // 0.5 s + 0.5, clamped
-    for (const float v : n->v) { lo = std::min(lo, v); hi = std::max(hi, v); }
+    const GridPtr n = Run("simplex", "width=1024,height=1024,seed=5,scale=7,octaves=1"); // 0.5 s + 0.5, clamped
+    for (const float v : n->v) {
+      lo = std::min(lo, v);
+      hi = std::max(hi, v);
+    }
     std::printf("  simplex single octave (0.5 s + 0.5, clamped): %.4f .. %.4f\n", lo, hi);
     CHECK(hi > 0.9f && lo < 0.1f, "simplex scale is off");
   }
@@ -297,7 +349,8 @@ static void TestProperties()
     const GridPtr c = Run("const", "width=30,height=30,value=0.6");
     const GridPtr b = Run("blur", "radius=3", {{"a", c}});
     float maxd = 0;
-    for (const float v : b->v) maxd = std::max(maxd, std::fabs(v - 0.6f));
+    for (const float v : b->v)
+      maxd = std::max(maxd, std::fabs(v - 0.6f));
     CHECK(maxd < 1e-5f, "blur of a constant moved by %g", maxd);
     const GridPtr n = gFix["N"];
     const GridPtr nb = Run("blur", "radius=2", {{"a", n}});
@@ -322,7 +375,8 @@ static void TestProperties()
             }
           }
         }
-        if (best < 1e8) worst = std::max(worst, std::fabs(float(best) - d->At(x, z)));
+        if (best < 1e8)
+          worst = std::max(worst, std::fabs(float(best) - d->At(x, z)));
       }
     }
     CHECK(any && worst < 1e-4f, "distance transform differs from brute force by %g", worst);
@@ -332,7 +386,9 @@ static void TestProperties()
   // slope on a ramp: 0.5 units per sample
   {
     Grid ramp(16, 16, 1.0f, 0.0f, 0.0f);
-    for (int z = 0; z < 16; ++z) for (int x = 0; x < 16; ++x) ramp.At(x, z) = 0.5f * float(x);
+    for (int z = 0; z < 16; ++z)
+      for (int x = 0; x < 16; ++x)
+        ramp.At(x, z) = 0.5f * float(x);
     auto r = std::make_shared<Grid>(ramp);
     const GridPtr deg = Run("slope", "mode=degrees", {{"a", r}});
     CHECK(std::fabs(deg->At(8, 8) - 26.5651f) < 0.01f, "slope degrees %f", deg->At(8, 8));
@@ -357,7 +413,12 @@ static void TestProperties()
     CHECK(std::fabs(before - after) < 1e-4, "thermal changed the mean: %f -> %f", before, after);
     const GridPtr r0 = Run("slope", "mode=rating", {{"a", h}});
     const GridPtr r1 = Run("slope", "mode=rating", {{"a", t}});
-    CHECK(Measure(*r1).max < Measure(*r0).max, "thermal did not lower the steepest slope: %f -> %f", Measure(*r0).max, Measure(*r1).max);
+    CHECK(
+      Measure(*r1).max < Measure(*r0).max,
+      "thermal did not lower the steepest slope: %f -> %f",
+      Measure(*r0).max,
+      Measure(*r1).max
+    );
     const GridPtr flat = Run("const", "width=20,height=20,value=7");
     const GridPtr tf = Run("thermal", "iterations=10", {{"a", flat}});
     CHECK(Checksum(*tf) == Checksum(*flat), "thermal moved a flat field");
@@ -378,15 +439,24 @@ static void TestProperties()
     int bad = 0;
     for (int z = 0; z < n; ++z) {
       for (int x = 0; x < n; ++x) {
-        if (mx->At(x, z) != mx->At(n - 1 - x, z)) ++bad;
-        if (mz->At(x, z) != mz->At(x, n - 1 - z)) ++bad;
-        if (mxz->At(x, z) != mxz->At(n - 1 - x, z) || mxz->At(x, z) != mxz->At(x, n - 1 - z)) ++bad;
-        if (r2->At(x, z) != r2->At(n - 1 - x, n - 1 - z)) ++bad;
-        if (r2b->At(x, z) != r2b->At(n - 1 - x, n - 1 - z)) ++bad;
-        if (r4->At(x, z) != r4->At(n - 1 - z, x)) ++bad;      // a quarter turn
-        if (r4b->At(x, z) != r4b->At(n - 1 - z, x)) ++bad;
-        if (dg->At(x, z) != dg->At(z, x)) ++bad;
-        if (ad->At(x, z) != ad->At(n - 1 - z, n - 1 - x)) ++bad;
+        if (mx->At(x, z) != mx->At(n - 1 - x, z))
+          ++bad;
+        if (mz->At(x, z) != mz->At(x, n - 1 - z))
+          ++bad;
+        if (mxz->At(x, z) != mxz->At(n - 1 - x, z) || mxz->At(x, z) != mxz->At(x, n - 1 - z))
+          ++bad;
+        if (r2->At(x, z) != r2->At(n - 1 - x, n - 1 - z))
+          ++bad;
+        if (r2b->At(x, z) != r2b->At(n - 1 - x, n - 1 - z))
+          ++bad;
+        if (r4->At(x, z) != r4->At(n - 1 - z, x))
+          ++bad; // a quarter turn
+        if (r4b->At(x, z) != r4b->At(n - 1 - z, x))
+          ++bad;
+        if (dg->At(x, z) != dg->At(z, x))
+          ++bad;
+        if (ad->At(x, z) != ad->At(n - 1 - z, n - 1 - x))
+          ++bad;
       }
     }
     CHECK(bad == 0, "%d symmetry violations", bad);
@@ -397,7 +467,8 @@ static void TestProperties()
   {
     const GridPtr id = Run("remap", "points=0:0;1:1,smooth=0", {{"a", gFix["A"]}});
     float maxd = 0;
-    for (std::size_t i = 0; i < id->Count(); ++i) maxd = std::max(maxd, std::fabs(id->v[i] - gFix["A"]->v[i]));
+    for (std::size_t i = 0; i < id->Count(); ++i)
+      maxd = std::max(maxd, std::fabs(id->v[i] - gFix["A"]->v[i]));
     CHECK(maxd < 1e-6f, "identity remap moved values by %g", maxd);
     const GridPtr sm = Run("remap", "points=0:0;0.3:0.1;0.7:0.9;1:1,smooth=1", {{"a", gFix["A"]}});
     CHECK(Measure(*sm).min >= -1e-5f && Measure(*sm).max <= 1.0f + 1e-5f, "monotone cubic overshoots");
@@ -405,7 +476,8 @@ static void TestProperties()
     CHECK(Measure(*lv).min == 0.0f, "levels");
     const GridPtr tr = Run("terrace", "steps=4,sharpness=1", {{"a", gFix["A"]}});
     std::map<int, int> levels;
-    for (const float v : tr->v) levels[int(std::floor(v * 4.0f * 1000.0f + 0.5f))]++;
+    for (const float v : tr->v)
+      levels[int(std::floor(v * 4.0f * 1000.0f + 0.5f))]++;
     CHECK(levels.size() <= 6, "terrace made %d distinct levels", int(levels.size()));
   }
   // geometry: offset by whole samples, resize shapes, rotate by 0 is identity
@@ -416,7 +488,9 @@ static void TestProperties()
     const GridPtr rot = Run("rotate", "angle=0", {{"a", a}});
     CHECK(Checksum(*rot) == Checksum(*a), "rotate by 0");
     const GridPtr rs = Run("resize", "width=17,height=17", {{"a", a}});
-    CHECK(rs->w == 17 && rs->cell == 2.0f && rs->At(16, 16) == a->At(32, 32) && rs->At(8, 8) == a->At(16, 16), "resize");
+    CHECK(
+      rs->w == 17 && rs->cell == 2.0f && rs->At(16, 16) == a->At(32, 32) && rs->At(8, 8) == a->At(16, 16), "resize"
+    );
     const GridPtr sc = Run("scale", "factor=1", {{"a", a}});
     CHECK(Checksum(*sc) == Checksum(*a), "scale by 1");
   }
@@ -435,7 +509,8 @@ static void TestProperties()
     Downsample(*c, 8, 8, out);
     CHECK(out.size() == 64 && out[10] == 2.0f, "downsample");
   }
-  // height_from_gradient: integrates the slopes of a smooth height back (lengths that are not powers of two use the chirp-z transform)
+  // height_from_gradient: integrates the slopes of a smooth height back (lengths that are not powers of two use the
+  // chirp-z transform)
   for (const bool periodic : {true, false}) {
     const int W = 100;
     const int H = 80;
@@ -446,37 +521,53 @@ static void TestProperties()
     for (int z = 0; z < H; ++z) {
       for (int x = 0; x < W; ++x) {
         double v, px, pz;
-        if (periodic) {           // tiles: three periods across, two down
+        if (periodic) { // tiles: three periods across, two down
           const double ax = 2 * pi * 3 / W, az = 2 * pi * 2 / H;
           v = 10 * std::sin(ax * x) + 6 * std::cos(az * z) + 4 * std::sin(ax * x + az * z);
-          px = (10 * ax * std::cos(ax * x) + 4 * ax * std::cos(ax * x + az * z)) / 2.0;          // per world unit: the cell is 2
+          px = (10 * ax * std::cos(ax * x) + 4 * ax * std::cos(ax * x + az * z)) / 2.0; // per world unit: the cell is 2
           pz = (-6 * az * std::sin(az * z) + 4 * az * std::cos(ax * x + az * z)) / 2.0;
-        } else {                  // zero slope across the border
+        } else { // zero slope across the border
           const double ax = pi * 2 / (W - 1), az = pi * 3 / (H - 1);
           v = 10 * std::cos(ax * x) * std::cos(az * z) + 5 * std::cos(ax * x * 2);
           px = (-10 * ax * std::sin(ax * x) * std::cos(az * z) - 10 * ax * std::sin(ax * x * 2)) / 2.0;
           pz = (-10 * az * std::cos(ax * x) * std::sin(az * z)) / 2.0;
         }
-        h0->At(x, z) = static_cast<float>(v);          // the height in world units: the sum of slope * cell
+        h0->At(x, z) = static_cast<float>(v); // the height in world units: the sum of slope * cell
         dx->At(x, z) = static_cast<float>(px);
         dz->At(x, z) = static_cast<float>(pz);
       }
     }
     std::string err;
-    const GridPtr r = Make("height_from_gradient", periodic ? "periodic=1" : "periodic=0", {{"dx", dx}, {"dz", dz}}, &err);
+    const GridPtr r =
+      Make("height_from_gradient", periodic ? "periodic=1" : "periodic=0", {{"dx", dx}, {"dz", dz}}, &err);
     CHECK(r != nullptr && r->w == W && r->h == H, "height_from_gradient: %s", err.c_str());
     if (r) {
       double m0 = 0, m1 = 0, rms = 0, amp = 0;
-      for (std::size_t i = 0; i < r->Count(); ++i) { m0 += h0->v[i]; m1 += r->v[i]; }
-      m0 /= r->Count(); m1 /= r->Count();
+      for (std::size_t i = 0; i < r->Count(); ++i) {
+        m0 += h0->v[i];
+        m1 += r->v[i];
+      }
+      m0 /= r->Count();
+      m1 /= r->Count();
       for (std::size_t i = 0; i < r->Count(); ++i) {
         const double a = h0->v[i] - m0, b = r->v[i] - m1;
         rms += (a - b) * (a - b);
         amp += a * a;
       }
       const double rel = std::sqrt(rms / amp);
-      std::printf("  height_from_gradient %s: relative error %.4f (mean of result %.2g)\n", periodic ? "periodic" : "mirrored", rel, m1);
-      CHECK(rel < 0.04 && std::fabs(m1) < 1.0e-3, "height_from_gradient %s: error %f mean %g", periodic ? "periodic" : "mirrored", rel, m1);
+      std::printf(
+        "  height_from_gradient %s: relative error %.4f (mean of result %.2g)\n",
+        periodic ? "periodic" : "mirrored",
+        rel,
+        m1
+      );
+      CHECK(
+        rel < 0.04 && std::fabs(m1) < 1.0e-3,
+        "height_from_gradient %s: error %f mean %g",
+        periodic ? "periodic" : "mirrored",
+        rel,
+        m1
+      );
     }
   }
   // unknown op and missing input are errors, not crashes
@@ -484,7 +575,10 @@ static void TestProperties()
     std::string err;
     CHECK(Make("nope", "", {}, &err) == nullptr && !err.empty(), "unknown op");
     CHECK(Make("blur", "radius=2", {}, &err) == nullptr, "blur without input");
-    CHECK(Make("add", "", {{"a", gFix["A"]}, {"b", Run("const", "width=5,height=5")}}, &err) == nullptr, "add with mismatched sizes");
+    CHECK(
+      Make("add", "", {{"a", gFix["A"]}, {"b", Run("const", "width=5,height=5")}}, &err) == nullptr,
+      "add with mismatched sizes"
+    );
     CHECK(OpNames().size() >= 35, "only %d ops", int(OpNames().size()));
   }
 }
@@ -515,11 +609,17 @@ static void Bench()
     t = Now();
     const GridPtr s = Run("slope", "mode=rating,window=2", {{"a", h}});
     std::printf("  slope rating window 2  %8.1f ms\n", (Now() - t) * 1000);
-    (void)b; (void)th; (void)d; (void)s;
+    (void)b;
+    (void)th;
+    (void)d;
+    (void)s;
   }
 }
 
-int main(int argc, char** argv)
+int main(
+  int argc,
+  char** argv
+)
 {
   gDefaultThreads = Threads();
   std::printf("EdFieldTest: %d threads, %d ops\n", gDefaultThreads, int(OpNames().size()));
@@ -531,7 +631,8 @@ int main(int argc, char** argv)
       TestGoldens(update);
       if (update) {
         std::ofstream out(cases, std::ios::binary | std::ios::trunc);
-        for (const std::string& l : gLines) out << l << "\n";
+        for (const std::string& l : gLines)
+          out << l << "\n";
       }
     } else {
       CHECK(false, "cannot read the cases file %s", cases.c_str());
@@ -541,7 +642,8 @@ int main(int argc, char** argv)
   }
   TestProperties();
   TestThreadsLarge();
-  if (bench) Bench();
+  if (bench)
+    Bench();
   std::printf(gFailures == 0 ? "EdFieldTest PASS\n" : "EdFieldTest FAIL (%d)\n", gFailures);
   return gFailures == 0 ? 0 : 1;
 }

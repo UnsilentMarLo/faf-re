@@ -22,10 +22,12 @@ namespace moho
     [[nodiscard]] bool IsEdFace(const char* face);
     /** Face name without the `ed:` prefix and without a trailing `;g` (gray) flag. */
     [[nodiscard]] std::string FamilyOf(const char* face);
-    /** `ed:Family` draws LCD (ClearType-style, two-pass technique `TTextLcd`); `ed:Family;g` draws gray coverage with the normal technique. */
+    /** `ed:Family` draws LCD (ClearType-style, two-pass technique `TTextLcd`); `ed:Family;g` draws gray coverage with
+     * the normal technique. */
     [[nodiscard]] bool WantsLcd(const char* face);
 
-    /** Creates the per-font backend state; returns null if `edtext.dll` is unavailable. Metrics are unrounded pixels. */
+    /** Creates the per-font backend state; returns null if `edtext.dll` is unavailable. Metrics are unrounded pixels.
+     */
     [[nodiscard]] void* Attach(const char* face, float pixelSize, float& ascent, float& descent, float& lineGap);
     void Destroy(void* state);
 

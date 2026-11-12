@@ -12,15 +12,19 @@
 // Terrain (the live world; samples are 1 world unit apart, heights are world units = word / 128):
 //   ed_terrain_info()                    -> samplesX, samplesZ
 //   ed_terrain_get(x, z)                 -> world height at one sample
-//   ed_terrain_get_many(coords [, out])  -> out, outside   heights of many samples in one call: coords = { x1, z1, x2, z2, ... }, out[i] = height or false outside
-//                                           the map; `out` (optional) is a table that is filled and returned, so one table can be reused every frame
+//   ed_terrain_get_many(coords [, out])  -> out, outside   heights of many samples in one call: coords = { x1, z1, x2,
+//   z2, ... }, out[i] = height or false outside
+//                                           the map; `out` (optional) is a table that is filled and returned, so one
+//                                           table can be reused every frame
 //   ed_terrain_raise(cx, cz, r, amount)  -> samples changed  (cosine hill, `amount` world units at the centre)
 //   ed_terrain_set_rect(x0,z0,x1,z1, h)  -> samples changed  (flatten an inclusive sample rectangle to h)
 //   ed_terrain_read_rect(x0,z0,x1,z1)    -> array of height words, row major (x fastest), rect clamped
 //                                           returns the clamped x0,z0,x1,z1 after the array
 //   ed_terrain_write_rect(x0,z0,x1,z1, words) -> samples written   (words as returned by read_rect)
-//   ed_terrain_brush(cx,cz,r,mode,strength,dir,falloff,level,seed) -> changed,x0,z0,x1,z1,level   one round brush dab on the document
-//                                           (raise / lower / plateau / flatten / smooth / noise; EdBrush.cpp, math in EdBrush.h)
+//   ed_terrain_brush(cx,cz,r,mode,strength,dir,falloff,level,seed) -> changed,x0,z0,x1,z1,level   one round brush dab
+//   on the document
+//                                           (raise / lower / plateau / flatten / smooth / noise; EdBrush.cpp, math in
+//                                           EdBrush.h)
 //
 // Document and command stack (M1; moho/editor/MapDocument.h). The document owns the heights; edits are commands:
 //   ed_doc_attach()                      -> samplesX, samplesZ   (binds the document to the open session; a new
@@ -128,7 +132,10 @@ namespace
     return fallbackSet;
   }
 
-  [[nodiscard]] const char* PathArg(lua_State* const state, const char* const functionName)
+  [[nodiscard]] const char* PathArg(
+    lua_State* const state,
+    const char* const functionName
+  )
   {
     const char* const path = lua_tostring(state, 1);
     if (path == nullptr) {
@@ -137,14 +144,18 @@ namespace
     return path;
   }
 
-  int __cdecl cfunc_EdFileExists(lua_State* const state)
+  int __cdecl cfunc_EdFileExists(
+    lua_State* const state
+  )
   {
     std::error_code ec;
     lua_pushboolean(state, fs::is_regular_file(fs::path(PathArg(state, "ed_file_exists")), ec) ? 1 : 0);
     return 1;
   }
 
-  int __cdecl cfunc_EdFileStamp(lua_State* const state)
+  int __cdecl cfunc_EdFileStamp(
+    lua_State* const state
+  )
   {
     const fs::path path(PathArg(state, "ed_file_stamp"));
     std::error_code ec;
@@ -160,14 +171,19 @@ namespace
     }
     char text[64];
     std::snprintf(
-      text, sizeof(text), "%llu:%lld", static_cast<unsigned long long>(size),
+      text,
+      sizeof(text),
+      "%llu:%lld",
+      static_cast<unsigned long long>(size),
       static_cast<long long>(time.time_since_epoch().count())
     );
     lua_pushstring(state, text);
     return 1;
   }
 
-  int __cdecl cfunc_EdReadFile(lua_State* const state)
+  int __cdecl cfunc_EdReadFile(
+    lua_State* const state
+  )
   {
     std::ifstream in(fs::path(PathArg(state, "ed_read_file")), std::ios::binary);
     if (!in) {
@@ -179,7 +195,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdWriteFile(lua_State* const state)
+  int __cdecl cfunc_EdWriteFile(
+    lua_State* const state
+  )
   {
     const fs::path path(PathArg(state, "ed_write_file"));
     const char* const data = lua_tostring(state, 2);
@@ -202,14 +220,13 @@ namespace
     return 1;
   }
 
-
   // ---- terrain -------------------------------------------------------------------------------------------
 
   struct TerrainTargets
   {
     moho::IWldTerrainRes* res = nullptr;
-    moho::CHeightField* view = nullptr;   // what the renderer reads
-    moho::CHeightField* sim = nullptr;    // what the simulation reads (null outside a live sim)
+    moho::CHeightField* view = nullptr; // what the renderer reads
+    moho::CHeightField* sim = nullptr;  // what the simulation reads (null outside a live sim)
   };
 
   [[nodiscard]] TerrainTargets ResolveTerrain()
@@ -235,7 +252,9 @@ namespace
     return out;
   }
 
-  [[nodiscard]] std::uint16_t ClampWord(const float value)
+  [[nodiscard]] std::uint16_t ClampWord(
+    const float value
+  )
   {
     const float v = std::floor(value + 0.5f);
     return static_cast<std::uint16_t>(v < 0.0f ? 0.0f : (v > 65535.0f ? 65535.0f : v));
@@ -244,7 +263,14 @@ namespace
   // A write that is not an undoable command (tests, import): it goes through the document, which stays the truth and
   // projects into the view field at once and into the sim's field between beats; the history is cleared (see
   // MapDocument::WriteExternal). Undoable edits use ed_doc_height_write.
-  void ApplyTerrainRect(const TerrainTargets& t, int x0, int z0, int x1, int z1, const std::vector<std::uint16_t>& words)
+  void ApplyTerrainRect(
+    const TerrainTargets& t,
+    int x0,
+    int z0,
+    int x1,
+    int z1,
+    const std::vector<std::uint16_t>& words
+  )
   {
     (void)t;
     if (!moho::editor::AttachDocument(false)) {
@@ -258,7 +284,9 @@ namespace
     moho::editor::Document().WriteExternal(rect, words.data());
   }
 
-  int __cdecl cfunc_EdTerrainInfo(lua_State* const state)
+  int __cdecl cfunc_EdTerrainInfo(
+    lua_State* const state
+  )
   {
     const TerrainTargets t = ResolveTerrain();
     if (t.view == nullptr) {
@@ -270,7 +298,9 @@ namespace
     return 2;
   }
 
-  int __cdecl cfunc_EdTerrainGet(lua_State* const state)
+  int __cdecl cfunc_EdTerrainGet(
+    lua_State* const state
+  )
   {
     const TerrainTargets t = ResolveTerrain();
     const int x = static_cast<int>(luaL_checknumber(state, 1));
@@ -284,11 +314,15 @@ namespace
   }
 
   // ed_terrain_get_many(coords [, out]) -> out, outside
-  //   coords: a flat array { x1, z1, x2, z2, ... } of sample coordinates (truncated to integers, like ed_terrain_get); out: a table to fill (entries 1 .. n are written, the
-  //   rest is left alone: one table can be kept and reused every frame) or none (a new table). out[i] is the world height of point i, `false` for a point outside the map
-  //   (ed_terrain_get answers nil there; a hole in the array would not do). `outside` counts those. A value that is not a number reads as 0. One call instead of n:
-  //   the Lua to C++ transition is what costs when a panel or a validator asks for thousands of heights.
-  int __cdecl cfunc_EdTerrainGetMany(lua_State* const state)
+  //   coords: a flat array { x1, z1, x2, z2, ... } of sample coordinates (truncated to integers, like ed_terrain_get);
+  //   out: a table to fill (entries 1 .. n are written, the rest is left alone: one table can be kept and reused every
+  //   frame) or none (a new table). out[i] is the world height of point i, `false` for a point outside the map
+  //   (ed_terrain_get answers nil there; a hole in the array would not do). `outside` counts those. A value that is not
+  //   a number reads as 0. One call instead of n: the Lua to C++ transition is what costs when a panel or a validator
+  //   asks for thousands of heights.
+  int __cdecl cfunc_EdTerrainGetMany(
+    lua_State* const state
+  )
   {
     luaL_checktype(state, 1, LUA_TTABLE);
     const TerrainTargets t = ResolveTerrain();
@@ -322,7 +356,9 @@ namespace
     return 2;
   }
 
-  int __cdecl cfunc_EdTerrainRaise(lua_State* const state)
+  int __cdecl cfunc_EdTerrainRaise(
+    lua_State* const state
+  )
   {
     const TerrainTargets t = ResolveTerrain();
     const float cx = static_cast<float>(luaL_checknumber(state, 1));
@@ -365,7 +401,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdTerrainSetRect(lua_State* const state)
+  int __cdecl cfunc_EdTerrainSetRect(
+    lua_State* const state
+  )
   {
     const TerrainTargets t = ResolveTerrain();
     int x0 = static_cast<int>(luaL_checknumber(state, 1));
@@ -393,18 +431,27 @@ namespace
     return 1;
   }
 
-
-  void ClampRect(const moho::CHeightField* const f, int& x0, int& z0, int& x1, int& z1)
+  void ClampRect(
+    const moho::CHeightField* const f,
+    int& x0,
+    int& z0,
+    int& x1,
+    int& z1
+  )
   {
-    if (x0 > x1) std::swap(x0, x1);
-    if (z0 > z1) std::swap(z0, z1);
+    if (x0 > x1)
+      std::swap(x0, x1);
+    if (z0 > z1)
+      std::swap(z0, z1);
     x0 = std::max(0, x0);
     z0 = std::max(0, z0);
     x1 = std::min(f->Width() - 1, x1);
     z1 = std::min(f->Height() - 1, z1);
   }
 
-  int __cdecl cfunc_EdTerrainReadRect(lua_State* const state)
+  int __cdecl cfunc_EdTerrainReadRect(
+    lua_State* const state
+  )
   {
     const TerrainTargets t = ResolveTerrain();
     int x0 = static_cast<int>(luaL_checknumber(state, 1));
@@ -435,7 +482,9 @@ namespace
     return 5;
   }
 
-  int __cdecl cfunc_EdTerrainWriteRect(lua_State* const state)
+  int __cdecl cfunc_EdTerrainWriteRect(
+    lua_State* const state
+  )
   {
     const TerrainTargets t = ResolveTerrain();
     int x0 = static_cast<int>(luaL_checknumber(state, 1));
@@ -465,10 +514,12 @@ namespace
     return 1;
   }
 
-
   // ---- document and command stack -------------------------------------------------------------------------
 
-  [[nodiscard]] moho::editor::CellRect RectArgs(lua_State* const state, const int first)
+  [[nodiscard]] moho::editor::CellRect RectArgs(
+    lua_State* const state,
+    const int first
+  )
   {
     moho::editor::CellRect r;
     r.x0 = static_cast<int>(luaL_checknumber(state, first));
@@ -478,7 +529,9 @@ namespace
     return r;
   }
 
-  int __cdecl cfunc_EdDocAttach(lua_State* const state)
+  int __cdecl cfunc_EdDocAttach(
+    lua_State* const state
+  )
   {
     if (!moho::editor::AttachDocument(true)) {
       lua_pushnil(state);
@@ -489,7 +542,9 @@ namespace
     return 2;
   }
 
-  int __cdecl cfunc_EdDocHeightWrite(lua_State* const state)
+  int __cdecl cfunc_EdDocHeightWrite(
+    lua_State* const state
+  )
   {
     const moho::editor::CellRect rect = RectArgs(state, 1);
     luaL_checktype(state, 5, LUA_TTABLE);
@@ -514,7 +569,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdCmdBegin(lua_State* const state)
+  int __cdecl cfunc_EdCmdBegin(
+    lua_State* const state
+  )
   {
     if (moho::editor::AttachDocument(false)) {
       const char* const label = lua_tostring(state, 1);
@@ -523,7 +580,9 @@ namespace
     return 0;
   }
 
-  int __cdecl cfunc_EdCmdEnd(lua_State* const state)
+  int __cdecl cfunc_EdCmdEnd(
+    lua_State* const state
+  )
   {
     (void)state;
     if (moho::editor::Document().Valid()) {
@@ -532,7 +591,10 @@ namespace
     return 0;
   }
 
-  int HistoryStep(lua_State* const state, const bool undo)
+  int HistoryStep(
+    lua_State* const state,
+    const bool undo
+  )
   {
     if (!moho::editor::AttachDocument(false)) {
       lua_pushboolean(state, 0);
@@ -549,17 +611,23 @@ namespace
     return 7;
   }
 
-  int __cdecl cfunc_EdCmdUndo(lua_State* const state)
+  int __cdecl cfunc_EdCmdUndo(
+    lua_State* const state
+  )
   {
     return HistoryStep(state, true);
   }
 
-  int __cdecl cfunc_EdCmdRedo(lua_State* const state)
+  int __cdecl cfunc_EdCmdRedo(
+    lua_State* const state
+  )
   {
     return HistoryStep(state, false);
   }
 
-  int __cdecl cfunc_EdCmdDepth(lua_State* const state)
+  int __cdecl cfunc_EdCmdDepth(
+    lua_State* const state
+  )
   {
     const moho::editor::MapDocument& doc = moho::editor::Document();
     lua_pushnumber(state, static_cast<lua_Number>(doc.UndoDepth()));
@@ -569,7 +637,9 @@ namespace
     return 4;
   }
 
-  int __cdecl cfunc_EdCmdLabels(lua_State* const state)
+  int __cdecl cfunc_EdCmdLabels(
+    lua_State* const state
+  )
   {
     const moho::editor::MapDocument& doc = moho::editor::Document();
     lua_pushstring(state, doc.UndoLabel().c_str());
@@ -577,21 +647,27 @@ namespace
     return 2;
   }
 
-  int __cdecl cfunc_EdCmdClear(lua_State* const state)
+  int __cdecl cfunc_EdCmdClear(
+    lua_State* const state
+  )
   {
     (void)state;
     moho::editor::Document().ClearHistory();
     return 0;
   }
 
-  int __cdecl cfunc_EdDocMarkClean(lua_State* const state)
+  int __cdecl cfunc_EdDocMarkClean(
+    lua_State* const state
+  )
   {
     (void)state;
     moho::editor::Document().MarkClean();
     return 0;
   }
 
-  int __cdecl cfunc_EdDocChecksum(lua_State* const state)
+  int __cdecl cfunc_EdDocChecksum(
+    lua_State* const state
+  )
   {
     const moho::editor::CellRect rect = RectArgs(state, 1);
     if (!moho::editor::AttachDocument(false)) {
@@ -604,14 +680,18 @@ namespace
   }
 
   // sim state: lua_State -> Sim through the global user data, like ed_sim_terrain_changed
-  int __cdecl cfunc_EdSimApplyPending(lua_State* const state)
+  int __cdecl cfunc_EdSimApplyPending(
+    lua_State* const state
+  )
   {
     moho::Sim* const sim = (state != nullptr && state->l_G != nullptr) ? state->l_G->globalUserData : nullptr;
     lua_pushnumber(state, static_cast<lua_Number>(moho::editor::ApplyPendingHeightEdits(sim)));
     return 1;
   }
 
-  int __cdecl cfunc_EdSimChecksum(lua_State* const state)
+  int __cdecl cfunc_EdSimChecksum(
+    lua_State* const state
+  )
   {
     moho::Sim* const sim = (state != nullptr && state->l_G != nullptr) ? state->l_G->globalUserData : nullptr;
     const moho::editor::CellRect rect = RectArgs(state, 1);
@@ -619,7 +699,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdMapSave(lua_State* const state)
+  int __cdecl cfunc_EdMapSave(
+    lua_State* const state
+  )
   {
     const char* const path = PathArg(state, "ed_map_save");
     moho::CWldSession* const session = moho::WLD_GetActiveSession();
@@ -636,7 +718,6 @@ namespace
     return 1;
   }
 
-
   // ---- virtual file system -------------------------------------------------------------------------------
 
   [[nodiscard]] moho::CVirtualFileSystem* ActiveVfs()
@@ -645,7 +726,9 @@ namespace
     return set != nullptr ? set->mHandle : nullptr;
   }
 
-  int __cdecl cfunc_EdVfsToDisk(lua_State* const state)
+  int __cdecl cfunc_EdVfsToDisk(
+    lua_State* const state
+  )
   {
     const char* const path = PathArg(state, "ed_vfs_to_disk");
     moho::CVirtualFileSystem* const vfs = ActiveVfs();
@@ -663,7 +746,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdVfsMount(lua_State* const state)
+  int __cdecl cfunc_EdVfsMount(
+    lua_State* const state
+  )
   {
     const char* const dir = PathArg(state, "ed_vfs_mount");
     const char* const mountpoint = lua_tostring(state, 2);
@@ -700,14 +785,18 @@ namespace
     return session->mWldMap->mProps;
   }
 
-  int __cdecl cfunc_EdPropCount(lua_State* const state)
+  int __cdecl cfunc_EdPropCount(
+    lua_State* const state
+  )
   {
     moho::CWldProps* const props = LiveProps();
     lua_pushnumber(state, props != nullptr ? static_cast<lua_Number>(props->mEntries.size()) : 0);
     return 1;
   }
 
-  int __cdecl cfunc_EdPropGet(lua_State* const state)
+  int __cdecl cfunc_EdPropGet(
+    lua_State* const state
+  )
   {
     moho::CWldProps* const props = LiveProps();
     const int index = static_cast<int>(luaL_checknumber(state, 1)) - 1;
@@ -731,7 +820,10 @@ namespace
   }
 
   // Scale arguments starting at `first`: none = (1,1,1), one = uniform, three = per axis.
-  [[nodiscard]] Wm3::Vec3f ScaleArgs(lua_State* const state, const int first)
+  [[nodiscard]] Wm3::Vec3f ScaleArgs(
+    lua_State* const state,
+    const int first
+  )
   {
     if (lua_gettop(state) < first) {
       return Wm3::Vec3f(1.0f, 1.0f, 1.0f);
@@ -741,10 +833,13 @@ namespace
       return Wm3::Vec3f(sx, sx, sx);
     }
     return Wm3::Vec3f(
-      sx, static_cast<float>(luaL_checknumber(state, first + 1)), static_cast<float>(luaL_checknumber(state, first + 2)));
+      sx, static_cast<float>(luaL_checknumber(state, first + 1)), static_cast<float>(luaL_checknumber(state, first + 2))
+    );
   }
 
-  int __cdecl cfunc_EdPropAdd(lua_State* const state)
+  int __cdecl cfunc_EdPropAdd(
+    lua_State* const state
+  )
   {
     moho::CWldProps* const props = LiveProps();
     const char* const blueprint = lua_tostring(state, 1);
@@ -766,7 +861,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdPropMove(lua_State* const state)
+  int __cdecl cfunc_EdPropMove(
+    lua_State* const state
+  )
   {
     moho::CWldProps* const props = LiveProps();
     const int index = static_cast<int>(luaL_checknumber(state, 1)) - 1;
@@ -778,12 +875,15 @@ namespace
     e.mTransform.pos_ = Wm3::Vec3f(
       static_cast<float>(luaL_checknumber(state, 2)),
       static_cast<float>(luaL_checknumber(state, 3)),
-      static_cast<float>(luaL_checknumber(state, 4)));
+      static_cast<float>(luaL_checknumber(state, 4))
+    );
     lua_pushboolean(state, 1);
     return 1;
   }
 
-  int __cdecl cfunc_EdPropScale(lua_State* const state)
+  int __cdecl cfunc_EdPropScale(
+    lua_State* const state
+  )
   {
     moho::CWldProps* const props = LiveProps();
     const int index = static_cast<int>(luaL_checknumber(state, 1)) - 1;
@@ -796,7 +896,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdPropRemove(lua_State* const state)
+  int __cdecl cfunc_EdPropRemove(
+    lua_State* const state
+  )
   {
     moho::CWldProps* const props = LiveProps();
     const int index = static_cast<int>(luaL_checknumber(state, 1)) - 1;
@@ -832,7 +934,10 @@ namespace
   }
 
   // map decals only: simulation-created decals (mArmy >= 0) are runtime effects and are skipped everywhere
-  [[nodiscard]] moho::CWldTerrainDecal* NthMapDecal(moho::IDecalManager* const manager, const int ordinal)
+  [[nodiscard]] moho::CWldTerrainDecal* NthMapDecal(
+    moho::IDecalManager* const manager,
+    const int ordinal
+  )
   {
     int seen = 0;
     const int count = manager->GetDecalCount();
@@ -849,8 +954,11 @@ namespace
     return nullptr;
   }
 
-  /** The number of map decals in one pass (NthMapDecal walks the list from its start: counting with it is quadratic, 20 ms per ed_decal_add at 1000 decals). */
-  [[nodiscard]] int CountMapDecals(moho::IDecalManager* const manager)
+  /** The number of map decals in one pass (NthMapDecal walks the list from its start: counting with it is quadratic, 20
+   * ms per ed_decal_add at 1000 decals). */
+  [[nodiscard]] int CountMapDecals(
+    moho::IDecalManager* const manager
+  )
   {
     int n = 0;
     const int count = manager->GetDecalCount();
@@ -863,7 +971,9 @@ namespace
     return n;
   }
 
-  int __cdecl cfunc_EdDecalCount(lua_State* const state)
+  int __cdecl cfunc_EdDecalCount(
+    lua_State* const state
+  )
   {
     moho::IDecalManager* const manager = LiveDecals();
     const int n = manager != nullptr ? CountMapDecals(manager) : 0;
@@ -871,11 +981,14 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdDecalGet(lua_State* const state)
+  int __cdecl cfunc_EdDecalGet(
+    lua_State* const state
+  )
   {
     moho::IDecalManager* const manager = LiveDecals();
     const int ordinal = static_cast<int>(luaL_checknumber(state, 1)) - 1;
-    const moho::CWldTerrainDecal* const d = (manager != nullptr && ordinal >= 0) ? NthMapDecal(manager, ordinal) : nullptr;
+    const moho::CWldTerrainDecal* const d =
+      (manager != nullptr && ordinal >= 0) ? NthMapDecal(manager, ordinal) : nullptr;
     if (d == nullptr) {
       lua_pushnil(state);
       return 1;
@@ -896,7 +1009,9 @@ namespace
     return 13;
   }
 
-  int __cdecl cfunc_EdDecalAdd(lua_State* const state)
+  int __cdecl cfunc_EdDecalAdd(
+    lua_State* const state
+  )
   {
     moho::IDecalManager* const manager = LiveDecals();
     const char* const name = lua_tostring(state, 1);
@@ -905,15 +1020,21 @@ namespace
       return 1;
     }
     const int type = static_cast<int>(luaL_checknumber(state, 2));
-    const Wm3::Vec3f position(static_cast<float>(luaL_checknumber(state, 3)),
-                              static_cast<float>(luaL_checknumber(state, 4)),
-                              static_cast<float>(luaL_checknumber(state, 5)));
-    const Wm3::Vec3f rotation(static_cast<float>(luaL_optnumber(state, 6, 0.0)),
-                              static_cast<float>(luaL_optnumber(state, 7, 0.0)),
-                              static_cast<float>(luaL_optnumber(state, 8, 0.0)));
-    const Wm3::Vec3f scale(static_cast<float>(luaL_optnumber(state, 9, 10.0)),
-                           static_cast<float>(luaL_optnumber(state, 10, 10.0)),
-                           static_cast<float>(luaL_optnumber(state, 11, 10.0)));
+    const Wm3::Vec3f position(
+      static_cast<float>(luaL_checknumber(state, 3)),
+      static_cast<float>(luaL_checknumber(state, 4)),
+      static_cast<float>(luaL_checknumber(state, 5))
+    );
+    const Wm3::Vec3f rotation(
+      static_cast<float>(luaL_optnumber(state, 6, 0.0)),
+      static_cast<float>(luaL_optnumber(state, 7, 0.0)),
+      static_cast<float>(luaL_optnumber(state, 8, 0.0))
+    );
+    const Wm3::Vec3f scale(
+      static_cast<float>(luaL_optnumber(state, 9, 10.0)),
+      static_cast<float>(luaL_optnumber(state, 10, 10.0)),
+      static_cast<float>(luaL_optnumber(state, 11, 10.0))
+    );
     const float cutoff = static_cast<float>(luaL_optnumber(state, 12, 1000.0));
 
     // a free decal index: one past the highest in use (map decals address each other by index in groups)
@@ -942,11 +1063,14 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdDecalRemove(lua_State* const state)
+  int __cdecl cfunc_EdDecalRemove(
+    lua_State* const state
+  )
   {
     moho::IDecalManager* const manager = LiveDecals();
     const int ordinal = static_cast<int>(luaL_checknumber(state, 1)) - 1;
-    moho::CWldTerrainDecal* const decal = (manager != nullptr && ordinal >= 0) ? NthMapDecal(manager, ordinal) : nullptr;
+    moho::CWldTerrainDecal* const decal =
+      (manager != nullptr && ordinal >= 0) ? NthMapDecal(manager, ordinal) : nullptr;
     if (decal == nullptr) {
       lua_pushboolean(state, 0);
       return 1;
@@ -957,22 +1081,28 @@ namespace
     return 1;
   }
 
-
   // ---- simulation caches ---------------------------------------------------------------------------------
 
-  int __cdecl cfunc_EdSimTerrainChanged(lua_State* const state)
+  int __cdecl cfunc_EdSimTerrainChanged(
+    lua_State* const state
+  )
   {
     moho::Sim* const sim = (state != nullptr && state->l_G != nullptr) ? state->l_G->globalUserData : nullptr;
     int x0 = static_cast<int>(luaL_checknumber(state, 1));
     int z0 = static_cast<int>(luaL_checknumber(state, 2));
     int x1 = static_cast<int>(luaL_checknumber(state, 3));
     int z1 = static_cast<int>(luaL_checknumber(state, 4));
-    if (sim == nullptr || sim->mPathTables == nullptr || sim->mMapData == nullptr || sim->mMapData->mHeightField.get() == nullptr) {
+    if (
+      sim == nullptr || sim->mPathTables == nullptr || sim->mMapData == nullptr ||
+      sim->mMapData->mHeightField.get() == nullptr
+    ) {
       lua_pushboolean(state, 0);
       return 1;
     }
-    if (x0 > x1) std::swap(x0, x1);
-    if (z0 > z1) std::swap(z0, z1);
+    if (x0 > x1)
+      std::swap(x0, x1);
+    if (z0 > z1)
+      std::swap(z0, z1);
     // A path cell reads the heights of the cell and its neighbours, and a unit footprint spans several cells:
     // dirty a margin around the edit so no cluster that could see the change keeps its old answer.
     constexpr int kMargin = 10;
@@ -987,14 +1117,22 @@ namespace
     return 1;
   }
 
-  moho::CScrLuaInitForm* BindGlobal(const char* const name, int(__cdecl* const function)(lua_State*), const char* const help)
+  moho::CScrLuaInitForm* BindGlobal(
+    const char* const name,
+    int(__cdecl* const function)(lua_State*),
+    const char* const help
+  )
   {
     // one binder per call site, kept alive for the process (forms are linked into the set by construction)
     return new moho::CScrLuaBinder(EditorUserLuaInitSet(), name, function, nullptr, "<global>", help);
   }
 
   // The same function also in the simulation's Lua state (sim callbacks use the file functions to report).
-  moho::CScrLuaInitForm* BindSimGlobal(const char* const name, int(__cdecl* const function)(lua_State*), const char* const help)
+  moho::CScrLuaInitForm* BindSimGlobal(
+    const char* const name,
+    int(__cdecl* const function)(lua_State*),
+    const char* const help
+  )
   {
     return new moho::CScrLuaBinder(EditorSimLuaInitSet(), name, function, nullptr, "<global>", help);
   }
@@ -1008,17 +1146,34 @@ namespace
       (void)BindSimGlobal("ed_file_exists", &cfunc_EdFileExists, "ed_file_exists(path) -> bool");
       (void)BindSimGlobal("ed_read_file", &cfunc_EdReadFile, "ed_read_file(path) -> string or nil");
       (void)BindSimGlobal("ed_write_file", &cfunc_EdWriteFile, "ed_write_file(path, data) -> bool");
-      (void)BindSimGlobal("ed_sim_terrain_changed", &cfunc_EdSimTerrainChanged, "ed_sim_terrain_changed(x0, z0, x1, z1) -> bool");
+      (void)BindSimGlobal(
+        "ed_sim_terrain_changed", &cfunc_EdSimTerrainChanged, "ed_sim_terrain_changed(x0, z0, x1, z1) -> bool"
+      );
       (void)BindGlobal("ed_file_stamp", &cfunc_EdFileStamp, "ed_file_stamp(path) -> \"size:mtime\" or nil");
       (void)BindGlobal("ed_read_file", &cfunc_EdReadFile, "ed_read_file(path) -> string or nil");
       (void)BindGlobal("ed_write_file", &cfunc_EdWriteFile, "ed_write_file(path, data) -> bool");
       (void)BindGlobal("ed_terrain_info", &cfunc_EdTerrainInfo, "ed_terrain_info() -> samplesX, samplesZ");
       (void)BindGlobal("ed_terrain_get", &cfunc_EdTerrainGet, "ed_terrain_get(x, z) -> world height");
-      (void)BindGlobal("ed_terrain_get_many", &cfunc_EdTerrainGetMany, "ed_terrain_get_many(coords [, out]) -> out, outside: heights of the points { x1, z1, x2, z2, ... }, false outside the map");
-      (void)BindGlobal("ed_terrain_raise", &cfunc_EdTerrainRaise, "ed_terrain_raise(cx, cz, radius, amount) -> samples");
-      (void)BindGlobal("ed_terrain_set_rect", &cfunc_EdTerrainSetRect, "ed_terrain_set_rect(x0, z0, x1, z1, height) -> samples");
-      (void)BindGlobal("ed_terrain_read_rect", &cfunc_EdTerrainReadRect, "ed_terrain_read_rect(x0, z0, x1, z1) -> words, x0, z0, x1, z1");
-      (void)BindGlobal("ed_terrain_write_rect", &cfunc_EdTerrainWriteRect, "ed_terrain_write_rect(x0, z0, x1, z1, words) -> samples");
+      (void)BindGlobal(
+        "ed_terrain_get_many",
+        &cfunc_EdTerrainGetMany,
+        "ed_terrain_get_many(coords [, out]) -> out, outside: heights of the points { x1, z1, x2, z2, ... }, false "
+        "outside the map"
+      );
+      (void)BindGlobal(
+        "ed_terrain_raise", &cfunc_EdTerrainRaise, "ed_terrain_raise(cx, cz, radius, amount) -> samples"
+      );
+      (void)BindGlobal(
+        "ed_terrain_set_rect", &cfunc_EdTerrainSetRect, "ed_terrain_set_rect(x0, z0, x1, z1, height) -> samples"
+      );
+      (void)BindGlobal(
+        "ed_terrain_read_rect",
+        &cfunc_EdTerrainReadRect,
+        "ed_terrain_read_rect(x0, z0, x1, z1) -> words, x0, z0, x1, z1"
+      );
+      (void)BindGlobal(
+        "ed_terrain_write_rect", &cfunc_EdTerrainWriteRect, "ed_terrain_write_rect(x0, z0, x1, z1, words) -> samples"
+      );
       (void)BindGlobal("ed_map_save", &cfunc_EdMapSave, "ed_map_save(path) -> bool");
       (void)BindGlobal("ed_vfs_to_disk", &cfunc_EdVfsToDisk, "ed_vfs_to_disk(...)");
       (void)BindGlobal("ed_vfs_mount", &cfunc_EdVfsMount, "ed_vfs_mount(...)");
@@ -1029,7 +1184,9 @@ namespace
       (void)BindGlobal("ed_prop_remove", &cfunc_EdPropRemove, "ed_prop_remove(...)");
       (void)BindGlobal("ed_prop_scale", &cfunc_EdPropScale, "ed_prop_scale(...)");
       (void)BindGlobal("ed_doc_attach", &cfunc_EdDocAttach, "ed_doc_attach() -> samplesX, samplesZ");
-      (void)BindGlobal("ed_doc_height_write", &cfunc_EdDocHeightWrite, "ed_doc_height_write(x0, z0, x1, z1, words) -> changed");
+      (void)BindGlobal(
+        "ed_doc_height_write", &cfunc_EdDocHeightWrite, "ed_doc_height_write(x0, z0, x1, z1, words) -> changed"
+      );
       (void)BindGlobal("ed_cmd_begin", &cfunc_EdCmdBegin, "ed_cmd_begin(label)");
       (void)BindGlobal("ed_cmd_end", &cfunc_EdCmdEnd, "ed_cmd_end()");
       (void)BindGlobal("ed_cmd_undo", &cfunc_EdCmdUndo, "ed_cmd_undo() -> ok, x0, z0, x1, z1, label, verified");

@@ -1,10 +1,13 @@
-// Mesh terrain renderer of the editor (docs/projects/editor/MESH_VIEW.md). The shaders and the draw order follow automation/terrainmesh/meshterrain.cpp (the patch
-// for the retail exe), which in turn follows SC2's terrain.hlsl: two blended layers, radiosity normal mapping with three baked light masks, sun occlusion in the
-// alpha of mask 0, the layer blend in the alpha of mask 1, FA's shadow map for dynamic shadows, FA's water ramp below the water level.
+// Mesh terrain renderer of the editor (docs/projects/editor/MESH_VIEW.md). The shaders and the draw order follow
+// automation/terrainmesh/meshterrain.cpp (the patch for the retail exe), which in turn follows SC2's terrain.hlsl: two
+// blended layers, radiosity normal mapping with three baked light masks, sun occlusion in the alpha of mask 0, the
+// layer blend in the alpha of mask 1, FA's shadow map for dynamic shadows, FA's water ramp below the water level.
 //
-// Differences to the patch: the camera and the shadow state come from the engine objects (GeomCamera3, Shadow) instead of being read back from shader constants,
-// so the matrices are used as the engine stores them (row vector convention, `row_major` in HLSL). The raw Direct3D 11 device and its immediate context are the gal
-// device's own; every draw saves the pipeline state it changes and puts it back, so the engine's state stays valid. The shaders are shader model 4 (the patch's are 3).
+// Differences to the patch: the camera and the shadow state come from the engine objects (GeomCamera3, Shadow) instead
+// of being read back from shader constants, so the matrices are used as the engine stores them (row vector convention,
+// `row_major` in HLSL). The raw Direct3D 11 device and its immediate context are the gal device's own; every draw saves
+// the pipeline state it changes and puts it back, so the engine's state stays valid. The shaders are shader model 4
+// (the patch's are 3).
 
 #include "moho/editor/EdMeshTerrain.h"
 #include "moho/editor/EdD3D11Device.h"
@@ -43,8 +46,10 @@ namespace moho
     {
       using Microsoft::WRL::ComPtr;
 
-      // ---- shaders ---------------------------------------------------------------------------------------------------------------------
-      // Constant buffers: b0 of the vertex shader and b0 of the pixel shader, filled from the arrays below (the old c# registers, in the same order).
+      // ---- shaders
+      // ---------------------------------------------------------------------------------------------------------------------
+      // Constant buffers: b0 of the vertex shader and b0 of the pixel shader, filled from the arrays below (the old c#
+      // registers, in the same order).
 
       const char kVertexShader[] = R"(
 cbuffer VSConst : register(b0) { row_major float4x4 ViewProj; row_major float4x4 ShadowMatrix; };
@@ -191,7 +196,8 @@ float4 PS(float4 pos : SV_Position, float2 uv : TEXCOORD0, float facing : TEXCOO
 }
 )";
 
-      // The void fill: one huge rectangle drawn at the far plane, so it only shows where nothing else was drawn (water to the horizon, or the colour of a canyon map's void).
+      // The void fill: one huge rectangle drawn at the far plane, so it only shows where nothing else was drawn (water
+      // to the horizon, or the colour of a canyon map's void).
       const char kFillVertexShader[] = R"(
 cbuffer VSConst : register(b0) { row_major float4x4 ViewProj; };
 float4 VS(float3 pos : POSITION) : SV_Position {
@@ -210,7 +216,8 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
 }
 )";
 
-      // ---- state -----------------------------------------------------------------------------------------------------------------------
+      // ---- state
+      // -----------------------------------------------------------------------------------------------------------------------
 
       MeshMap gMap;
       GeomCamera3 gCamera;
@@ -236,18 +243,18 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         ComPtr<ID3D11VertexShader> vs, depthVs, skyVs, fillVs;
         ComPtr<ID3D11PixelShader> ps, depthPs, skyPs, fillPs;
         ComPtr<ID3D11InputLayout> layout, depthLayout, skyLayout, fillLayout;
-        ComPtr<ID3D11Buffer> vsConst;            // 128 bytes: the vertex shaders' b0
-        ComPtr<ID3D11Buffer> psConst;            // 128 bytes: the pixel shaders' b0
-        ComPtr<ID3D11Buffer> fillVb;             // the void fill's four vertices
+        ComPtr<ID3D11Buffer> vsConst; // 128 bytes: the vertex shaders' b0
+        ComPtr<ID3D11Buffer> psConst; // 128 bytes: the pixel shaders' b0
+        ComPtr<ID3D11Buffer> fillVb;  // the void fill's four vertices
         ComPtr<ID3D11SamplerState> samplers[kSamplerCount];
-        ComPtr<ID3D11SamplerState> skySampler;   // slot 0 wraps
+        ComPtr<ID3D11SamplerState> skySampler; // slot 0 wraps
         ComPtr<ID3D11RasterizerState> raster, rasterBiased;
         ComPtr<ID3D11DepthStencilState> depthWrite, depthTest;
         ComPtr<ID3D11BlendState> opaque, skyAlpha, skyAdditive;
         ComPtr<ID3D11ShaderResourceView> white, gray, flatNormal, ramp;
         std::string rampPath;
         std::vector<GpuPatch> patches;
-        std::vector<ComPtr<ID3D11ShaderResourceView>> textures;   // material * kSlots + slot
+        std::vector<ComPtr<ID3D11ShaderResourceView>> textures; // material * kSlots + slot
       };
       Gpu gGpu;
 
@@ -290,12 +297,19 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
       {
         static const CreateTextureFn fn = [] {
           HMODULE module = ::LoadLibraryA("d3dx11_43.dll");
-          return module != nullptr ? reinterpret_cast<CreateTextureFn>(::GetProcAddress(module, "D3DX11CreateTextureFromMemory")) : nullptr;
+          return module != nullptr
+            ? reinterpret_cast<CreateTextureFn>(::GetProcAddress(module, "D3DX11CreateTextureFromMemory"))
+            : nullptr;
         }();
         return fn;
       }
 
-      bool CompileShader(const char* const source, const char* const entry, const char* const profile, ComPtr<ID3DBlob>& code)
+      bool CompileShader(
+        const char* const source,
+        const char* const entry,
+        const char* const profile,
+        ComPtr<ID3DBlob>& code
+      )
       {
         const CompileFn compile = Compiler();
         if (compile == nullptr) {
@@ -303,18 +317,33 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
           return false;
         }
         ComPtr<ID3DBlob> errors;
-        const HRESULT hr = compile(source, std::strlen(source), nullptr, nullptr, nullptr, entry, profile, 0, 0, &code, &errors);
+        const HRESULT hr =
+          compile(source, std::strlen(source), nullptr, nullptr, nullptr, entry, profile, 0, 0, &code, &errors);
         if (FAILED(hr) || !code) {
-          std::fprintf(stderr, "[edmesh] shader compile failed (%s): %s\n", profile, errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
+          std::fprintf(
+            stderr,
+            "[edmesh] shader compile failed (%s): %s\n",
+            profile,
+            errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?"
+          );
           return false;
         }
         return true;
       }
 
-      bool MakeVertexShader(ID3D11Device* const dev, const char* const source, ComPtr<ID3D11VertexShader>& vs, ComPtr<ID3D11InputLayout>& layout, const bool fullLayout)
+      bool MakeVertexShader(
+        ID3D11Device* const dev,
+        const char* const source,
+        ComPtr<ID3D11VertexShader>& vs,
+        ComPtr<ID3D11InputLayout>& layout,
+        const bool fullLayout
+      )
       {
         ComPtr<ID3DBlob> code;
-        if (!CompileShader(source, "VS", "vs_4_0", code) || FAILED(dev->CreateVertexShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &vs))) {
+        if (
+          !CompileShader(source, "VS", "vs_4_0", code) ||
+          FAILED(dev->CreateVertexShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &vs))
+        ) {
           return false;
         }
         static const D3D11_INPUT_ELEMENT_DESC kElements[] = {
@@ -325,19 +354,31 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
           {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 48, D3D11_INPUT_PER_VERTEX_DATA, 0},
           {"TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, 56, D3D11_INPUT_PER_VERTEX_DATA, 0},
         };
-        static const D3D11_INPUT_ELEMENT_DESC kFillElements[] = {{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0}};
-        const HRESULT hr = fullLayout ? dev->CreateInputLayout(kElements, 6, code->GetBufferPointer(), code->GetBufferSize(), &layout)
-                                      : dev->CreateInputLayout(kFillElements, 1, code->GetBufferPointer(), code->GetBufferSize(), &layout);
+        static const D3D11_INPUT_ELEMENT_DESC kFillElements[] = {
+          {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0}
+        };
+        const HRESULT hr = fullLayout
+          ? dev->CreateInputLayout(kElements, 6, code->GetBufferPointer(), code->GetBufferSize(), &layout)
+          : dev->CreateInputLayout(kFillElements, 1, code->GetBufferPointer(), code->GetBufferSize(), &layout);
         return SUCCEEDED(hr);
       }
 
-      bool MakePixelShader(ID3D11Device* const dev, const char* const source, ComPtr<ID3D11PixelShader>& ps)
+      bool MakePixelShader(
+        ID3D11Device* const dev,
+        const char* const source,
+        ComPtr<ID3D11PixelShader>& ps
+      )
       {
         ComPtr<ID3DBlob> code;
-        return CompileShader(source, "PS", "ps_4_0", code) && SUCCEEDED(dev->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &ps));
+        return CompileShader(source, "PS", "ps_4_0", code) &&
+          SUCCEEDED(dev->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &ps));
       }
 
-      ComPtr<ID3D11ShaderResourceView> LoadTexture(ID3D11Device* const dev, const std::string& vfsPath, const bool oneLevel)
+      ComPtr<ID3D11ShaderResourceView> LoadTexture(
+        ID3D11Device* const dev,
+        const std::string& vfsPath,
+        const bool oneLevel
+      )
       {
         const std::vector<std::uint8_t> bytes = ReadVfs(vfsPath);
         const CreateTextureFn load = TextureLoader();
@@ -356,43 +397,60 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         return SUCCEEDED(dev->CreateShaderResourceView(resource.Get(), nullptr, &view)) ? view : nullptr;
       }
 
-      ComPtr<ID3D11ShaderResourceView> Solid(ID3D11Device* const dev, const std::uint32_t argb)
+      ComPtr<ID3D11ShaderResourceView> Solid(
+        ID3D11Device* const dev,
+        const std::uint32_t argb
+      )
       {
         D3D11_TEXTURE2D_DESC desc{};
         desc.Width = 1;
         desc.Height = 1;
         desc.MipLevels = 1;
         desc.ArraySize = 1;
-        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;   // A8R8G8B8 as a 32 bit value
+        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM; // A8R8G8B8 as a 32 bit value
         desc.SampleDesc.Count = 1;
         desc.Usage = D3D11_USAGE_IMMUTABLE;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         const D3D11_SUBRESOURCE_DATA data = {&argb, 4, 0};
         ComPtr<ID3D11Texture2D> texture;
         ComPtr<ID3D11ShaderResourceView> view;
-        if (FAILED(dev->CreateTexture2D(&desc, &data, &texture)) || FAILED(dev->CreateShaderResourceView(texture.Get(), nullptr, &view))) {
+        if (
+          FAILED(dev->CreateTexture2D(&desc, &data, &texture)) ||
+          FAILED(dev->CreateShaderResourceView(texture.Get(), nullptr, &view))
+        ) {
           return nullptr;
         }
         return view;
       }
 
-      ComPtr<ID3D11Buffer> MakeBuffer(ID3D11Device* const dev, const void* const data, const UINT bytes, const UINT bindFlags)
+      ComPtr<ID3D11Buffer> MakeBuffer(
+        ID3D11Device* const dev,
+        const void* const data,
+        const UINT bytes,
+        const UINT bindFlags
+      )
       {
         D3D11_BUFFER_DESC desc{};
         desc.ByteWidth = bytes;
         desc.BindFlags = bindFlags;
-        desc.Usage = data != nullptr && bindFlags != D3D11_BIND_CONSTANT_BUFFER ? D3D11_USAGE_IMMUTABLE : D3D11_USAGE_DEFAULT;
+        desc.Usage =
+          data != nullptr && bindFlags != D3D11_BIND_CONSTANT_BUFFER ? D3D11_USAGE_IMMUTABLE : D3D11_USAGE_DEFAULT;
         const D3D11_SUBRESOURCE_DATA init = {data, 0, 0};
         ComPtr<ID3D11Buffer> buffer;
         return SUCCEEDED(dev->CreateBuffer(&desc, data != nullptr ? &init : nullptr, &buffer)) ? buffer : nullptr;
       }
 
-      bool CreateStates(ID3D11Device* const dev)
+      bool CreateStates(
+        ID3D11Device* const dev
+      )
       {
         for (int i = 0; i < kSamplerCount; ++i) {
-          // 0-1 tiled layers, 2-4 light masks, 5 shadow map (outside it: in the sun), 6 water ramp, 7-8 normal maps, 9-10 the masks (glow, highlight)
+          // 0-1 tiled layers, 2-4 light masks, 5 shadow map (outside it: in the sun), 6 water ramp, 7-8 normal maps,
+          // 9-10 the masks (glow, highlight)
           const bool tiled = i < 2 || i > 6;
-          const D3D11_TEXTURE_ADDRESS_MODE address = tiled ? D3D11_TEXTURE_ADDRESS_WRAP : i == 5 ? D3D11_TEXTURE_ADDRESS_BORDER : D3D11_TEXTURE_ADDRESS_CLAMP;
+          const D3D11_TEXTURE_ADDRESS_MODE address = tiled ? D3D11_TEXTURE_ADDRESS_WRAP
+            : i == 5                                       ? D3D11_TEXTURE_ADDRESS_BORDER
+                                                           : D3D11_TEXTURE_ADDRESS_CLAMP;
           const bool mips = i < 5 || i > 6;
           D3D11_SAMPLER_DESC desc{};
           desc.Filter = mips ? D3D11_FILTER_MIN_MAG_MIP_LINEAR : D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
@@ -411,7 +469,8 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         if (FAILED(dev->CreateRasterizerState(&raster, &gGpu.raster))) {
           return false;
         }
-        // both surfaces: the mesh is pulled a little towards the camera (the former depth bias of -0.002 is about -0.002 * 2^24 steps of a 24 bit buffer, slope scale -4)
+        // both surfaces: the mesh is pulled a little towards the camera (the former depth bias of -0.002 is about
+        // -0.002 * 2^24 steps of a 24 bit buffer, slope scale -4)
         raster.DepthBias = -33554;
         raster.SlopeScaledDepthBias = -4.0f;
         if (FAILED(dev->CreateRasterizerState(&raster, &gGpu.rasterBiased))) {
@@ -436,7 +495,7 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         blend.RenderTarget[0].BlendEnable = TRUE;
         blend.RenderTarget[0].BlendOp = blend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
         blend.RenderTarget[0].SrcBlend = blend.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_SRC_ALPHA;
-        blend.RenderTarget[0].RenderTargetWriteMask = 0x7;   // alpha is FA's glow: leave it
+        blend.RenderTarget[0].RenderTargetWriteMask = 0x7; // alpha is FA's glow: leave it
         blend.RenderTarget[0].DestBlend = blend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
         if (FAILED(dev->CreateBlendState(&blend, &gGpu.skyAlpha))) {
           return false;
@@ -445,14 +504,23 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         return SUCCEEDED(dev->CreateBlendState(&blend, &gGpu.skyAdditive));
       }
 
-      bool CreateResources(ID3D11Device* const dev, const CWaterShaderProperties* water)
+      bool CreateResources(
+        ID3D11Device* const dev,
+        const CWaterShaderProperties* water
+      )
       {
         ReleaseAll();
         gGpu.device = dev;
-        if (!MakeVertexShader(dev, kVertexShader, gGpu.vs, gGpu.layout, true) || !MakePixelShader(dev, kPixelShader, gGpu.ps) ||
-            !MakeVertexShader(dev, kDepthVertexShader, gGpu.depthVs, gGpu.depthLayout, true) || !MakePixelShader(dev, kDepthPixelShader, gGpu.depthPs) ||
-            !MakeVertexShader(dev, kSkyVertexShader, gGpu.skyVs, gGpu.skyLayout, true) || !MakePixelShader(dev, kSkyPixelShader, gGpu.skyPs) ||
-            !MakeVertexShader(dev, kFillVertexShader, gGpu.fillVs, gGpu.fillLayout, false) || !MakePixelShader(dev, kFillPixelShader, gGpu.fillPs)) {
+        if (
+          !MakeVertexShader(dev, kVertexShader, gGpu.vs, gGpu.layout, true) ||
+          !MakePixelShader(dev, kPixelShader, gGpu.ps) ||
+          !MakeVertexShader(dev, kDepthVertexShader, gGpu.depthVs, gGpu.depthLayout, true) ||
+          !MakePixelShader(dev, kDepthPixelShader, gGpu.depthPs) ||
+          !MakeVertexShader(dev, kSkyVertexShader, gGpu.skyVs, gGpu.skyLayout, true) ||
+          !MakePixelShader(dev, kSkyPixelShader, gGpu.skyPs) ||
+          !MakeVertexShader(dev, kFillVertexShader, gGpu.fillVs, gGpu.fillLayout, false) ||
+          !MakePixelShader(dev, kFillPixelShader, gGpu.fillPs)
+        ) {
           return false;
         }
         gGpu.vsConst = MakeBuffer(dev, nullptr, 128, D3D11_BIND_CONSTANT_BUFFER);
@@ -507,7 +575,10 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         return true;
       }
 
-      bool EnsureResources(ID3D11Device* const dev, const CWaterShaderProperties* water)
+      bool EnsureResources(
+        ID3D11Device* const dev,
+        const CWaterShaderProperties* water
+      )
       {
         if (gGpu.device == dev && gGpu.generation == gGeneration) {
           return true;
@@ -525,12 +596,19 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         return true;
       }
 
-      const Material* MaterialOf(const Patch& p)
+      const Material* MaterialOf(
+        const Patch& p
+      )
       {
-        return p.material >= 0 && p.material < static_cast<int>(gMap.materials.size()) ? &gMap.materials[static_cast<std::size_t>(p.material)] : nullptr;
+        return p.material >= 0 && p.material < static_cast<int>(gMap.materials.size())
+          ? &gMap.materials[static_cast<std::size_t>(p.material)]
+          : nullptr;
       }
 
-      ID3D11ShaderResourceView* SlotTexture(const Patch& p, const int slot)
+      ID3D11ShaderResourceView* SlotTexture(
+        const Patch& p,
+        const int slot
+      )
       {
         if (p.material < 0 || p.material >= static_cast<int>(gMap.materials.size())) {
           return nullptr;
@@ -538,7 +616,9 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         return gGpu.textures[static_cast<std::size_t>(p.material) * kSlots + static_cast<std::size_t>(slot)].Get();
       }
 
-      ID3D11ShaderResourceView* ShadowTexture(Shadow* shadow)
+      ID3D11ShaderResourceView* ShadowTexture(
+        Shadow* shadow
+      )
       {
         if (shadow == nullptr || !shadow->mShadowCameraValid) {
           return nullptr;
@@ -550,12 +630,16 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         CD3DRenderTarget::SurfaceHandle handle;
         target->GetSurface(handle);
         gpg::gal::RenderTarget* const surface = handle.get();
-        return surface != nullptr ? static_cast<gpg::gal::RenderTargetD3D11*>(surface)->GetShaderResourceView() : nullptr;
+        return surface != nullptr ? static_cast<gpg::gal::RenderTargetD3D11*>(surface)->GetShaderResourceView()
+                                  : nullptr;
       }
 
-      /// clip = ((p * View) * (s, s, s, 1)) * Proj with s = TerrainErrorScale (terrain.fx): FA pulls distant terrain slightly towards the camera, so the mesh and the
-      /// depth buffer agree with units and decals at every zoom.
-      void TerrainViewProj(const GeomCamera3& camera, float out[16])
+      /// clip = ((p * View) * (s, s, s, 1)) * Proj with s = TerrainErrorScale (terrain.fx): FA pulls distant terrain
+      /// slightly towards the camera, so the mesh and the depth buffer agree with units and decals at every zoom.
+      void TerrainViewProj(
+        const GeomCamera3& camera,
+        float out[16]
+      )
       {
         constexpr double kErrorScale = 1.0005;
         float view[16], proj[16];
@@ -591,7 +675,9 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         ComPtr<ID3D11ShaderResourceView> srv[kSamplerCount];
         ComPtr<ID3D11SamplerState> sampler[kSamplerCount];
 
-        void Capture(ID3D11DeviceContext* const ctx)
+        void Capture(
+          ID3D11DeviceContext* const ctx
+        )
         {
           ctx->IAGetInputLayout(&layout);
           ctx->IAGetVertexBuffers(0, 1, vb.GetAddressOf(), &stride, &vbOffset);
@@ -614,7 +700,9 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
           }
         }
 
-        void Restore(ID3D11DeviceContext* const ctx)
+        void Restore(
+          ID3D11DeviceContext* const ctx
+        )
         {
           ctx->IASetInputLayout(layout.Get());
           ctx->IASetVertexBuffers(0, 1, vb.GetAddressOf(), &stride, &vbOffset);
@@ -638,12 +726,20 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         }
       };
 
-      void SetTexture(ID3D11DeviceContext* const ctx, const UINT slot, ID3D11ShaderResourceView* const view)
+      void SetTexture(
+        ID3D11DeviceContext* const ctx,
+        const UINT slot,
+        ID3D11ShaderResourceView* const view
+      )
       {
         ctx->PSSetShaderResources(slot, 1, &view);
       }
 
-      void DrawPatch(ID3D11DeviceContext* const ctx, const GpuPatch& g, const Patch& p)
+      void DrawPatch(
+        ID3D11DeviceContext* const ctx,
+        const GpuPatch& g,
+        const Patch& p
+      )
       {
         const UINT stride = kVertexStride;
         const UINT offset = 0;
@@ -653,7 +749,8 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
       }
     } // namespace
 
-    // ---- public state ---------------------------------------------------------------------------------------------------------------
+    // ---- public state
+    // ---------------------------------------------------------------------------------------------------------------
 
     MeshMap& Map()
     {
@@ -675,7 +772,9 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
       return gMode;
     }
 
-    void SetMode(const Mode mode)
+    void SetMode(
+      const Mode mode
+    )
     {
       gMode = mode;
     }
@@ -695,13 +794,22 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
       return gLastDrawMs;
     }
 
-    void NoteCamera(const GeomCamera3& camera)
+    void NoteCamera(
+      const GeomCamera3& camera
+    )
     {
       gCamera = camera;
       gHaveCamera = true;
     }
 
-    bool CameraRay(const float px, const float py, const float vw, const float vh, float origin[3], float dir[3])
+    bool CameraRay(
+      const float px,
+      const float py,
+      const float vw,
+      const float vh,
+      float origin[3],
+      float dir[3]
+    )
     {
       if (!gHaveCamera || vw <= 0.0f || vh <= 0.0f) {
         return false;
@@ -727,7 +835,8 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
       if (!gMap.Loaded() || !gMap.HeightRange(32.0f, low, high)) {
         return;
       }
-      // (the engine's names are swapped: `patch_maxMapHeight` holds the bottom of the band, `patch_minMapHeight` its top, see Sim_Create_exxt)
+      // (the engine's names are swapped: `patch_maxMapHeight` holds the bottom of the band, `patch_minMapHeight` its
+      // top, see Sim_Create_exxt)
       moho::patch_maxMapHeight = std::min(moho::patch_maxMapHeight, low - 5.0f);
       moho::patch_minMapHeight = std::max(moho::patch_minMapHeight, high + 30.0f);
       if (CD3DDevice* const device = D3D_GetDevice(); device != nullptr) {
@@ -738,9 +847,14 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
       }
     }
 
-    // ---- the surface pass -----------------------------------------------------------------------------------------------------------
+    // ---- the surface pass
+    // -----------------------------------------------------------------------------------------------------------
 
-    bool DrawSurface(const GeomCamera3& camera, Shadow* const shadow, const CWaterShaderProperties* const water)
+    bool DrawSurface(
+      const GeomCamera3& camera,
+      Shadow* const shadow,
+      const CWaterShaderProperties* const water
+    )
     {
       if (!MeshWanted()) {
         return false;
@@ -756,7 +870,7 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
       saved.Capture(ctx);
 
       const Settings& s = gMap.settings;
-      float vsConst[32];   // ViewProj, ShadowMatrix
+      float vsConst[32]; // ViewProj, ShadowMatrix
       TerrainViewProj(camera, vsConst);
       float* const shadowMatrix = vsConst + 16;
       static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
@@ -770,8 +884,11 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
 
       const bool hasWater = s.water > -9000.0f;
       const bool hazeOn = !hasWater && s.haveVoid && s.haze > -9000.0f;
-      float psConst[32] = {};   // c0..c7 of the pixel shader: params, haze, void colour, shadow colour, material, sun direction, sun colour, eye
-      const float params[4] = {1.0f, shadowTexture != nullptr ? 1.0f : 0.0f, s.water, 1.0f / std::max(1.0f, s.water - s.waterAbyss)};
+      float psConst[32] = {}; // c0..c7 of the pixel shader: params, haze, void colour, shadow colour, material, sun
+                              // direction, sun colour, eye
+      const float params[4] = {
+        1.0f, shadowTexture != nullptr ? 1.0f : 0.0f, s.water, 1.0f / std::max(1.0f, s.water - s.waterAbyss)
+      };
       const float haze[4] = {s.haze, 1.0f / s.hazeSpan, s.waterTint, hazeOn ? 1.0f : 0.0f};
       const float voidColor[4] = {s.voidColor[0], s.voidColor[1], s.voidColor[2], 0.0f};
       std::memcpy(psConst + 0, params, 16);
@@ -789,8 +906,9 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
       ctx->PSSetShader(gGpu.ps.Get(), nullptr, 0);
       ctx->VSSetConstantBuffers(0, 1, gGpu.vsConst.GetAddressOf());
       ctx->PSSetConstantBuffers(0, 1, gGpu.psConst.GetAddressOf());
-      // both surfaces: the mesh is pulled a little towards the camera, so the height field shows only where it lies above the mesh (where the sim's ground and
-      // the visible ground disagree) instead of the two z-fighting over every flat part
+      // both surfaces: the mesh is pulled a little towards the camera, so the height field shows only where it lies
+      // above the mesh (where the sim's ground and the visible ground disagree) instead of the two z-fighting over
+      // every flat part
       ctx->RSSetState(gMode == Mode::Both ? gGpu.rasterBiased.Get() : gGpu.raster.Get());
       ctx->OMSetDepthStencilState(gGpu.depthWrite.Get(), 0);
       ctx->OMSetBlendState(gGpu.opaque.Get(), nullptr, 0xFFFFFFFFu);
@@ -814,23 +932,35 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         for (int k = 0; k < 7; ++k) {
           ID3D11ShaderResourceView* t = SlotTexture(p, k);
           if (t == nullptr && (k == 1 || k == 6) && m != nullptr) {
-            t = SlotTexture(p, k == 1 ? 0 : 5);   // one layer only: blend it with itself
+            t = SlotTexture(p, k == 1 ? 0 : 5); // one layer only: blend it with itself
           }
-          SetTexture(ctx, kSampler[k], t != nullptr ? t : (k < 2 ? gGpu.white.Get() : k < 5 ? gGpu.gray.Get() : gGpu.flatNormal.Get()));
+          SetTexture(
+            ctx,
+            kSampler[k],
+            t != nullptr ? t
+                         : (k < 2     ? gGpu.white.Get()
+                              : k < 5 ? gGpu.gray.Get()
+                                      : gGpu.flatNormal.Get())
+          );
         }
         ID3D11ShaderResourceView* const maskA = SlotTexture(p, 7);
         ID3D11ShaderResourceView* const maskB = SlotTexture(p, 8);
         const bool glow = m != nullptr && m->glow && maskA != nullptr;
         SetTexture(ctx, 9, maskA != nullptr ? maskA : gGpu.white.Get());
         SetTexture(ctx, 10, maskB != nullptr ? maskB : (maskA != nullptr ? maskA : gGpu.white.Get()));
-        const float material[4] = {m != nullptr && m->blending ? 1.0f : 0.0f, glow ? 1.0f : 0.0f, m != nullptr && m->highlight ? 0.5f : 0.0f,
-                                   m != nullptr && m->alphaTest >= 0.0f ? m->alphaTest + 1.0f : -1.0f};
+        const float material[4] = {
+          m != nullptr && m->blending ? 1.0f : 0.0f,
+          glow ? 1.0f : 0.0f,
+          m != nullptr && m->highlight ? 0.5f : 0.0f,
+          m != nullptr && m->alphaTest >= 0.0f ? m->alphaTest + 1.0f : -1.0f
+        };
         std::memcpy(psConst + 16, material, 16);
         ctx->UpdateSubresource(gGpu.psConst.Get(), 0, nullptr, psConst, 0, 0);
         DrawPatch(ctx, g, p);
       }
 
-      // where no ground was drawn: water to the horizon, or the haze a canyon map fades into (the quad sits at the far plane)
+      // where no ground was drawn: water to the horizon, or the haze a canyon map fades into (the quad sits at the far
+      // plane)
       if ((hasWater && gGpu.ramp) || hazeOn) {
         const float y = hasWater ? s.water : s.haze - s.hazeSpan, lo = -8.0f * s.size, hi = 9.0f * s.size;
         const float quad[4][3] = {{lo, y, lo}, {hi, y, lo}, {lo, y, hi}, {hi, y, hi}};
@@ -855,7 +985,7 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
         anySky = anySky || p.sky;
       }
       if (anySky) {
-        float skyConst[32] = {};   // ViewProj, Eye, Centre
+        float skyConst[32] = {}; // ViewProj, Eye, Centre
         std::memcpy(skyConst, vsConst, 16 * sizeof(float));
         std::memcpy(skyConst + 16, eye, 16);
         const float centre[4] = {s.size * 0.5f, 0.0f, s.size * 0.5f, 0.0f};
@@ -877,7 +1007,9 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
           const Material* m = MaterialOf(p);
           ID3D11ShaderResourceView* const t = SlotTexture(p, 0);
           SetTexture(ctx, 0, t != nullptr ? t : gGpu.white.Get());
-          ctx->OMSetBlendState(m != nullptr && m->additive ? gGpu.skyAdditive.Get() : gGpu.skyAlpha.Get(), nullptr, 0xFFFFFFFFu);
+          ctx->OMSetBlendState(
+            m != nullptr && m->additive ? gGpu.skyAdditive.Get() : gGpu.skyAlpha.Get(), nullptr, 0xFFFFFFFFu
+          );
           DrawPatch(ctx, g, p);
         }
       }
@@ -888,9 +1020,12 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
       return true;
     }
 
-    // ---- the shadow map -------------------------------------------------------------------------------------------------------------
+    // ---- the shadow map
+    // -------------------------------------------------------------------------------------------------------------
 
-    bool DrawDepth(const GeomCamera3& lightCamera)
+    bool DrawDepth(
+      const GeomCamera3& lightCamera
+    )
     {
       if (!MeshWanted()) {
         return false;
@@ -914,7 +1049,7 @@ float4 PS(float4 pos : SV_Position) : SV_Target {
       ctx->RSSetState(gGpu.raster.Get());
       ctx->OMSetDepthStencilState(gGpu.depthWrite.Get(), 0);
       ctx->OMSetBlendState(gGpu.opaque.Get(), nullptr, 0xFFFFFFFFu);
-      ID3D11SamplerState* const sampler = gGpu.samplers[0].Get();   // tiled, linear
+      ID3D11SamplerState* const sampler = gGpu.samplers[0].Get(); // tiled, linear
       ctx->PSSetSamplers(0, 1, &sampler);
       for (std::size_t pi = 0; pi < gMap.patches.size(); ++pi) {
         const Patch& p = gMap.patches[pi];

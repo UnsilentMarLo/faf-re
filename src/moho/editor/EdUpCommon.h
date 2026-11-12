@@ -1,23 +1,31 @@
 // EDITOR: the binding scaffold of the "up" natives (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP1).
 //
-// "Up" is upstream's editor logic (src/editor/{doc,tools,graph,undo}, built as faf_editor_logic, namespace faf::editor): text in, text out, no engine objects.
-// Each area of it is bound to Lua by one translation unit of moho/editor named EdUp<Area>.cpp (EdUpCore.cpp holds ed_up_version); this header is what those
-// units share, so each stays a thin layer over the library:
+// "Up" is upstream's editor logic (src/editor/{doc,tools,graph,undo}, built as faf_editor_logic, namespace
+// faf::editor): text in, text out, no engine objects. Each area of it is bound to Lua by one translation unit of
+// moho/editor named EdUp<Area>.cpp (EdUpCore.cpp holds ed_up_version); this header is what those units share, so each
+// stays a thin layer over the library:
 //
-//   * registration:   a unit declares `static const moho::editor::up::Natives bootstrap{{ {"ed_xxx", &cfunc_Xxx, "ed_xxx(a) -> b"}, ... }};` and the natives are in the
+//   * registration:   a unit declares `static const moho::editor::up::Natives bootstrap{{ {"ed_xxx", &cfunc_Xxx,
+//   "ed_xxx(a) -> b"}, ... }};` and the natives are in the
 //                     UI Lua state (the "User" init set, as ed_field_* and the other ed_* natives are).
-//   * tables:         plain Lua tables in and out; the helpers read a field with a default (a missing field is not an error, the library's own defaults apply) and
-//                     push lists, so a binding is "table -> struct, call, struct -> table" and nothing else. Failures are `nil, message` (Fail), never a Lua error,
-//                     except a wrong argument type (Arg* helpers, luaL_error as the engine's natives do).
-//   * jobs:           anything that waits (HTTP, a zip of a map folder, a vault download) runs on a worker thread of the library and is POLLED from Lua:
-//                       ed_xxx_start(args...)  -> job id        (the job runs on its own thread; the UI thread never blocks)
-//                       ed_xxx_poll(job)       -> { done = bool, progress = 0..1, ... }, and once `done`, the result fields or `error`
-//                       ed_xxx_cancel(job)     -> nothing       (the worker is asked to stop; the job still ends with `done`)
-//                       ed_xxx_free(job)       -> nothing       (forgets the result; a running job is cancelled and joined first)
-//                     `JobSet<Result>` below is the registry: Start() takes a callable `Result(JobContext&)`, Poll() / Take() are what the natives call. The registry
-//                     is touched by the Lua thread only; the worker sees its JobContext (cancel flag, progress) and nothing else, so the library needs no locks.
+//   * tables:         plain Lua tables in and out; the helpers read a field with a default (a missing field is not an
+//   error, the library's own defaults apply) and
+//                     push lists, so a binding is "table -> struct, call, struct -> table" and nothing else. Failures
+//                     are `nil, message` (Fail), never a Lua error, except a wrong argument type (Arg* helpers,
+//                     luaL_error as the engine's natives do).
+//   * jobs:           anything that waits (HTTP, a zip of a map folder, a vault download) runs on a worker thread of
+//   the library and is POLLED from Lua:
+//                       ed_xxx_start(args...)  -> job id        (the job runs on its own thread; the UI thread never
+//                       blocks) ed_xxx_poll(job)       -> { done = bool, progress = 0..1, ... }, and once `done`, the
+//                       result fields or `error` ed_xxx_cancel(job)     -> nothing       (the worker is asked to stop;
+//                       the job still ends with `done`) ed_xxx_free(job)       -> nothing       (forgets the result; a
+//                       running job is cancelled and joined first)
+//                     `JobSet<Result>` below is the registry: Start() takes a callable `Result(JobContext&)`, Poll() /
+//                     Take() are what the natives call. The registry is touched by the Lua thread only; the worker sees
+//                     its JobContext (cancel flag, progress) and nothing else, so the library needs no locks.
 //
-// Everything here is header-only and includes no engine header but the Lua C API, so a unit that binds a library area stays small.
+// Everything here is header-only and includes no engine header but the Lua C API, so a unit that binds a library area
+// stays small.
 
 #pragma once
 
@@ -42,7 +50,8 @@
 
 namespace moho::editor::up
 {
-  // ---- registration ---------------------------------------------------------------------------------------------------------------------------
+  // ---- registration
+  // ---------------------------------------------------------------------------------------------------------------------------
 
   struct Native
   {
@@ -61,10 +70,13 @@ namespace moho::editor::up
     return fallbackSet;
   }
 
-  /** A static object of a binding unit: registers its natives when the executable starts, as the other editor natives do. */
+  /** A static object of a binding unit: registers its natives when the executable starts, as the other editor natives
+   * do. */
   struct Natives
   {
-    Natives(std::initializer_list<Native> list)
+    Natives(
+      std::initializer_list<Native> list
+    )
     {
       moho::CScrLuaInitFormSet& set = UserLuaInitSet();
       for (const Native& n : list) {
@@ -73,22 +85,32 @@ namespace moho::editor::up
     }
   };
 
-  // ---- results --------------------------------------------------------------------------------------------------------------------------------
+  // ---- results
+  // --------------------------------------------------------------------------------------------------------------------------------
 
   /** `nil, message` for a Lua caller; returns the number of results. */
-  inline int Fail(lua_State* const L, const std::string& message)
+  inline int Fail(
+    lua_State* const L,
+    const std::string& message
+  )
   {
     lua_pushnil(L);
     lua_pushstring(L, message.c_str());
     return 2;
   }
 
-  // ---- reading a table argument ---------------------------------------------------------------------------------------------------------------------
+  // ---- reading a table argument
+  // ---------------------------------------------------------------------------------------------------------------------
   //
-  // `index` is the table's stack index (absolute or relative to the top of the stack at call time); a non-table argument reads as an empty table.
+  // `index` is the table's stack index (absolute or relative to the top of the stack at call time); a non-table
+  // argument reads as an empty table.
 
   /** Pushes t[key] (nil when `index` is no table) and returns its type. Pop it with lua_settop(L, -2). */
-  inline int PushField(lua_State* const L, const int index, const char* const key)
+  inline int PushField(
+    lua_State* const L,
+    const int index,
+    const char* const key
+  )
   {
     const int abs = index < 0 && index > LUA_REGISTRYINDEX ? lua_gettop(L) + index + 1 : index;
     if (lua_type(L, abs) != LUA_TTABLE) {
@@ -100,7 +122,12 @@ namespace moho::editor::up
     return lua_type(L, -1);
   }
 
-  [[nodiscard]] inline std::string FieldString(lua_State* const L, const int index, const char* const key, const std::string& fallback = std::string())
+  [[nodiscard]] inline std::string FieldString(
+    lua_State* const L,
+    const int index,
+    const char* const key,
+    const std::string& fallback = std::string()
+  )
   {
     std::string out = fallback;
     if (PushField(L, index, key) == LUA_TSTRING) {
@@ -110,7 +137,12 @@ namespace moho::editor::up
     return out;
   }
 
-  [[nodiscard]] inline double FieldNumber(lua_State* const L, const int index, const char* const key, const double fallback = 0.0)
+  [[nodiscard]] inline double FieldNumber(
+    lua_State* const L,
+    const int index,
+    const char* const key,
+    const double fallback = 0.0
+  )
   {
     double out = fallback;
     if (PushField(L, index, key) == LUA_TNUMBER) {
@@ -120,12 +152,22 @@ namespace moho::editor::up
     return out;
   }
 
-  [[nodiscard]] inline int FieldInt(lua_State* const L, const int index, const char* const key, const int fallback = 0)
+  [[nodiscard]] inline int FieldInt(
+    lua_State* const L,
+    const int index,
+    const char* const key,
+    const int fallback = 0
+  )
   {
     return static_cast<int>(FieldNumber(L, index, key, static_cast<double>(fallback)));
   }
 
-  [[nodiscard]] inline bool FieldBool(lua_State* const L, const int index, const char* const key, const bool fallback = false)
+  [[nodiscard]] inline bool FieldBool(
+    lua_State* const L,
+    const int index,
+    const char* const key,
+    const bool fallback = false
+  )
   {
     bool out = fallback;
     if (PushField(L, index, key) == LUA_TBOOLEAN) {
@@ -136,7 +178,11 @@ namespace moho::editor::up
   }
 
   /** The strings of the array t[key] (non-string entries are skipped). */
-  [[nodiscard]] inline std::vector<std::string> FieldStringList(lua_State* const L, const int index, const char* const key)
+  [[nodiscard]] inline std::vector<std::string> FieldStringList(
+    lua_State* const L,
+    const int index,
+    const char* const key
+  )
   {
     std::vector<std::string> out;
     if (PushField(L, index, key) == LUA_TTABLE) {
@@ -159,7 +205,11 @@ namespace moho::editor::up
   }
 
   /** The numbers of the array t[key] (non-number entries are skipped). */
-  [[nodiscard]] inline std::vector<double> FieldNumberList(lua_State* const L, const int index, const char* const key)
+  [[nodiscard]] inline std::vector<double> FieldNumberList(
+    lua_State* const L,
+    const int index,
+    const char* const key
+  )
   {
     std::vector<double> out;
     if (PushField(L, index, key) == LUA_TTABLE) {
@@ -182,7 +232,11 @@ namespace moho::editor::up
   }
 
   /** A string argument (a Lua error naming `what` when it is not one). */
-  [[nodiscard]] inline std::string ArgString(lua_State* const L, const int index, const char* const what)
+  [[nodiscard]] inline std::string ArgString(
+    lua_State* const L,
+    const int index,
+    const char* const what
+  )
   {
     if (lua_type(L, index) != LUA_TSTRING) {
       luaL_error(L, "%s: argument %d must be a string", what, index);
@@ -190,32 +244,49 @@ namespace moho::editor::up
     return std::string(lua_tostring(L, index), lua_strlen(L, index));
   }
 
-  // ---- writing a table result -----------------------------------------------------------------------------------------------------------------------
+  // ---- writing a table result
+  // -----------------------------------------------------------------------------------------------------------------------
   //
   // The table is on top of the stack (lua_newtable first); each call adds one field and leaves the stack as it was.
 
-  inline void SetString(lua_State* const L, const char* const key, const std::string& value)
+  inline void SetString(
+    lua_State* const L,
+    const char* const key,
+    const std::string& value
+  )
   {
     lua_pushstring(L, key);
     lua_pushlstring(L, value.data(), value.size());
     lua_settable(L, -3);
   }
 
-  inline void SetNumber(lua_State* const L, const char* const key, const double value)
+  inline void SetNumber(
+    lua_State* const L,
+    const char* const key,
+    const double value
+  )
   {
     lua_pushstring(L, key);
     lua_pushnumber(L, static_cast<lua_Number>(value));
     lua_settable(L, -3);
   }
 
-  inline void SetBool(lua_State* const L, const char* const key, const bool value)
+  inline void SetBool(
+    lua_State* const L,
+    const char* const key,
+    const bool value
+  )
   {
     lua_pushstring(L, key);
     lua_pushboolean(L, value ? 1 : 0);
     lua_settable(L, -3);
   }
 
-  inline void SetStringList(lua_State* const L, const char* const key, const std::vector<std::string>& values)
+  inline void SetStringList(
+    lua_State* const L,
+    const char* const key,
+    const std::vector<std::string>& values
+  )
   {
     lua_pushstring(L, key);
     lua_newtable(L);
@@ -226,7 +297,11 @@ namespace moho::editor::up
     lua_settable(L, -3);
   }
 
-  inline void SetNumberList(lua_State* const L, const char* const key, const std::vector<double>& values)
+  inline void SetNumberList(
+    lua_State* const L,
+    const char* const key,
+    const std::vector<double>& values
+  )
   {
     lua_pushstring(L, key);
     lua_newtable(L);
@@ -237,15 +312,24 @@ namespace moho::editor::up
     lua_settable(L, -3);
   }
 
-  // ---- jobs (polled from Lua) -----------------------------------------------------------------------------------------------------------------------
+  // ---- jobs (polled from Lua)
+  // -----------------------------------------------------------------------------------------------------------------------
 
   /** What a worker sees of its job: whether it should stop, and where it reports progress (0..1). */
   struct JobContext
   {
     std::atomic<bool> cancel{false};
     std::atomic<float> progress{0.0f};
-    [[nodiscard]] bool Cancelled() const noexcept { return cancel.load(std::memory_order_relaxed); }
-    void Report(const float value) noexcept { progress.store(value, std::memory_order_relaxed); }
+    [[nodiscard]] bool Cancelled() const noexcept
+    {
+      return cancel.load(std::memory_order_relaxed);
+    }
+    void Report(
+      const float value
+    ) noexcept
+    {
+      progress.store(value, std::memory_order_relaxed);
+    }
   };
 
   /** What Poll() says of a job. */
@@ -266,10 +350,15 @@ namespace moho::editor::up
     JobSet() = default;
     JobSet(const JobSet&) = delete;
     JobSet& operator=(const JobSet&) = delete;
-    ~JobSet() { Clear(); }
+    ~JobSet()
+    {
+      Clear();
+    }
 
     /** Starts `work` on a new thread; returns its id. */
-    int Start(Work work)
+    int Start(
+      Work work
+    )
     {
       const int id = nextId_++;
       auto job = std::make_shared<Job>();
@@ -286,7 +375,9 @@ namespace moho::editor::up
       return id;
     }
 
-    [[nodiscard]] JobStatus Poll(const int id) const
+    [[nodiscard]] JobStatus Poll(
+      const int id
+    ) const
     {
       JobStatus status;
       const auto it = jobs_.find(id);
@@ -300,7 +391,9 @@ namespace moho::editor::up
     }
 
     /** The result of a finished job (a copy; the job stays until Free()); empty while it runs or for an unknown id. */
-    [[nodiscard]] std::optional<Result> Get(const int id) const
+    [[nodiscard]] std::optional<Result> Get(
+      const int id
+    ) const
     {
       const auto it = jobs_.find(id);
       if (it == jobs_.end() || !it->second->done.load(std::memory_order_acquire)) {
@@ -311,7 +404,9 @@ namespace moho::editor::up
     }
 
     /** Asks the worker to stop (it decides when; the job still ends as done). */
-    void Cancel(const int id) const
+    void Cancel(
+      const int id
+    ) const
     {
       const auto it = jobs_.find(id);
       if (it != jobs_.end()) {
@@ -320,7 +415,9 @@ namespace moho::editor::up
     }
 
     /** Forgets a job: cancels and joins it when it still runs. */
-    void Free(const int id)
+    void Free(
+      const int id
+    )
     {
       const auto it = jobs_.find(id);
       if (it == jobs_.end()) {
@@ -339,7 +436,10 @@ namespace moho::editor::up
       jobs_.clear();
     }
 
-    [[nodiscard]] std::size_t Count() const noexcept { return jobs_.size(); }
+    [[nodiscard]] std::size_t Count() const noexcept
+    {
+      return jobs_.size();
+    }
 
   private:
     struct Job
@@ -351,7 +451,9 @@ namespace moho::editor::up
       std::thread thread;
     };
 
-    static void Retire(Job& job)
+    static void Retire(
+      Job& job
+    )
     {
       job.context.cancel.store(true, std::memory_order_relaxed);
       if (job.thread.joinable()) {
@@ -363,8 +465,12 @@ namespace moho::editor::up
     int nextId_ = 1;
   };
 
-  /** Starts the poll table of a job: { done = bool, progress = n } on top of the stack (the caller adds the result fields once `done`). */
-  inline void PushJobStatus(lua_State* const L, const JobStatus& status)
+  /** Starts the poll table of a job: { done = bool, progress = n } on top of the stack (the caller adds the result
+   * fields once `done`). */
+  inline void PushJobStatus(
+    lua_State* const L,
+    const JobStatus& status
+  )
   {
     lua_newtable(L);
     SetBool(L, "done", status.done);

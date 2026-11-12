@@ -43,13 +43,13 @@
 #include "moho/editor/EdBootstrap.h"
 #endif
 
-// FAF Studio: on a machine with an integrated and a dedicated GPU (laptops, desktops with the monitor on the motherboard output) the Direct3D 9 renderer
-// opened adapter 0, the integrated one. These two exported variables are the drivers' documented request (NVIDIA Optimus, AMD PowerXpress / Switchable
-// Graphics) to run the process on the high performance GPU; they are read from the exe's export table before the first Direct3D call.
-extern "C"
-{
-  __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
-  __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+// FAF Studio: on a machine with an integrated and a dedicated GPU (laptops, desktops with the monitor on the
+// motherboard output) the Direct3D 9 renderer opened adapter 0, the integrated one. These two exported variables are
+// the drivers' documented request (NVIDIA Optimus, AMD PowerXpress / Switchable Graphics) to run the process on the
+// high performance GPU; they are read from the exe's export table before the first Direct3D call.
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 
 // crashtest lua_table_corrupt builds a raw VM; lua_open is recovered in
@@ -139,7 +139,11 @@ namespace
    * and pointer, then up to 64 return addresses and a 0 terminator. An address
    * seen for the first time also gets its resolved symbol line, NUL included.
    */
-  void func_MemHook(const int isFreeing, const int size, ...)
+  void func_MemHook(
+    const int isFreeing,
+    const int size,
+    ...
+  )
   {
     va_list args;
     va_start(args, size);
@@ -187,7 +191,9 @@ namespace
    * performance-counter frequency as its header, sets up the lock, registers
    * the cleanup for exit and installs the hook.
    */
-  void InitializeAllocationLog(const char* const path)
+  void InitializeAllocationLog(
+    const char* const path
+  )
   {
     std::FILE* const file = std::fopen(path, "wb");
     if (file == nullptr) {
@@ -215,7 +221,9 @@ namespace
    * Registrar: FUN_00BE9700 (`__xc_a` lane), data-xref
    * `dword_F5BEFC = offset sub_8D4260` is the callsite evidence.
    */
-  void SC_StartMemoryLog(const fa::vector<fa::string>& args)
+  void SC_StartMemoryLog(
+    const fa::vector<fa::string>& args
+  )
   {
     if (args.size() != 2u) {
       return;
@@ -246,14 +254,18 @@ namespace
 
   [[noreturn]] void RunCrashTest(const char* kind); // defined below, beside its docs
 
-  DWORD WINAPI DelayedCrashThread(LPVOID)
+  DWORD WINAPI DelayedCrashThread(
+    LPVOID
+  )
   {
     ::Sleep(gDelayedCrashRequest.seconds * 1000ul);
     RunCrashTest(gDelayedCrashRequest.kind);
     return 0;
   }
 
-  void SC_FafCrashTest(const fa::vector<fa::string>& args)
+  void SC_FafCrashTest(
+    const fa::vector<fa::string>& args
+  )
   {
     const fa::string* const kindToken = moho::ConCommandArg(args, 1u);
     RunCrashTest((kindToken != nullptr) ? kindToken->c_str() : "nullread");
@@ -271,7 +283,9 @@ namespace
    * Registrar: FUN_00BE9740 (`__xc_a` lane), data-xref
    * `dword_F5BF0C = offset sub_8D42B0` is the callsite evidence.
    */
-  void SC_StopMemoryLog(const fa::vector<fa::string>& args)
+  void SC_StopMemoryLog(
+    const fa::vector<fa::string>& args
+  )
   {
     (void)args;
     func_CleanupAllocLoc();
@@ -285,7 +299,8 @@ namespace
    * Address: 0x00BE9700 (FUN_00BE9700, dynamic initializer for `gCConFunc_SC_StartMemoryLog`)
    * Address: 0x00C08F10 (FUN_00C08F10, dynamic atexit destructor for `gCConFunc_SC_StartMemoryLog`)
    */
-  moho::CConFunc gCConFunc_SC_StartMemoryLog("SC_StartMemoryLog", kConsoleStartupSCStartMemoryLogDescription, &SC_StartMemoryLog);
+  moho::CConFunc
+    gCConFunc_SC_StartMemoryLog("SC_StartMemoryLog", kConsoleStartupSCStartMemoryLogDescription, &SC_StartMemoryLog);
 
   /// 0x00E4F274, the `.data` initializer of `Moho::CConFunc_SC_StopMemoryLog`
   /// (+0x08), read directly from the shipped PE.
@@ -295,12 +310,13 @@ namespace
    * Address: 0x00BE9740 (FUN_00BE9740, dynamic initializer for `gCConFunc_SC_StopMemoryLog`)
    * Address: 0x00C08F40 (FUN_00C08F40, dynamic atexit destructor for `gCConFunc_SC_StopMemoryLog`)
    */
-  moho::CConFunc gCConFunc_SC_StopMemoryLog("SC_StopMemoryLog", kConsoleStartupSCStopMemoryLogDescription, &SC_StopMemoryLog);
+  moho::CConFunc
+    gCConFunc_SC_StopMemoryLog("SC_StopMemoryLog", kConsoleStartupSCStopMemoryLogDescription, &SC_StopMemoryLog);
 
   // New engine functionality (documented deviation), registered the same
   // way as the memory-log pair above.
-  moho::CConFunc gCConFunc_FafCrashTest("faf_crashtest", "Crash the game on purpose to test the crash report",
-                                        &SC_FafCrashTest);
+  moho::CConFunc
+    gCConFunc_FafCrashTest("faf_crashtest", "Crash the game on purpose to test the crash report", &SC_FafCrashTest);
 
   // The binary runs these registrars from the CRT static-initializer array;
   // this file-scope bootstrap object reproduces that, matching the
@@ -316,7 +332,9 @@ namespace
    * report (`faf_crash.txt`) before the dialog, so an engine `Die()` leaves a
    * persistent record instead of only a transient message box.
    */
-  void FatalErrorDieHandler(const char* const message)
+  void FatalErrorDieHandler(
+    const char* const message
+  )
   {
     gpg::diag::CrashReportContext reportContext{};
     reportContext.reason = (message != nullptr) ? message : "engine Die()";
@@ -339,7 +357,9 @@ namespace
    *                      Lua section must show the flagged table
    */
   [[noreturn]]
-  void RunCrashTest(const char* const kind)
+  void RunCrashTest(
+    const char* const kind
+  )
   {
     gpg::diag::DiagLine("[CRASHTEST] kind=%s", (kind != nullptr) ? kind : "(none)");
 
@@ -392,7 +412,9 @@ namespace
    * What it does:
    * Applies startup accessibility tweaks or restores previously captured values.
    */
-  void ConfigureAccessibilitySystemParameters(const bool restoreOriginalValues)
+  void ConfigureAccessibilitySystemParameters(
+    const bool restoreOriginalValues
+  )
   {
     if (restoreOriginalValues) {
       (void)::SystemParametersInfoW(SPI_SETSTICKYKEYS, sizeof(STICKYKEYS), &sSavedStickyKeys, 0);
@@ -453,8 +475,6 @@ namespace
     return reinterpret_cast<std::uintptr_t>(result) > 32U;
   }
 
-
-
 } // namespace
 
 extern int __argc;
@@ -472,7 +492,12 @@ extern char** __argv;
  */
 int (*gGameReplayPlayerMain)(int argc, char** argv) = nullptr;
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
+int WINAPI WinMain(
+  HINSTANCE hInstance,
+  HINSTANCE hPrevInstance,
+  LPSTR lpCmdLine,
+  int nShowCmd
+)
 {
   (void)hInstance;
   (void)hPrevInstance;
@@ -480,8 +505,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
   (void)nShowCmd;
 
 #if defined(FAF_STUDIO_EDITOR)
-  // EDITOR: an editor start without arguments (a double click, no script) completes its arguments, makes the process DPI aware and sets up the FAF data it needs;
-  // when that is impossible a message is shown and the process ends cleanly (moho/editor/EdBootstrap.h).
+  // EDITOR: an editor start without arguments (a double click, no script) completes its arguments, makes the process
+  // DPI aware and sets up the FAF data it needs; when that is impossible a message is shown and the process ends
+  // cleanly (moho/editor/EdBootstrap.h).
   {
     std::vector<std::string> given;
     for (int i = 1; i < __argc; ++i) {

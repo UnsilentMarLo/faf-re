@@ -1,24 +1,39 @@
-// EDITOR: stage T7 generators and domain warps of the field engine (docs/projects/editor/TERRAIN_GEN_DESIGN.md, section T7). Engine independent like EdFieldCore; registered through RegisterOp.
+// EDITOR: stage T7 generators and domain warps of the field engine (docs/projects/editor/TERRAIN_GEN_DESIGN.md, section
+// T7). Engine independent like EdFieldCore; registered through RegisterOp.
 //
-//   musgrave     like/width,height. Musgrave multifractals: mode ridged (default) | hybrid | hetero. seed, scale (units), octaves, lacunarity, h (spectral exponent), offset, gain. Result 0..1.
-//   fbm_damped   Gradient-noise fBm whose octaves are damped where the accumulated slope is steep (analytic derivatives): smooth valleys, rough crests, the "eroded" look of noise.
+//   musgrave     like/width,height. Musgrave multifractals: mode ridged (default) | hybrid | hetero. seed, scale
+//   (units), octaves, lacunarity, h (spectral exponent), offset, gain. Result 0..1. fbm_damped   Gradient-noise fBm
+//   whose octaves are damped where the accumulated slope is steep (analytic derivatives): smooth valleys, rough crests,
+//   the "eroded" look of noise.
 //                seed, scale, octaves, persistence, lacunarity, damp. 0..1.
-//   cells        Voronoi variants. metric euclid | manhattan | chebyshev | minkowski (p); mode f1 | f2 | f3 | edge (f2 - f1) | crack | id | smooth (soft minimum, `smooth` = sharpness) |
-//                border (exact distance to the cell border) | plate (a level per cell with bevelled borders) | facet (a level per cell tilted towards the centre); scale (units), jitter, thickness,
-//                bevel, drop, warp (units), warp_scale (units), seed.
-//   craters      A scatter of impact craters (bowl + raised rim): scale (cell size, units), density (share of cells with a crater), rmin / rmax (crater radius, share of the cell), depth, rim
+//   cells        Voronoi variants. metric euclid | manhattan | chebyshev | minkowski (p); mode f1 | f2 | f3 | edge (f2
+//   - f1) | crack | id | smooth (soft minimum, `smooth` = sharpness) |
+//                border (exact distance to the cell border) | plate (a level per cell with bevelled borders) | facet (a
+//                level per cell tilted towards the centre); scale (units), jitter, thickness, bevel, drop, warp
+//                (units), warp_scale (units), seed.
+//   craters      A scatter of impact craters (bowl + raised rim): scale (cell size, units), density (share of cells
+//   with a crater), rmin / rmax (crater radius, share of the cell), depth, rim
 //                (share of depth), shape (bowl exponent), base (level outside), seed. Result 0..1 (base +- relief).
-//   dunes        Asymmetric dune ridges: wavelength (units), angle (wind direction, degrees; the crests are perpendicular), asym (0 = sine, 1.5 = sharp slip face), warp (units, meander of the
-//                crests), warp_size (units), variation (crest height variation), ripples (secondary wave amplitude), seed. 0..1.
-//   cracks       Networks of cracks (dry mud, fractured rock): scale (units), crack_width (units; not `width`, that is the size of the grid), levels (1..3 finer networks), warp (units), jitter, profile v | u | flat, seed. 1 in a crack, 0 on the plates.
-//   island       Island heights / masks from a ragged disc: cx, cz (world; default the middle), radius (units; 0 = half the smaller side), aspect, angle (degrees), roughness (0..1 of the radius),
-//                noise_scale (units), edge (coast softness, share of the radius), power (profile exponent), output height | mask | distance, seed.
-//   dwarp        Domain warp of `a` (optional mask): kind fbm | curl | swirl | ripple | pinch. strength (units; swirl: degrees), size (units; swirl / pinch: radius), octaves, iterations (fbm: 2 =
-//                warp of a warp), angle / wavelength / phase (ripple), cx, cz (swirl / pinch centre, world), seed, edge clamp | wrap | mirror.
+//   dunes        Asymmetric dune ridges: wavelength (units), angle (wind direction, degrees; the crests are
+//   perpendicular), asym (0 = sine, 1.5 = sharp slip face), warp (units, meander of the
+//                crests), warp_size (units), variation (crest height variation), ripples (secondary wave amplitude),
+//                seed. 0..1.
+//   cracks       Networks of cracks (dry mud, fractured rock): scale (units), crack_width (units; not `width`, that is
+//   the size of the grid), levels (1..3 finer networks), warp (units), jitter, profile v | u | flat, seed. 1 in a
+//   crack, 0 on the plates. island       Island heights / masks from a ragged disc: cx, cz (world; default the middle),
+//   radius (units; 0 = half the smaller side), aspect, angle (degrees), roughness (0..1 of the radius),
+//                noise_scale (units), edge (coast softness, share of the radius), power (profile exponent), output
+//                height | mask | distance, seed.
+//   dwarp        Domain warp of `a` (optional mask): kind fbm | curl | swirl | ripple | pinch. strength (units; swirl:
+//   degrees), size (units; swirl / pinch: radius), octaves, iterations (fbm: 2 =
+//                warp of a warp), angle / wavelength / phase (ripple), cx, cz (swirl / pinch centre, world), seed, edge
+//                clamp | wrap | mirror.
 //
-//   musgrave / fbm_damped also take rotate (0 default, 1: every octave in its own frame and 64 gradient directions, no lattice seams: see OctaveFrame in EdFieldCore.h).
+//   musgrave / fbm_damped also take rotate (0 default, 1: every octave in its own frame and 64 gradient directions, no
+//   lattice seams: see OctaveFrame in EdFieldCore.h).
 //
-// Every output sample is computed from the inputs and the world position alone, so the results are bit identical for any thread count.
+// Every output sample is computed from the inputs and the world position alone, so the results are bit identical for
+// any thread count.
 #pragma fp_contract(off)
 
 #include "moho/editor/EdFieldUtil.h"
@@ -31,11 +46,17 @@ namespace moho::editor::field
 
   namespace
   {
-    // ---- musgrave --------------------------------------------------------------------------------------------------------------------------------
+    // ---- musgrave
+    // --------------------------------------------------------------------------------------------------------------------------------
 
-    bool OpMusgrave(const OpArgs& a, Grid& out, std::string& err)
+    bool OpMusgrave(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
-      if (!MakeOut(a, out, err)) return false;
+      if (!MakeOut(a, out, err))
+        return false;
       const std::uint32_t seed = SeedOf(a);
       const double scale = std::max(1e-3, a.p.N("scale", 100.0));
       const int octaves = std::max(1, std::min(16, static_cast<int>(a.p.N("octaves", 6))));
@@ -65,7 +86,8 @@ namespace moho::editor::field
         for (int o = 0; o < octaves; ++o) {
           const std::uint32_t s = Hash32(seed * 131U + static_cast<std::uint32_t>(o) * 7919U + 17U);
           double qx = wx * freq, qz = wz * freq;
-          if (rotate) RotatedPoint(o, wx * freq, wz * freq, qx, qz);
+          if (rotate)
+            RotatedPoint(o, wx * freq, wz * freq, qx, qz);
           float n = Perlin(qx, qz, s, rotate);
           n = std::max(-1.0f, std::min(1.0f, n));
           const float amp = amps[static_cast<std::size_t>(o)];
@@ -94,17 +116,24 @@ namespace moho::editor::field
           }
           freq *= static_cast<double>(lac);
         }
-        if (kind == 0) return Clamp01(result / (ampSum * std::max(1e-3f, offset * offset)));
+        if (kind == 0)
+          return Clamp01(result / (ampSum * std::max(1e-3f, offset * offset)));
         return Clamp01(result / (ampSum * std::max(1e-3f, offset + 1.0f)));
       });
       return true;
     }
 
-    // ---- fbm_damped ------------------------------------------------------------------------------------------------------------------------------
+    // ---- fbm_damped
+    // ------------------------------------------------------------------------------------------------------------------------------
 
-    bool OpFbmDamped(const OpArgs& a, Grid& out, std::string& err)
+    bool OpFbmDamped(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
-      if (!MakeOut(a, out, err)) return false;
+      if (!MakeOut(a, out, err))
+        return false;
       const std::uint32_t seed = SeedOf(a);
       const double scale = std::max(1e-3, a.p.N("scale", 150.0));
       const int octaves = std::max(1, std::min(16, static_cast<int>(a.p.N("octaves", 8))));
@@ -121,10 +150,11 @@ namespace moho::editor::field
           const std::uint32_t s = Hash32(seed * 131U + static_cast<std::uint32_t>(o) * 7919U + 17U);
           float dnx, dnz;
           double qx = wx * freq, qz = wz * freq;
-          if (rotate) RotatedPoint(o, wx * freq, wz * freq, qx, qz);
+          if (rotate)
+            RotatedPoint(o, wx * freq, wz * freq, qx, qz);
           const float n = PerlinD(qx, qz, s, dnx, dnz, rotate);
           if (rotate) {
-            const OctaveFrame& fr = OctaveFrameOf(o);       // the gradient back into the world frame
+            const OctaveFrame& fr = OctaveFrameOf(o); // the gradient back into the world frame
             const float gx = static_cast<float>(fr.c) * dnx + static_cast<float>(fr.s) * dnz;
             const float gz = static_cast<float>(-fr.s) * dnx + static_cast<float>(fr.c) * dnz;
             dnx = gx;
@@ -142,44 +172,64 @@ namespace moho::editor::field
       return true;
     }
 
-    // ---- cells (Voronoi variants) ----------------------------------------------------------------------------------------------------------------
+    // ---- cells (Voronoi variants)
+    // ----------------------------------------------------------------------------------------------------------------
 
     struct CellHit
     {
       float f1 = 1e9f, f2 = 1e9f, f3 = 1e9f;
       std::uint32_t id = 0;
-      float cx = 0.0f, cz = 0.0f;   // vector from the sample to the nearest feature point (cell units)
-      float soft = 0.0f;            // sum of exp(-k d)
+      float cx = 0.0f, cz = 0.0f; // vector from the sample to the nearest feature point (cell units)
+      float soft = 0.0f;          // sum of exp(-k d)
     };
 
     struct CellSetup
     {
       std::uint32_t seed = 1;
       float jitter = 1.0f;
-      int metric = 0;   // 0 euclid, 1 manhattan, 2 chebyshev, 3 minkowski
+      int metric = 0; // 0 euclid, 1 manhattan, 2 chebyshev, 3 minkowski
       float p = 3.0f;
       float k = 8.0f;
       int range = 1;
     };
 
-    inline float Metric(const CellSetup& s, const float ex, const float ez)
+    inline float Metric(
+      const CellSetup& s,
+      const float ex,
+      const float ez
+    )
     {
       switch (s.metric) {
-        case 1: return std::fabs(ex) + std::fabs(ez);
-        case 2: return std::max(std::fabs(ex), std::fabs(ez));
-        case 3: return std::pow(std::pow(std::fabs(ex), s.p) + std::pow(std::fabs(ez), s.p), 1.0f / s.p);
-        default: return std::sqrt(ex * ex + ez * ez);
+      case 1:
+        return std::fabs(ex) + std::fabs(ez);
+      case 2:
+        return std::max(std::fabs(ex), std::fabs(ez));
+      case 3:
+        return std::pow(std::pow(std::fabs(ex), s.p) + std::pow(std::fabs(ez), s.p), 1.0f / s.p);
+      default:
+        return std::sqrt(ex * ex + ez * ez);
       }
     }
 
-    inline void FeaturePoint(const CellSetup& s, const int cx, const int cz, float& jx, float& jz, std::uint32_t& h)
+    inline void FeaturePoint(
+      const CellSetup& s,
+      const int cx,
+      const int cz,
+      float& jx,
+      float& jz,
+      std::uint32_t& h
+    )
     {
       h = Hash2(cx, cz, s.seed);
       jx = 0.5f + (Unit(h) - 0.5f) * s.jitter;
       jz = 0.5f + (Unit(Hash32(h ^ 0x68E31DA4U)) - 0.5f) * s.jitter;
     }
 
-    CellHit Nearest(const CellSetup& s, const double px, const double pz)
+    CellHit Nearest(
+      const CellSetup& s,
+      const double px,
+      const double pz
+    )
     {
       CellHit hit;
       const double fx0 = std::floor(px), fz0 = std::floor(pz);
@@ -212,8 +262,14 @@ namespace moho::editor::field
       return hit;
     }
 
-    /** Exact distance (cell units) from the sample to the border of its Voronoi cell (Euclidean metric): the second pass of the two pass algorithm. */
-    float BorderDistance(const CellSetup& s, const double px, const double pz, const CellHit& hit)
+    /** Exact distance (cell units) from the sample to the border of its Voronoi cell (Euclidean metric): the second
+     * pass of the two pass algorithm. */
+    float BorderDistance(
+      const CellSetup& s,
+      const double px,
+      const double pz,
+      const CellHit& hit
+    )
     {
       const double fx0 = std::floor(px), fz0 = std::floor(pz);
       const int cx = static_cast<int>(fx0), cz = static_cast<int>(fz0);
@@ -228,7 +284,8 @@ namespace moho::editor::field
           const float ez = static_cast<float>(dz) + jz - lz;
           const float rx = ex - hit.cx, rz = ez - hit.cz;
           const float len = std::sqrt(rx * rx + rz * rz);
-          if (len < 1e-5f) continue;
+          if (len < 1e-5f)
+            continue;
           const float d = (0.5f * (hit.cx + ex) * rx + 0.5f * (hit.cz + ez) * rz) / len;
           best = std::min(best, d);
         }
@@ -236,17 +293,26 @@ namespace moho::editor::field
       return best;
     }
 
-    bool OpCells(const OpArgs& a, Grid& out, std::string& err)
+    bool OpCells(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
-      if (!MakeOut(a, out, err)) return false;
+      if (!MakeOut(a, out, err))
+        return false;
       CellSetup s;
       s.seed = SeedOf(a);
       s.jitter = Clamp01(static_cast<float>(a.p.N("jitter", 1.0)));
       const std::string metric = a.p.S("metric", "euclid");
-      if (metric == "euclid") s.metric = 0;
-      else if (metric == "manhattan") s.metric = 1;
-      else if (metric == "chebyshev") s.metric = 2;
-      else if (metric == "minkowski") s.metric = 3;
+      if (metric == "euclid")
+        s.metric = 0;
+      else if (metric == "manhattan")
+        s.metric = 1;
+      else if (metric == "chebyshev")
+        s.metric = 2;
+      else if (metric == "minkowski")
+        s.metric = 3;
       else {
         err = "cells: metric must be euclid, manhattan, chebyshev or minkowski";
         return false;
@@ -254,16 +320,20 @@ namespace moho::editor::field
       s.p = std::max(0.2f, static_cast<float>(a.p.N("p", 3.0)));
       s.k = std::max(0.5f, static_cast<float>(a.p.N("smooth", 8.0)));
       const std::string mode = a.p.S("mode", "f1");
-      static const char* const modes[] = {"f1", "f2", "f3", "edge", "crack", "id", "smooth", "border", "plate", "facet"};
+      static const char* const modes[] = {
+        "f1", "f2", "f3", "edge", "crack", "id", "smooth", "border", "plate", "facet"
+      };
       int m = -1;
       for (int i = 0; i < 10; ++i) {
-        if (mode == modes[i]) m = i;
+        if (mode == modes[i])
+          m = i;
       }
       if (m < 0) {
         err = "cells: unknown mode '" + mode + "'";
         return false;
       }
-      if (m == 7 || m == 8) s.metric = 0;   // the border distance is a Euclidean construction
+      if (m == 7 || m == 8)
+        s.metric = 0; // the border distance is a Euclidean construction
       s.range = (m == 2 || m == 6 || s.metric == 1 || s.metric == 3) ? 2 : 1;
       const double scale = std::max(1e-3, a.p.N("scale", 80.0));
       const float width = std::max(1e-4f, static_cast<float>(a.p.N("thickness", 0.12)));
@@ -283,33 +353,47 @@ namespace moho::editor::field
         const double px = wx / scale, pz = wz / scale;
         const CellHit hit = Nearest(s, px, pz);
         switch (m) {
-          case 0: return Clamp01(hit.f1);
-          case 1: return Clamp01(hit.f2 * (1.0f / 1.4f));
-          case 2: return Clamp01(hit.f3 * (1.0f / 1.7f));
-          case 3: return Clamp01(hit.f2 - hit.f1);
-          case 4: return 1.0f - SmoothStep(0.0f, width, hit.f2 - hit.f1);
-          case 5: return Unit(Hash32(hit.id ^ 0xA511E9B3U));
-          case 6: return Clamp01(-std::log(std::max(hit.soft, 1e-20f)) / s.k);
-          case 7: return Clamp01(2.0f * BorderDistance(s, px, pz, hit));
-          case 8: {
-            const float bd = BorderDistance(s, px, pz, hit);
-            const float level = Unit(Hash32(hit.id ^ 0xA511E9B3U));
-            return Clamp01(level * (1.0f - drop * (1.0f - SmoothStep(0.0f, bevel, bd))));
-          }
-          default: {
-            const float level = Unit(Hash32(hit.id ^ 0xA511E9B3U));
-            return Clamp01(0.7f * level + 0.3f * (1.0f - Clamp01(hit.f1)));
-          }
+        case 0:
+          return Clamp01(hit.f1);
+        case 1:
+          return Clamp01(hit.f2 * (1.0f / 1.4f));
+        case 2:
+          return Clamp01(hit.f3 * (1.0f / 1.7f));
+        case 3:
+          return Clamp01(hit.f2 - hit.f1);
+        case 4:
+          return 1.0f - SmoothStep(0.0f, width, hit.f2 - hit.f1);
+        case 5:
+          return Unit(Hash32(hit.id ^ 0xA511E9B3U));
+        case 6:
+          return Clamp01(-std::log(std::max(hit.soft, 1e-20f)) / s.k);
+        case 7:
+          return Clamp01(2.0f * BorderDistance(s, px, pz, hit));
+        case 8: {
+          const float bd = BorderDistance(s, px, pz, hit);
+          const float level = Unit(Hash32(hit.id ^ 0xA511E9B3U));
+          return Clamp01(level * (1.0f - drop * (1.0f - SmoothStep(0.0f, bevel, bd))));
+        }
+        default: {
+          const float level = Unit(Hash32(hit.id ^ 0xA511E9B3U));
+          return Clamp01(0.7f * level + 0.3f * (1.0f - Clamp01(hit.f1)));
+        }
         }
       });
       return true;
     }
 
-    // ---- craters ---------------------------------------------------------------------------------------------------------------------------------
+    // ---- craters
+    // ---------------------------------------------------------------------------------------------------------------------------------
 
-    bool OpCraters(const OpArgs& a, Grid& out, std::string& err)
+    bool OpCraters(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
-      if (!MakeOut(a, out, err)) return false;
+      if (!MakeOut(a, out, err))
+        return false;
       const std::uint32_t seed = SeedOf(a);
       const double scale = std::max(1.0, a.p.N("scale", 120.0));
       const float density = Clamp01(static_cast<float>(a.p.N("density", 0.6)));
@@ -329,17 +413,20 @@ namespace moho::editor::field
         for (int dz = -1; dz <= 1; ++dz) {
           for (int dx = -1; dx <= 1; ++dx) {
             const std::uint32_t h = Hash2(cx + dx, cz + dz, seed);
-            if (Unit(h) > density) continue;
+            if (Unit(h) > density)
+              continue;
             const float rr = rmin + (rmax - rmin) * Unit(Hash32(h ^ 0x1234567U));
             const float fxp = rr + (1.0f - 2.0f * rr) * Unit(Hash32(h ^ 0x9E3779B9U));
             const float fzp = rr + (1.0f - 2.0f * rr) * Unit(Hash32(h ^ 0x7F4A7C15U));
             const float ex = static_cast<float>(dx) + fxp - lx;
             const float ez = static_cast<float>(dz) + fzp - lz;
             const float r = std::sqrt(ex * ex + ez * ez) / rr;
-            if (r > 2.2f) continue;
+            if (r > 2.2f)
+              continue;
             const float d = depth * (rr / rmax) * (0.7f + 0.3f * Unit(Hash32(h ^ 0x2545F491U)));
             float v = 0.0f;
-            if (r < 1.0f) v -= d * std::pow(1.0f - r * r, shape);
+            if (r < 1.0f)
+              v -= d * std::pow(1.0f - r * r, shape);
             const float t = (r - 1.0f) / 0.3f;
             v += d * rim * std::exp(-t * t);
             sum += v;
@@ -350,11 +437,17 @@ namespace moho::editor::field
       return true;
     }
 
-    // ---- dunes -----------------------------------------------------------------------------------------------------------------------------------
+    // ---- dunes
+    // -----------------------------------------------------------------------------------------------------------------------------------
 
-    bool OpDunes(const OpArgs& a, Grid& out, std::string& err)
+    bool OpDunes(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
-      if (!MakeOut(a, out, err)) return false;
+      if (!MakeOut(a, out, err))
+        return false;
       const std::uint32_t seed = SeedOf(a);
       const double wl = std::max(1.0, a.p.N("wavelength", 60.0));
       const double ang = a.p.N("angle", 0.0) * kPiD / 180.0;
@@ -383,11 +476,17 @@ namespace moho::editor::field
       return true;
     }
 
-    // ---- cracks ----------------------------------------------------------------------------------------------------------------------------------
+    // ---- cracks
+    // ----------------------------------------------------------------------------------------------------------------------------------
 
-    bool OpCracks(const OpArgs& a, Grid& out, std::string& err)
+    bool OpCracks(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
-      if (!MakeOut(a, out, err)) return false;
+      if (!MakeOut(a, out, err))
+        return false;
       CellSetup s;
       s.seed = SeedOf(a);
       s.jitter = Clamp01(static_cast<float>(a.p.N("jitter", 0.9)));
@@ -416,12 +515,15 @@ namespace moho::editor::field
           t.seed = s.seed + static_cast<std::uint32_t>(lv) * 977U;
           const double px = wx / sc, pz = wz / sc;
           const CellHit hit = Nearest(t, px, pz);
-          const float bd = BorderDistance(t, px, pz, hit) * static_cast<float>(sc);   // units
+          const float bd = BorderDistance(t, px, pz, hit) * static_cast<float>(sc); // units
           const float half = static_cast<float>(wd * 0.5);
           float c;
-          if (prof == 2) c = bd < half ? 1.0f : 0.0f;
-          else if (prof == 1) c = 1.0f - SmoothStep(half * 0.6f, half * 1.2f, bd);
-          else c = Clamp01(1.0f - bd / std::max(half, 1e-3f));
+          if (prof == 2)
+            c = bd < half ? 1.0f : 0.0f;
+          else if (prof == 1)
+            c = 1.0f - SmoothStep(half * 0.6f, half * 1.2f, bd);
+          else
+            c = Clamp01(1.0f - bd / std::max(half, 1e-3f));
           best = std::max(best, c * weight);
           sc *= 0.45;
           wd *= 0.6;
@@ -432,11 +534,17 @@ namespace moho::editor::field
       return true;
     }
 
-    // ---- island ----------------------------------------------------------------------------------------------------------------------------------
+    // ---- island
+    // ----------------------------------------------------------------------------------------------------------------------------------
 
-    bool OpIsland(const OpArgs& a, Grid& out, std::string& err)
+    bool OpIsland(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
-      if (!MakeOut(a, out, err)) return false;
+      if (!MakeOut(a, out, err))
+        return false;
       const std::string output = a.p.S("output", "height");
       if (output != "height" && output != "mask" && output != "distance") {
         err = "island: output must be height, mask or distance";
@@ -445,7 +553,10 @@ namespace moho::editor::field
       const Grid& g = out;
       const double cxw = a.p.Has("cx") ? a.p.N("cx", 0) : WorldX(g, 0) + 0.5 * (g.w - 1) * g.cell;
       const double czw = a.p.Has("cz") ? a.p.N("cz", 0) : WorldZ(g, 0) + 0.5 * (g.h - 1) * g.cell;
-      const double radius = std::max(1e-3, a.p.Has("radius") && a.p.N("radius", 0) > 0.0 ? a.p.N("radius", 1) : 0.5 * std::min(g.w - 1, g.h - 1) * g.cell);
+      const double radius = std::max(
+        1e-3,
+        a.p.Has("radius") && a.p.N("radius", 0) > 0.0 ? a.p.N("radius", 1) : 0.5 * std::min(g.w - 1, g.h - 1) * g.cell
+      );
       const double aspect = std::max(0.2, a.p.N("aspect", 1.0));
       const double ang = a.p.N("angle", 0.0) * kPiD / 180.0;
       const double ca = std::cos(ang), sa = std::sin(ang);
@@ -461,22 +572,31 @@ namespace moho::editor::field
         float q = static_cast<float>(std::sqrt(u * u + v * v) / radius);
         const float n = Fbm01(WorldX(g, x), WorldZ(g, z), seed, nscale, 5);
         q += rough * (n - 0.5f) * 2.0f * (0.3f + 0.7f * std::min(1.0f, q));
-        if (mode == 1) return 1.0f - SmoothStep(1.0f - edge, 1.0f, q);
-        if (mode == 2) return Clamp01(1.0f - q);
+        if (mode == 1)
+          return 1.0f - SmoothStep(1.0f - edge, 1.0f, q);
+        if (mode == 2)
+          return Clamp01(1.0f - q);
         const float land = 1.0f - SmoothStep(1.0f - edge, 1.0f, q);
         return land * std::pow(Clamp01(1.0f - q * 0.9f), power);
       });
       return true;
     }
 
-    // ---- dwarp -----------------------------------------------------------------------------------------------------------------------------------
+    // ---- dwarp
+    // -----------------------------------------------------------------------------------------------------------------------------------
 
-    bool OpDWarp(const OpArgs& a, Grid& out, std::string& err)
+    bool OpDWarp(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
-      if (src == nullptr || !MakeOut(a, out, err)) return false;
+      if (src == nullptr || !MakeOut(a, out, err))
+        return false;
       const Grid* mask = Get(a, "mask");
-      if (!SameOrNone(mask, *src, "mask", err)) return false;
+      if (!SameOrNone(mask, *src, "mask", err))
+        return false;
       const std::string kind = a.p.S("kind", "fbm");
       if (kind != "fbm" && kind != "curl" && kind != "swirl" && kind != "ripple" && kind != "pinch") {
         err = "dwarp: kind must be fbm, curl, swirl, ripple or pinch";
@@ -499,7 +619,7 @@ namespace moho::editor::field
       const double cell = static_cast<double>(g.cell);
       Cells(out, [&](const int x, const int z) {
         const double wx = WorldX(g, x), wz = WorldZ(g, z);
-        double dx = 0.0, dz = 0.0;   // displacement in world units
+        double dx = 0.0, dz = 0.0; // displacement in world units
         if (k == 0) {
           double px = wx, pz = wz;
           for (int it = 0; it < iters; ++it) {
@@ -533,14 +653,14 @@ namespace moho::editor::field
           dx = (ex * c - ez * s + cxw) - wx;
           dz = (ex * s + ez * c + czw) - wz;
         } else if (k == 3) {
-          const double s = -wx * rz + wz * rx;   // across the ripple direction
+          const double s = -wx * rz + wz * rx; // across the ripple direction
           const double wave = std::sin(2.0 * kPiD * s / wl + phase);
           dx = rx * strength * wave;
           dz = rz * strength * wave;
         } else {
           const double ex = wx - cxw, ez = wz - czw;
           const double d = std::sqrt(ex * ex + ez * ez) / size;
-          const double f = 1.0 - strength * std::exp(-d * d);   // strength is a factor here (0.5 = magnify the middle)
+          const double f = 1.0 - strength * std::exp(-d * d); // strength is a factor here (0.5 = magnify the middle)
           dx = ex * f + cxw - wx;
           dz = ez * f + czw - wz;
         }

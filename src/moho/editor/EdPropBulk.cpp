@@ -1,9 +1,13 @@
 // EDITOR: bulk prop removal (docs/projects/editor/MAP_EDITOR_DESIGN.md 19.28).
 //
-//   ed_prop_remove_many(indices) -> removed     indices: a Lua array of 1-based prop numbers (any order, duplicates and numbers out of range are ignored). One pass over the
-//                                               map's prop list, instead of ed_prop_remove(i) once per prop: that rebuilds the whole list each time (fa::vector has no erase),
-//                                               17 ms per call on a map with 40000 props, so removing half of them took minutes (mirror of a half map, replace by blueprint, delete of
-//                                               a big selection). Returns how many props went. The numbers of the props behind a removed one shift down by one, as with ed_prop_remove.
+//   ed_prop_remove_many(indices) -> removed     indices: a Lua array of 1-based prop numbers (any order, duplicates and
+//   numbers out of range are ignored). One pass over the
+//                                               map's prop list, instead of ed_prop_remove(i) once per prop: that
+//                                               rebuilds the whole list each time (fa::vector has no erase), 17 ms per
+//                                               call on a map with 40000 props, so removing half of them took minutes
+//                                               (mirror of a half map, replace by blueprint, delete of a big
+//                                               selection). Returns how many props went. The numbers of the props
+//                                               behind a removed one shift down by one, as with ed_prop_remove.
 
 #include <algorithm>
 #include <cstddef>
@@ -28,7 +32,9 @@ namespace
     return session->mWldMap->mProps;
   }
 
-  int __cdecl cfunc_EdPropRemoveMany(lua_State* const L)
+  int __cdecl cfunc_EdPropRemoveMany(
+    lua_State* const L
+  )
   {
     moho::CWldProps* const props = LiveProps();
     if (props == nullptr || lua_type(L, 1) != LUA_TTABLE) {
@@ -82,7 +88,14 @@ namespace
     EdPropBulkLuaBootstrap()
     {
       moho::CScrLuaInitFormSet& set = UserLuaInitSet();
-      (void)new moho::CScrLuaBinder(set, "ed_prop_remove_many", &cfunc_EdPropRemoveMany, nullptr, "<global>", "ed_prop_remove_many(indices) -> removed");
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_prop_remove_many",
+        &cfunc_EdPropRemoveMany,
+        nullptr,
+        "<global>",
+        "ed_prop_remove_many(indices) -> removed"
+      );
     }
   };
 

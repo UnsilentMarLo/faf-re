@@ -10,7 +10,7 @@ namespace
   constexpr const char* kCMauiBorderSetNewTexturesHelpText =
     "SetNewTextures(vertical, horizontal, upperLeft, upperRight, lowerLeft, lowerRight)";
   constexpr const char* kCMauiBorderSetSolidColorHelpText = "SetSolidColor(color)";
-}
+} // namespace
 
 gpg::RType* moho::CMauiBorder::sType = nullptr;
 
@@ -358,12 +358,12 @@ void moho::CMauiBorder::DoRender(
   const float top = CScriptLazyVar_float::GetValue(&mTopLV);
   const float right = CScriptLazyVar_float::GetValue(&mRightLV);
   const float bottom = CScriptLazyVar_float::GetValue(&mBottomLV);
-  const float borderWidth =
-    static_cast<float>(FloorFrndintAdjustDown(CScriptLazyVar_float::GetValue(&mBorderWidthLV)));
+  const float borderWidth = static_cast<float>(FloorFrndintAdjustDown(CScriptLazyVar_float::GetValue(&mBorderWidthLV)));
   const float borderHeight =
     static_cast<float>(FloorFrndintAdjustDown(CScriptLazyVar_float::GetValue(&mBorderHeightLV)));
 
-  // EDITOR: alpha 0 or completely outside the window: nothing to draw (EdUiCull.h). The rectangle is grown by the border size: the strips lie inside it, this is only a margin.
+  // EDITOR: alpha 0 or completely outside the window: nothing to draw (EdUiCull.h). The rectangle is grown by the
+  // border size: the strips lie inside it, this is only a margin.
   {
     moho::editor::renderstats::Frame& uiStats = moho::editor::renderstats::gCur;
     if (moho::ui_SkipTransparent && moho::editor::uicull::ColorTransparent(mVertexAlpha)) {
@@ -374,7 +374,9 @@ void moho::CMauiBorder::DoRender(
     float viewH = 0.0f;
     if (moho::ui_CullOffscreen && UI_GetRenderViewSize(viewW, viewH)) {
       const float margin = std::max(std::fabs(borderWidth), std::fabs(borderHeight));
-      if (moho::editor::uicull::QuadOutside(left - margin, top - margin, right + margin, bottom + margin, viewW, viewH)) {
+      if (
+        moho::editor::uicull::QuadOutside(left - margin, top - margin, right + margin, bottom + margin, viewW, viewH)
+      ) {
         ++uiStats.uiBordersCulled;
         return;
       }

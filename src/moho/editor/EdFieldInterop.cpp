@@ -1,15 +1,23 @@
-// EDITOR: ops for the terrain interop (docs/projects/editor/TERRAIN_INTEROP.md). Engine independent like EdFieldCore; registered through RegisterOp.
+// EDITOR: ops for the terrain interop (docs/projects/editor/TERRAIN_INTEROP.md). Engine independent like EdFieldCore;
+// registered through RegisterOp.
 //
-//   img_resample  a (source image field), like (the target grid: size, cell, origin). Fits `a` over the sample rectangle x0, z0, x1, z1 of `like` (default: all of it; inclusive sample
+//   img_resample  a (source image field), like (the target grid: size, cell, origin). Fits `a` over the sample
+//   rectangle x0, z0, x1, z1 of `like` (default: all of it; inclusive sample
 //                 indices); samples outside the rectangle get `outside` (default 0).
-//                 align = cell (default; the image covers the rectangle's cells: pixel k is centred on (k + 0.5) / width of the rectangle, a 1024 image over a 1025 sample map)
-//                       | corner (the first and last pixel sit on the first and last sample: a 1025 image is the identity)
-//                 filter = bilinear (default) | bicubic (Catmull-Rom) | lanczos (a = 3) | nearest. When the image is larger than the rectangle the kernel is widened by the
-//                 scale (a proper low pass, no aliasing); edges replicate. Exact for the identity (weights at integer offsets are exactly 0 / 1).
-//   img_orient    a. transpose (0 / 1) swaps x and z, then flip_x, flip_z mirror: together the 8 orientations of a square. Cell 1, origin 0.
-//   rect_mask     like. 1 inside the sample rectangle x0, z0, x1, z1 (inclusive), 0 outside; `feather` samples at the rectangle's border rise smoothly from 0 (curve = smooth | linear).
-//                 feather_l / feather_r / feather_t / feather_b = 0 keep a side hard (the sides on the map border). The distance is rectangular (min over the sides).
-//   points_mask   like. pts = x, z, radius, value per point (world units): `value` inside the disc, falling to 0 over `feather` world units beyond the radius (smooth); the maximum of all.
+//                 align = cell (default; the image covers the rectangle's cells: pixel k is centred on (k + 0.5) /
+//                 width of the rectangle, a 1024 image over a 1025 sample map)
+//                       | corner (the first and last pixel sit on the first and last sample: a 1025 image is the
+//                       identity)
+//                 filter = bilinear (default) | bicubic (Catmull-Rom) | lanczos (a = 3) | nearest. When the image is
+//                 larger than the rectangle the kernel is widened by the scale (a proper low pass, no aliasing); edges
+//                 replicate. Exact for the identity (weights at integer offsets are exactly 0 / 1).
+//   img_orient    a. transpose (0 / 1) swaps x and z, then flip_x, flip_z mirror: together the 8 orientations of a
+//   square. Cell 1, origin 0. rect_mask     like. 1 inside the sample rectangle x0, z0, x1, z1 (inclusive), 0 outside;
+//   `feather` samples at the rectangle's border rise smoothly from 0 (curve = smooth | linear).
+//                 feather_l / feather_r / feather_t / feather_b = 0 keep a side hard (the sides on the map border). The
+//                 distance is rectangular (min over the sides).
+//   points_mask   like. pts = x, z, radius, value per point (world units): `value` inside the disc, falling to 0 over
+//   `feather` world units beyond the radius (smooth); the maximum of all.
 //
 // Every output sample depends on the inputs only, so results are bit identical for any thread count.
 #pragma fp_contract(off)
@@ -26,7 +34,11 @@ namespace moho::editor::field
   {
     constexpr double kPi = 3.14159265358979323846;
 
-    const Grid* Need(const OpArgs& a, const char* const name, std::string& err)
+    const Grid* Need(
+      const OpArgs& a,
+      const char* const name,
+      std::string& err
+    )
     {
       const auto it = a.in.find(name);
       if (it == a.in.end() || !it->second) {
@@ -36,17 +48,29 @@ namespace moho::editor::field
       return it->second.get();
     }
 
-    inline double SmoothStep(const double t)
+    inline double SmoothStep(
+      const double t
+    )
     {
       const double c = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t);
       return c * c * (3.0 - 2.0 * c);
     }
 
-    // ---- kernels -----------------------------------------------------------------------------------------------------------------------------
+    // ---- kernels
+    // -----------------------------------------------------------------------------------------------------------------------------
 
-    enum class Kind { Nearest, Bilinear, Bicubic, Lanczos };
+    enum class Kind
+    {
+      Nearest,
+      Bilinear,
+      Bicubic,
+      Lanczos
+    };
 
-    double Kernel(const Kind kind, const double x)
+    double Kernel(
+      const Kind kind,
+      const double x
+    )
     {
       const double ax = std::fabs(x);
       switch (kind) {
@@ -54,14 +78,19 @@ namespace moho::editor::field
         return ax < 1.0 ? 1.0 - ax : 0.0;
       case Kind::Bicubic: {
         // Catmull-Rom (a = -0.5): 1 at 0, exactly 0 at the other integers
-        if (ax <= 1.0) return (1.5 * ax - 2.5) * ax * ax + 1.0;
-        if (ax < 2.0) return ((-0.5 * ax + 2.5) * ax - 4.0) * ax + 2.0;
+        if (ax <= 1.0)
+          return (1.5 * ax - 2.5) * ax * ax + 1.0;
+        if (ax < 2.0)
+          return ((-0.5 * ax + 2.5) * ax - 4.0) * ax + 2.0;
         return 0.0;
       }
       case Kind::Lanczos: {
-        if (ax >= 3.0) return 0.0;
-        if (ax < 1.0e-12) return 1.0;
-        if (std::fabs(ax - std::floor(ax + 0.5)) < 1.0e-9) return 0.0;   // integer offsets are exactly 0 (the identity stays exact)
+        if (ax >= 3.0)
+          return 0.0;
+        if (ax < 1.0e-12)
+          return 1.0;
+        if (std::fabs(ax - std::floor(ax + 0.5)) < 1.0e-9)
+          return 0.0; // integer offsets are exactly 0 (the identity stays exact)
         const double px = kPi * ax;
         return 3.0 * std::sin(px) * std::sin(px / 3.0) / (px * px);
       }
@@ -70,26 +99,40 @@ namespace moho::editor::field
       }
     }
 
-    double Support(const Kind kind)
+    double Support(
+      const Kind kind
+    )
     {
       switch (kind) {
-      case Kind::Bilinear: return 1.0;
-      case Kind::Bicubic: return 2.0;
-      case Kind::Lanczos: return 3.0;
-      default: return 0.5;
+      case Kind::Bilinear:
+        return 1.0;
+      case Kind::Bicubic:
+        return 2.0;
+      case Kind::Lanczos:
+        return 3.0;
+      default:
+        return 0.5;
       }
     }
 
     struct Taps
     {
-      int first = 0;                 // index of the first tap (clamped later)
-      std::vector<float> w;          // normalised weights, w[k] belongs to source index first + k
+      int first = 0;        // index of the first tap (clamped later)
+      std::vector<float> w; // normalised weights, w[k] belongs to source index first + k
     };
 
-    /** The taps of every output sample i = 0..out-1. `u(i)` is the source coordinate (pixel k has its centre at k), `scale` the source pixels per output step. */
-    std::vector<Taps> BuildTaps(const Kind kind, const int out, const int srcN, const double scaleIn, const bool cell, const int cells)
+    /** The taps of every output sample i = 0..out-1. `u(i)` is the source coordinate (pixel k has its centre at k),
+     * `scale` the source pixels per output step. */
+    std::vector<Taps> BuildTaps(
+      const Kind kind,
+      const int out,
+      const int srcN,
+      const double scaleIn,
+      const bool cell,
+      const int cells
+    )
     {
-      const double scale = scaleIn < 1.0 ? 1.0 : scaleIn;     // widen the kernel when shrinking
+      const double scale = scaleIn < 1.0 ? 1.0 : scaleIn; // widen the kernel when shrinking
       const double radius = Support(kind) * scale;
       std::vector<Taps> taps(static_cast<std::size_t>(out));
       for (int i = 0; i < out; ++i) {
@@ -128,7 +171,11 @@ namespace moho::editor::field
       return taps;
     }
 
-    bool OpImgResample(const OpArgs& a, Grid& out, std::string& err)
+    bool OpImgResample(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       const Grid* like = Need(a, "like", err);
@@ -154,7 +201,9 @@ namespace moho::editor::field
         return false;
       }
       const std::string fname = a.p.S("filter", "bilinear");
-      const Kind kind = fname == "nearest" ? Kind::Nearest : (fname == "bicubic" ? Kind::Bicubic : (fname == "lanczos" ? Kind::Lanczos : Kind::Bilinear));
+      const Kind kind = fname == "nearest"
+        ? Kind::Nearest
+        : (fname == "bicubic" ? Kind::Bicubic : (fname == "lanczos" ? Kind::Lanczos : Kind::Bilinear));
       const float outside = static_cast<float>(a.p.N("outside", 0.0));
 
       const int rw = x1 - x0 + 1;
@@ -186,12 +235,16 @@ namespace moho::editor::field
       out = Grid(like->w, like->h, like->cell, like->ox, like->oz, outside);
       ParallelFor(rh, [&](const int j) {
         const Taps& t = tz[static_cast<std::size_t>(j)];
-        float* dst = &out.v[static_cast<std::size_t>(z0 + j) * static_cast<std::size_t>(out.w) + static_cast<std::size_t>(x0)];
+        float* dst =
+          &out.v[static_cast<std::size_t>(z0 + j) * static_cast<std::size_t>(out.w) + static_cast<std::size_t>(x0)];
         for (int i = 0; i < rw; ++i) {
           double acc = 0.0;
           for (std::size_t k = 0; k < t.w.size(); ++k) {
             const int idx = std::min(src->h - 1, std::max(0, t.first + static_cast<int>(k)));
-            acc += static_cast<double>(t.w[k]) * static_cast<double>(mid[static_cast<std::size_t>(idx) * static_cast<std::size_t>(rw) + static_cast<std::size_t>(i)]);
+            acc += static_cast<double>(t.w[k]) *
+              static_cast<double>(
+                     mid[static_cast<std::size_t>(idx) * static_cast<std::size_t>(rw) + static_cast<std::size_t>(i)]
+              );
           }
           dst[i] = static_cast<float>(acc);
         }
@@ -199,9 +252,14 @@ namespace moho::editor::field
       return true;
     }
 
-    // ---- orientation -------------------------------------------------------------------------------------------------------------------------
+    // ---- orientation
+    // -------------------------------------------------------------------------------------------------------------------------
 
-    bool OpImgOrient(const OpArgs& a, Grid& out, std::string& err)
+    bool OpImgOrient(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr) {
@@ -224,9 +282,14 @@ namespace moho::editor::field
       return true;
     }
 
-    // ---- masks -------------------------------------------------------------------------------------------------------------------------------
+    // ---- masks
+    // -------------------------------------------------------------------------------------------------------------------------------
 
-    bool OpRectMask(const OpArgs& a, Grid& out, std::string& err)
+    bool OpRectMask(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* like = Need(a, "like", err);
       if (like == nullptr) {
@@ -244,14 +307,19 @@ namespace moho::editor::field
       const bool fb = a.p.N("feather_b", 1) > 0.5;
       out = Grid(like->w, like->h, like->cell, like->ox, like->oz, 0.0f);
       ParallelFor(like->h, [&](const int z) {
-        if (z < z0 || z > z1) return;
+        if (z < z0 || z > z1)
+          return;
         for (int x = x0 < 0 ? 0 : x0; x <= x1 && x < like->w; ++x) {
           double t = 1.0;
           if (feather > 0.0) {
-            if (fl) t = std::min(t, (x - x0) / feather);
-            if (fr) t = std::min(t, (x1 - x) / feather);
-            if (ft) t = std::min(t, (z - z0) / feather);
-            if (fb) t = std::min(t, (z1 - z) / feather);
+            if (fl)
+              t = std::min(t, (x - x0) / feather);
+            if (fr)
+              t = std::min(t, (x1 - x) / feather);
+            if (ft)
+              t = std::min(t, (z - z0) / feather);
+            if (fb)
+              t = std::min(t, (z1 - z) / feather);
             t = smooth ? SmoothStep(t) : (t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t));
           }
           out.At(x, z) = static_cast<float>(t);
@@ -260,7 +328,11 @@ namespace moho::editor::field
       return true;
     }
 
-    bool OpPointsMask(const OpArgs& a, Grid& out, std::string& err)
+    bool OpPointsMask(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* like = Need(a, "like", err);
       if (like == nullptr) {
@@ -285,14 +357,19 @@ namespace moho::editor::field
             const double value = (*pts)[k * 4 + 3];
             const double reach = r + feather;
             const double dz = wz - pz;
-            if (dz > reach || dz < -reach) continue;
+            if (dz > reach || dz < -reach)
+              continue;
             const double dx = wx - px;
-            if (dx > reach || dx < -reach) continue;
+            if (dx > reach || dx < -reach)
+              continue;
             const double d = std::sqrt(dx * dx + dz * dz);
             double t;
-            if (d <= r) t = 1.0;
-            else if (feather <= 0.0 || d >= reach) continue;
-            else t = 1.0 - SmoothStep((d - r) / feather);
+            if (d <= r)
+              t = 1.0;
+            else if (feather <= 0.0 || d >= reach)
+              continue;
+            else
+              t = 1.0 - SmoothStep((d - r) / feather);
             best = std::max(best, t * value);
           }
           out.At(x, z) = static_cast<float>(best);

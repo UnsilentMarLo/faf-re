@@ -22,12 +22,14 @@ namespace
 {
   moho::TConVar<bool> gTConVar_ren_ShadowCache(
     "ren_ShadowCache",
-    "Skip the shadow pass while the light camera, the shadow settings and the scene are the same as when the shadow map was drawn (1 = on, 0 = draw it every frame)",
+    "Skip the shadow pass while the light camera, the shadow settings and the scene are the same as when the shadow "
+    "map was drawn (1 = on, 0 = draw it every frame)",
     &moho::ren_ShadowCache
   );
   moho::TConVar<bool> gTConVar_ren_ShadowCacheTrees(
     "ren_ShadowCacheTrees",
-    "1 = a shadow map drawn with wind swaying trees may be reused too (the sway moves less than a texel); 0 = such a map is drawn every frame",
+    "1 = a shadow map drawn with wind swaying trees may be reused too (the sway moves less than a texel); 0 = such a "
+    "map is drawn every frame",
     &moho::ren_ShadowCacheTrees
   );
   moho::TConVar<int> gTConVar_ren_ShadowCacheMaxAge(
@@ -37,7 +39,8 @@ namespace
   );
   moho::TConVar<bool> gTConVar_ren_WaterSkipDisabled(
     "ren_WaterSkipDisabled",
-    "1 = a map with its water switched off skips the reflection pass, the water mask, the refraction copy and the water surface",
+    "1 = a map with its water switched off skips the reflection pass, the water mask, the refraction copy and the "
+    "water surface",
     &moho::ren_WaterSkipDisabled
   );
   moho::TConVar<bool> gTConVar_ui_CullOffscreen(
@@ -51,7 +54,11 @@ namespace
     &moho::ui_SkipTransparent
   );
 
-  void Put(lua_State* const L, const char* const key, const double value)
+  void Put(
+    lua_State* const L,
+    const char* const key,
+    const double value
+  )
   {
     lua_pushstring(L, key);
     lua_pushnumber(L, static_cast<lua_Number>(value));
@@ -60,16 +67,17 @@ namespace
 
   // ed_render_stats() -> table of the last complete frame (counts are per frame, ms are CPU time on the render thread):
   //   drawCalls, primitives, vertices                  every draw the graphics backend got (whatever issued it)
-  //   batcherFlushes, batcherVertices, batcherIndices  the prim batcher (UI, text, overlay): one flush is one draw call; vertices / 4 = quads
-  //   overlayMs, overlayFlushes, overlayVertices       the editor's native overlay (slope view, grids, lines, icons): its share of the above
-  //   uiMs                                             Maui: CUIManager::RenderFrames + DrawUI
-  //   uiBitmapsDrawn / Culled / Transparent, uiBordersDrawn / Culled, uiTextsDrawn / Culled
-  //   atlasLookups, atlasFastHits, atlasAdds, atlasResets
-  //   shadowMs, shadowSceneMs, shadowRendered, shadowReused     the shadow pass of the frame (1 / 0)
-  //   waterSkipped                                     1 when the water passes were left out
-  //   renderMs                                         WRenViewport::Render, all heads
+  //   batcherFlushes, batcherVertices, batcherIndices  the prim batcher (UI, text, overlay): one flush is one draw
+  //   call; vertices / 4 = quads overlayMs, overlayFlushes, overlayVertices       the editor's native overlay (slope
+  //   view, grids, lines, icons): its share of the above uiMs                                             Maui:
+  //   CUIManager::RenderFrames + DrawUI uiBitmapsDrawn / Culled / Transparent, uiBordersDrawn / Culled, uiTextsDrawn /
+  //   Culled atlasLookups, atlasFastHits, atlasAdds, atlasResets shadowMs, shadowSceneMs, shadowRendered, shadowReused
+  //   the shadow pass of the frame (1 / 0) waterSkipped                                     1 when the water passes
+  //   were left out renderMs                                         WRenViewport::Render, all heads
   // and since the start: frames, shadowHits, shadowMisses, waterSkippedFrames
-  int __cdecl cfunc_EdRenderStats(lua_State* const L)
+  int __cdecl cfunc_EdRenderStats(
+    lua_State* const L
+  )
   {
     namespace rs = moho::editor::renderstats;
     const rs::Frame& f = rs::gLast;
@@ -121,8 +129,15 @@ namespace
   {
     EdRenderStatsLuaBootstrap()
     {
-      (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_render_stats", &cfunc_EdRenderStats, nullptr, "<global>",
-                                    "ed_render_stats() -> table: draw calls, batcher flushes, UI controls drawn / culled, atlas lookups, shadow cache, water skip, CPU ms of the last frame");
+      (void)new moho::CScrLuaBinder(
+        UserLuaInitSet(),
+        "ed_render_stats",
+        &cfunc_EdRenderStats,
+        nullptr,
+        "<global>",
+        "ed_render_stats() -> table: draw calls, batcher flushes, UI controls drawn / culled, atlas lookups, shadow "
+        "cache, water skip, CPU ms of the last frame"
+      );
     }
   };
 

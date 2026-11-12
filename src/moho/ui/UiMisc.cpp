@@ -163,36 +163,35 @@ namespace
     *packedAddressLane += static_cast<std::uint32_t>(4 * dwordCount);
     return packedAddressLane;
   }
-}
+} // namespace
 
+/// The dragger that owns the mouse until it is released or replaced. A
+/// weak link, so a dragger that deletes itself drops out of it.
+// Address: 0x0078E540 (FUN_0078E540 -- this global's constructor emitted
+// out of line: both words zeroed, `this` returned.)
+// Address: 0x0078E560 (FUN_0078E560 -- its destructor, `~WeakPtr`; ICF twin
+// 0x00C02D50 is the copy the exit list runs. Formerly the uncalled statics
+// `func_ResetCurrentDraggerLink` / `func_UnlinkCurrentDraggerLink`, removed
+// 2026-09-30.)
+moho::WeakPtr<IMauiDragger> sCurrentDragger{};
+std::int32_t sCurrentDraggerKeycode = 0;
+std::uint8_t sMouseIsCaptured = 0;
+std::uint8_t sMouseIsScrubbing = 0;
+POINT sMouseMoveStart{};
+POINT sMouseScrubDelta{};
+bool sInvertMidMouseScrub = false;
+POINT sMouseScrubAnchor{};
+// Engine addition, not in the binary: where the latest
+// SetCursorPos(sMouseScrubAnchor) actually put the cursor, re-read after
+// every warp. Under DPI scaling, or when the anchor falls outside the
+// window's ClipCursor rect, the cursor lands elsewhere, and not always on
+// the same spot; measuring against the requested anchor counted that gap as
+// mouse motion on every warp (a tiny drag spun the camera by hundreds of
+// pixels). Where the warp lands exactly, this equals the anchor and nothing
+// changes.
+POINT sMouseScrubLanded{};
 
-  /// The dragger that owns the mouse until it is released or replaced. A
-  /// weak link, so a dragger that deletes itself drops out of it.
-  // Address: 0x0078E540 (FUN_0078E540 -- this global's constructor emitted
-  // out of line: both words zeroed, `this` returned.)
-  // Address: 0x0078E560 (FUN_0078E560 -- its destructor, `~WeakPtr`; ICF twin
-  // 0x00C02D50 is the copy the exit list runs. Formerly the uncalled statics
-  // `func_ResetCurrentDraggerLink` / `func_UnlinkCurrentDraggerLink`, removed
-  // 2026-09-30.)
-  moho::WeakPtr<IMauiDragger> sCurrentDragger{};
-  std::int32_t sCurrentDraggerKeycode = 0;
-  std::uint8_t sMouseIsCaptured = 0;
-  std::uint8_t sMouseIsScrubbing = 0;
-  POINT sMouseMoveStart{};
-  POINT sMouseScrubDelta{};
-  bool sInvertMidMouseScrub = false;
-  POINT sMouseScrubAnchor{};
-  // Engine addition, not in the binary: where the latest
-  // SetCursorPos(sMouseScrubAnchor) actually put the cursor, re-read after
-  // every warp. Under DPI scaling, or when the anchor falls outside the
-  // window's ClipCursor rect, the cursor lands elsewhere, and not always on
-  // the same spot; measuring against the requested anchor counted that gap as
-  // mouse motion on every warp (a tiny drag spun the camera by hundreds of
-  // pixels). Where the warp lands exactly, this equals the anchor and nothing
-  // changes.
-  POINT sMouseScrubLanded{};
-
-  fa::vector<moho::WeakPtr<moho::CMauiControl>> sInputCapture;
+fa::vector<moho::WeakPtr<moho::CMauiControl>> sInputCapture;
 namespace
 {
 
@@ -277,8 +276,7 @@ namespace
   {
     return text.view().find_first_of(characterSet.view(), startPos);
   }
-}
-
+} // namespace
 
 // `moho::sUIState` is defined in gpg/core/reflection/Reflection.cpp (sim side).
 bool moho::cam_Free = false;
@@ -758,8 +756,7 @@ namespace
   };
 
   UiLuaFactoryIndexStartup gUiLuaFactoryIndexStartup;
-}
-
+} // namespace
 
 /**
  * Address: 0x0077F670 (FUN_0077F670)
@@ -936,13 +933,13 @@ void moho::UI_SetInvertMidMouseScrub(
 {
   sInvertMidMouseScrub = invert;
 }
-  /**
-   * Depth of MAUI event dispatch currently on the stack. `PurgeDeleted` skips
-   * the delete while this is non-zero, so a control cannot be freed underneath
-   * an event walk that still holds a pointer to it. Single-threaded: every
-   * dispatch runs on the wx message loop.
-   */
-  int gMauiEventDispatchDepth = 0;
+/**
+ * Depth of MAUI event dispatch currently on the stack. `PurgeDeleted` skips
+ * the delete while this is non-zero, so a control cannot be freed underneath
+ * an event walk that still holds a pointer to it. Single-threaded: every
+ * dispatch runs on the wx message loop.
+ */
+int gMauiEventDispatchDepth = 0;
 
 bool moho::MAUI_EventDispatchInProgress() noexcept
 {
@@ -1077,7 +1074,12 @@ int moho::cfunc_SetFrontEndData(
 moho::CScrLuaInitForm* moho::func_SetFrontEndData_LuaFuncDef()
 {
   static CScrLuaBinder binder(
-    moho::SCR_UserLuaInitSet(), "SetFrontEndData", &moho::cfunc_SetFrontEndData, nullptr, "<global>", kSetFrontEndDataHelpText
+    moho::SCR_UserLuaInitSet(),
+    "SetFrontEndData",
+    &moho::cfunc_SetFrontEndData,
+    nullptr,
+    "<global>",
+    kSetFrontEndDataHelpText
   );
   return &binder;
 }
@@ -1315,8 +1317,9 @@ namespace moho
 
     std::size_t index = 0;
     for (wxWindow* const inputWindow : g_UIManager->mInputWindows) {
-      // EDITOR: a closed pop-out leaves a null slot in the window list (CUIManager::RemovePopoutFrame); the original loop dereferenced it: a crash in the
-      // first FlushEvents after a pop-out was closed (the loading dialog's stop at the next map open).
+      // EDITOR: a closed pop-out leaves a null slot in the window list (CUIManager::RemovePopoutFrame); the original
+      // loop dereferenced it: a crash in the first FlushEvents after a pop-out was closed (the loading dialog's stop at
+      // the next map open).
       if (inputWindow == nullptr) {
         ++index;
         continue;
@@ -1341,8 +1344,7 @@ namespace moho
       ++index;
     }
   }
-}
-
+} // namespace moho
 
 /**
  * Address: 0x0084E0F0 (FUN_0084E0F0, func_FlushEvents)
@@ -1539,8 +1541,7 @@ namespace
     }
     return static_cast<std::int32_t>(bitmap->mFrames.end() - frameStart);
   }
-}
-
+} // namespace
 
 /**
  * Address: 0x00795BD0 (FUN_00795BD0, func_CreateLuaEvent)
@@ -1619,8 +1620,7 @@ LuaPlus::LuaState* moho::USER_GetLuaState()
   }
 
   static LuaPlus::LuaState sLuaState(
-    LuaPlus::LuaState::LIB_BASE,
-    static_cast<int>(moho::lua_incremental::ELuaVmRole::FrontendUi)
+    LuaPlus::LuaState::LIB_BASE, static_cast<int>(moho::lua_incremental::ELuaVmRole::FrontendUi)
   );
   static CTaskStage sStage;
 
@@ -1779,7 +1779,12 @@ int moho::cfunc_AnyInputCapture(
 moho::CScrLuaInitForm* moho::func_AnyInputCapture_LuaFuncDef()
 {
   static CScrLuaBinder binder(
-    moho::SCR_UserLuaInitSet(), "AnyInputCapture", &moho::cfunc_AnyInputCapture, nullptr, "<global>", kAnyInputCaptureHelpText
+    moho::SCR_UserLuaInitSet(),
+    "AnyInputCapture",
+    &moho::cfunc_AnyInputCapture,
+    nullptr,
+    "<global>",
+    kAnyInputCaptureHelpText
   );
   return &binder;
 }
@@ -1835,8 +1840,7 @@ namespace
     }
     return static_cast<std::uint32_t>(end - begin);
   }
-}
-
+} // namespace
 
 void moho::CurrentBuildQueueItemCommands(
   const int oneBasedQueueIndex,
@@ -1900,7 +1904,6 @@ namespace moho
   WeakSet<UserEntity> sSelectionBrackets;
 }
 
-
 /**
  * Address: 0x007FD9F0 (FUN_007FD9F0, func_PushBlinkyBox)
  *
@@ -1942,7 +1945,7 @@ void moho::func_AddSelectionBracketUserUnit(
   (void)sSelectionBrackets.Add(unit);
 }
 
-  fa::list<SCommandFeedbackBlip> sCommandFeedbackBlips;
+fa::list<SCommandFeedbackBlip> sCommandFeedbackBlips;
 namespace
 {
 
@@ -1957,8 +1960,7 @@ namespace
     delete meshInstance;
     meshInstance = nullptr;
   }
-}
-
+} // namespace
 
 /**
  * Address: 0x008586C0 (FUN_008586C0, Moho::RemoveCommandFeedbackBlips)
@@ -1999,8 +2001,7 @@ void moho::UI_UpdateCommandFeedbackBlips(
 {
   (void)moho::MeshRenderer::GetInstance();
 
-  for (fa::list<SCommandFeedbackBlip>::iterator it = sCommandFeedbackBlips.begin();
-       it != sCommandFeedbackBlips.end();
+  for (fa::list<SCommandFeedbackBlip>::iterator it = sCommandFeedbackBlips.begin(); it != sCommandFeedbackBlips.end();
        ++it) {
     SCommandFeedbackBlip& blip = *it;
     const float updatedTime = blip.mCurTime + deltaSeconds;
@@ -2015,9 +2016,16 @@ void moho::UI_UpdateCommandFeedbackBlips(
 void moho::UI_DumpCurrentInputCapture() {}
 
 // Rows 0x00F5B150.
-BEGIN_EVENT_TABLE(moho::CUIKeyHandler, wxEvtHandler)
-  EVT_KEY_UP(moho::CUIKeyHandler::OnKeyUp)
-  EVT_KEY_DOWN(moho::CUIKeyHandler::OnKeyDown)
+BEGIN_EVENT_TABLE(
+  moho::CUIKeyHandler,
+  wxEvtHandler
+)
+EVT_KEY_UP(
+  moho::CUIKeyHandler::OnKeyUp
+)
+EVT_KEY_DOWN(
+  moho::CUIKeyHandler::OnKeyDown
+)
 END_EVENT_TABLE()
 
 namespace moho
@@ -3045,12 +3053,12 @@ namespace
   };
 
   const UiLuaFuncDefStartup gUiLuaFuncDefStartup{};
-}
+} // namespace
 
 namespace moho
 {
-namespace
-{
+  namespace
+  {
     // 0x00E4F6E4: the "no water plane" sentinel elevation the skirt lift falls
     // back to when the map has water disabled - low enough that the max() below
     // always picks the terrain instead.
@@ -3063,8 +3071,7 @@ namespace
     // 0x00E4F84C: the outline's world thickness at unit view depth; divided by
     // the point's post-projection W to keep the on-screen width constant.
     constexpr float kSkirtThicknessAtUnitDepth = 0.15000001f;
-}
-
+  } // namespace
 
   /**
    * Address: 0x0085ABD0 (FUN_0085ABD0, Moho::DrawUnitSkirt)
@@ -3099,9 +3106,9 @@ namespace
 
     const STIMap* const map = session->GetSTIMap();
     // Engine addition (water bodies): the level of the water under the skirt.
-    const float waterElevation =
-      map->HasWaterBodies() ? map->GetWaterElevationAt(position.x, position.z)
-                            : (map->mWaterEnabled != 0 ? map->mWaterElevation : kNoWaterElevation);
+    const float waterElevation = map->HasWaterBodies()
+      ? map->GetWaterElevationAt(position.x, position.z)
+      : (map->mWaterEnabled != 0 ? map->mWaterElevation : kNoWaterElevation);
 
     float skirtY = position.y;
     if (heightField != nullptr) {
@@ -3192,7 +3199,7 @@ namespace
 
     batcher->Flush();
   }
-}
+} // namespace moho
 
 /**
  * Address: 0x0086A350 (FUN_0086A350, ??0IWldUIProvider@Moho@@QAE@XZ)

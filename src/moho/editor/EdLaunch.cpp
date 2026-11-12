@@ -1,6 +1,7 @@
 // EDITOR: the launch failure of a command-line map, see EdLaunch.h.
 //
-//   ed_launch_error([keep]) -> message | nil     the last launch failure ("Unable to launch <map>:\n<reason>"); reading it clears it unless `keep` is true
+//   ed_launch_error([keep]) -> message | nil     the last launch failure ("Unable to launch <map>:\n<reason>"); reading
+//   it clears it unless `keep` is true
 #include "moho/editor/EdLaunch.h"
 
 #include <atomic>
@@ -22,17 +23,20 @@
 namespace
 {
   std::mutex gLock;
-  std::string gMessage;                 // the pending failure ("" = none)
-  std::atomic<unsigned> gSerial{0};     // bumped by every failure; the delayed box belongs to one of them
+  std::string gMessage;             // the pending failure ("" = none)
+  std::atomic<unsigned> gSerial{0}; // bumped by every failure; the delayed box belongs to one of them
 
-  void ShowBoxLater(const unsigned serial, const std::string message)
+  void ShowBoxLater(
+    const unsigned serial,
+    const std::string message
+  )
   {
     std::thread([serial, message]() {
       std::this_thread::sleep_for(std::chrono::milliseconds(moho::editor::launch::kBoxDelayMs));
       {
         const std::lock_guard<std::mutex> lock(gLock);
         if (gSerial.load() != serial || gMessage.empty()) {
-          return;               // the editor's UI took it (or a later failure replaced it)
+          return; // the editor's UI took it (or a later failure replaced it)
         }
       }
       int length = ::MultiByteToWideChar(CP_UTF8, 0, message.c_str(), -1, nullptr, 0);
@@ -45,7 +49,9 @@ namespace
     }).detach();
   }
 
-  int __cdecl cfunc_EdLaunchError(lua_State* const L)
+  int __cdecl cfunc_EdLaunchError(
+    lua_State* const L
+  )
   {
     const bool keep = lua_toboolean(L, 1) != 0;
     const std::lock_guard<std::mutex> lock(gLock);
@@ -73,8 +79,14 @@ namespace
   {
     EdLaunchLuaBootstrap()
     {
-      (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_launch_error", &cfunc_EdLaunchError, nullptr, "<global>",
-                                    "ed_launch_error([keep]) -> the message of the last failed map launch, or nil (cleared by reading unless keep)");
+      (void)new moho::CScrLuaBinder(
+        UserLuaInitSet(),
+        "ed_launch_error",
+        &cfunc_EdLaunchError,
+        nullptr,
+        "<global>",
+        "ed_launch_error([keep]) -> the message of the last failed map launch, or nil (cleared by reading unless keep)"
+      );
     }
   };
 
@@ -88,9 +100,13 @@ namespace moho::editor::launch
     return moho::CFG_GetArgOption("/editor", 0, nullptr);
   }
 
-  void ReportFailure(const char* const mapName, const char* const reason)
+  void ReportFailure(
+    const char* const mapName,
+    const char* const reason
+  )
   {
-    std::string message = std::string("Unable to launch ") + (mapName != nullptr ? mapName : "") + ":\n" + (reason != nullptr ? reason : "unknown error");
+    std::string message = std::string("Unable to launch ") + (mapName != nullptr ? mapName : "") + ":\n" +
+      (reason != nullptr ? reason : "unknown error");
     gpg::Warnf("EDITOR: %s", message.c_str());
     unsigned serial;
     {

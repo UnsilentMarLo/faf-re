@@ -1,35 +1,43 @@
-// EDITOR: the "up" natives of adaptive maps (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP5): upstream's `_tables.lua` / `_options.lua` text
-// model, the lobby-option rules read from a map's script and what becomes of a unit, bound to Lua over EdUpCommon.h. The logic is upstream's
-// (src/editor/doc/EdAdaptiveTables, EdAdaptiveModel, EdGroupOptions, EdUnitFate, unchanged, in faf_editor_logic); this unit is table <-> struct glue, plus
-// `ed_wreck_value`, which replaces upstream's EdUnitWrecks (that one needs the EdDocument) by a lookup of the rules' blueprint.
+// EDITOR: the "up" natives of adaptive maps (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP5):
+// upstream's `_tables.lua` / `_options.lua` text model, the lobby-option rules read from a map's script and what
+// becomes of a unit, bound to Lua over EdUpCommon.h. The logic is upstream's (src/editor/doc/EdAdaptiveTables,
+// EdAdaptiveModel, EdGroupOptions, EdUnitFate, unchanged, in faf_editor_logic); this unit is table <-> struct glue,
+// plus `ed_wreck_value`, which replaces upstream's EdUnitWrecks (that one needs the EdDocument) by a lookup of the
+// rules' blueprint.
 //
-// Conventions. Text in, text out: a native that changes a file takes the file's text and returns the new text, the file is the caller's (adaptive.lua reads and
-// writes `_tables.lua` / `_options.lua`). Lua tables are plain: lists are arrays, structs are tables with the field names below. Every index into a list of
-// values / options / groups that crosses the boundary is 1-BASED and 0 means "none / not offered" (upstream's 0-based and -1).
+// Conventions. Text in, text out: a native that changes a file takes the file's text and returns the new text, the file
+// is the caller's (adaptive.lua reads and writes `_tables.lua` / `_options.lua`). Lua tables are plain: lists are
+// arrays, structs are tables with the field names below. Every index into a list of values / options / groups that
+// crosses the boundary is 1-BASED and 0 means "none / not offered" (upstream's 0-based and -1).
 //
 //   Tables (`_tables.lua`)
-//     ed_adaptive_known_tables()                -> { { name, label, hydro, optionKey }, ... }     the option tables the script reads, in its order
-//     ed_adaptive_tables_parse(text)            -> tables | nil, message
-//          tables = { maxPlayers, mexArmy = { {markerName, ...}, ... }, hydroArmy = {...}, options = { { name, groups = { {markerName, ...}, ... } }, ... },
+//     ed_adaptive_known_tables()                -> { { name, label, hydro, optionKey }, ... }     the option tables the
+//     script reads, in its order ed_adaptive_tables_parse(text)            -> tables | nil, message
+//          tables = { maxPlayers, mexArmy = { {markerName, ...}, ... }, hydroArmy = {...}, options = { { name, groups =
+//          { {markerName, ...}, ... } }, ... },
 //                     forwardCrazyrush = {...}, crazyrushOne = {...} }       (marker names, "Mass 07")
-//     ed_adaptive_tables_write(text, tables)    -> text      the file with the tables the script uses written in (the rest, its comments, kept); text '' = a new file
-//     ed_adaptive_tables_path(script)           -> '/maps/x/x_tables.lua' | ''     the file the map's script imports ('' = not an adaptive script)
+//     ed_adaptive_tables_write(text, tables)    -> text      the file with the tables the script uses written in (the
+//     rest, its comments, kept); text '' = a new file ed_adaptive_tables_path(script)           ->
+//     '/maps/x/x_tables.lua' | ''     the file the map's script imports ('' = not an adaptive script)
 //     ed_adaptive_scenario(scenarioText)        -> text      `_scenario.lua` with AdaptiveMap = true
-//     ed_adaptive_entry(markerName, hydro)      -> '7' | "'7'" | ''      the entry the script reads for a marker ('' = not that type)
-//     ed_adaptive_marker(entry, hydro)          -> markerName
-//     ed_adaptive_option_key(tableName)         -> 'middle_mexes'
+//     ed_adaptive_entry(markerName, hydro)      -> '7' | "'7'" | ''      the entry the script reads for a marker ('' =
+//     not that type) ed_adaptive_marker(entry, hydro)          -> markerName ed_adaptive_option_key(tableName) ->
+//     'middle_mexes'
 //   Lobby options (`_options.lua`)
-//     ed_adaptive_options_parse(text)           -> { { key, label, help, defaultIndex, values = { { key, number, numberKey, text, help }, ... } }, ... }
-//     ed_adaptive_option_find(text, key)        -> { found, values, defaultKey }
-//     ed_adaptive_option_put(text, option)      -> text      WithOption: the option as the table has it, its keys kept
-//     ed_adaptive_option_for(text, key, label, hydro, groupSizes) -> text      WithLobbyOption: values 1 (none) .. groups + 1 with the groups' resource counts
-//     ed_adaptive_option_values(text, key, label, help, values) -> text        values = { { text, help }, ... } (keys 1, 2, ...)
-//     ed_adaptive_option_write(text, key, label, help, defaultIndex, values) -> text     values = { { key, text, help }, ... }, key as a Lua literal
-//     ed_adaptive_option_remove(text, key)      -> text
-//     ed_adaptive_next_level(option, text)      -> value      the next counted value of a level option, as { key, number, numberKey, text, help }
+//     ed_adaptive_options_parse(text)           -> { { key, label, help, defaultIndex, values = { { key, number,
+//     numberKey, text, help }, ... } }, ... } ed_adaptive_option_find(text, key)        -> { found, values, defaultKey
+//     } ed_adaptive_option_put(text, option)      -> text      WithOption: the option as the table has it, its keys
+//     kept ed_adaptive_option_for(text, key, label, hydro, groupSizes) -> text      WithLobbyOption: values 1 (none) ..
+//     groups + 1 with the groups' resource counts ed_adaptive_option_values(text, key, label, help, values) -> text
+//     values = { { text, help }, ... } (keys 1, 2, ...) ed_adaptive_option_write(text, key, label, help, defaultIndex,
+//     values) -> text     values = { { key, text, help }, ... }, key as a Lua literal ed_adaptive_option_remove(text,
+//     key)      -> text ed_adaptive_next_level(option, text)      -> value      the next counted value of a level
+//     option, as { key, number, numberKey, text, help }
 //   The setup by what the player picks
-//     ed_adaptive_options_of(script, optionsText, tables) -> { { kind = 'mexes' | 'hydros' | 'levels' | 'other', key, lobby (1-based, 0 = not in the lobby),
-//                                                                table, tableLabel, loop = {..}, title, scriptReads }, ... }
+//     ed_adaptive_options_of(script, optionsText, tables) -> { { kind = 'mexes' | 'hydros' | 'levels' | 'other', key,
+//     lobby (1-based, 0 = not in the lobby),
+//                                                                table, tableLabel, loop = {..}, title, scriptReads },
+//                                                                ... }
 //          `tables` is a parsed tables table (or the text of `_tables.lua`).
 //     ed_adaptive_table_group(value)            -> n         the table group a choice adds (1-based), 0 for "none"
 //     ed_adaptive_level_group(loop, value)      -> name      the group a level choice adds, or ''
@@ -37,13 +45,16 @@
 //     ed_adaptive_loops(script)                 -> { { prefix, army, key, from, wreck }, ... }
 //     ed_adaptive_creations(script)             -> { { army, name, prefix, wreck }, ... }
 //   Units
-//     ed_adaptive_rule(script, optionsText, group) -> { scriptNames, never, keys, optionIndex, scriptDefault, cases = { { picks, made, asWreck, asUnit } },
+//     ed_adaptive_rule(script, optionsText, group) -> { scriptNames, never, keys, optionIndex, scriptDefault, cases = {
+//     { picks, made, asWreck, asUnit } },
 //                                                       lines = { text, ... }, when }
-//     ed_adaptive_spawn_targets(script, optionsText, army, groupPaths) -> { { path, exists, rule, when, wreck, unit, optionsWith, optionsChange }, ... }
-//     ed_adaptive_fate(path, civilian, script)  -> { kind, group, text }       path = { 'INITIAL', 'Base' }; kind = unit | wreck | scriptUnit | scriptWreck |
+//     ed_adaptive_spawn_targets(script, optionsText, army, groupPaths) -> { { path, exists, rule, when, wreck, unit,
+//     optionsWith, optionsChange }, ... } ed_adaptive_fate(path, civilian, script)  -> { kind, group, text }       path
+//     = { 'INITIAL', 'Base' }; kind = unit | wreck | scriptUnit | scriptWreck |
 //                                                                              scriptEither | never
-//     ed_wreck_value(bpId, underwater)          -> { known, exists, mass, energy, buildMass, buildEnergy } | nil, message     the rules' blueprint
-//     ed_wreck_value_of(bpText, buildMass, buildEnergy, underwater) -> { exists, mass, energy }
+//     ed_wreck_value(bpId, underwater)          -> { known, exists, mass, energy, buildMass, buildEnergy } | nil,
+//     message     the rules' blueprint ed_wreck_value_of(bpText, buildMass, buildEnergy, underwater) -> { exists, mass,
+//     energy }
 
 #include <algorithm>
 #include <cctype>
@@ -72,16 +83,24 @@ namespace
   namespace up = moho::editor::up;
   using namespace faf::editor;
 
-  // ---- table <-> struct helpers ---------------------------------------------------------------------------------------------------------------------
+  // ---- table <-> struct helpers
+  // ---------------------------------------------------------------------------------------------------------------------
 
-  int Absolute(lua_State* const L, const int index)
+  int Absolute(
+    lua_State* const L,
+    const int index
+  )
   {
     return index < 0 && index > LUA_REGISTRYINDEX ? lua_gettop(L) + index + 1 : index;
   }
 
   /** Calls `fn(absoluteIndexOfElement)` for t[1], t[2], ... of the table at `table` (an empty loop for a non-table). */
   template <class F>
-  void EachElement(lua_State* const L, const int table, F fn)
+  void EachElement(
+    lua_State* const L,
+    const int table,
+    F fn
+  )
   {
     const int abs = Absolute(L, table);
     if (lua_type(L, abs) != LUA_TTABLE) {
@@ -98,12 +117,19 @@ namespace
     }
   }
 
-  std::string StringAt(lua_State* const L, const int index)
+  std::string StringAt(
+    lua_State* const L,
+    const int index
+  )
   {
-    return lua_type(L, index) == LUA_TSTRING ? std::string(lua_tostring(L, index), lua_strlen(L, index)) : std::string();
+    return lua_type(L, index) == LUA_TSTRING ? std::string(lua_tostring(L, index), lua_strlen(L, index))
+                                             : std::string();
   }
 
-  std::vector<std::string> StringListAt(lua_State* const L, const int index)
+  std::vector<std::string> StringListAt(
+    lua_State* const L,
+    const int index
+  )
   {
     std::vector<std::string> out;
     EachElement(L, index, [&](const int item) {
@@ -115,17 +141,27 @@ namespace
   }
 
   /** The array of string arrays held by the field t[key]. */
-  std::vector<std::vector<std::string>> NestedField(lua_State* const L, const int table, const char* const key)
+  std::vector<std::vector<std::string>> NestedField(
+    lua_State* const L,
+    const int table,
+    const char* const key
+  )
   {
     std::vector<std::vector<std::string>> out;
     if (up::PushField(L, table, key) == LUA_TTABLE) {
-      EachElement(L, lua_gettop(L), [&](const int item) { out.push_back(StringListAt(L, item)); });
+      EachElement(L, lua_gettop(L), [&](const int item) {
+        out.push_back(StringListAt(L, item));
+      });
     }
     lua_settop(L, -2);
     return out;
   }
 
-  void SetNested(lua_State* const L, const char* const key, const std::vector<std::vector<std::string>>& lists)
+  void SetNested(
+    lua_State* const L,
+    const char* const key,
+    const std::vector<std::vector<std::string>>& lists
+  )
   {
     lua_pushstring(L, key);
     lua_newtable(L);
@@ -140,7 +176,11 @@ namespace
     lua_settable(L, -3);
   }
 
-  void SetIntList(lua_State* const L, const char* const key, const std::vector<int>& values)
+  void SetIntList(
+    lua_State* const L,
+    const char* const key,
+    const std::vector<int>& values
+  )
   {
     lua_pushstring(L, key);
     lua_newtable(L);
@@ -151,9 +191,13 @@ namespace
     lua_settable(L, -3);
   }
 
-  // ---- structs ------------------------------------------------------------------------------------------------------------------------------------
+  // ---- structs
+  // ------------------------------------------------------------------------------------------------------------------------------------
 
-  AdaptiveTables ReadTables(lua_State* const L, const int index)
+  AdaptiveTables ReadTables(
+    lua_State* const L,
+    const int index
+  )
   {
     AdaptiveTables tables;
     tables.maxPlayers = up::FieldInt(L, index, "maxPlayers", tables.maxPlayers);
@@ -170,7 +214,10 @@ namespace
     return tables;
   }
 
-  void PushTables(lua_State* const L, const AdaptiveTables& tables)
+  void PushTables(
+    lua_State* const L,
+    const AdaptiveTables& tables
+  )
   {
     lua_newtable(L);
     up::SetNumber(L, "maxPlayers", tables.maxPlayers);
@@ -189,7 +236,10 @@ namespace
     up::SetStringList(L, "crazyrushOne", tables.crazyrushOne);
   }
 
-  LobbyOptionInfo::Value ReadValue(lua_State* const L, const int index)
+  LobbyOptionInfo::Value ReadValue(
+    lua_State* const L,
+    const int index
+  )
   {
     LobbyOptionInfo::Value value;
     value.key = up::FieldString(L, index, "key");
@@ -200,7 +250,10 @@ namespace
     return value;
   }
 
-  void PushValue(lua_State* const L, const LobbyOptionInfo::Value& value)
+  void PushValue(
+    lua_State* const L,
+    const LobbyOptionInfo::Value& value
+  )
   {
     lua_newtable(L);
     up::SetString(L, "key", value.key);
@@ -210,7 +263,10 @@ namespace
     up::SetString(L, "help", value.help);
   }
 
-  LobbyOptionInfo ReadOption(lua_State* const L, const int index)
+  LobbyOptionInfo ReadOption(
+    lua_State* const L,
+    const int index
+  )
   {
     LobbyOptionInfo option;
     option.key = up::FieldString(L, index, "key");
@@ -218,13 +274,18 @@ namespace
     option.help = up::FieldString(L, index, "help");
     option.defaultIndex = up::FieldInt(L, index, "defaultIndex");
     if (up::PushField(L, index, "values") == LUA_TTABLE) {
-      EachElement(L, lua_gettop(L), [&](const int item) { option.values.push_back(ReadValue(L, item)); });
+      EachElement(L, lua_gettop(L), [&](const int item) {
+        option.values.push_back(ReadValue(L, item));
+      });
     }
     lua_settop(L, -2);
     return option;
   }
 
-  void PushOption(lua_State* const L, const LobbyOptionInfo& option)
+  void PushOption(
+    lua_State* const L,
+    const LobbyOptionInfo& option
+  )
   {
     lua_newtable(L);
     up::SetString(L, "key", option.key);
@@ -240,7 +301,10 @@ namespace
     lua_settable(L, -3);
   }
 
-  ScriptGroupLoop ReadLoop(lua_State* const L, const int index)
+  ScriptGroupLoop ReadLoop(
+    lua_State* const L,
+    const int index
+  )
   {
     ScriptGroupLoop loop;
     loop.prefix = up::FieldString(L, index, "prefix");
@@ -251,7 +315,10 @@ namespace
     return loop;
   }
 
-  void PushLoop(lua_State* const L, const ScriptGroupLoop& loop)
+  void PushLoop(
+    lua_State* const L,
+    const ScriptGroupLoop& loop
+  )
   {
     lua_newtable(L);
     up::SetString(L, "prefix", loop.prefix);
@@ -261,13 +328,19 @@ namespace
     up::SetBool(L, "wreck", loop.wreck);
   }
 
-  const char* MadeName(const GroupLobbyRule::Made made)
+  const char* MadeName(
+    const GroupLobbyRule::Made made
+  )
   {
     return made == GroupLobbyRule::Made::Yes ? "yes" : made == GroupLobbyRule::Made::Maybe ? "maybe" : "no";
   }
 
   /** The rule as a table (indices 1-based, 0 = not offered); `lines` and `when` as the Properties panel words them. */
-  void PushRule(lua_State* const L, const GroupLobbyRule& rule, const std::vector<LobbyOptionInfo>& options)
+  void PushRule(
+    lua_State* const L,
+    const GroupLobbyRule& rule,
+    const std::vector<LobbyOptionInfo>& options
+  )
   {
     lua_newtable(L);
     up::SetBool(L, "scriptNames", rule.scriptNames);
@@ -298,7 +371,9 @@ namespace
     up::SetString(L, "when", LobbyRuleWhen(rule, options));
   }
 
-  const char* KindName(const AdaptiveOption::Kind kind)
+  const char* KindName(
+    const AdaptiveOption::Kind kind
+  )
   {
     switch (kind) {
     case AdaptiveOption::Kind::Mexes:
@@ -312,7 +387,9 @@ namespace
     }
   }
 
-  const char* FateName(const UnitFate::Kind kind)
+  const char* FateName(
+    const UnitFate::Kind kind
+  )
   {
     switch (kind) {
     case UnitFate::Kind::Unit:
@@ -330,9 +407,12 @@ namespace
     }
   }
 
-  // ---- tables -------------------------------------------------------------------------------------------------------------------------------------
+  // ---- tables
+  // -------------------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_KnownTables(lua_State* const L)
+  int __cdecl cfunc_KnownTables(
+    lua_State* const L
+  )
   {
     lua_newtable(L);
     int n = 0;
@@ -347,7 +427,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_TablesParse(lua_State* const L)
+  int __cdecl cfunc_TablesParse(
+    lua_State* const L
+  )
   {
     const std::string text = up::ArgString(L, 1, "ed_adaptive_tables_parse");
     AdaptiveTables tables;
@@ -359,7 +441,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_TablesWrite(lua_State* const L)
+  int __cdecl cfunc_TablesWrite(
+    lua_State* const L
+  )
   {
     const std::string text = up::ArgString(L, 1, "ed_adaptive_tables_write");
     const std::string out = WithAdaptiveTables(text, ReadTables(L, 2));
@@ -367,44 +451,57 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_TablesPath(lua_State* const L)
+  int __cdecl cfunc_TablesPath(
+    lua_State* const L
+  )
   {
     const std::string path = AdaptiveTablesPath(up::ArgString(L, 1, "ed_adaptive_tables_path"));
     lua_pushlstring(L, path.data(), path.size());
     return 1;
   }
 
-  int __cdecl cfunc_Scenario(lua_State* const L)
+  int __cdecl cfunc_Scenario(
+    lua_State* const L
+  )
   {
     const std::string out = WithScenarioAdaptive(up::ArgString(L, 1, "ed_adaptive_scenario"));
     lua_pushlstring(L, out.data(), out.size());
     return 1;
   }
 
-  int __cdecl cfunc_Entry(lua_State* const L)
+  int __cdecl cfunc_Entry(
+    lua_State* const L
+  )
   {
     const std::string out = AdaptiveEntry(up::ArgString(L, 1, "ed_adaptive_entry"), lua_toboolean(L, 2) != 0);
     lua_pushlstring(L, out.data(), out.size());
     return 1;
   }
 
-  int __cdecl cfunc_Marker(lua_State* const L)
+  int __cdecl cfunc_Marker(
+    lua_State* const L
+  )
   {
     const std::string out = AdaptiveMarkerName(up::ArgString(L, 1, "ed_adaptive_marker"), lua_toboolean(L, 2) != 0);
     lua_pushlstring(L, out.data(), out.size());
     return 1;
   }
 
-  int __cdecl cfunc_OptionKey(lua_State* const L)
+  int __cdecl cfunc_OptionKey(
+    lua_State* const L
+  )
   {
     const std::string out = AdaptiveOptionKey(up::ArgString(L, 1, "ed_adaptive_option_key"));
     lua_pushlstring(L, out.data(), out.size());
     return 1;
   }
 
-  // ---- lobby options ------------------------------------------------------------------------------------------------------------------------------
+  // ---- lobby options
+  // ------------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_OptionsParse(lua_State* const L)
+  int __cdecl cfunc_OptionsParse(
+    lua_State* const L
+  )
   {
     const std::vector<LobbyOptionInfo> options = ParseLobbyOptions(up::ArgString(L, 1, "ed_adaptive_options_parse"));
     lua_newtable(L);
@@ -415,9 +512,12 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_OptionFind(lua_State* const L)
+  int __cdecl cfunc_OptionFind(
+    lua_State* const L
+  )
   {
-    const LobbyOption found = FindLobbyOption(up::ArgString(L, 1, "ed_adaptive_option_find"), up::ArgString(L, 2, "ed_adaptive_option_find"));
+    const LobbyOption found =
+      FindLobbyOption(up::ArgString(L, 1, "ed_adaptive_option_find"), up::ArgString(L, 2, "ed_adaptive_option_find"));
     lua_newtable(L);
     up::SetBool(L, "found", found.found);
     up::SetNumber(L, "values", found.values);
@@ -425,58 +525,112 @@ namespace
     return 1;
   }
 
-  int PushText(lua_State* const L, const std::string& text)
+  int PushText(
+    lua_State* const L,
+    const std::string& text
+  )
   {
     lua_pushlstring(L, text.data(), text.size());
     return 1;
   }
 
-  int __cdecl cfunc_OptionPut(lua_State* const L)
+  int __cdecl cfunc_OptionPut(
+    lua_State* const L
+  )
   {
     return PushText(L, WithOption(up::ArgString(L, 1, "ed_adaptive_option_put"), ReadOption(L, 2)));
   }
 
-  int __cdecl cfunc_OptionFor(lua_State* const L)
+  int __cdecl cfunc_OptionFor(
+    lua_State* const L
+  )
   {
     std::vector<int> sizes; // the array itself (argument 5)
-    EachElement(L, 5, [&](const int item) { sizes.push_back(lua_type(L, item) == LUA_TNUMBER ? static_cast<int>(lua_tonumber(L, item)) : 0); });
-    return PushText(L, WithLobbyOption(up::ArgString(L, 1, "ed_adaptive_option_for"), up::ArgString(L, 2, "ed_adaptive_option_for"), StringAt(L, 3),
-                                       lua_toboolean(L, 4) != 0, sizes));
+    EachElement(L, 5, [&](const int item) {
+      sizes.push_back(lua_type(L, item) == LUA_TNUMBER ? static_cast<int>(lua_tonumber(L, item)) : 0);
+    });
+    return PushText(
+      L,
+      WithLobbyOption(
+        up::ArgString(L, 1, "ed_adaptive_option_for"),
+        up::ArgString(L, 2, "ed_adaptive_option_for"),
+        StringAt(L, 3),
+        lua_toboolean(L, 4) != 0,
+        sizes
+      )
+    );
   }
 
-  int __cdecl cfunc_OptionValues(lua_State* const L)
+  int __cdecl cfunc_OptionValues(
+    lua_State* const L
+  )
   {
     std::vector<std::pair<std::string, std::string>> values;
-    EachElement(L, 5, [&](const int item) { values.emplace_back(up::FieldString(L, item, "text"), up::FieldString(L, item, "help")); });
-    return PushText(L, WithLobbyOptionValues(up::ArgString(L, 1, "ed_adaptive_option_values"), up::ArgString(L, 2, "ed_adaptive_option_values"),
-                                             StringAt(L, 3), StringAt(L, 4), values));
+    EachElement(L, 5, [&](const int item) {
+      values.emplace_back(up::FieldString(L, item, "text"), up::FieldString(L, item, "help"));
+    });
+    return PushText(
+      L,
+      WithLobbyOptionValues(
+        up::ArgString(L, 1, "ed_adaptive_option_values"),
+        up::ArgString(L, 2, "ed_adaptive_option_values"),
+        StringAt(L, 3),
+        StringAt(L, 4),
+        values
+      )
+    );
   }
 
-  int __cdecl cfunc_OptionWrite(lua_State* const L)
+  int __cdecl cfunc_OptionWrite(
+    lua_State* const L
+  )
   {
     std::vector<LobbyValueText> values;
     EachElement(L, 6, [&](const int item) {
-      values.push_back({up::FieldString(L, item, "key"), up::FieldString(L, item, "text"), up::FieldString(L, item, "help")});
+      values.push_back(
+        {up::FieldString(L, item, "key"), up::FieldString(L, item, "text"), up::FieldString(L, item, "help")}
+      );
     });
     const int defaultIndex = lua_type(L, 5) == LUA_TNUMBER ? static_cast<int>(lua_tonumber(L, 5)) : 0;
-    return PushText(L, WithLobbyOptionWritten(up::ArgString(L, 1, "ed_adaptive_option_write"), up::ArgString(L, 2, "ed_adaptive_option_write"),
-                                              StringAt(L, 3), StringAt(L, 4), defaultIndex, values));
+    return PushText(
+      L,
+      WithLobbyOptionWritten(
+        up::ArgString(L, 1, "ed_adaptive_option_write"),
+        up::ArgString(L, 2, "ed_adaptive_option_write"),
+        StringAt(L, 3),
+        StringAt(L, 4),
+        defaultIndex,
+        values
+      )
+    );
   }
 
-  int __cdecl cfunc_OptionRemove(lua_State* const L)
+  int __cdecl cfunc_OptionRemove(
+    lua_State* const L
+  )
   {
-    return PushText(L, WithoutLobbyOption(up::ArgString(L, 1, "ed_adaptive_option_remove"), up::ArgString(L, 2, "ed_adaptive_option_remove")));
+    return PushText(
+      L,
+      WithoutLobbyOption(
+        up::ArgString(L, 1, "ed_adaptive_option_remove"), up::ArgString(L, 2, "ed_adaptive_option_remove")
+      )
+    );
   }
 
-  int __cdecl cfunc_NextLevel(lua_State* const L)
+  int __cdecl cfunc_NextLevel(
+    lua_State* const L
+  )
   {
     PushValue(L, NextLevelValue(ReadOption(L, 1), StringAt(L, 2)));
     return 1;
   }
 
-  // ---- the setup by what the player picks ------------------------------------------------------------------------------------------------------
+  // ---- the setup by what the player picks
+  // ------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_OptionsOf(lua_State* const L)
+  int __cdecl cfunc_OptionsOf(
+    lua_State* const L
+  )
   {
     const std::string script = up::ArgString(L, 1, "ed_adaptive_options_of");
     const std::string optionsText = StringAt(L, 2);
@@ -511,18 +665,24 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_TableGroup(lua_State* const L)
+  int __cdecl cfunc_TableGroup(
+    lua_State* const L
+  )
   {
     lua_pushnumber(L, TableGroupOfChoice(ReadValue(L, 1)) + 1);
     return 1;
   }
 
-  int __cdecl cfunc_LevelGroup(lua_State* const L)
+  int __cdecl cfunc_LevelGroup(
+    lua_State* const L
+  )
   {
     return PushText(L, LoopGroupOfChoice(ReadLoop(L, 1), ReadValue(L, 2)));
   }
 
-  int __cdecl cfunc_GroupsMade(lua_State* const L)
+  int __cdecl cfunc_GroupsMade(
+    lua_State* const L
+  )
   {
     const std::string script = up::ArgString(L, 1, "ed_adaptive_groups_made");
     const std::vector<LobbyOptionInfo> lobby = ParseLobbyOptions(StringAt(L, 2));
@@ -541,7 +701,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Loops(lua_State* const L)
+  int __cdecl cfunc_Loops(
+    lua_State* const L
+  )
   {
     const std::vector<ScriptGroupLoop> loops = ScriptGroupLoops(up::ArgString(L, 1, "ed_adaptive_loops"));
     lua_newtable(L);
@@ -552,9 +714,12 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Creations(lua_State* const L)
+  int __cdecl cfunc_Creations(
+    lua_State* const L
+  )
   {
-    const std::vector<ScriptGroupCreation> creations = ScriptGroupCreations(up::ArgString(L, 1, "ed_adaptive_creations"));
+    const std::vector<ScriptGroupCreation> creations =
+      ScriptGroupCreations(up::ArgString(L, 1, "ed_adaptive_creations"));
     lua_newtable(L);
     for (std::size_t i = 0; i < creations.size(); ++i) {
       lua_newtable(L);
@@ -567,9 +732,12 @@ namespace
     return 1;
   }
 
-  // ---- units --------------------------------------------------------------------------------------------------------------------------------------
+  // ---- units
+  // --------------------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_Rule(lua_State* const L)
+  int __cdecl cfunc_Rule(
+    lua_State* const L
+  )
   {
     const std::string script = up::ArgString(L, 1, "ed_adaptive_rule");
     const std::vector<LobbyOptionInfo> options = ParseLobbyOptions(StringAt(L, 2));
@@ -577,13 +745,17 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_SpawnTargets(lua_State* const L)
+  int __cdecl cfunc_SpawnTargets(
+    lua_State* const L
+  )
   {
     const std::string script = up::ArgString(L, 1, "ed_adaptive_spawn_targets");
     const std::string optionsText = StringAt(L, 2);
     const std::string army = up::ArgString(L, 3, "ed_adaptive_spawn_targets");
     std::vector<std::vector<std::string>> paths;
-    EachElement(L, 4, [&](const int item) { paths.push_back(StringListAt(L, item)); });
+    EachElement(L, 4, [&](const int item) {
+      paths.push_back(StringListAt(L, item));
+    });
     const std::vector<SpawnTarget> targets = SpawnTargets(script, optionsText, army, paths);
     const std::vector<LobbyOptionInfo> current = ParseLobbyOptions(optionsText);
     lua_newtable(L);
@@ -605,7 +777,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Fate(lua_State* const L)
+  int __cdecl cfunc_Fate(
+    lua_State* const L
+  )
   {
     const std::vector<std::string> path = StringListAt(L, 1);
     const UnitFate fate = FateOfUnit(path, lua_toboolean(L, 2) != 0, StringAt(L, 3));
@@ -616,14 +790,20 @@ namespace
     return 1;
   }
 
-  // ---- wrecks -------------------------------------------------------------------------------------------------------------------------------------
+  // ---- wrecks
+  // -------------------------------------------------------------------------------------------------------------------------------------
 
   /** A game file's text (a folder or an archive; the path as MapLoad resolves it), false when it is not there. */
-  bool ReadGameText(const std::string& virtualPath, std::string& out)
+  bool ReadGameText(
+    const std::string& virtualPath,
+    std::string& out
+  )
   {
     out.clear();
     std::string path = virtualPath;
-    if (moho::FWaitHandleSet* const files = moho::FILE_GetWaitHandleSet(); files != nullptr && files->mHandle != nullptr) {
+    if (
+      moho::FWaitHandleSet* const files = moho::FILE_GetWaitHandleSet(); files != nullptr && files->mHandle != nullptr
+    ) {
       fa::string resolved;
       (void)files->mHandle->FindFile(&resolved, virtualPath.c_str(), nullptr);
       if (!resolved.empty()) {
@@ -636,7 +816,8 @@ namespace
         return false;
       }
       char buffer[65536];
-      for (std::size_t got = stream->Read(buffer, sizeof(buffer)); got != 0; got = stream->Read(buffer, sizeof(buffer))) {
+      for (std::size_t got = stream->Read(buffer, sizeof(buffer)); got != 0;
+           got = stream->Read(buffer, sizeof(buffer))) {
         out.append(buffer, got);
       }
       return true;
@@ -654,10 +835,15 @@ namespace
   };
 
   /**
-   * A blueprint's build costs and `.bp` text, read once per id: from the kept rules when they are built (upstream's editor builds them), else from the Lua state's `__blueprints`
-   * (the editor session's blueprint table: Economy.BuildCostMass / BuildCostEnergy and Source, the file the blueprint came from). Null when neither knows the unit (and nothing is cached).
+   * A blueprint's build costs and `.bp` text, read once per id: from the kept rules when they are built (upstream's
+   * editor builds them), else from the Lua state's `__blueprints` (the editor session's blueprint table:
+   * Economy.BuildCostMass / BuildCostEnergy and Source, the file the blueprint came from). Null when neither knows the
+   * unit (and nothing is cached).
    */
-  const BlueprintFacts* FactsOf(lua_State* const L, const std::string& id)
+  const BlueprintFacts* FactsOf(
+    lua_State* const L,
+    const std::string& id
+  )
   {
     static std::map<std::string, BlueprintFacts> cache;
     if (const auto found = cache.find(id); found != cache.end()) {
@@ -679,7 +865,13 @@ namespace
       lua_pushstring(L, "__blueprints");
       lua_gettable(L, LUA_GLOBALSINDEX);
       if (lua_type(L, -1) == LUA_TTABLE) {
-        const std::string lowerText = [&] { std::string t = id; std::transform(t.begin(), t.end(), t.begin(), [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); }); return t; }();
+        const std::string lowerText = [&] {
+          std::string t = id;
+          std::transform(t.begin(), t.end(), t.begin(), [](const unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+          });
+          return t;
+        }();
         for (const std::string* const name : {&id, &lowerText}) {
           if (known) {
             break;
@@ -705,7 +897,9 @@ namespace
     return &cache.emplace(id, std::move(facts)).first->second;
   }
 
-  int __cdecl cfunc_WreckValue(lua_State* const L)
+  int __cdecl cfunc_WreckValue(
+    lua_State* const L
+  )
   {
     const std::string id = up::ArgString(L, 1, "ed_wreck_value");
     const bool underwater = lua_toboolean(L, 2) != 0;
@@ -726,9 +920,13 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_WreckValueOf(lua_State* const L)
+  int __cdecl cfunc_WreckValueOf(
+    lua_State* const L
+  )
   {
-    const WreckValue wreck = WreckOfUnit(up::ArgString(L, 1, "ed_wreck_value_of"), luaL_checknumber(L, 2), luaL_checknumber(L, 3), lua_toboolean(L, 4) != 0);
+    const WreckValue wreck = WreckOfUnit(
+      up::ArgString(L, 1, "ed_wreck_value_of"), luaL_checknumber(L, 2), luaL_checknumber(L, 3), lua_toboolean(L, 4) != 0
+    );
     lua_newtable(L);
     up::SetBool(L, "exists", wreck.exists);
     up::SetNumber(L, "mass", wreck.mass);
@@ -737,7 +935,9 @@ namespace
   }
 
   const up::Natives gEdUpAdaptiveNatives{{
-    {"ed_adaptive_known_tables", &cfunc_KnownTables, "ed_adaptive_known_tables() -> { { name, label, hydro, optionKey }, ... }"},
+    {"ed_adaptive_known_tables",
+     &cfunc_KnownTables,
+     "ed_adaptive_known_tables() -> { { name, label, hydro, optionKey }, ... }"},
     {"ed_adaptive_tables_parse", &cfunc_TablesParse, "ed_adaptive_tables_parse(text) -> tables | nil, message"},
     {"ed_adaptive_tables_write", &cfunc_TablesWrite, "ed_adaptive_tables_write(text, tables) -> text"},
     {"ed_adaptive_tables_path", &cfunc_TablesPath, "ed_adaptive_tables_path(script) -> vfs path | ''"},
@@ -746,23 +946,39 @@ namespace
     {"ed_adaptive_marker", &cfunc_Marker, "ed_adaptive_marker(entry, hydro) -> markerName"},
     {"ed_adaptive_option_key", &cfunc_OptionKey, "ed_adaptive_option_key(tableName) -> lobby option key"},
     {"ed_adaptive_options_parse", &cfunc_OptionsParse, "ed_adaptive_options_parse(text) -> { option, ... }"},
-    {"ed_adaptive_option_find", &cfunc_OptionFind, "ed_adaptive_option_find(text, key) -> { found, values, defaultKey }"},
+    {"ed_adaptive_option_find",
+     &cfunc_OptionFind,
+     "ed_adaptive_option_find(text, key) -> { found, values, defaultKey }"},
     {"ed_adaptive_option_put", &cfunc_OptionPut, "ed_adaptive_option_put(text, option) -> text"},
     {"ed_adaptive_option_for", &cfunc_OptionFor, "ed_adaptive_option_for(text, key, label, hydro, groupSizes) -> text"},
-    {"ed_adaptive_option_values", &cfunc_OptionValues, "ed_adaptive_option_values(text, key, label, help, values) -> text"},
-    {"ed_adaptive_option_write", &cfunc_OptionWrite, "ed_adaptive_option_write(text, key, label, help, defaultIndex, values) -> text"},
+    {"ed_adaptive_option_values",
+     &cfunc_OptionValues,
+     "ed_adaptive_option_values(text, key, label, help, values) -> text"},
+    {"ed_adaptive_option_write",
+     &cfunc_OptionWrite,
+     "ed_adaptive_option_write(text, key, label, help, defaultIndex, values) -> text"},
     {"ed_adaptive_option_remove", &cfunc_OptionRemove, "ed_adaptive_option_remove(text, key) -> text"},
     {"ed_adaptive_next_level", &cfunc_NextLevel, "ed_adaptive_next_level(option, text) -> value"},
-    {"ed_adaptive_options_of", &cfunc_OptionsOf, "ed_adaptive_options_of(script, optionsText, tables) -> { option, ... }"},
+    {"ed_adaptive_options_of",
+     &cfunc_OptionsOf,
+     "ed_adaptive_options_of(script, optionsText, tables) -> { option, ... }"},
     {"ed_adaptive_table_group", &cfunc_TableGroup, "ed_adaptive_table_group(value) -> group (1-based, 0 none)"},
     {"ed_adaptive_level_group", &cfunc_LevelGroup, "ed_adaptive_level_group(loop, value) -> group name | ''"},
-    {"ed_adaptive_groups_made", &cfunc_GroupsMade, "ed_adaptive_groups_made(script, optionsText, key, valueIndex) -> { { group, wreck, unit, maybe } }"},
+    {"ed_adaptive_groups_made",
+     &cfunc_GroupsMade,
+     "ed_adaptive_groups_made(script, optionsText, key, valueIndex) -> { { group, wreck, unit, maybe } }"},
     {"ed_adaptive_loops", &cfunc_Loops, "ed_adaptive_loops(script) -> { loop, ... }"},
     {"ed_adaptive_creations", &cfunc_Creations, "ed_adaptive_creations(script) -> { { army, name, prefix, wreck } }"},
     {"ed_adaptive_rule", &cfunc_Rule, "ed_adaptive_rule(script, optionsText, group) -> rule"},
-    {"ed_adaptive_spawn_targets", &cfunc_SpawnTargets, "ed_adaptive_spawn_targets(script, optionsText, army, groupPaths) -> { target, ... }"},
+    {"ed_adaptive_spawn_targets",
+     &cfunc_SpawnTargets,
+     "ed_adaptive_spawn_targets(script, optionsText, army, groupPaths) -> { target, ... }"},
     {"ed_adaptive_fate", &cfunc_Fate, "ed_adaptive_fate(path, civilian, script) -> { kind, group, text }"},
-    {"ed_wreck_value", &cfunc_WreckValue, "ed_wreck_value(bpId, underwater) -> { known, exists, mass, energy, buildMass, buildEnergy } | nil, message"},
-    {"ed_wreck_value_of", &cfunc_WreckValueOf, "ed_wreck_value_of(bpText, buildMass, buildEnergy, underwater) -> { exists, mass, energy }"},
+    {"ed_wreck_value",
+     &cfunc_WreckValue,
+     "ed_wreck_value(bpId, underwater) -> { known, exists, mass, energy, buildMass, buildEnergy } | nil, message"},
+    {"ed_wreck_value_of",
+     &cfunc_WreckValueOf,
+     "ed_wreck_value_of(bpText, buildMass, buildEnergy, underwater) -> { exists, mass, energy }"},
   }};
 } // namespace

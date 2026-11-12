@@ -38,15 +38,16 @@
 
 namespace moho::editor::field
 {
-  GridPtr FindGrid(int id);   // EdField.cpp: the grid of a field handle (Lua: ed_field_*)
+  GridPtr FindGrid(int id); // EdField.cpp: the grid of a field handle (Lua: ed_field_*)
 }
 
 namespace
 {
   using Polyline = moho::editor::overlaylines::Polyline;
 
-  // Every change of one of the three sets bumps its epoch: the retained geometry and the texture groups (below) are rebuilt when it differs from theirs. Lua writes the same
-  // line again and again (the overlay refresh), so a set with identical data changes nothing, not even the epoch.
+  // Every change of one of the three sets bumps its epoch: the retained geometry and the texture groups (below) are
+  // rebuilt when it differs from theirs. Lua writes the same line again and again (the overlay refresh), so a set with
+  // identical data changes nothing, not even the epoch.
   std::uint32_t gLinesEpoch = 1, gIconsEpoch = 1, gDecalsEpoch = 1;
 
   std::map<std::string, Polyline, std::less<>>& Lines()
@@ -70,12 +71,13 @@ namespace
     return icons;
   }
 
-  // A textured square lying on the ground (a splat): `size` world units across, centred on (x, y, z), projected like everything else.
+  // A textured square lying on the ground (a splat): `size` world units across, centred on (x, y, z), projected like
+  // everything else.
   struct Decal
   {
     float x = 0.0f, y = 0.0f, z = 0.0f;
     float size = 2.0f;
-    float yaw = 0.0f;   // radians
+    float yaw = 0.0f; // radians
     std::uint32_t argb = 0xFFFFFFFFu;
     std::string texture;
   };
@@ -86,16 +88,18 @@ namespace
     return decals;
   }
 
-  // A grid of values on the height samples (brush weights): node (x0 + i * step, z0 + j * step) carries `v[j * nw + i]` (0..255) as the alpha of
-  // `rgb`, the cells between the nodes are drawn with smoothly interpolated alpha, draped over the terrain.
+  // A grid of values on the height samples (brush weights): node (x0 + i * step, z0 + j * step) carries `v[j * nw + i]`
+  // (0..255) as the alpha of `rgb`, the cells between the nodes are drawn with smoothly interpolated alpha, draped over
+  // the terrain.
   struct NodeGrid
   {
     int x0 = 0, z0 = 0, nw = 0, nh = 0;
-    int step = 1;            // world units between neighbouring nodes (a coarse grid covers a big view)
+    int step = 1; // world units between neighbouring nodes (a coarse grid covers a big view)
     std::vector<std::uint8_t> v;
     std::uint32_t rgb = 0xFFFFFFu;
     std::uint32_t maxAlpha = 0xC0u;
-    std::vector<moho::editor::overlaynodes::Run> runs;   // the cells that draw anything (EdOverlayNodes.h), rebuilt when the values change
+    std::vector<moho::editor::overlaynodes::Run>
+      runs; // the cells that draw anything (EdOverlayNodes.h), rebuilt when the values change
     bool runsDirty = true;
   };
 
@@ -105,59 +109,69 @@ namespace
     return grids;
   }
 
-  // scratch buffers of the decal drawing (one decal at a time; kept so a frame with many splats does not allocate for each)
+  // scratch buffers of the decal drawing (one decal at a time; kept so a frame with many splats does not allocate for
+  // each)
   std::vector<moho::editor::overlaygeom::DecalPoint> gDecalPoints;
   std::vector<Wm3::Vector2f> gDecalScreen;
   std::vector<char> gDecalVisible;
 
-  float gCam[16] = {};  // camera->viewport rows, for ed_overlay_stats
-  float gDbg[8] = {};   // ed_overlay_stats: first vertex of the last drawn line (screen x, y, depth, half), viewport w, h, segments drawn, culled
+  float gCam[16] = {}; // camera->viewport rows, for ed_overlay_stats
+  float gDbg[8] = {};  // ed_overlay_stats: first vertex of the last drawn line (screen x, y, depth, half), viewport w,
+                       // h, segments drawn, culled
 
-  // ---- slope view: the engine's own terrain ratings as a colour gradient over the ground ------------------------------------------------
+  // ---- slope view: the engine's own terrain ratings as a colour gradient over the ground
+  // ------------------------------------------------
   //
-  // kind 0 "path": the rule a mobile footprint of `window` x `window` cells is checked with (STIMap::OccupancyCapsOfFootprintAt /
-  //   OCCUPY_MobileCheck): the largest height difference between neighbouring samples inside the window, in world units per cell,
-  //   against the footprint's MaxSlope (0.75 for every land, amphibious and hover footprint, lua/footprints.lua).
-  // kind 1 "build": the rule a structure is checked with (OCCUPY_CheckAreaFlatness): highest minus lowest sample over the skirt
-  //   (window x window cells, window + 1 samples per side), against the blueprint's Physics.MaxGroundVariation (1.1 for most). Used by blueprints with
-  //   FlattenSkirt = false (mass extractors, hydrocarbon plants, walls, point defence, naval factories, ...).
-  // kind 2 "ring": the rule of blueprints with FlattenSkirt = true (nearly every building): OCCUPY_CheckEdgeFlatness, the 1-cell ring around the skirt against
+  // kind 0 "path": the rule a mobile footprint of `window` x `window` cells is checked with
+  // (STIMap::OccupancyCapsOfFootprintAt /
+  //   OCCUPY_MobileCheck): the largest height difference between neighbouring samples inside the window, in world units
+  //   per cell, against the footprint's MaxSlope (0.75 for every land, amphibious and hover footprint,
+  //   lua/footprints.lua).
+  // kind 1 "build": the rule a structure is checked with (OCCUPY_CheckAreaFlatness): highest minus lowest sample over
+  // the skirt
+  //   (window x window cells, window + 1 samples per side), against the blueprint's Physics.MaxGroundVariation (1.1 for
+  //   most). Used by blueprints with FlattenSkirt = false (mass extractors, hydrocarbon plants, walls, point defence,
+  //   naval factories, ...).
+  // kind 2 "ring": the rule of blueprints with FlattenSkirt = true (nearly every building): OCCUPY_CheckEdgeFlatness,
+  // the 1-cell ring around the skirt against
   //   a pivot of ceil(last sample), see EdOverlaySlope.h.
   //
-  // The ratings are kept in a tile cache (EdOverlaySlope.h) until the heights under a tile change (NotifyHeights, called by the document's height sink) or
-  // the rule / window changes; a frame only rates tiles that were never rated or went stale, within a time budget. What is drawn is a quadtree of blocks
-  // (EdOverlayLod.h) cut up by their size on screen, so the detail follows the distance from the camera, not the size of the visible rectangle.
+  // The ratings are kept in a tile cache (EdOverlaySlope.h) until the heights under a tile change (NotifyHeights,
+  // called by the document's height sink) or the rule / window changes; a frame only rates tiles that were never rated
+  // or went stale, within a time budget. What is drawn is a quadtree of blocks (EdOverlayLod.h) cut up by their size on
+  // screen, so the detail follows the distance from the camera, not the size of the visible rectangle.
   struct SlopeLayer
   {
     bool on = false;
     int kind = 0;
-    int x0 = 0, z0 = 0, x1 = 0, z1 = 0;   // cell rectangle [x0, x1) x [z0, z1)
+    int x0 = 0, z0 = 0, x1 = 0, z1 = 0; // cell rectangle [x0, x1) x [z0, z1)
     int window = 1;
     float limit = 0.75f;
   };
 
   SlopeLayer gSlope;
 
-  unsigned gHeightEpoch = 1;                       // moves with every change of the height field (NotifyHeights)
+  unsigned gHeightEpoch = 1; // moves with every change of the height field (NotifyHeights)
   moho::editor::overlayslope::Store gSlopeStore;
   unsigned gSlopeFrame = 0;
-  constexpr double kSlopeBudgetMs = 5.0;           // rating time per frame
-  constexpr float kSlopeNoCutPx = 24.0f;           // a slope block smaller than this on screen is one quad (the ground inside it cannot be more than a pixel or two off)
+  constexpr double kSlopeBudgetMs = 5.0; // rating time per frame
+  constexpr float kSlopeNoCutPx = 24.0f; // a slope block smaller than this on screen is one quad (the ground inside it
+                                         // cannot be more than a pixel or two off)
 
   // numbers for ed_overlay_perf (last frame)
   struct OverlayPerf
   {
-    double slopeRateMs = 0.0;       // time spent rating tiles
-    double slopeDrawMs = 0.0;       // time to project and draw the slope blocks (without the rating)
+    double slopeRateMs = 0.0; // time spent rating tiles
+    double slopeDrawMs = 0.0; // time to project and draw the slope blocks (without the rating)
     int slopeTilesRated = 0;
-    int slopePending = 0;           // tiles in view that still wait for their rating
+    int slopePending = 0; // tiles in view that still wait for their rating
     int slopeQuads = 0;
     int slopeLevel = 0;
     int slopeNodesProjected = 0;
-    int slopeLeaves = 0;            // blocks of the quadtree that were drawn (EdOverlayLod.h)
-    int slopeMinLevel = 0;          // finest / coarsest block level among them
+    int slopeLeaves = 0;   // blocks of the quadtree that were drawn (EdOverlayLod.h)
+    int slopeMinLevel = 0; // finest / coarsest block level among them
     int slopeMaxLevel = 0;
-    double buildGridMs = 0.0;       // the build grid (ed_overlay_grid)
+    double buildGridMs = 0.0; // the build grid (ed_overlay_grid)
     int buildGridLeaves = 0;
     int buildGridSegments = 0;
     int buildGridNodesProjected = 0;
@@ -165,12 +179,13 @@ namespace
     int gridQuads = 0;
     int gridNodesProjected = 0;
     int gridGroups = 0;
-    double fieldMs = 0.0;           // the field overlays (ed_overlay_field): project, reduce and draw, rebuild included
-    double fieldPyramidMs = 0.0;    // the last mip chain built (not reset per frame: it happens in the call, not in the frame)
+    double fieldMs = 0.0; // the field overlays (ed_overlay_field): project, reduce and draw, rebuild included
+    double fieldPyramidMs =
+      0.0; // the last mip chain built (not reset per frame: it happens in the call, not in the frame)
     int fieldLeaves = 0;
     int fieldQuads = 0;
     int fieldNodesProjected = 0;
-    int fieldMinLevel = 0;          // finest / coarsest leaf level
+    int fieldMinLevel = 0; // finest / coarsest leaf level
     int fieldMaxLevel = 0;
   };
   OverlayPerf gPerf;
@@ -189,29 +204,41 @@ namespace
     return session->mWldMap->mTerrainRes->GetHeightField();
   }
 
-  // The w that GeomCamera3::Project divides by: > 0 in front of the camera (the distance along the view direction), <= 0 behind it. This, not viewport.r[1] (the LOD plane,
-  // scaled by the camera's LOD scale), decides whether a point is in front (overlaydrape::InFront).
-  float ClipW(const moho::GeomCamera3& camera, const Wm3::Vector3f& p)
+  // The w that GeomCamera3::Project divides by: > 0 in front of the camera (the distance along the view direction), <=
+  // 0 behind it. This, not viewport.r[1] (the LOD plane, scaled by the camera's LOD scale), decides whether a point is
+  // in front (overlaydrape::InFront).
+  float ClipW(
+    const moho::GeomCamera3& camera,
+    const Wm3::Vector3f& p
+  )
   {
     const moho::VMatrix4& m = camera.viewProjection;
     return (m.r[0].w * p.x) + (m.r[1].w * p.y) + (m.r[2].w * p.z) + m.r[3].w;
   }
 
-  // Depth of the overlay vertices (EdOverlayLod.h, VertexZ / BiasedDepth): with the depth test on (technique TEdGroundOverlay, editor/runtime/override/effects/edtext_techniques.fx.part)
-  // the terrain and anything in front of it hides the overlay; ed_overlay_depth(false) goes back to drawing without any occlusion.
+  // Depth of the overlay vertices (EdOverlayLod.h, VertexZ / BiasedDepth): with the depth test on (technique
+  // TEdGroundOverlay, editor/runtime/override/effects/edtext_techniques.fx.part) the terrain and anything in front of
+  // it hides the overlay; ed_overlay_depth(false) goes back to drawing without any occlusion.
   moho::editor::overlaylod::DepthFit gDepthFit;
   bool gDepthTest = true;
 
-  float ClipZ(const moho::GeomCamera3& camera, const Wm3::Vector3f& p)
+  float ClipZ(
+    const moho::GeomCamera3& camera,
+    const Wm3::Vector3f& p
+  )
   {
     const moho::VMatrix4& m = camera.viewProjection;
     return (m.r[0].z * p.x) + (m.r[1].z * p.y) + (m.r[2].z * p.z) + m.r[3].z;
   }
 
-  void FitCameraDepth(const moho::GeomCamera3& camera)
+  void FitCameraDepth(
+    const moho::GeomCamera3& camera
+  )
   {
     const moho::VMatrix4& m = camera.viewProjection;
-    gDepthFit = moho::editor::overlaylod::FitDepth(m.r[0].z, m.r[1].z, m.r[2].z, m.r[3].z, m.r[0].w, m.r[1].w, m.r[2].w, m.r[3].w);
+    gDepthFit = moho::editor::overlaylod::FitDepth(
+      m.r[0].z, m.r[1].z, m.r[2].z, m.r[3].z, m.r[0].w, m.r[1].w, m.r[2].w, m.r[3].w
+    );
   }
 
   // The ground point (x, z) (clamped to the map) lifted by `lift`, projected: screen position, clip w and the vertex z.
@@ -222,12 +249,18 @@ namespace
     float vw = 0.0f, vh = 0.0f, lift = 0.0f;
   };
 
-  moho::editor::overlaylod::GroundNode ProjectGround(const GroundCtx& c, const int x, const int z)
+  moho::editor::overlaylod::GroundNode ProjectGround(
+    const GroundCtx& c,
+    const int x,
+    const int z
+  )
   {
     moho::editor::overlaylod::GroundNode n;
     const int wx = std::max(0, std::min(c.field->Width() - 1, x));
     const int wz = std::max(0, std::min(c.field->Height() - 1, z));
-    const Wm3::Vector3f p{static_cast<float>(wx), static_cast<float>(c.field->GetHeightAt(wx, wz)) / 128.0f + c.lift, static_cast<float>(wz)};
+    const Wm3::Vector3f p{
+      static_cast<float>(wx), static_cast<float>(c.field->GetHeightAt(wx, wz)) / 128.0f + c.lift, static_cast<float>(wz)
+    };
     const float w = ClipW(*c.camera, p);
     n.w = w;
     if (moho::editor::overlaydrape::InFront(w)) {
@@ -240,15 +273,30 @@ namespace
     return n;
   }
 
-  // What the camera looked like when a projection was made: the rows of its viewport matrix and the size of the view. A cached projection is good while this is equal.
+  // What the camera looked like when a projection was made: the rows of its viewport matrix and the size of the view. A
+  // cached projection is good while this is equal.
   struct CamStamp
   {
     float m[18] = {};
-    bool operator==(const CamStamp& o) const { return std::memcmp(m, o.m, sizeof(m)) == 0; }
-    bool operator!=(const CamStamp& o) const { return !(*this == o); }
+    bool operator==(
+      const CamStamp& o
+    ) const
+    {
+      return std::memcmp(m, o.m, sizeof(m)) == 0;
+    }
+    bool operator!=(
+      const CamStamp& o
+    ) const
+    {
+      return !(*this == o);
+    }
   };
 
-  CamStamp MakeStamp(const moho::GeomCamera3& camera, const float vw, const float vh)
+  CamStamp MakeStamp(
+    const moho::GeomCamera3& camera,
+    const float vw,
+    const float vh
+  )
   {
     CamStamp s;
     for (int r = 0; r < 4; ++r) {
@@ -262,8 +310,9 @@ namespace
     return s;
   }
 
-  // Screen positions of a grid of ground points (x0 + i * step, z0 + j * step), projected when first asked for and kept while the camera, the heights and the grid
-  // stay the same: a static view costs no projection at all, and only the nodes that a drawn cell needs are ever projected.
+  // Screen positions of a grid of ground points (x0 + i * step, z0 + j * step), projected when first asked for and kept
+  // while the camera, the heights and the grid stay the same: a static view costs no projection at all, and only the
+  // nodes that a drawn cell needs are ever projected.
   struct ProjGrid
   {
     int x0 = 0, z0 = 0, nw = 0, nh = 0, step = 1;
@@ -275,12 +324,28 @@ namespace
     std::vector<std::uint8_t> state;   // 0 not projected yet, 1 on screen side, 2 behind the camera
     unsigned usedFrame = 0;
 
-    void Prepare(const int px0, const int pz0, const int pnw, const int pnh, const int pstep, const float plift, const CamStamp& cs)
+    void Prepare(
+      const int px0,
+      const int pz0,
+      const int pnw,
+      const int pnh,
+      const int pstep,
+      const float plift,
+      const CamStamp& cs
+    )
     {
-      if (valid && x0 == px0 && z0 == pz0 && nw == pnw && nh == pnh && step == pstep && lift == plift && heightEpoch == gHeightEpoch && stamp == cs) {
+      if (
+        valid && x0 == px0 && z0 == pz0 && nw == pnw && nh == pnh && step == pstep && lift == plift &&
+        heightEpoch == gHeightEpoch && stamp == cs
+      ) {
         return;
       }
-      x0 = px0; z0 = pz0; nw = pnw; nh = pnh; step = pstep; lift = plift;
+      x0 = px0;
+      z0 = pz0;
+      nw = pnw;
+      nh = pnh;
+      step = pstep;
+      lift = plift;
       heightEpoch = gHeightEpoch;
       stamp = cs;
       valid = true;
@@ -292,9 +357,21 @@ namespace
       state.assign(n, 0);
     }
 
-    // Node (i, j): true when it is in front of the camera; its screen position in (x, y), its clip w in *outW and its vertex z in *outZ.
-    bool Get(moho::CHeightField& field, moho::GeomCamera3& camera, const float vw, const float vh, const int i, const int j, float& x, float& y, int& projected, float* const outW = nullptr,
-             float* const outZ = nullptr)
+    // Node (i, j): true when it is in front of the camera; its screen position in (x, y), its clip w in *outW and its
+    // vertex z in *outZ.
+    bool Get(
+      moho::CHeightField& field,
+      moho::GeomCamera3& camera,
+      const float vw,
+      const float vh,
+      const int i,
+      const int j,
+      float& x,
+      float& y,
+      int& projected,
+      float* const outW = nullptr,
+      float* const outZ = nullptr
+    )
     {
       const std::size_t k = static_cast<std::size_t>(j) * static_cast<std::size_t>(nw) + static_cast<std::size_t>(i);
       if (state[k] == 0) {
@@ -323,19 +400,34 @@ namespace
     }
   };
 
-  std::map<std::array<int, 5>, ProjGrid> gGridProj;   // by window (x0, z0, nw, nh, step): shared by every grid that has it
+  std::map<std::array<int, 5>, ProjGrid>
+    gGridProj; // by window (x0, z0, nw, nh, step): shared by every grid that has it
 
-  // A run of cells drawn as ONE straight screen quad only looks right while the nodes it skips lie on the straight line between its end nodes: over bumpy ground the chord
-  // cuts under the terrain (which pokes through the draped colour as dark slivers) or floats above it. The longest length <= `len` whose skipped top and bottom edge nodes are
-  // within half a pixel of the chord; 1 (a single cell, always exact) when none is.
+  // A run of cells drawn as ONE straight screen quad only looks right while the nodes it skips lie on the straight line
+  // between its end nodes: over bumpy ground the chord cuts under the terrain (which pokes through the draped colour as
+  // dark slivers) or floats above it. The longest length <= `len` whose skipped top and bottom edge nodes are within
+  // half a pixel of the chord; 1 (a single cell, always exact) when none is.
   template <class Proj>
-  int FitRun(Proj& pg, moho::CHeightField& field, moho::GeomCamera3& camera, const float vw, const float vh, const int i, const int j, int len, int& projected)
+  int FitRun(
+    Proj& pg,
+    moho::CHeightField& field,
+    moho::GeomCamera3& camera,
+    const float vw,
+    const float vh,
+    const int i,
+    const int j,
+    int len,
+    int& projected
+  )
   {
     for (; len > 1; --len) {
       bool ok = true;
       for (int row = 0; row < 2 && ok; ++row) {
         float x0, y0, x1, y1;
-        if (!pg.Get(field, camera, vw, vh, i, j + row, x0, y0, projected) || !pg.Get(field, camera, vw, vh, i + len, j + row, x1, y1, projected)) {
+        if (
+          !pg.Get(field, camera, vw, vh, i, j + row, x0, y0, projected) ||
+          !pg.Get(field, camera, vw, vh, i + len, j + row, x1, y1, projected)
+        ) {
           ok = false;
           break;
         }
@@ -347,7 +439,8 @@ namespace
             ok = false;
             break;
           }
-          const float off = chord > 1.0e-3f ? std::fabs((x - x0) * dy - (y - y0) * dx) / chord : std::sqrt((x - x0) * (x - x0) + (y - y0) * (y - y0));
+          const float off = chord > 1.0e-3f ? std::fabs((x - x0) * dy - (y - y0) * dx) / chord
+                                            : std::sqrt((x - x0) * (x - x0) + (y - y0) * (y - y0));
           if (off > 0.5f) {
             ok = false;
             break;
@@ -361,10 +454,12 @@ namespace
     return 1;
   }
 
-  // ---- draping a patch over the real ground (EdOverlayDrape.h) ---------------------------------------------------------------------------
+  // ---- draping a patch over the real ground (EdOverlayDrape.h)
+  // ---------------------------------------------------------------------------
   //
-  // A patch (a block of the slope view, a cell run of a coarse node grid) is ONE screen quad between its four corner nodes, which only follows the terrain when the ground
-  // inside is as flat as the quad. DrapeRect cuts it 2 x 2 (recursively, DrapePatch) wherever the real ground at the edge midpoints / centre is more than 0.75 px away from
+  // A patch (a block of the slope view, a cell run of a coarse node grid) is ONE screen quad between its four corner
+  // nodes, which only follows the terrain when the ground inside is as flat as the quad. DrapeRect cuts it 2 x 2
+  // (recursively, DrapePatch) wherever the real ground at the edge midpoints / centre is more than 0.75 px away from
   // the flat patch, sampling the true heights of the sub-nodes.
   struct DrapeQuad
   {
@@ -377,18 +472,30 @@ namespace
     moho::CHeightField* field = nullptr;
     moho::GeomCamera3* camera = nullptr;
     float vw = 0.0f, vh = 0.0f, lift = 0.0f;
-    int* projected = nullptr;                          // perf counter of projected nodes
-    moho::editor::overlaylod::NodeTable* table = nullptr;   // projected nodes shared between patches and frames (null: every node is projected again)
-    int growMask = 0;                                  // sides (overlaylod::Side) of the next patch that grow outward by growPx (a neighbour of another level)
+    int* projected = nullptr; // perf counter of projected nodes
+    moho::editor::overlaylod::NodeTable* table =
+      nullptr; // projected nodes shared between patches and frames (null: every node is projected again)
+    int growMask =
+      0; // sides (overlaylod::Side) of the next patch that grow outward by growPx (a neighbour of another level)
     float growPx = 1.0f;
-    int maxDepth = moho::editor::overlaydrape::kMaxDepth;   // how often a patch may be cut up to follow the ground (0: never, a small block is drawn as one quad)
+    int maxDepth = moho::editor::overlaydrape::kMaxDepth; // how often a patch may be cut up to follow the ground (0:
+                                                          // never, a small block is drawn as one quad)
     moho::editor::overlaydrape::QuadBudget budget;
     std::vector<DrapeQuad>* out = nullptr;
   };
 
-  // Clips [x0, x1] x [z0, z1] to the map (what ProjGrid does with its nodes), cuts it up and appends the quads to sc.out. `pre` are the projected corners of the CLIPPED rectangle
-  // in the order (x0, z0), (x1, z0), (x1, z1), (x0, z1); `col` the ARGB at the corners of the unclipped one.
-  void DrapeRect(DrapeScene& sc, const int x0, const int z0, const int x1, const int z1, const std::uint32_t* const col, const moho::editor::overlaydrape::Node* const pre)
+  // Clips [x0, x1] x [z0, z1] to the map (what ProjGrid does with its nodes), cuts it up and appends the quads to
+  // sc.out. `pre` are the projected corners of the CLIPPED rectangle in the order (x0, z0), (x1, z0), (x1, z1), (x0,
+  // z1); `col` the ARGB at the corners of the unclipped one.
+  void DrapeRect(
+    DrapeScene& sc,
+    const int x0,
+    const int z0,
+    const int x1,
+    const int z1,
+    const std::uint32_t* const col,
+    const moho::editor::overlaydrape::Node* const pre
+  )
   {
     namespace od = moho::editor::overlaydrape;
     namespace lod = moho::editor::overlaylod;
@@ -398,21 +505,31 @@ namespace
     if (cx1 <= cx0 || cz1 <= cz0 || x1 <= x0 || z1 <= z0) {
       return;
     }
-    const float u0 = static_cast<float>(cx0 - x0) / static_cast<float>(x1 - x0), u1 = static_cast<float>(cx1 - x0) / static_cast<float>(x1 - x0);
-    const float v0 = static_cast<float>(cz0 - z0) / static_cast<float>(z1 - z0), v1 = static_cast<float>(cz1 - z0) / static_cast<float>(z1 - z0);
-    const std::uint32_t cc[4] = {od::LerpArgb(col, u0, v0), od::LerpArgb(col, u1, v0), od::LerpArgb(col, u1, v1), od::LerpArgb(col, u0, v1)};
+    const float u0 = static_cast<float>(cx0 - x0) / static_cast<float>(x1 - x0),
+                u1 = static_cast<float>(cx1 - x0) / static_cast<float>(x1 - x0);
+    const float v0 = static_cast<float>(cz0 - z0) / static_cast<float>(z1 - z0),
+                v1 = static_cast<float>(cz1 - z0) / static_cast<float>(z1 - z0);
+    const std::uint32_t cc[4] = {
+      od::LerpArgb(col, u0, v0), od::LerpArgb(col, u1, v0), od::LerpArgb(col, u1, v1), od::LerpArgb(col, u0, v1)
+    };
 
-    // Sides that grow outward (overlap the finer neighbour a little): the edge between the corners moves by growPx along its outward screen normal, corners and edge nodes alike.
+    // Sides that grow outward (overlap the finer neighbour a little): the edge between the corners moves by growPx
+    // along its outward screen normal, corners and edge nodes alike.
     int mask = sc.growMask;
-    if (cx0 != x0) mask &= ~lod::kLeft;
-    if (cx1 != x1) mask &= ~lod::kRight;
-    if (cz0 != z0) mask &= ~lod::kTop;
-    if (cz1 != z1) mask &= ~lod::kBottom;
+    if (cx0 != x0)
+      mask &= ~lod::kLeft;
+    if (cx1 != x1)
+      mask &= ~lod::kRight;
+    if (cz0 != z0)
+      mask &= ~lod::kTop;
+    if (cz1 != z1)
+      mask &= ~lod::kBottom;
     od::Node pc[4] = {pre[0], pre[1], pre[2], pre[3]};
-    float gnx[4] = {0.0f, 0.0f, 0.0f, 0.0f}, gny[4] = {0.0f, 0.0f, 0.0f, 0.0f};   // per side: left, right, top, bottom
+    float gnx[4] = {0.0f, 0.0f, 0.0f, 0.0f}, gny[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // per side: left, right, top, bottom
     if (mask != 0) {
-      const float mx = 0.25f * (pre[0].x + pre[1].x + pre[2].x + pre[3].x), my = 0.25f * (pre[0].y + pre[1].y + pre[2].y + pre[3].y);
-      static const int kA[4] = {3, 1, 0, 2}, kB[4] = {0, 2, 1, 3};   // the corners of each side
+      const float mx = 0.25f * (pre[0].x + pre[1].x + pre[2].x + pre[3].x),
+                  my = 0.25f * (pre[0].y + pre[1].y + pre[2].y + pre[3].y);
+      static const int kA[4] = {3, 1, 0, 2}, kB[4] = {0, 2, 1, 3}; // the corners of each side
       for (int k = 0; k < 4; ++k) {
         if ((mask & (1 << k)) == 0) {
           continue;
@@ -424,7 +541,9 @@ namespace
           continue;
         }
         float nx = -ey / el, ny = ex / el;
-        if (nx * (0.5f * (pre[kA[k]].x + pre[kB[k]].x) - mx) + ny * (0.5f * (pre[kA[k]].y + pre[kB[k]].y) - my) < 0.0f) {
+        if (
+          nx * (0.5f * (pre[kA[k]].x + pre[kB[k]].x) - mx) + ny * (0.5f * (pre[kA[k]].y + pre[kB[k]].y) - my) < 0.0f
+        ) {
           nx = -nx;
           ny = -ny;
         }
@@ -441,7 +560,9 @@ namespace
     const auto node = [&sc, &ctx, mask, &gnx, &gny, cx0, cx1, cz0, cz1](const int x, const int z, od::Node& n) {
       lod::GroundNode g;
       if (sc.table != nullptr) {
-        g = sc.table->Get(x, z, [&ctx](const int px, const int pz) { return ProjectGround(ctx, px, pz); }, *sc.projected);
+        g = sc.table->Get(x, z, [&ctx](const int px, const int pz) {
+          return ProjectGround(ctx, px, pz);
+        }, *sc.projected);
       } else {
         g = ProjectGround(ctx, x, z);
         ++*sc.projected;
@@ -451,10 +572,22 @@ namespace
       }
       n = od::Node{g.x, g.y, g.w, g.z};
       if (mask != 0) {
-        if ((mask & lod::kLeft) != 0 && x == cx0) { n.x += gnx[0]; n.y += gny[0]; }
-        if ((mask & lod::kRight) != 0 && x == cx1) { n.x += gnx[1]; n.y += gny[1]; }
-        if ((mask & lod::kTop) != 0 && z == cz0) { n.x += gnx[2]; n.y += gny[2]; }
-        if ((mask & lod::kBottom) != 0 && z == cz1) { n.x += gnx[3]; n.y += gny[3]; }
+        if ((mask & lod::kLeft) != 0 && x == cx0) {
+          n.x += gnx[0];
+          n.y += gny[0];
+        }
+        if ((mask & lod::kRight) != 0 && x == cx1) {
+          n.x += gnx[1];
+          n.y += gny[1];
+        }
+        if ((mask & lod::kTop) != 0 && z == cz0) {
+          n.x += gnx[2];
+          n.y += gny[2];
+        }
+        if ((mask & lod::kBottom) != 0 && z == cz1) {
+          n.x += gnx[3];
+          n.y += gny[3];
+        }
       }
       return true;
     };
@@ -481,17 +614,30 @@ namespace
     od::DrapePatch(node, visible, emit, sc.budget, cx0, cz0, cx1, cz1, pc, cc, 0, sc.maxDepth);
   }
 
-  void DrawDrapeQuads(moho::CD3DPrimBatcher& batcher, const std::vector<DrapeQuad>& quads)
+  void DrawDrapeQuads(
+    moho::CD3DPrimBatcher& batcher,
+    const std::vector<DrapeQuad>& quads
+  )
   {
     using V = moho::CD3DPrimBatcher::Vertex;
     for (const DrapeQuad& q : quads) {
-      batcher.DrawQuad(V{q.x[0], q.y[0], q.z[0], q.c[0], 0.0f, 0.0f}, V{q.x[1], q.y[1], q.z[1], q.c[1], 1.0f, 0.0f}, V{q.x[2], q.y[2], q.z[2], q.c[2], 1.0f, 1.0f},
-                       V{q.x[3], q.y[3], q.z[3], q.c[3], 0.0f, 1.0f});
+      batcher.DrawQuad(
+        V{q.x[0], q.y[0], q.z[0], q.c[0], 0.0f, 0.0f},
+        V{q.x[1], q.y[1], q.z[1], q.c[1], 1.0f, 0.0f},
+        V{q.x[2], q.y[2], q.z[2], q.c[2], 1.0f, 1.0f},
+        V{q.x[3], q.y[3], q.z[3], q.c[3], 0.0f, 1.0f}
+      );
     }
   }
 
-  // The nodes of a screen box test: is any of the block on screen, how big is it there (EdOverlayLod.h). The corners come from `table`.
-  moho::editor::overlaylod::NodeInfo ProbeBlock(const GroundCtx& ctx, moho::editor::overlaylod::NodeTable& table, const moho::editor::overlaylod::Key& k, int& projected)
+  // The nodes of a screen box test: is any of the block on screen, how big is it there (EdOverlayLod.h). The corners
+  // come from `table`.
+  moho::editor::overlaylod::NodeInfo ProbeBlock(
+    const GroundCtx& ctx,
+    moho::editor::overlaylod::NodeTable& table,
+    const moho::editor::overlaylod::Key& k,
+    int& projected
+  )
   {
     namespace lod = moho::editor::overlaylod;
     const int maxX = ctx.field->Width() - 1, maxZ = ctx.field->Height() - 1;
@@ -501,9 +647,15 @@ namespace
       return lod::NodeInfo{};
     }
     const int xs[2] = {x0, std::min(x0 + size, maxX)}, zs[2] = {z0, std::min(z0 + size, maxZ)};
-    const auto make = [&ctx](const int x, const int z) { return ProjectGround(ctx, x, z); };
-    const lod::GroundNode n[4] = {table.Get(xs[0], zs[0], make, projected), table.Get(xs[1], zs[0], make, projected), table.Get(xs[1], zs[1], make, projected),
-                                  table.Get(xs[0], zs[1], make, projected)};
+    const auto make = [&ctx](const int x, const int z) {
+      return ProjectGround(ctx, x, z);
+    };
+    const lod::GroundNode n[4] = {
+      table.Get(xs[0], zs[0], make, projected),
+      table.Get(xs[1], zs[0], make, projected),
+      table.Get(xs[1], zs[1], make, projected),
+      table.Get(xs[0], zs[1], make, projected)
+    };
     int front = 0;
     float wSum = 0.0f;
     for (const lod::GroundNode& g : n) {
@@ -514,19 +666,25 @@ namespace
       return lod::NodeInfo{};
     }
     if (front < 4) {
-      return lod::NodeInfo{true, 1.0e9f, 0.0f};   // across the camera plane: cut it up as far as it goes, the cells that are still in front are drawn
+      return lod::NodeInfo{
+        true, 1.0e9f, 0.0f
+      }; // across the camera plane: cut it up as far as it goes, the cells that are still in front are drawn
     }
     const float sx[4] = {n[0].x, n[1].x, n[2].x, n[3].x}, sy[4] = {n[0].y, n[1].y, n[2].y, n[3].y};
-    const float minX = std::min(std::min(sx[0], sx[1]), std::min(sx[2], sx[3])), maxXs = std::max(std::max(sx[0], sx[1]), std::max(sx[2], sx[3]));
-    const float minY = std::min(std::min(sy[0], sy[1]), std::min(sy[2], sy[3])), maxYs = std::max(std::max(sy[0], sy[1]), std::max(sy[2], sy[3]));
-    const float margin = 0.5f * std::max(maxXs - minX, maxYs - minY) + 16.0f;   // ground between the corners can rise above the chord
+    const float minX = std::min(std::min(sx[0], sx[1]), std::min(sx[2], sx[3])),
+                maxXs = std::max(std::max(sx[0], sx[1]), std::max(sx[2], sx[3]));
+    const float minY = std::min(std::min(sy[0], sy[1]), std::min(sy[2], sy[3])),
+                maxYs = std::max(std::max(sy[0], sy[1]), std::max(sy[2], sy[3]));
+    const float margin =
+      0.5f * std::max(maxXs - minX, maxYs - minY) + 16.0f; // ground between the corners can rise above the chord
     if (maxXs < -margin || maxYs < -margin || minX > ctx.vw + margin || minY > ctx.vh + margin) {
       return lod::NodeInfo{};
     }
     return lod::NodeInfo{true, lod::ProjectedSize(sx, sy), 0.25f * wSum};
   }
 
-  // The drawn slope blocks of the last frame, kept while nothing they depend on changes: a still view replays them without projecting or sampling anything.
+  // The drawn slope blocks of the last frame, kept while nothing they depend on changes: a still view replays them
+  // without projecting or sampling anything.
   struct SlopeCache
   {
     bool valid = false;
@@ -538,7 +696,7 @@ namespace
     std::vector<DrapeQuad> quads;
   };
   SlopeCache gSlopeCache;
-  moho::editor::overlaylod::RefineState gSlopeState;      // the blocks that were cut last frame (hysteresis)
+  moho::editor::overlaylod::RefineState gSlopeState; // the blocks that were cut last frame (hysteresis)
 
   // Projected ground nodes of one layer, kept while the camera and the heights stay the same.
   struct NodeCache
@@ -548,7 +706,9 @@ namespace
     unsigned epoch = 0;
     bool valid = false;
 
-    moho::editor::overlaylod::NodeTable& Prepare(const CamStamp& now)
+    moho::editor::overlaylod::NodeTable& Prepare(
+      const CamStamp& now
+    )
     {
       if (!valid || epoch != gHeightEpoch || stamp != now) {
         table.Clear();
@@ -564,8 +724,9 @@ namespace
   NodeCache gFieldNodes;
   moho::editor::overlaylod::RefineState gGridState;
 
-  // A float field of the field engine as a ground overlay (ed_overlay_field, EdOverlayField.h): the field is held here (a shared pointer: the Lua handle may be freed), its alpha
-  // levels as a mip chain, and what is drawn is a quadtree of ground blocks cut up by their size on screen. The drawn quads are kept while nothing they depend on changes.
+  // A float field of the field engine as a ground overlay (ed_overlay_field, EdOverlayField.h): the field is held here
+  // (a shared pointer: the Lua handle may be freed), its alpha levels as a mip chain, and what is drawn is a quadtree
+  // of ground blocks cut up by their size on screen. The drawn quads are kept while nothing they depend on changes.
   struct FieldLayer
   {
     moho::editor::field::GridPtr grid;
@@ -576,12 +737,12 @@ namespace
     std::uint32_t rgb = 0xFFFFFFu;
     std::uint32_t maxAlpha = 0xC0u;
     float refinePx = moho::editor::overlayfield::kRefinePx;
-    unsigned version = 1;                              // moves with every change of what the quads depend on
-    moho::editor::overlaylod::RefineState state;       // the blocks that were cut last frame (hysteresis)
+    unsigned version = 1;                        // moves with every change of what the quads depend on
+    moho::editor::overlaylod::RefineState state; // the blocks that were cut last frame (hysteresis)
     // the drawn quads of the last frame
     bool valid = false;
-    bool detailed = false;                             // built with the full detail (not the coarse one used while the camera moves)
-    CamStamp seen;                                     // the camera of the previous frame: different = it is moving
+    bool detailed = false; // built with the full detail (not the coarse one used while the camera moves)
+    CamStamp seen;         // the camera of the previous frame: different = it is moving
     bool seenValid = false;
     CamStamp stamp;
     unsigned heightEpoch = 0, cachedVersion = 0;
@@ -625,7 +786,10 @@ namespace
   GridCache gGridCache;
 
   // A one pixel line from (x0, y0) to (x1, y1) with the depth z0 / z1 at its ends.
-  void EmitDepthLine(moho::CD3DPrimBatcher& b, const GridSeg& s)
+  void EmitDepthLine(
+    moho::CD3DPrimBatcher& b,
+    const GridSeg& s
+  )
   {
     float dx = s.x[1] - s.x[0];
     float dy = s.y[1] - s.y[0];
@@ -639,14 +803,20 @@ namespace
     const float nx = -dy * h;
     const float ny = dx * h;
     using V = moho::CD3DPrimBatcher::Vertex;
-    b.DrawQuad(V{s.x[0] + nx, s.y[0] + ny, s.z[0], s.color, 0.0f, 0.0f}, V{s.x[0] - nx, s.y[0] - ny, s.z[0], s.color, 0.0f, 1.0f},
-               V{s.x[1] - nx, s.y[1] - ny, s.z[1], s.color, 1.0f, 1.0f}, V{s.x[1] + nx, s.y[1] + ny, s.z[1], s.color, 1.0f, 0.0f});
+    b.DrawQuad(
+      V{s.x[0] + nx, s.y[0] + ny, s.z[0], s.color, 0.0f, 0.0f},
+      V{s.x[0] - nx, s.y[0] - ny, s.z[0], s.color, 0.0f, 1.0f},
+      V{s.x[1] - nx, s.y[1] - ny, s.z[1], s.color, 1.0f, 1.0f},
+      V{s.x[1] + nx, s.y[1] + ny, s.z[1], s.color, 1.0f, 0.0f}
+    );
   }
-  constexpr int kGridQuadCap = 30000;            // the same for all node grids together
+  constexpr int kGridQuadCap = 30000; // the same for all node grids together
 
-  // green (gentle) -> yellow -> red (at the limit), purple beyond it; flat ground stays clear so the terrain shows through. `step` is a ColorStep
-  // (EdOverlaySlope.h): 0 flat, 1 .. kSteps up to the limit, kSteps + 1 beyond.
-  std::uint32_t SlopeColor(const int step)
+  // green (gentle) -> yellow -> red (at the limit), purple beyond it; flat ground stays clear so the terrain shows
+  // through. `step` is a ColorStep (EdOverlaySlope.h): 0 flat, 1 .. kSteps up to the limit, kSteps + 1 beyond.
+  std::uint32_t SlopeColor(
+    const int step
+  )
   {
     if (step > moho::editor::overlayslope::kSteps) {
       return 0xB8C018D8u;
@@ -668,17 +838,22 @@ namespace
       b = 40.0f;
     }
     const std::uint32_t a = 0x58u + static_cast<std::uint32_t>(0x40 * std::min(1.0f, t));
-    return (a << 24) | (static_cast<std::uint32_t>(r) << 16) | (static_cast<std::uint32_t>(g) << 8) | static_cast<std::uint32_t>(b);
+    return (a << 24) | (static_cast<std::uint32_t>(r) << 16) | (static_cast<std::uint32_t>(g) << 8) |
+      static_cast<std::uint32_t>(b);
   }
 
-  // ed_overlay_hash([on]): FNV-1a over every quad of the lines and icons the overlay sent to the batcher in the last frame (positions, colours, uvs), so a change of how they are
-  // built can be proven to leave the picture exactly as it was without comparing screenshots (water and clouds move).
+  // ed_overlay_hash([on]): FNV-1a over every quad of the lines and icons the overlay sent to the batcher in the last
+  // frame (positions, colours, uvs), so a change of how they are built can be proven to leave the picture exactly as it
+  // was without comparing screenshots (water and clouds move).
   bool gHashOn = false;
   std::uint32_t gHashAcc = 2166136261u;
   std::uint32_t gHashLast = 0u;
   std::uint32_t gHashQuads = 0u;
 
-  void HashBytes(const void* const data, const std::size_t n)
+  void HashBytes(
+    const void* const data,
+    const std::size_t n
+  )
   {
     const unsigned char* const p = static_cast<const unsigned char*>(data);
     std::uint32_t h = gHashAcc;
@@ -688,30 +863,43 @@ namespace
     gHashAcc = h;
   }
 
-  void HashQuad(const moho::CD3DPrimBatcher::Vertex& a, const moho::CD3DPrimBatcher::Vertex& b, const moho::CD3DPrimBatcher::Vertex& c, const moho::CD3DPrimBatcher::Vertex& d)
+  void HashQuad(
+    const moho::CD3DPrimBatcher::Vertex& a,
+    const moho::CD3DPrimBatcher::Vertex& b,
+    const moho::CD3DPrimBatcher::Vertex& c,
+    const moho::CD3DPrimBatcher::Vertex& d
+  )
   {
     const moho::CD3DPrimBatcher::Vertex v[4] = {a, b, c, d};
     HashBytes(v, sizeof(v));
     ++gHashQuads;
   }
 
-  // The lines and icons are retained as quads (four vertices per quad, in DrawQuad's argument order) and replayed while nothing they depend on changed: the set of lines, the
-  // camera (view-projection matrix) and the viewport. A still camera (the usual state of an editor) then costs no projection at all; a moving one projects every vertex once
-  // and feeds the halo pass and the line pass from the same projection (it was twice, with five vector allocations per line each time).
+  // The lines and icons are retained as quads (four vertices per quad, in DrawQuad's argument order) and replayed while
+  // nothing they depend on changed: the set of lines, the camera (view-projection matrix) and the viewport. A still
+  // camera (the usual state of an editor) then costs no projection at all; a moving one projects every vertex once and
+  // feeds the halo pass and the line pass from the same projection (it was twice, with five vector allocations per line
+  // each time).
   namespace ol = moho::editor::overlaylines;
   using QuadVertex = moho::CD3DPrimBatcher::Vertex;
   using QuadList = std::vector<QuadVertex>;
 
-  void DrawQuadList(moho::CD3DPrimBatcher& b, const QuadList& q)
+  void DrawQuadList(
+    moho::CD3DPrimBatcher& b,
+    const QuadList& q
+  )
   {
-    if (gHashOn) {          // checking: hash every quad and send them one DrawQuad at a time, as before the blocks (ed_overlay_hash)
+    if (gHashOn) { // checking: hash every quad and send them one DrawQuad at a time, as before the blocks
+                   // (ed_overlay_hash)
       for (std::size_t i = 0; i + 3u < q.size(); i += 4u) {
         HashQuad(q[i], q[i + 1u], q[i + 2u], q[i + 3u]);
         b.DrawQuad(q[i], q[i + 1u], q[i + 2u], q[i + 3u]);
       }
       return;
     }
-    b.DrawVertexQuads(q.data(), q.size() / 4u);       // the same vertices, indices and flushes as one DrawQuad per quad, written in blocks
+    b.DrawVertexQuads(
+      q.data(), q.size() / 4u
+    ); // the same vertices, indices and flushes as one DrawQuad per quad, written in blocks
   }
 
   // The projector of EdOverlayLines.h for the world camera and the viewport.
@@ -719,13 +907,23 @@ namespace
   {
     const moho::GeomCamera3& cam;
     float vw, vh;
-    void Screen(const float x, const float y, const float z, float& sx, float& sy) const
+    void Screen(
+      const float x,
+      const float y,
+      const float z,
+      float& sx,
+      float& sy
+    ) const
     {
       const Wm3::Vector2f s = cam.Project(Wm3::Vector3f{x, y, z}, 0.0f, vw, vh, 0.0f);
       sx = s.x;
       sy = s.y;
     }
-    float W(const float x, const float y, const float z) const
+    float W(
+      const float x,
+      const float y,
+      const float z
+    ) const
     {
       return ClipW(cam, Wm3::Vector3f{x, y, z});
     }
@@ -740,7 +938,7 @@ namespace
     std::uint32_t epoch = 0;
     float vp[16] = {};
     float vw = 0.0f, vh = 0.0f;
-    QuadList halo, line;      // halo quads of every line that has a halo, then the quads of every line
+    QuadList halo, line; // halo quads of every line that has a halo, then the quads of every line
     bool dbgSet = false;
     float dbg[8] = {};
     std::uint32_t builds = 0, replays = 0;
@@ -748,12 +946,23 @@ namespace
   LineCache gLineCache;
   static_assert(sizeof(moho::VMatrix4) == 16u * sizeof(float), "the camera matrix is compared as 16 floats");
 
-  bool SameCamera(const float* const vp, const moho::GeomCamera3& cam, const float vw, const float vh, const float cvw, const float cvh)
+  bool SameCamera(
+    const float* const vp,
+    const moho::GeomCamera3& cam,
+    const float vw,
+    const float vh,
+    const float cvw,
+    const float cvh
+  )
   {
     return vw == cvw && vh == cvh && std::memcmp(vp, &cam.viewProjection, sizeof(moho::VMatrix4)) == 0;
   }
 
-  void UpdateLineCache(moho::GeomCamera3& cam, const float vw, const float vh)
+  void UpdateLineCache(
+    moho::GeomCamera3& cam,
+    const float vw,
+    const float vh
+  )
   {
     LineCache& c = gLineCache;
     if (c.valid && c.epoch == gLinesEpoch && SameCamera(c.vp, cam, vw, vh, c.vw, c.vh)) {
@@ -786,13 +995,15 @@ namespace
     }
   }
 
-  // ---- retained icon and decal groups -------------------------------------------------------------------------------------------------------
-  // The icons and decals are drawn one texture at a time; the grouping by texture (an ordered map built from scratch every frame before) is kept until the set changes.
+  // ---- retained icon and decal groups
+  // ------------------------------------------------------------------------------------------------------- The icons
+  // and decals are drawn one texture at a time; the grouping by texture (an ordered map built from scratch every frame
+  // before) is kept until the set changes.
   struct IconGroup
   {
     std::string texture;
     std::vector<const Icon*> icons;
-    QuadList quads;           // their quads for the camera of IconCache; valid when `built`
+    QuadList quads; // their quads for the camera of IconCache; valid when `built`
     bool built = false;
   };
 
@@ -806,7 +1017,11 @@ namespace
   };
   IconCache gIconCache;
 
-  std::vector<IconGroup>& IconGroups(const moho::GeomCamera3& cam, const float vw, const float vh)
+  std::vector<IconGroup>& IconGroups(
+    const moho::GeomCamera3& cam,
+    const float vw,
+    const float vh
+  )
   {
     IconCache& c = gIconCache;
     if (c.groupsEpoch != gIconsEpoch) {
@@ -837,7 +1052,12 @@ namespace
     return c.groups;
   }
 
-  void BuildIconQuads(const moho::GeomCamera3& camera, const float vw, const float vh, IconGroup& g)
+  void BuildIconQuads(
+    const moho::GeomCamera3& camera,
+    const float vw,
+    const float vh,
+    IconGroup& g
+  )
   {
     g.quads.clear();
     for (const Icon* const icon : g.icons) {
@@ -853,8 +1073,13 @@ namespace
       const float cx = std::floor(s.x) + 0.5f;
       const float cy = std::floor(s.y) + 0.5f;
       using V = moho::CD3DPrimBatcher::Vertex;
-      ol::PushQuad(g.quads, V{cx - h, cy - h, 0.0f, icon->argb, 0.0f, 0.0f}, V{cx + h, cy - h, 0.0f, icon->argb, 1.0f, 0.0f},
-               V{cx + h, cy + h, 0.0f, icon->argb, 1.0f, 1.0f}, V{cx - h, cy + h, 0.0f, icon->argb, 0.0f, 1.0f});
+      ol::PushQuad(
+        g.quads,
+        V{cx - h, cy - h, 0.0f, icon->argb, 0.0f, 0.0f},
+        V{cx + h, cy - h, 0.0f, icon->argb, 1.0f, 0.0f},
+        V{cx + h, cy + h, 0.0f, icon->argb, 1.0f, 1.0f},
+        V{cx - h, cy + h, 0.0f, icon->argb, 0.0f, 1.0f}
+      );
     }
     g.built = true;
   }
@@ -889,27 +1114,40 @@ namespace
 
   // ed_overlay_set(id, points, color [, worldWidth, minPx, maxPx, closed, halo])
   //   points: flat array { x, y, z, x, y, z, ... } in world coordinates; color: 'RRGGBB' or 'AARRGGBB' hex string
-  bool SameFloats(const float a, const float b)
+  bool SameFloats(
+    const float a,
+    const float b
+  )
   {
     return std::memcmp(&a, &b, sizeof(float)) == 0;
   }
 
-  // The same line as the one stored (points compared bit for bit): the overlay refresh writes every line again, mostly unchanged.
-  bool SamePolyline(const Polyline& a, const Polyline& b, const std::vector<float>& bPts)
+  // The same line as the one stored (points compared bit for bit): the overlay refresh writes every line again, mostly
+  // unchanged.
+  bool SamePolyline(
+    const Polyline& a,
+    const Polyline& b,
+    const std::vector<float>& bPts
+  )
   {
-    return a.argb == b.argb && SameFloats(a.worldWidth, b.worldWidth) && SameFloats(a.minPx, b.minPx) && SameFloats(a.maxPx, b.maxPx) && a.closed == b.closed &&
-           a.halo == b.halo && a.caps == b.caps && a.pts.size() == bPts.size() && (bPts.empty() || std::memcmp(a.pts.data(), bPts.data(), bPts.size() * sizeof(float)) == 0);
+    return a.argb == b.argb && SameFloats(a.worldWidth, b.worldWidth) && SameFloats(a.minPx, b.minPx) &&
+      SameFloats(a.maxPx, b.maxPx) && a.closed == b.closed && a.halo == b.halo && a.caps == b.caps &&
+      a.pts.size() == bPts.size() &&
+      (bPts.empty() || std::memcmp(a.pts.data(), bPts.data(), bPts.size() * sizeof(float)) == 0);
   }
 
-  int __cdecl cfunc_EdOverlaySet(lua_State* const L)
+  int __cdecl cfunc_EdOverlaySet(
+    lua_State* const L
+  )
   {
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 2) != LUA_TTABLE) {
-      moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+      moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_set(id, points, color [, worldWidth, minPx, maxPx, closed, halo])");
       return 2;
     }
-    Polyline pl;                          // pl.pts stays empty: the points go through a buffer that is kept between calls (no allocation for an unchanged line)
+    Polyline pl; // pl.pts stays empty: the points go through a buffer that is kept between calls (no allocation for an
+                 // unchanged line)
     static std::vector<float> pts;
     pts.clear();
     const int count = lua_getn(L, 2);
@@ -924,12 +1162,17 @@ namespace
       const std::uint32_t v = static_cast<std::uint32_t>(std::strtoul(text, nullptr, 16));
       pl.argb = (std::strlen(text) <= 6u) ? (0xFF000000u | v) : v;
     }
-    if (lua_type(L, 4) == LUA_TNUMBER) pl.worldWidth = static_cast<float>(lua_tonumber(L, 4));
-    if (lua_type(L, 5) == LUA_TNUMBER) pl.minPx = static_cast<float>(lua_tonumber(L, 5));
-    if (lua_type(L, 6) == LUA_TNUMBER) pl.maxPx = static_cast<float>(lua_tonumber(L, 6));
+    if (lua_type(L, 4) == LUA_TNUMBER)
+      pl.worldWidth = static_cast<float>(lua_tonumber(L, 4));
+    if (lua_type(L, 5) == LUA_TNUMBER)
+      pl.minPx = static_cast<float>(lua_tonumber(L, 5));
+    if (lua_type(L, 6) == LUA_TNUMBER)
+      pl.maxPx = static_cast<float>(lua_tonumber(L, 6));
     pl.closed = lua_toboolean(L, 7) != 0;
-    if (lua_type(L, 8) != LUA_TNIL && lua_type(L, 8) != LUA_TNONE) pl.halo = lua_toboolean(L, 8) != 0;
-    if (lua_type(L, 9) != LUA_TNIL && lua_type(L, 9) != LUA_TNONE) pl.caps = lua_toboolean(L, 9) != 0;
+    if (lua_type(L, 8) != LUA_TNIL && lua_type(L, 8) != LUA_TNONE)
+      pl.halo = lua_toboolean(L, 8) != 0;
+    if (lua_type(L, 9) != LUA_TNIL && lua_type(L, 9) != LUA_TNONE)
+      pl.caps = lua_toboolean(L, 9) != 0;
     const std::string_view id(lua_tostring(L, 1));
     const auto found = Lines().find(id);
     if (found != Lines().end()) {
@@ -951,16 +1194,18 @@ namespace
       Lines().emplace(std::string(id), std::move(pl));
     }
     ++gLinesEpoch;
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     lua_pushboolean(L, 1);
     return 1;
   }
 
   // ed_overlay_icon(id, x, y, z, texturePath, sizePx [, color])
-  int __cdecl cfunc_EdOverlayIcon(lua_State* const L)
+  int __cdecl cfunc_EdOverlayIcon(
+    lua_State* const L
+  )
   {
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 5) != LUA_TSTRING) {
-      moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+      moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_icon(id, x, y, z, texturePath, sizePx [, color])");
       return 2;
@@ -970,7 +1215,8 @@ namespace
     icon.y = static_cast<float>(lua_tonumber(L, 3));
     icon.z = static_cast<float>(lua_tonumber(L, 4));
     icon.texture = lua_tostring(L, 5);
-    if (lua_type(L, 6) == LUA_TNUMBER) icon.px = static_cast<float>(lua_tonumber(L, 6));
+    if (lua_type(L, 6) == LUA_TNUMBER)
+      icon.px = static_cast<float>(lua_tonumber(L, 6));
     if (const char* const text = lua_tostring(L, 7)) {
       const std::uint32_t v = static_cast<std::uint32_t>(std::strtoul(text, nullptr, 16));
       icon.argb = (std::strlen(text) <= 6u) ? (0xFF000000u | v) : v;
@@ -979,7 +1225,10 @@ namespace
     const auto found = Icons().find(id);
     if (found != Icons().end()) {
       const Icon& old = found->second;
-      if (SameFloats(old.x, icon.x) && SameFloats(old.y, icon.y) && SameFloats(old.z, icon.z) && SameFloats(old.px, icon.px) && old.argb == icon.argb && old.texture == icon.texture) {
+      if (
+        SameFloats(old.x, icon.x) && SameFloats(old.y, icon.y) && SameFloats(old.z, icon.z) &&
+        SameFloats(old.px, icon.px) && old.argb == icon.argb && old.texture == icon.texture
+      ) {
         lua_pushboolean(L, 1);
         return 1;
       }
@@ -988,16 +1237,18 @@ namespace
       Icons().emplace(std::string(id), std::move(icon));
     }
     ++gIconsEpoch;
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     lua_pushboolean(L, 1);
     return 1;
   }
 
   // ed_overlay_decal(id, x, y, z, texturePath, size [, color, yawRadians])
-  int __cdecl cfunc_EdOverlayDecal(lua_State* const L)
+  int __cdecl cfunc_EdOverlayDecal(
+    lua_State* const L
+  )
   {
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 5) != LUA_TSTRING) {
-      moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+      moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw])");
       return 2;
@@ -1007,18 +1258,23 @@ namespace
     decal.y = static_cast<float>(lua_tonumber(L, 3));
     decal.z = static_cast<float>(lua_tonumber(L, 4));
     decal.texture = lua_tostring(L, 5);
-    if (lua_type(L, 6) == LUA_TNUMBER) decal.size = static_cast<float>(lua_tonumber(L, 6));
+    if (lua_type(L, 6) == LUA_TNUMBER)
+      decal.size = static_cast<float>(lua_tonumber(L, 6));
     if (const char* const text = lua_tostring(L, 7)) {
       const std::uint32_t v = static_cast<std::uint32_t>(std::strtoul(text, nullptr, 16));
       decal.argb = (std::strlen(text) <= 6u) ? (0xFF000000u | v) : v;
     }
-    if (lua_type(L, 8) == LUA_TNUMBER) decal.yaw = static_cast<float>(lua_tonumber(L, 8));
+    if (lua_type(L, 8) == LUA_TNUMBER)
+      decal.yaw = static_cast<float>(lua_tonumber(L, 8));
     const std::string_view id(lua_tostring(L, 1));
     const auto found = Decals().find(id);
     if (found != Decals().end()) {
       const Decal& old = found->second;
-      if (SameFloats(old.x, decal.x) && SameFloats(old.y, decal.y) && SameFloats(old.z, decal.z) && SameFloats(old.size, decal.size) && SameFloats(old.yaw, decal.yaw) &&
-          old.argb == decal.argb && old.texture == decal.texture) {
+      if (
+        SameFloats(old.x, decal.x) && SameFloats(old.y, decal.y) && SameFloats(old.z, decal.z) &&
+        SameFloats(old.size, decal.size) && SameFloats(old.yaw, decal.yaw) && old.argb == decal.argb &&
+        old.texture == decal.texture
+      ) {
         lua_pushboolean(L, 1);
         return 1;
       }
@@ -1027,17 +1283,19 @@ namespace
       Decals().emplace(std::string(id), std::move(decal));
     }
     ++gDecalsEpoch;
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     lua_pushboolean(L, 1);
     return 1;
   }
 
-  // ed_overlay_slope(kind, x0, z0, x1, z1, window, limit): show the slope gradient over the cell rectangle [x0, x1) x [z0, z1);
-  // kind 'path' (mobile footprint rule), 'build' (structure area rule, FlattenSkirt = false) or 'ring' (structure edge rule, FlattenSkirt = true);
-  // ed_overlay_slope_caps() lists the kinds this build knows.
-  int __cdecl cfunc_EdOverlaySlope(lua_State* const L)
+  // ed_overlay_slope(kind, x0, z0, x1, z1, window, limit): show the slope gradient over the cell rectangle [x0, x1) x
+  // [z0, z1); kind 'path' (mobile footprint rule), 'build' (structure area rule, FlattenSkirt = false) or 'ring'
+  // (structure edge rule, FlattenSkirt = true); ed_overlay_slope_caps() lists the kinds this build knows.
+  int __cdecl cfunc_EdOverlaySlope(
+    lua_State* const L
+  )
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     const char* const kind = lua_tostring(L, 1);
     if (kind == nullptr) {
       lua_pushnil(L);
@@ -1056,10 +1314,13 @@ namespace
     return 1;
   }
 
-  // ed_overlay_slope_caps() -> { 'path', 'build', 'ring' }: the rule names ed_overlay_slope / ed_slope_at understand (an older build has no such function and knows 'path' and 'build')
-  int __cdecl cfunc_EdOverlaySlopeCaps(lua_State* const L)
+  // ed_overlay_slope_caps() -> { 'path', 'build', 'ring' }: the rule names ed_overlay_slope / ed_slope_at understand
+  // (an older build has no such function and knows 'path' and 'build')
+  int __cdecl cfunc_EdOverlaySlopeCaps(
+    lua_State* const L
+  )
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     lua_newtable(L);
     int i = 0;
     for (const char* const name : {"path", "build", "ring"}) {
@@ -1070,15 +1331,19 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdOverlaySlopeOff(lua_State* const)
+  int __cdecl cfunc_EdOverlaySlopeOff(
+    lua_State* const
+  )
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     gSlope.on = false;
     return 0;
   }
 
   // ed_slope_at(kind, x, z, window) -> the engine's rating of the cell containing (x, z), or nil
-  int __cdecl cfunc_EdSlopeAt(lua_State* const L)
+  int __cdecl cfunc_EdSlopeAt(
+    lua_State* const L
+  )
   {
     moho::CHeightField* const field = ViewHeightField();
     const char* const kind = lua_tostring(L, 1);
@@ -1089,16 +1354,22 @@ namespace
     const int cx = static_cast<int>(std::floor(lua_tonumber(L, 2)));
     const int cz = static_cast<int>(std::floor(lua_tonumber(L, 3)));
     const int n = std::max(1, std::min(16, static_cast<int>(lua_tonumber(L, 4))));
-    const int v = moho::editor::overlayslope::CellRating(moho::editor::overlayslope::KindFromName(kind), n, cx, cz,
-                                                         [field](int x, int z) { return static_cast<int>(field->GetHeightAt(x, z)); });
+    const int v = moho::editor::overlayslope::CellRating(
+      moho::editor::overlayslope::KindFromName(kind), n, cx, cz, [field](int x, int z) {
+      return static_cast<int>(field->GetHeightAt(x, z));
+    }
+    );
     lua_pushnumber(L, static_cast<lua_Number>(static_cast<float>(v) / 128.0f));
     return 1;
   }
 
-  // ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha [, step]])  values: nw * nh numbers 0..255, row major; node (i, j) lies at world (x0 + i * step, z0 + j * step)
-  int __cdecl cfunc_EdOverlayNodes(lua_State* const L)
+  // ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha [, step]])  values: nw * nh numbers 0..255, row major;
+  // node (i, j) lies at world (x0 + i * step, z0 + j * step)
+  int __cdecl cfunc_EdOverlayNodes(
+    lua_State* const L
+  )
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 6) != LUA_TTABLE) {
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha])");
@@ -1125,13 +1396,19 @@ namespace
     if (const char* const text = lua_tostring(L, 7)) {
       g.rgb = static_cast<std::uint32_t>(std::strtoul(text, nullptr, 16)) & 0xFFFFFFu;
     }
-    if (lua_type(L, 8) == LUA_TNUMBER) g.maxAlpha = static_cast<std::uint32_t>(std::max(0.0, std::min(255.0, static_cast<double>(lua_tonumber(L, 8)))));
-    if (lua_type(L, 9) == LUA_TNUMBER) g.step = std::max(1, std::min(64, static_cast<int>(lua_tonumber(L, 9))));
-    // the same grid again (a caller that sends its layers every time): keep what is there, with its cell runs and projections
+    if (lua_type(L, 8) == LUA_TNUMBER)
+      g.maxAlpha = static_cast<std::uint32_t>(std::max(0.0, std::min(255.0, static_cast<double>(lua_tonumber(L, 8)))));
+    if (lua_type(L, 9) == LUA_TNUMBER)
+      g.step = std::max(1, std::min(64, static_cast<int>(lua_tonumber(L, 9))));
+    // the same grid again (a caller that sends its layers every time): keep what is there, with its cell runs and
+    // projections
     const auto existing = NodeGrids().find(lua_tostring(L, 1));
     if (existing != NodeGrids().end()) {
       const NodeGrid& e = existing->second;
-      if (e.x0 == g.x0 && e.z0 == g.z0 && e.nw == g.nw && e.nh == g.nh && e.step == g.step && e.rgb == g.rgb && e.maxAlpha == g.maxAlpha && e.v == g.v) {
+      if (
+        e.x0 == g.x0 && e.z0 == g.z0 && e.nw == g.nw && e.nh == g.nh && e.step == g.step && e.rgb == g.rgb &&
+        e.maxAlpha == g.maxAlpha && e.v == g.v
+      ) {
         lua_pushboolean(L, 1);
         return 1;
       }
@@ -1141,11 +1418,14 @@ namespace
     return 1;
   }
 
-  // ed_overlay_nodes_rect(id, i0, j0, w, h, values): replaces the nodes [i0, i0 + w) x [j0, j0 + h) of a grid that is already there with `values` (w * h numbers
-  // 0..255, row major): the cheap way to send a change of a few nodes instead of the whole grid. nil, message when there is no such grid or the rectangle is outside it.
-  int __cdecl cfunc_EdOverlayNodesRect(lua_State* const L)
+  // ed_overlay_nodes_rect(id, i0, j0, w, h, values): replaces the nodes [i0, i0 + w) x [j0, j0 + h) of a grid that is
+  // already there with `values` (w * h numbers 0..255, row major): the cheap way to send a change of a few nodes
+  // instead of the whole grid. nil, message when there is no such grid or the rectangle is outside it.
+  int __cdecl cfunc_EdOverlayNodesRect(
+    lua_State* const L
+  )
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 6) != LUA_TTABLE) {
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_nodes_rect(id, i0, j0, w, h, values)");
@@ -1175,7 +1455,8 @@ namespace
         const double value = lua_tonumber(L, -1);
         lua_settop(L, -2);
         const std::uint8_t b = static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, value)));
-        std::uint8_t& dst = g.v[static_cast<std::size_t>(j0 + j) * static_cast<std::size_t>(g.nw) + static_cast<std::size_t>(i0 + i)];
+        std::uint8_t& dst =
+          g.v[static_cast<std::size_t>(j0 + j) * static_cast<std::size_t>(g.nw) + static_cast<std::size_t>(i0 + i)];
         if (dst != b) {
           dst = b;
           changed = true;
@@ -1189,7 +1470,12 @@ namespace
     return 1;
   }
 
-  double LuaOptNumber(lua_State* const L, const int index, const char* const key, const double fallback)
+  double LuaOptNumber(
+    lua_State* const L,
+    const int index,
+    const char* const key,
+    const double fallback
+  )
   {
     if (lua_type(L, index) != LUA_TTABLE) {
       return fallback;
@@ -1206,16 +1492,21 @@ namespace
     return v;
   }
 
-  // ed_overlay_field(id, field, rgb [, maxAlpha [, opts]])  a float field of the field engine (ed_field_*: a handle, or a mask / height-like 0..1 field) as a ground overlay of the colour
-  //   `rgb` ('RRGGBB'), alpha up to maxAlpha (default 192). Lua passes no samples: the field stays in native memory and the overlay samples it itself, at the resolution the camera
-  //   needs (EdOverlayField.h: a quadtree of ground blocks cut up by their size on screen, the field reduced per block corner, draped over the terrain, depth tested).
-  //   opts.scale / opts.bias / opts.invert: alpha = clamp(v * scale + bias) (invert: 1 - that) * maxAlpha;  opts.cutoff (default 0.02): at or below it nothing is drawn;
-  //   opts.reduce = 'avg' (default; masks) | 'max' (thin features); opts.px = the screen size in pixels a block is cut up from (default 8; smaller = finer and dearer).
-  //   The call is cheap when nothing changed (same field handle and options); a new handle or new scale / bias / invert / cutoff builds the mip chain (a few ms).
-  //   ed_overlay_remove(id) takes it off. -> true | nil, message
-  int __cdecl cfunc_EdOverlayField(lua_State* const L)
+  // ed_overlay_field(id, field, rgb [, maxAlpha [, opts]])  a float field of the field engine (ed_field_*: a handle, or
+  // a mask / height-like 0..1 field) as a ground overlay of the colour
+  //   `rgb` ('RRGGBB'), alpha up to maxAlpha (default 192). Lua passes no samples: the field stays in native memory and
+  //   the overlay samples it itself, at the resolution the camera needs (EdOverlayField.h: a quadtree of ground blocks
+  //   cut up by their size on screen, the field reduced per block corner, draped over the terrain, depth tested).
+  //   opts.scale / opts.bias / opts.invert: alpha = clamp(v * scale + bias) (invert: 1 - that) * maxAlpha;  opts.cutoff
+  //   (default 0.02): at or below it nothing is drawn; opts.reduce = 'avg' (default; masks) | 'max' (thin features);
+  //   opts.px = the screen size in pixels a block is cut up from (default 8; smaller = finer and dearer). The call is
+  //   cheap when nothing changed (same field handle and options); a new handle or new scale / bias / invert / cutoff
+  //   builds the mip chain (a few ms). ed_overlay_remove(id) takes it off. -> true | nil, message
+  int __cdecl cfunc_EdOverlayField(
+    lua_State* const L
+  )
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     namespace of = moho::editor::overlayfield;
     if (lua_type(L, 1) != LUA_TSTRING || lua_type(L, 2) != LUA_TNUMBER) {
       lua_pushnil(L);
@@ -1275,10 +1566,15 @@ namespace
     return 1;
   }
 
-  // ed_overlay_perf() -> slopeRateMs, slopeDrawMs, slopeTilesRated, slopePending, slopeQuads, slopeCoarsestLevel, slopeNodesProjected, gridsMs, gridQuads,
-  //   gridNodesProjected, gridGroups, slopeLeaves, slopeFinestLevel, buildGridMs, buildGridLeaves, buildGridSegments, buildGridNodesProjected, depthTest, fieldMs, fieldLeaves, fieldQuads, fieldNodesProjected, fieldPyramidMs, fieldMinLevel, fieldMaxLevel
-  //   (what the last frame spent on the slope view, the node grids and the build grid; leaves = blocks of the quadtree that were drawn)
-  int __cdecl cfunc_EdOverlayPerf(lua_State* const L)
+  // ed_overlay_perf() -> slopeRateMs, slopeDrawMs, slopeTilesRated, slopePending, slopeQuads, slopeCoarsestLevel,
+  // slopeNodesProjected, gridsMs, gridQuads,
+  //   gridNodesProjected, gridGroups, slopeLeaves, slopeFinestLevel, buildGridMs, buildGridLeaves, buildGridSegments,
+  //   buildGridNodesProjected, depthTest, fieldMs, fieldLeaves, fieldQuads, fieldNodesProjected, fieldPyramidMs,
+  //   fieldMinLevel, fieldMaxLevel (what the last frame spent on the slope view, the node grids and the build grid;
+  //   leaves = blocks of the quadtree that were drawn)
+  int __cdecl cfunc_EdOverlayPerf(
+    lua_State* const L
+  )
   {
     lua_pushnumber(L, gPerf.slopeRateMs);
     lua_pushnumber(L, gPerf.slopeDrawMs);
@@ -1308,11 +1604,15 @@ namespace
     return 25;
   }
 
-  // ed_overlay_grid(x0, z0, x1, z1 [, rgb, alpha]): the build grid over the cell rectangle [x0, x1] x [z0, z1], drawn natively every frame, distance adaptive (EdOverlayLod.h):
-  //   lines every cell where a cell is big on screen, every 2, 4 ... 64 cells where it is small, fading with the distance. rgb = 0xRRGGBB (default white), alpha 0 .. 1 scales the lines.
-  int __cdecl cfunc_EdOverlayGrid(lua_State* const L)
+  // ed_overlay_grid(x0, z0, x1, z1 [, rgb, alpha]): the build grid over the cell rectangle [x0, x1] x [z0, z1], drawn
+  // natively every frame, distance adaptive (EdOverlayLod.h):
+  //   lines every cell where a cell is big on screen, every 2, 4 ... 64 cells where it is small, fading with the
+  //   distance. rgb = 0xRRGGBB (default white), alpha 0 .. 1 scales the lines.
+  int __cdecl cfunc_EdOverlayGrid(
+    lua_State* const L
+  )
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TNUMBER || lua_type(L, 4) != LUA_TNUMBER) {
       lua_pushnil(L);
       lua_pushstring(L, "ed_overlay_grid(x0, z0, x1, z1 [, rgb, alpha])");
@@ -1322,24 +1622,31 @@ namespace
     gGrid.z0 = static_cast<int>(lua_tonumber(L, 2));
     gGrid.x1 = static_cast<int>(lua_tonumber(L, 3));
     gGrid.z1 = static_cast<int>(lua_tonumber(L, 4));
-    if (lua_type(L, 5) == LUA_TNUMBER) gGrid.rgb = static_cast<std::uint32_t>(lua_tonumber(L, 5)) & 0xFFFFFFu;
-    if (lua_type(L, 6) == LUA_TNUMBER) gGrid.alpha = std::max(0.0f, std::min(1.0f, static_cast<float>(lua_tonumber(L, 6))));
+    if (lua_type(L, 5) == LUA_TNUMBER)
+      gGrid.rgb = static_cast<std::uint32_t>(lua_tonumber(L, 5)) & 0xFFFFFFu;
+    if (lua_type(L, 6) == LUA_TNUMBER)
+      gGrid.alpha = std::max(0.0f, std::min(1.0f, static_cast<float>(lua_tonumber(L, 6))));
     gGrid.on = true;
     lua_pushboolean(L, 1);
     return 1;
   }
 
-  int __cdecl cfunc_EdOverlayGridOff(lua_State* const)
+  int __cdecl cfunc_EdOverlayGridOff(
+    lua_State* const
+  )
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     gGrid.on = false;
     return 0;
   }
 
-  // ed_overlay_depth([on]) -> on: the slope view, the build grid and the value grids are hidden by the terrain (depth test, writes off); false draws them without occlusion again.
-  int __cdecl cfunc_EdOverlayDepth(lua_State* const L)
+  // ed_overlay_depth([on]) -> on: the slope view, the build grid and the value grids are hidden by the terrain (depth
+  // test, writes off); false draws them without occlusion again.
+  int __cdecl cfunc_EdOverlayDepth(
+    lua_State* const L
+  )
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     if (lua_type(L, 1) != LUA_TNONE && lua_type(L, 1) != LUA_TNIL) {
       gDepthTest = lua_toboolean(L, 1) != 0;
     }
@@ -1347,7 +1654,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdOverlayRemove(lua_State* const L)
+  int __cdecl cfunc_EdOverlayRemove(
+    lua_State* const L
+  )
   {
     if (const char* const id = lua_tostring(L, 1)) {
       const std::string_view key(id);
@@ -1369,13 +1678,15 @@ namespace
       NodeGrids().erase(id);
       FieldLayers().erase(id);
     }
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     return 0;
   }
 
-  int __cdecl cfunc_EdOverlayClear(lua_State* const)
+  int __cdecl cfunc_EdOverlayClear(
+    lua_State* const
+  )
   {
-    moho::editor::activity::Touch(moho::editor::activity::kOverlay);   // EDITOR: ed_scene_dirty
+    moho::editor::activity::Touch(moho::editor::activity::kOverlay); // EDITOR: ed_scene_dirty
     Lines().clear();
     Icons().clear();
     Decals().clear();
@@ -1387,7 +1698,9 @@ namespace
     return 0;
   }
 
-  int __cdecl cfunc_EdOverlayStats(lua_State* const L)
+  int __cdecl cfunc_EdOverlayStats(
+    lua_State* const L
+  )
   {
     for (int i = 0; i < 8; ++i) {
       lua_pushnumber(L, static_cast<lua_Number>(gDbg[i]));
@@ -1398,9 +1711,11 @@ namespace
     return 24;
   }
 
-  // ed_overlay_hash([on]) -> "hhhhhhhh", quads, builds, replays: hash and count of the line and icon quads of the last frame (hashing is off until it was switched on), and how often
-  // the retained line quads were rebuilt / replayed
-  int __cdecl cfunc_EdOverlayHash(lua_State* const L)
+  // ed_overlay_hash([on]) -> "hhhhhhhh", quads, builds, replays: hash and count of the line and icon quads of the last
+  // frame (hashing is off until it was switched on), and how often the retained line quads were rebuilt / replayed
+  int __cdecl cfunc_EdOverlayHash(
+    lua_State* const L
+  )
   {
     if (lua_type(L, 1) != LUA_TNIL && lua_type(L, 1) != LUA_TNONE) {
       gHashOn = lua_toboolean(L, 1) != 0;
@@ -1409,14 +1724,23 @@ namespace
     std::snprintf(text, sizeof(text), "%08x", gHashLast);
     lua_pushstring(L, text);
     lua_pushnumber(L, static_cast<lua_Number>(gHashQuads));
-    lua_pushnumber(L, static_cast<lua_Number>(gLineCache.builds));     // how often the line quads were rebuilt, and replayed unchanged, since the start
+    lua_pushnumber(
+      L, static_cast<lua_Number>(gLineCache.builds)
+    ); // how often the line quads were rebuilt, and replayed unchanged, since the start
     lua_pushnumber(L, static_cast<lua_Number>(gLineCache.replays));
     return 4;
   }
 
-  int __cdecl cfunc_EdOverlayCount(lua_State* const L)
+  int __cdecl cfunc_EdOverlayCount(
+    lua_State* const L
+  )
   {
-    lua_pushnumber(L, static_cast<lua_Number>(Lines().size() + Icons().size() + Decals().size() + NodeGrids().size() + FieldLayers().size()));
+    lua_pushnumber(
+      L,
+      static_cast<lua_Number>(
+        Lines().size() + Icons().size() + Decals().size() + NodeGrids().size() + FieldLayers().size()
+      )
+    );
     return 1;
   }
 
@@ -1434,35 +1758,137 @@ namespace
     EdOverlayLuaBootstrap()
     {
       auto& set = UserLuaInitSet();
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_set", &cfunc_EdOverlaySet, nullptr, "<global>",
-                                    "ed_overlay_set(id, points, color [, worldWidth, minPx, maxPx, closed, halo]) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_slope", &cfunc_EdOverlaySlope, nullptr, "<global>",
-                                    "ed_overlay_slope(kind, x0, z0, x1, z1, window, limit) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_slope_off", &cfunc_EdOverlaySlopeOff, nullptr, "<global>", "ed_overlay_slope_off()");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_slope_caps", &cfunc_EdOverlaySlopeCaps, nullptr, "<global>",
-                                    "ed_overlay_slope_caps() -> { 'path', 'build', 'ring' }, the rule names of ed_overlay_slope / ed_slope_at");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_grid", &cfunc_EdOverlayGrid, nullptr, "<global>", "ed_overlay_grid(x0, z0, x1, z1 [, rgb, alpha]) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_grid_off", &cfunc_EdOverlayGridOff, nullptr, "<global>", "ed_overlay_grid_off()");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_depth", &cfunc_EdOverlayDepth, nullptr, "<global>", "ed_overlay_depth([on]) -> on: depth test of the ground overlays against the terrain");
-      (void)new moho::CScrLuaBinder(set, "ed_slope_at", &cfunc_EdSlopeAt, nullptr, "<global>",
-                                    "ed_slope_at(kind, x, z, window) -> rating of the cell, in the engine's units");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_nodes", &cfunc_EdOverlayNodes, nullptr, "<global>",
-                                    "ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha [, step]]) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_field", &cfunc_EdOverlayField, nullptr, "<global>",
-                                    "ed_overlay_field(id, field, rgb [, maxAlpha [, {scale, bias, invert, cutoff, reduce, px}]]) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_nodes_rect", &cfunc_EdOverlayNodesRect, nullptr, "<global>",
-                                    "ed_overlay_nodes_rect(id, i0, j0, w, h, values) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_perf", &cfunc_EdOverlayPerf, nullptr, "<global>",
-                                    "ed_overlay_perf() -> slopeRateMs, slopeDrawMs, slopeTilesRated, slopePending, slopeQuads, slopeCoarsestLevel, slopeNodesProjected, gridsMs, gridQuads, gridNodesProjected, gridGroups, slopeLeaves, slopeFinestLevel, buildGridMs, buildGridLeaves, buildGridSegments, buildGridNodesProjected, depthTest, fieldMs, fieldLeaves, fieldQuads, fieldNodesProjected, fieldPyramidMs, fieldMinLevel, fieldMaxLevel");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_decal", &cfunc_EdOverlayDecal, nullptr, "<global>",
-                                    "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw]) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_icon", &cfunc_EdOverlayIcon, nullptr, "<global>",
-                                    "ed_overlay_icon(id, x, y, z, texturePath, sizePx [, color]) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_remove", &cfunc_EdOverlayRemove, nullptr, "<global>", "ed_overlay_remove(id)");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_clear", &cfunc_EdOverlayClear, nullptr, "<global>", "ed_overlay_clear()");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_stats", &cfunc_EdOverlayStats, nullptr, "<global>", "ed_overlay_stats() -> x, y, depth, half, vw, vh, drawn, culled");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_hash", &cfunc_EdOverlayHash, nullptr, "<global>", "ed_overlay_hash([on]) -> hash, quads of the line and icon quads of the last frame");
-      (void)new moho::CScrLuaBinder(set, "ed_overlay_count", &cfunc_EdOverlayCount, nullptr, "<global>", "ed_overlay_count() -> number of lines");
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_set",
+        &cfunc_EdOverlaySet,
+        nullptr,
+        "<global>",
+        "ed_overlay_set(id, points, color [, worldWidth, minPx, maxPx, closed, halo]) -> true | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_slope",
+        &cfunc_EdOverlaySlope,
+        nullptr,
+        "<global>",
+        "ed_overlay_slope(kind, x0, z0, x1, z1, window, limit) -> true | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_overlay_slope_off", &cfunc_EdOverlaySlopeOff, nullptr, "<global>", "ed_overlay_slope_off()"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_slope_caps",
+        &cfunc_EdOverlaySlopeCaps,
+        nullptr,
+        "<global>",
+        "ed_overlay_slope_caps() -> { 'path', 'build', 'ring' }, the rule names of ed_overlay_slope / ed_slope_at"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_grid",
+        &cfunc_EdOverlayGrid,
+        nullptr,
+        "<global>",
+        "ed_overlay_grid(x0, z0, x1, z1 [, rgb, alpha]) -> true | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_overlay_grid_off", &cfunc_EdOverlayGridOff, nullptr, "<global>", "ed_overlay_grid_off()"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_depth",
+        &cfunc_EdOverlayDepth,
+        nullptr,
+        "<global>",
+        "ed_overlay_depth([on]) -> on: depth test of the ground overlays against the terrain"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_slope_at",
+        &cfunc_EdSlopeAt,
+        nullptr,
+        "<global>",
+        "ed_slope_at(kind, x, z, window) -> rating of the cell, in the engine's units"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_nodes",
+        &cfunc_EdOverlayNodes,
+        nullptr,
+        "<global>",
+        "ed_overlay_nodes(id, x0, z0, nw, nh, values, rgb [, maxAlpha [, step]]) -> true | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_field",
+        &cfunc_EdOverlayField,
+        nullptr,
+        "<global>",
+        "ed_overlay_field(id, field, rgb [, maxAlpha [, {scale, bias, invert, cutoff, reduce, px}]]) -> true | nil, "
+        "message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_nodes_rect",
+        &cfunc_EdOverlayNodesRect,
+        nullptr,
+        "<global>",
+        "ed_overlay_nodes_rect(id, i0, j0, w, h, values) -> true | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_perf",
+        &cfunc_EdOverlayPerf,
+        nullptr,
+        "<global>",
+        "ed_overlay_perf() -> slopeRateMs, slopeDrawMs, slopeTilesRated, slopePending, slopeQuads, slopeCoarsestLevel, "
+        "slopeNodesProjected, gridsMs, gridQuads, gridNodesProjected, gridGroups, slopeLeaves, slopeFinestLevel, "
+        "buildGridMs, buildGridLeaves, buildGridSegments, buildGridNodesProjected, depthTest, fieldMs, fieldLeaves, "
+        "fieldQuads, fieldNodesProjected, fieldPyramidMs, fieldMinLevel, fieldMaxLevel"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_decal",
+        &cfunc_EdOverlayDecal,
+        nullptr,
+        "<global>",
+        "ed_overlay_decal(id, x, y, z, texturePath, size [, color, yaw]) -> true | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_icon",
+        &cfunc_EdOverlayIcon,
+        nullptr,
+        "<global>",
+        "ed_overlay_icon(id, x, y, z, texturePath, sizePx [, color]) -> true | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_overlay_remove", &cfunc_EdOverlayRemove, nullptr, "<global>", "ed_overlay_remove(id)"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_overlay_clear", &cfunc_EdOverlayClear, nullptr, "<global>", "ed_overlay_clear()"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_stats",
+        &cfunc_EdOverlayStats,
+        nullptr,
+        "<global>",
+        "ed_overlay_stats() -> x, y, depth, half, vw, vh, drawn, culled"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_overlay_hash",
+        &cfunc_EdOverlayHash,
+        nullptr,
+        "<global>",
+        "ed_overlay_hash([on]) -> hash, quads of the line and icon quads of the last frame"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_overlay_count", &cfunc_EdOverlayCount, nullptr, "<global>", "ed_overlay_count() -> number of lines"
+      );
     }
   };
 
@@ -1473,7 +1899,12 @@ namespace moho
 {
   namespace edoverlay
   {
-    void NotifyHeights(const int x0, const int z0, const int x1, const int z1)
+    void NotifyHeights(
+      const int x0,
+      const int z0,
+      const int x1,
+      const int z1
+    )
     {
       moho::editor::activity::Touch(moho::editor::activity::kHeights);
       ++gHeightEpoch;
@@ -1487,9 +1918,16 @@ namespace moho
       gSlopeStore.InvalidateAll();
     }
 
-    void Render(GeomCamera3* const camera, CD3DPrimBatcher* const batcher)
+    void Render(
+      GeomCamera3* const camera,
+      CD3DPrimBatcher* const batcher
+    )
     {
-      if ((Lines().empty() && Icons().empty() && Decals().empty() && NodeGrids().empty() && FieldLayers().empty() && !gSlope.on) || camera == nullptr || batcher == nullptr) {
+      if (
+        (Lines().empty() && Icons().empty() && Decals().empty() && NodeGrids().empty() && FieldLayers().empty() &&
+         !gSlope.on) ||
+        camera == nullptr || batcher == nullptr
+      ) {
         return;
       }
       for (int r = 0; r < 4; ++r) {
@@ -1533,7 +1971,8 @@ namespace moho
           }
           batcher->SetTexture(texture);
           for (const Decal* const d : group.decals) {
-            // The corners of the flat square: they decide whether the decal is on screen at all, and how big it is there (how finely it is cut up).
+            // The corners of the flat square: they decide whether the decal is on screen at all, and how big it is
+            // there (how finely it is cut up).
             const float h = d->size * 0.5f;
             const float cs = std::cos(d->yaw);
             const float sn = std::sin(d->yaw);
@@ -1542,19 +1981,24 @@ namespace moho
             Wm3::Vector2f s[4];
             bool allVisible = true;
             for (int i = 0; i < 4; ++i) {
-              const Wm3::Vector3f p{d->x + cornersX[i] * cs - cornersZ[i] * sn, d->y, d->z + cornersX[i] * sn + cornersZ[i] * cs};
+              const Wm3::Vector3f p{
+                d->x + cornersX[i] * cs - cornersZ[i] * sn, d->y, d->z + cornersX[i] * sn + cornersZ[i] * cs
+              };
               if (!moho::editor::overlaydrape::InFront(ClipW(*camera, p))) {
                 allVisible = false;
                 continue;
               }
               s[i] = camera->Project(p, 0.0f, vw, vh, 0.0f);
             }
-            float screenPx = 0.0f;   // widest extent on screen; 0 = a corner is behind the camera (cut up by the terrain alone)
+            float screenPx =
+              0.0f; // widest extent on screen; 0 = a corner is behind the camera (cut up by the terrain alone)
             if (allVisible) {
-              if ((s[0].x < -64.0f && s[1].x < -64.0f && s[2].x < -64.0f && s[3].x < -64.0f) ||
-                  (s[0].x > vw + 64.0f && s[1].x > vw + 64.0f && s[2].x > vw + 64.0f && s[3].x > vw + 64.0f) ||
-                  (s[0].y < -64.0f && s[1].y < -64.0f && s[2].y < -64.0f && s[3].y < -64.0f) ||
-                  (s[0].y > vh + 64.0f && s[1].y > vh + 64.0f && s[2].y > vh + 64.0f && s[3].y > vh + 64.0f)) {
+              if (
+                (s[0].x < -64.0f && s[1].x < -64.0f && s[2].x < -64.0f && s[3].x < -64.0f) ||
+                (s[0].x > vw + 64.0f && s[1].x > vw + 64.0f && s[2].x > vw + 64.0f && s[3].x > vw + 64.0f) ||
+                (s[0].y < -64.0f && s[1].y < -64.0f && s[2].y < -64.0f && s[3].y < -64.0f) ||
+                (s[0].y > vh + 64.0f && s[1].y > vh + 64.0f && s[2].y > vh + 64.0f && s[3].y > vh + 64.0f)
+              ) {
                 continue;
               }
               for (int i = 0; i < 4; ++i) {
@@ -1565,18 +2009,33 @@ namespace moho
               screenPx = std::max(screenPx, 1.0f);
             }
 
-            // Laid onto the terrain in cells (moho/editor/EdOverlayGeom.h): it lies on the slope, and a decal seen from close by is not skewed by the linear
-            // interpolation of its picture over one big quad. Without a height field (no terrain loaded) the flat square is drawn as one cell.
+            // Laid onto the terrain in cells (moho/editor/EdOverlayGeom.h): it lies on the slope, and a decal seen from
+            // close by is not skewed by the linear interpolation of its picture over one big quad. Without a height
+            // field (no terrain loaded) the flat square is drawn as one cell.
             moho::CHeightField* const field = ViewHeightField();
             const int fw = (field != nullptr) ? field->Width() : 0;
             const int fh = (field != nullptr) ? field->Height() : 0;
             std::vector<moho::editor::overlaygeom::DecalPoint>& pts = gDecalPoints;
             if (fw >= 2 && fh >= 2) {
-              const auto height = [field](const int x, const int z) { return static_cast<float>(field->GetHeightAt(x, z)) / 128.0f; };
-              moho::editor::overlaygeom::BuildDecal(height, fw, fh, d->x, d->y, d->z, d->size, d->yaw,
-                                                    moho::editor::overlaygeom::DecalCells(d->size, screenPx), pts);
+              const auto height = [field](const int x, const int z) {
+                return static_cast<float>(field->GetHeightAt(x, z)) / 128.0f;
+              };
+              moho::editor::overlaygeom::BuildDecal(
+                height,
+                fw,
+                fh,
+                d->x,
+                d->y,
+                d->z,
+                d->size,
+                d->yaw,
+                moho::editor::overlaygeom::DecalCells(d->size, screenPx),
+                pts
+              );
             } else {
-              const auto flat = [](const int, const int) { return 0.0f; };
+              const auto flat = [](const int, const int) {
+                return 0.0f;
+              };
               moho::editor::overlaygeom::BuildDecal(flat, 2, 2, d->x, d->y, d->z, d->size, d->yaw, 1, pts);
             }
             const int n = static_cast<int>(std::lround(std::sqrt(static_cast<double>(pts.size())))) - 1;
@@ -1601,10 +2060,12 @@ namespace moho
                 if (!visible[i00] || !visible[i10] || !visible[i11] || !visible[i01]) {
                   continue;
                 }
-                batcher->DrawQuad(V{screen[i00].x, screen[i00].y, 0.0f, d->argb, pts[i00].u, pts[i00].v},
-                                  V{screen[i10].x, screen[i10].y, 0.0f, d->argb, pts[i10].u, pts[i10].v},
-                                  V{screen[i11].x, screen[i11].y, 0.0f, d->argb, pts[i11].u, pts[i11].v},
-                                  V{screen[i01].x, screen[i01].y, 0.0f, d->argb, pts[i01].u, pts[i01].v});
+                batcher->DrawQuad(
+                  V{screen[i00].x, screen[i00].y, 0.0f, d->argb, pts[i00].u, pts[i00].v},
+                  V{screen[i10].x, screen[i10].y, 0.0f, d->argb, pts[i10].u, pts[i10].v},
+                  V{screen[i11].x, screen[i11].y, 0.0f, d->argb, pts[i11].u, pts[i11].v},
+                  V{screen[i01].x, screen[i01].y, 0.0f, d->argb, pts[i01].u, pts[i01].v}
+                );
               }
             }
           }
@@ -1663,7 +2124,8 @@ namespace moho
           gSlopeStore.Reset(fw, fh);
         }
       }
-      // The ground layers (slope view, build grid, value grids) are depth tested against the terrain (writes off); lines, icons and decals stay x-ray.
+      // The ground layers (slope view, build grid, value grids) are depth tested against the terrain (writes off);
+      // lines, icons and decals stay x-ray.
       const auto groundPass = [&]() {
         batcher->Flush();
         (void)batcher->Setup(gDepthTest ? "TEdGroundOverlay" : "TAlphaBlendLinearSampleNoDepth");
@@ -1692,18 +2154,25 @@ namespace moho
             gSlopeStore.SetKey(gSlope.kind, gSlope.window);
             groundPass();
 
-            // The quadtree (EdOverlayLod.h): root blocks of kRootLevel (64 cells, one tile of the store) over the visible rectangle, cut into four while their projected size is
-            // above the threshold, so the detail follows the distance from the camera and not the size of the visible rectangle.
+            // The quadtree (EdOverlayLod.h): root blocks of kRootLevel (64 cells, one tile of the store) over the
+            // visible rectangle, cut into four while their projected size is above the threshold, so the detail follows
+            // the distance from the camera and not the size of the visible rectangle.
             const GroundCtx ctx{field, camera, vw, vh, 0.12f};
             lod::NodeTable& table = gSlopeNodes.Prepare(stamp);
             const int rbx0 = x0 >> lod::kRootLevel, rbz0 = z0 >> lod::kRootLevel;
-            const int rbx1 = (x1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel, rbz1 = (z1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel;   // exclusive
+            const int rbx1 = (x1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel,
+                      rbz1 = (z1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel; // exclusive
 
-            // the root blocks that are on screen: their tiles are rated, the ones nearest the camera first (then the stale ones before the new ones)
+            // the root blocks that are on screen: their tiles are rated, the ones nearest the camera first (then the
+            // stale ones before the new ones)
             const double tRate = NowMs();
             std::vector<lod::Candidate> roots;
             {
-              struct Todo { double key; int tx, tz; };
+              struct Todo
+              {
+                double key;
+                int tx, tz;
+              };
               std::vector<Todo> todo;
               for (int bz = rbz0; bz < rbz1; ++bz) {
                 for (int bx = rbx0; bx < rbx1; ++bx) {
@@ -1721,8 +2190,12 @@ namespace moho
                   roots.push_back(lod::Candidate{k, info});
                 }
               }
-              std::sort(todo.begin(), todo.end(), [](const Todo& a, const Todo& b) { return a.key < b.key; });
-              const auto sampler = [field](const int x, const int z) { return static_cast<int>(field->GetHeightAt(x, z)); };
+              std::sort(todo.begin(), todo.end(), [](const Todo& a, const Todo& b) {
+                return a.key < b.key;
+              });
+              const auto sampler = [field](const int x, const int z) {
+                return static_cast<int>(field->GetHeightAt(x, z));
+              };
               std::size_t done = 0;
               for (; done < todo.size(); ++done) {
                 gSlopeStore.Rate(todo[done].tx, todo[done].tz, sampler, gSlopeFrame);
@@ -1734,21 +2207,25 @@ namespace moho
               }
               gPerf.slopePending = static_cast<int>(todo.size() - done);
               if (gSlopeStore.Built() > 2600u) {
-                gSlopeStore.Trim(gSlopeFrame, 300u);   // an explored 80 km map keeps the tiles near the camera, not all 4096
+                gSlopeStore.Trim(
+                  gSlopeFrame, 300u
+                ); // an explored 80 km map keeps the tiles near the camera, not all 4096
               }
             }
             const double tDraw = NowMs();
             gPerf.slopeRateMs = tDraw - tRate;
 
-            // the colour of a block: the engine's rating of it (the steepest cell inside) as a step; a flat block draws nothing and is not cut up
+            // the colour of a block: the engine's rating of it (the steepest cell inside) as a step; a flat block draws
+            // nothing and is not cut up
             const auto stepOf = [&](const lod::Key& k) {
               return sl::ColorStep(static_cast<float>(gSlopeStore.Block(k.level, k.bx, k.bz)) / 128.0f, gSlope.limit);
             };
 
             SlopeCache& cache = gSlopeCache;
             // Nothing changed since the last frame (camera, heights, view, ratings): replay its quads.
-            const bool same = cache.valid && cache.stamp == stamp && cache.heightEpoch == gHeightEpoch && cache.storeVersion == gSlopeStore.Version() && cache.rbx0 == rbx0 &&
-                              cache.rbz0 == rbz0 && cache.rbx1 == rbx1 && cache.rbz1 == rbz1 && cache.limit == gSlope.limit;
+            const bool same = cache.valid && cache.stamp == stamp && cache.heightEpoch == gHeightEpoch &&
+              cache.storeVersion == gSlopeStore.Version() && cache.rbx0 == rbx0 && cache.rbz0 == rbz0 &&
+              cache.rbx1 == rbx1 && cache.rbz1 == rbz1 && cache.limit == gSlope.limit;
             if (!same) {
               cache.valid = false;
               cache.quads.clear();
@@ -1761,7 +2238,7 @@ namespace moho
               lod::TreeParams params;
               params.th = lod::Thresholds{lod::kSlopeRefinePx, lod::kSlopeMergePx};
               params.maxLeaves = lod::kSlopeMaxLeaves;
-              static lod::Tree tree;   // kept between frames so a frame does not allocate
+              static lod::Tree tree; // kept between frames so a frame does not allocate
               const auto probe = [&](const lod::Key& k) {
                 lod::NodeInfo info = ProbeBlock(ctx, table, k, gPerf.slopeNodesProjected);
                 if (info.visible && stepOf(k) <= 0) {
@@ -1781,17 +2258,25 @@ namespace moho
               sc.projected = &gPerf.slopeNodesProjected;
               sc.table = &table;
               sc.budget.cap = lod::kSlopeQuadCap;
-              // every leaf counts one quad from the start, so the leaves drawn first cannot use up the quads the others need
+              // every leaf counts one quad from the start, so the leaves drawn first cannot use up the quads the others
+              // need
               sc.budget.committed = static_cast<int>(tree.leaves.size());
               sc.out = &cache.quads;
               int minLevel = lod::kRootLevel, maxLevel = 0;
-              const auto make = [&ctx](const int x, const int z) { return ProjectGround(ctx, x, z); };
+              const auto make = [&ctx](const int x, const int z) {
+                return ProjectGround(ctx, x, z);
+              };
               for (const lod::Leaf& leaf : tree.leaves) {
                 const int size = 1 << leaf.key.level;
                 const int wx0 = leaf.key.bx << leaf.key.level, wz0 = leaf.key.bz << leaf.key.level;
                 const int cx1 = std::min(wx0 + size, mapW - 1), cz1 = std::min(wz0 + size, mapH - 1);
                 int ignored = 0;
-                const lod::GroundNode n[4] = {table.Get(wx0, wz0, make, ignored), table.Get(cx1, wz0, make, ignored), table.Get(cx1, cz1, make, ignored), table.Get(wx0, cz1, make, ignored)};
+                const lod::GroundNode n[4] = {
+                  table.Get(wx0, wz0, make, ignored),
+                  table.Get(cx1, wz0, make, ignored),
+                  table.Get(cx1, cz1, make, ignored),
+                  table.Get(wx0, cz1, make, ignored)
+                };
                 if (!n[0].front || !n[1].front || !n[2].front || !n[3].front) {
                   continue;
                 }
@@ -1832,8 +2317,9 @@ namespace moho
         }
       }
 
-      // the build grid: the outlines of the leaves of a quadtree of its own (a block of 2^L cells is a leaf while it is between ~10 and ~20 px big), so lines are every cell where
-      // a cell is big on screen and every 2^L cells where it is small
+      // the build grid: the outlines of the leaves of a quadtree of its own (a block of 2^L cells is a leaf while it is
+      // between ~10 and ~20 px big), so lines are every cell where a cell is big on screen and every 2^L cells where it
+      // is small
       if (gGrid.on) {
         if (moho::CHeightField* const field = ViewHeightField(); field != nullptr) {
           const double tGrid = NowMs();
@@ -1850,10 +2336,12 @@ namespace moho
             const GroundCtx ctx{field, camera, vw, vh, 0.14f};
             lod::NodeTable& table = gGridNodes.Prepare(stamp);
             const int rbx0 = x0 >> lod::kRootLevel, rbz0 = z0 >> lod::kRootLevel;
-            const int rbx1 = (x1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel, rbz1 = (z1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel;
+            const int rbx1 = (x1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel,
+                      rbz1 = (z1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel;
             GridCache& cache = gGridCache;
-            const bool same = cache.valid && cache.stamp == stamp && cache.heightEpoch == gHeightEpoch && cache.rbx0 == rbx0 && cache.rbz0 == rbz0 && cache.rbx1 == rbx1 &&
-                              cache.rbz1 == rbz1 && cache.rgb == gGrid.rgb && cache.alpha == gGrid.alpha;
+            const bool same = cache.valid && cache.stamp == stamp && cache.heightEpoch == gHeightEpoch &&
+              cache.rbx0 == rbx0 && cache.rbz0 == rbz0 && cache.rbx1 == rbx1 && cache.rbz1 == rbz1 &&
+              cache.rgb == gGrid.rgb && cache.alpha == gGrid.alpha;
             if (!same) {
               cache.valid = false;
               cache.segs.clear();
@@ -1869,22 +2357,29 @@ namespace moho
               }
               lod::TreeParams params;
               params.th = lod::Thresholds{lod::kGridRefinePx, lod::kGridMergePx};
-              // The leaf budget follows the screen: leaves are 7-20 px across, so a 2560x1600 view needs more than the 20,000 a 1080p view does. A grid that runs out of
-              // leaves keeps the far ground coarse, and where that border lies moves with every camera change (the grid "switched resolution").
-              // A flat view from above needs area / 100 leaves at the moment every block crosses the 20 px refine threshold together (all cells 10 px), and the budget was
-              // area / 104 (20,000 at 1080p): measured at 2066 x 1294 on the NVIDIA laptop, a zoom in small steps ran into the cap (25,783 of 25,800 leaves) and the far strip of
-              // the view stayed 16-32 cells per block. The scale is twice that now (area / 52); a frame that does not need it does not pay for it (the cap only stops the cutting).
+              // The leaf budget follows the screen: leaves are 7-20 px across, so a 2560x1600 view needs more than the
+              // 20,000 a 1080p view does. A grid that runs out of leaves keeps the far ground coarse, and where that
+              // border lies moves with every camera change (the grid "switched resolution"). A flat view from above
+              // needs area / 100 leaves at the moment every block crosses the 20 px refine threshold together (all
+              // cells 10 px), and the budget was area / 104 (20,000 at 1080p): measured at 2066 x 1294 on the NVIDIA
+              // laptop, a zoom in small steps ran into the cap (25,783 of 25,800 leaves) and the far strip of the view
+              // stayed 16-32 cells per block. The scale is twice that now (area / 52); a frame that does not need it
+              // does not pay for it (the cap only stops the cutting).
               const float budgetScale = 2.0f * std::max(1.0f, vw * vh / (1920.0f * 1080.0f));
               params.maxLeaves = static_cast<int>(static_cast<float>(lod::kGridMaxLeaves) * budgetScale);
               static lod::Tree tree;
-              const auto probe = [&](const lod::Key& k) { return ProbeBlock(ctx, table, k, gPerf.buildGridNodesProjected); };
+              const auto probe = [&](const lod::Key& k) {
+                return ProbeBlock(ctx, table, k, gPerf.buildGridNodesProjected);
+              };
               lod::BuildTree(roots, probe, gGridState, gridTreeFrame, params, tree);
 
               namespace od = moho::editor::overlaydrape;
               od::QuadBudget budget;
               budget.cap = static_cast<int>(static_cast<float>(lod::kGridSegmentCap) * budgetScale);
               budget.committed = static_cast<int>(tree.leaves.size()) * 2;
-              const auto make = [&ctx](const int x, const int z) { return ProjectGround(ctx, x, z); };
+              const auto make = [&ctx](const int x, const int z) {
+                return ProjectGround(ctx, x, z);
+              };
               const auto node = [&](const int x, const int z, od::Node& n) {
                 const lod::GroundNode g = table.Get(x, z, make, gPerf.buildGridNodesProjected);
                 if (!g.front) {
@@ -1893,25 +2388,33 @@ namespace moho
                 n = od::Node{g.x, g.y, g.w, g.z};
                 return true;
               };
-              const auto visible = [&](const float minX, const float minY, const float maxXs, const float maxYs) { return !(maxXs < 0.0f || maxYs < 0.0f || minX > vw || minY > vh); };
+              const auto visible = [&](const float minX, const float minY, const float maxXs, const float maxYs) {
+                return !(maxXs < 0.0f || maxYs < 0.0f || minX > vw || minY > vh);
+              };
               for (const lod::Leaf& leaf : tree.leaves) {
                 const int size = 1 << leaf.key.level;
                 const int wx0 = leaf.key.bx << leaf.key.level, wz0 = leaf.key.bz << leaf.key.level;
                 const int wx1 = wx0 + size, wz1 = wz0 + size;
                 const int sides = lod::GridSides(tree.all, leaf.key);
-                // an edge is drawn from `from` to `to` (integer ground positions; the part past the edge of the map is cut off)
-                const auto edge = [&](const int ax, const int az, const int bx, const int bz, const int coord, const int level) {
+                // an edge is drawn from `from` to `to` (integer ground positions; the part past the edge of the map is
+                // cut off)
+                const auto edge =
+                  [&](const int ax, const int az, const int bx, const int bz, const int coord, const int level) {
                   od::Node a, b;
                   if (!node(ax, az, a) || !node(bx, bz, b)) {
                     return;
                   }
-                  const std::uint32_t alpha = static_cast<std::uint32_t>(lod::GridAlpha(leaf.px, lod::IsMajor(coord, level), gGrid.alpha));
+                  const std::uint32_t alpha =
+                    static_cast<std::uint32_t>(lod::GridAlpha(leaf.px, lod::IsMajor(coord, level), gGrid.alpha));
                   if (alpha == 0u) {
                     return;
                   }
                   const std::uint32_t color = (alpha << 24) | gGrid.rgb;
                   const auto emitSeg = [&](const od::Node& p, const od::Node& q) {
-                    if ((p.x < -8.0f && q.x < -8.0f) || (p.y < -8.0f && q.y < -8.0f) || (p.x > vw + 8.0f && q.x > vw + 8.0f) || (p.y > vh + 8.0f && q.y > vh + 8.0f)) {
+                    if (
+                      (p.x < -8.0f && q.x < -8.0f) || (p.y < -8.0f && q.y < -8.0f) ||
+                      (p.x > vw + 8.0f && q.x > vw + 8.0f) || (p.y > vh + 8.0f && q.y > vh + 8.0f)
+                    ) {
                       return;
                     }
                     cache.segs.push_back(GridSeg{{p.x, q.x}, {p.y, q.y}, {p.z, q.z}, color});
@@ -1919,10 +2422,14 @@ namespace moho
                   od::DrapeEdge(node, visible, emitSeg, budget, ax, az, bx, bz, a, b, 0);
                 };
                 const int cx1 = std::min(wx1, mapW - 1), cz1 = std::min(wz1, mapH - 1);
-                if ((sides & lod::kLeft) != 0) edge(wx0, wz0, wx0, cz1, wx0, leaf.key.level);
-                if ((sides & lod::kTop) != 0) edge(wx0, wz0, cx1, wz0, wz0, leaf.key.level);
-                if ((sides & lod::kRight) != 0 && wx1 <= mapW - 1) edge(wx1, wz0, wx1, cz1, wx1, leaf.key.level);
-                if ((sides & lod::kBottom) != 0 && wz1 <= mapH - 1) edge(wx0, wz1, cx1, wz1, wz1, leaf.key.level);
+                if ((sides & lod::kLeft) != 0)
+                  edge(wx0, wz0, wx0, cz1, wx0, leaf.key.level);
+                if ((sides & lod::kTop) != 0)
+                  edge(wx0, wz0, cx1, wz0, wz0, leaf.key.level);
+                if ((sides & lod::kRight) != 0 && wx1 <= mapW - 1)
+                  edge(wx1, wz0, wx1, cz1, wx1, leaf.key.level);
+                if ((sides & lod::kBottom) != 0 && wz1 <= mapH - 1)
+                  edge(wx0, wz1, cx1, wz1, wz1, leaf.key.level);
               }
               cache.stamp = stamp;
               cache.heightEpoch = gHeightEpoch;
@@ -1955,7 +2462,7 @@ namespace moho
         const double tGrids = NowMs();
         groundPass();
         namespace od = moho::editor::overlaydrape;
-        static std::vector<DrapeQuad> gridQuads;   // kept between frames so a frame does not allocate
+        static std::vector<DrapeQuad> gridQuads; // kept between frames so a frame does not allocate
         gridQuads.clear();
         DrapeScene sc;
         sc.field = field;
@@ -1983,25 +2490,63 @@ namespace moho
           pg.Prepare(g.x0, g.z0, g.nw, g.nh, g.step, 0.14f, stamp);
           pg.usedFrame = gridFrame;
           const auto colorAt = [&g](const int i, const int j) {
-            return (moho::editor::overlaynodes::NodeAlpha(g.v[static_cast<std::size_t>(j) * g.nw + i], g.maxAlpha) << 24) | g.rgb;
+            return (moho::editor::overlaynodes::NodeAlpha(g.v[static_cast<std::size_t>(j) * g.nw + i], g.maxAlpha)
+                    << 24) |
+              g.rgb;
           };
           for (const moho::editor::overlaynodes::Run& run : g.runs) {
             // a long run is split where the ground is not straight (FitRun)
             int pos = 0;
             while (pos < run.len) {
               const int i = run.i + pos, j = run.j;
-              const int len = run.len > 1 ? FitRun(pg, *field, *camera, vw, vh, i, j, run.len - pos, gPerf.gridNodesProjected) : 1;
+              const int len =
+                run.len > 1 ? FitRun(pg, *field, *camera, vw, vh, i, j, run.len - pos, gPerf.gridNodesProjected) : 1;
               pos += len;
-              // the corners with their clip w; the patch (a run of cells of a coarse grid) is draped over the ground between them (DrapeRect)
+              // the corners with their clip w; the patch (a run of cells of a coarse grid) is draped over the ground
+              // between them (DrapeRect)
               od::Node pre[4];
-              if (!pg.Get(*field, *camera, vw, vh, i, j, pre[0].x, pre[0].y, gPerf.gridNodesProjected, &pre[0].w, &pre[0].z) ||
-                  !pg.Get(*field, *camera, vw, vh, i + len, j, pre[1].x, pre[1].y, gPerf.gridNodesProjected, &pre[1].w, &pre[1].z) ||
-                  !pg.Get(*field, *camera, vw, vh, i + len, j + 1, pre[2].x, pre[2].y, gPerf.gridNodesProjected, &pre[2].w, &pre[2].z) ||
-                  !pg.Get(*field, *camera, vw, vh, i, j + 1, pre[3].x, pre[3].y, gPerf.gridNodesProjected, &pre[3].w, &pre[3].z)) {
+              if (
+                !pg.Get(
+                  *field, *camera, vw, vh, i, j, pre[0].x, pre[0].y, gPerf.gridNodesProjected, &pre[0].w, &pre[0].z
+                ) ||
+                !pg.Get(
+                  *field,
+                  *camera,
+                  vw,
+                  vh,
+                  i + len,
+                  j,
+                  pre[1].x,
+                  pre[1].y,
+                  gPerf.gridNodesProjected,
+                  &pre[1].w,
+                  &pre[1].z
+                ) ||
+                !pg.Get(
+                  *field,
+                  *camera,
+                  vw,
+                  vh,
+                  i + len,
+                  j + 1,
+                  pre[2].x,
+                  pre[2].y,
+                  gPerf.gridNodesProjected,
+                  &pre[2].w,
+                  &pre[2].z
+                ) ||
+                !pg.Get(
+                  *field, *camera, vw, vh, i, j + 1, pre[3].x, pre[3].y, gPerf.gridNodesProjected, &pre[3].w, &pre[3].z
+                )
+              ) {
                 continue;
               }
-              const std::uint32_t col[4] = {colorAt(i, j), colorAt(i + len, j), colorAt(i + len, j + 1), colorAt(i, j + 1)};
-              DrapeRect(sc, g.x0 + i * g.step, g.z0 + j * g.step, g.x0 + (i + len) * g.step, g.z0 + (j + 1) * g.step, col, pre);
+              const std::uint32_t col[4] = {
+                colorAt(i, j), colorAt(i + len, j), colorAt(i + len, j + 1), colorAt(i, j + 1)
+              };
+              DrapeRect(
+                sc, g.x0 + i * g.step, g.z0 + j * g.step, g.x0 + (i + len) * g.step, g.z0 + (j + 1) * g.step, col, pre
+              );
             }
           }
         }
@@ -2019,8 +2564,9 @@ namespace moho
         gPerf.gridsMs = NowMs() - tGrids;
       }
 
-      // field overlays (ed_overlay_field): a quadtree of ground blocks per field, cut up by their size on screen, the field reduced per block corner (EdOverlayField.h), draped over the
-      // ground and depth tested like the other ground layers
+      // field overlays (ed_overlay_field): a quadtree of ground blocks per field, cut up by their size on screen, the
+      // field reduced per block corner (EdOverlayField.h), draped over the ground and depth tested like the other
+      // ground layers
       if (!FieldLayers().empty()) {
         if (moho::CHeightField* const field = ViewHeightField(); field != nullptr) {
           namespace of = moho::editor::overlayfield;
@@ -2033,37 +2579,46 @@ namespace moho
           ++fieldFrame;
           const GroundCtx ctx{field, camera, vw, vh, 0.14f};
           lod::NodeTable& table = gFieldNodes.Prepare(stamp);
-          const auto make = [&ctx](const int x, const int z) { return ProjectGround(ctx, x, z); };
-          static lod::Tree tree;   // kept between frames so a frame does not allocate
+          const auto make = [&ctx](const int x, const int z) {
+            return ProjectGround(ctx, x, z);
+          };
+          static lod::Tree tree; // kept between frames so a frame does not allocate
           for (auto& entry : FieldLayers()) {
             FieldLayer& fl = entry.second;
             if (fl.pyr.Empty()) {
               continue;
             }
-            // While the camera moves the tree is rebuilt every frame: it is built coarser then (2.5 times the block size on screen, a quarter of the leaves) and once at full detail
-            // as soon as the camera has stopped.
+            // While the camera moves the tree is rebuilt every frame: it is built coarser then (2.5 times the block
+            // size on screen, a quarter of the leaves) and once at full detail as soon as the camera has stopped.
             const bool moving = fl.seenValid && fl.seen != stamp;
             fl.seen = stamp;
             fl.seenValid = true;
-            const bool same = fl.valid && fl.stamp == stamp && fl.heightEpoch == gHeightEpoch && fl.cachedVersion == fl.version && (fl.detailed || moving);
+            const bool same = fl.valid && fl.stamp == stamp && fl.heightEpoch == gHeightEpoch &&
+              fl.cachedVersion == fl.version && (fl.detailed || moving);
             if (!same) {
               fl.valid = false;
               fl.quads.clear();
               const of::Placement& pl = fl.place;
               // the root blocks over the part of the map the field covers
-              const int x0 = std::max(0, static_cast<int>(std::floor(of::ExtentMinX(pl)))), z0 = std::max(0, static_cast<int>(std::floor(of::ExtentMinZ(pl))));
-              const int x1 = std::min(mapW - 1, static_cast<int>(std::ceil(of::ExtentMaxX(pl)))), z1 = std::min(mapH - 1, static_cast<int>(std::ceil(of::ExtentMaxZ(pl))));
+              const int x0 = std::max(0, static_cast<int>(std::floor(of::ExtentMinX(pl)))),
+                        z0 = std::max(0, static_cast<int>(std::floor(of::ExtentMinZ(pl))));
+              const int x1 = std::min(mapW - 1, static_cast<int>(std::ceil(of::ExtentMaxX(pl)))),
+                        z1 = std::min(mapH - 1, static_cast<int>(std::ceil(of::ExtentMaxZ(pl))));
               const auto probe = [&](const lod::Key& k) {
                 lod::NodeInfo info = ProbeBlock(ctx, table, k, gPerf.fieldNodesProjected);
-                if (info.visible && of::BlockMaxLevel(fl.pyr, pl, k.bx << k.level, k.bz << k.level, 1 << k.level) <= 0.0f) {
-                  info.visible = false;   // nothing of the field in or around this block
+                if (
+                  info.visible && of::BlockMaxLevel(fl.pyr, pl, k.bx << k.level, k.bz << k.level, 1 << k.level) <= 0.0f
+                ) {
+                  info.visible = false; // nothing of the field in or around this block
                 }
                 return info;
               };
               std::vector<lod::Candidate> roots;
               if (x1 > x0 && z1 > z0) {
-                for (int bz = z0 >> lod::kRootLevel; bz < ((z1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel); ++bz) {
-                  for (int bx = x0 >> lod::kRootLevel; bx < ((x1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel); ++bx) {
+                for (int bz = z0 >> lod::kRootLevel; bz < ((z1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel);
+                     ++bz) {
+                  for (int bx = x0 >> lod::kRootLevel; bx < ((x1 + (1 << lod::kRootLevel) - 1) >> lod::kRootLevel);
+                       ++bx) {
                     const lod::Key k{lod::kRootLevel, bx, bz};
                     const lod::NodeInfo info = probe(k);
                     if (info.visible) {
@@ -2088,7 +2643,7 @@ namespace moho
               sc.projected = &gPerf.fieldNodesProjected;
               sc.table = &table;
               sc.budget.cap = of::kQuadCap;
-              sc.budget.committed = static_cast<int>(tree.leaves.size());   // every leaf counts one quad from the start
+              sc.budget.committed = static_cast<int>(tree.leaves.size()); // every leaf counts one quad from the start
               sc.out = &fl.quads;
               int minLevel = lod::kRootLevel, maxLevel = 0;
               for (const lod::Leaf& leaf : tree.leaves) {
@@ -2096,7 +2651,12 @@ namespace moho
                 const int wx0 = leaf.key.bx << leaf.key.level, wz0 = leaf.key.bz << leaf.key.level;
                 const int cx1 = std::min(wx0 + size, mapW - 1), cz1 = std::min(wz0 + size, mapH - 1);
                 int ignored = 0;
-                const lod::GroundNode n[4] = {table.Get(wx0, wz0, make, ignored), table.Get(cx1, wz0, make, ignored), table.Get(cx1, cz1, make, ignored), table.Get(wx0, cz1, make, ignored)};
+                const lod::GroundNode n[4] = {
+                  table.Get(wx0, wz0, make, ignored),
+                  table.Get(cx1, wz0, make, ignored),
+                  table.Get(cx1, cz1, make, ignored),
+                  table.Get(wx0, cz1, make, ignored)
+                };
                 if (!n[0].front || !n[1].front || !n[2].front || !n[3].front) {
                   continue;
                 }
@@ -2108,7 +2668,12 @@ namespace moho
                 for (int k = 0; k < 4; ++k) {
                   pre[k] = od::Node{n[k].x, n[k].y, n[k].w, n[k].z};
                 }
-                const std::uint32_t col[4] = {(alpha[0] << 24) | fl.rgb, (alpha[1] << 24) | fl.rgb, (alpha[2] << 24) | fl.rgb, (alpha[3] << 24) | fl.rgb};
+                const std::uint32_t col[4] = {
+                  (alpha[0] << 24) | fl.rgb,
+                  (alpha[1] << 24) | fl.rgb,
+                  (alpha[2] << 24) | fl.rgb,
+                  (alpha[3] << 24) | fl.rgb
+                };
                 sc.growMask = lod::GrowSides(tree.internal, leaf.key);
                 sc.maxDepth = leaf.px < kSlopeNoCutPx ? 0 : od::kMaxDepth;
                 DrapeRect(sc, wx0, wz0, wx0 + size, wz0 + size, col, pre);
@@ -2140,7 +2705,7 @@ namespace moho
       gHashAcc = 2166136261u;
       gHashQuads = 0u;
       UpdateLineCache(*camera, vw, vh);
-      DrawQuadList(*batcher, gLineCache.halo);       // dark halos first, then every line on top of all of them
+      DrawQuadList(*batcher, gLineCache.halo); // dark halos first, then every line on top of all of them
       DrawQuadList(*batcher, gLineCache.line);
       batcher->Flush();
 

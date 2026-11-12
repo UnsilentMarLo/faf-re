@@ -1,13 +1,13 @@
 // Editor natives for the mesh terrain (EdMeshTerrain.h, EdMeshData.h):
 //
-//   ed_mesh_load(manifestVfsPath)       -> true | nil, why          reads the manifest and its patches (any mounted folder or archive)
-//   ed_mesh_unload()
-//   ed_mesh_mode([mode])                -> mode                     0 height field, 1 mesh, 2 both; a number sets it
-//   ed_mesh_info()                      -> table | nil              loaded map: counts, size, playable, water, heights, last draw time
-//   ed_mesh_height(x, z [, ceiling])    -> y | nil                  highest mesh surface under the point at or below `ceiling`
-//   ed_mesh_ray(ox, oy, oz, dx, dy, dz [, maxDistance]) -> t, x, y, z, nx, ny, nz, patch, material | nil     (1 based patch and material numbers)
-//   ed_mesh_pick(px, py, vw, vh)        -> ray hit under a pixel of the world view (see below)
-//   ed_mesh_range([margin])             -> low, high | nil          lowest / highest vertex inside the playable rectangle grown by `margin` (default 32)
+//   ed_mesh_load(manifestVfsPath)       -> true | nil, why          reads the manifest and its patches (any mounted
+//   folder or archive) ed_mesh_unload() ed_mesh_mode([mode])                -> mode                     0 height field,
+//   1 mesh, 2 both; a number sets it ed_mesh_info()                      -> table | nil              loaded map:
+//   counts, size, playable, water, heights, last draw time ed_mesh_height(x, z [, ceiling])    -> y | nil highest mesh
+//   surface under the point at or below `ceiling` ed_mesh_ray(ox, oy, oz, dx, dy, dz [, maxDistance]) -> t, x, y, z,
+//   nx, ny, nz, patch, material | nil     (1 based patch and material numbers) ed_mesh_pick(px, py, vw, vh)        ->
+//   ray hit under a pixel of the world view (see below) ed_mesh_range([margin])             -> low, high | nil lowest /
+//   highest vertex inside the playable rectangle grown by `margin` (default 32)
 
 #include <cmath>
 #include <cstdint>
@@ -21,21 +21,31 @@
 
 namespace
 {
-  void Put(lua_State* const L, const char* const key, const double value)
+  void Put(
+    lua_State* const L,
+    const char* const key,
+    const double value
+  )
   {
     lua_pushstring(L, key);
     lua_pushnumber(L, static_cast<lua_Number>(value));
     lua_settable(L, -3);
   }
 
-  void PutString(lua_State* const L, const char* const key, const std::string& value)
+  void PutString(
+    lua_State* const L,
+    const char* const key,
+    const std::string& value
+  )
   {
     lua_pushstring(L, key);
     lua_pushstring(L, value.c_str());
     lua_settable(L, -3);
   }
 
-  int __cdecl cfunc_EdMeshLoad(lua_State* const L)
+  int __cdecl cfunc_EdMeshLoad(
+    lua_State* const L
+  )
   {
     const char* const path = lua_tostring(L, 1);
     if (path == nullptr) {
@@ -56,7 +66,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdMeshUnload(lua_State* const L)
+  int __cdecl cfunc_EdMeshUnload(
+    lua_State* const L
+  )
   {
     (void)L;
     moho::edmesh::ReleaseGpu();
@@ -65,17 +77,25 @@ namespace
     return 0;
   }
 
-  int __cdecl cfunc_EdMeshMode(lua_State* const L)
+  int __cdecl cfunc_EdMeshMode(
+    lua_State* const L
+  )
   {
     if (lua_type(L, 1) == LUA_TNUMBER) {
       const int mode = static_cast<int>(lua_tonumber(L, 1));
-      moho::edmesh::SetMode(mode <= 0 ? moho::edmesh::Mode::HeightField : mode == 1 ? moho::edmesh::Mode::Mesh : moho::edmesh::Mode::Both);
+      moho::edmesh::SetMode(
+        mode <= 0     ? moho::edmesh::Mode::HeightField
+          : mode == 1 ? moho::edmesh::Mode::Mesh
+                      : moho::edmesh::Mode::Both
+      );
     }
     lua_pushnumber(L, static_cast<lua_Number>(static_cast<int>(moho::edmesh::GetMode())));
     return 1;
   }
 
-  int __cdecl cfunc_EdMeshInfo(lua_State* const L)
+  int __cdecl cfunc_EdMeshInfo(
+    lua_State* const L
+  )
   {
     const moho::edmesh::MeshMap& m = moho::edmesh::Map();
     if (!m.Loaded()) {
@@ -110,7 +130,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdMeshHeight(lua_State* const L)
+  int __cdecl cfunc_EdMeshHeight(
+    lua_State* const L
+  )
   {
     const float x = static_cast<float>(luaL_checknumber(L, 1));
     const float z = static_cast<float>(luaL_checknumber(L, 2));
@@ -124,7 +146,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdMeshRay(lua_State* const L)
+  int __cdecl cfunc_EdMeshRay(
+    lua_State* const L
+  )
   {
     float o[3], d[3];
     for (int i = 0; i < 3; ++i) {
@@ -145,28 +169,55 @@ namespace
       lua_pushnil(L);
       return 1;
     }
-    const lua_Number values[9] = {hit.t,          hit.position[0], hit.position[1], hit.position[2], hit.normal[0],
-                                  hit.normal[1],  hit.normal[2],   static_cast<lua_Number>(hit.patch + 1), static_cast<lua_Number>(hit.material + 1)};
+    const lua_Number values[9] = {
+      hit.t,
+      hit.position[0],
+      hit.position[1],
+      hit.position[2],
+      hit.normal[0],
+      hit.normal[1],
+      hit.normal[2],
+      static_cast<lua_Number>(hit.patch + 1),
+      static_cast<lua_Number>(hit.material + 1)
+    };
     for (const lua_Number v : values) {
       lua_pushnumber(L, v);
     }
     return 9;
   }
 
-  // ed_mesh_pick(px, py, vw, vh) -> the same as ed_mesh_ray for the ray under that pixel of the world view; the ray itself when the mesh is not hit:
+  // ed_mesh_pick(px, py, vw, vh) -> the same as ed_mesh_ray for the ray under that pixel of the world view; the ray
+  // itself when the mesh is not hit:
   //   t, x, y, z, nx, ny, nz, patch, material | nil, ox, oy, oz, dx, dy, dz
-  int __cdecl cfunc_EdMeshPick(lua_State* const L)
+  int __cdecl cfunc_EdMeshPick(
+    lua_State* const L
+  )
   {
     float o[3], d[3];
-    if (!moho::edmesh::CameraRay(static_cast<float>(luaL_checknumber(L, 1)), static_cast<float>(luaL_checknumber(L, 2)),
-                                 static_cast<float>(luaL_checknumber(L, 3)), static_cast<float>(luaL_checknumber(L, 4)), o, d)) {
+    if (!moho::edmesh::CameraRay(
+          static_cast<float>(luaL_checknumber(L, 1)),
+          static_cast<float>(luaL_checknumber(L, 2)),
+          static_cast<float>(luaL_checknumber(L, 3)),
+          static_cast<float>(luaL_checknumber(L, 4)),
+          o,
+          d
+        )) {
       lua_pushnil(L);
       return 1;
     }
     moho::edmesh::RayHit hit;
     if (moho::edmesh::Map().Raycast(o, d, 1e9f, hit)) {
-      const lua_Number values[9] = {hit.t,          hit.position[0], hit.position[1], hit.position[2], hit.normal[0],
-                                    hit.normal[1],  hit.normal[2],   static_cast<lua_Number>(hit.patch + 1), static_cast<lua_Number>(hit.material + 1)};
+      const lua_Number values[9] = {
+        hit.t,
+        hit.position[0],
+        hit.position[1],
+        hit.position[2],
+        hit.normal[0],
+        hit.normal[1],
+        hit.normal[2],
+        static_cast<lua_Number>(hit.patch + 1),
+        static_cast<lua_Number>(hit.material + 1)
+      };
       for (const lua_Number v : values) {
         lua_pushnumber(L, v);
       }
@@ -182,7 +233,9 @@ namespace
     return 7;
   }
 
-  int __cdecl cfunc_EdMeshRange(lua_State* const L)
+  int __cdecl cfunc_EdMeshRange(
+    lua_State* const L
+  )
   {
     const float margin = lua_type(L, 1) == LUA_TNUMBER ? static_cast<float>(lua_tonumber(L, 1)) : 32.0f;
     float low = 0.0f, high = 0.0f;
@@ -209,16 +262,45 @@ namespace
     EdMeshLuaBootstrap()
     {
       auto& set = UserLuaInitSet();
-      (void)new moho::CScrLuaBinder(set, "ed_mesh_load", &cfunc_EdMeshLoad, nullptr, "<global>", "ed_mesh_load(manifestVfsPath) -> true | nil, why");
-      (void)new moho::CScrLuaBinder(set, "ed_mesh_unload", &cfunc_EdMeshUnload, nullptr, "<global>", "ed_mesh_unload()");
-      (void)new moho::CScrLuaBinder(set, "ed_mesh_mode", &cfunc_EdMeshMode, nullptr, "<global>", "ed_mesh_mode([mode]) -> mode (0 height field, 1 mesh, 2 both)");
-      (void)new moho::CScrLuaBinder(set, "ed_mesh_info", &cfunc_EdMeshInfo, nullptr, "<global>", "ed_mesh_info() -> table | nil");
-      (void)new moho::CScrLuaBinder(set, "ed_mesh_height", &cfunc_EdMeshHeight, nullptr, "<global>", "ed_mesh_height(x, z [, ceiling]) -> y | nil");
-      (void)new moho::CScrLuaBinder(set, "ed_mesh_ray", &cfunc_EdMeshRay, nullptr, "<global>",
-                                    "ed_mesh_ray(ox, oy, oz, dx, dy, dz [, maxDistance]) -> t, x, y, z, nx, ny, nz, patch, material | nil");
-      (void)new moho::CScrLuaBinder(set, "ed_mesh_pick", &cfunc_EdMeshPick, nullptr, "<global>",
-                                    "ed_mesh_pick(px, py, vw, vh) -> t, x, y, z, nx, ny, nz, patch, material | nil, ox, oy, oz, dx, dy, dz");
-      (void)new moho::CScrLuaBinder(set, "ed_mesh_range", &cfunc_EdMeshRange, nullptr, "<global>", "ed_mesh_range([margin]) -> low, high | nil");
+      (void)new moho::CScrLuaBinder(
+        set, "ed_mesh_load", &cfunc_EdMeshLoad, nullptr, "<global>", "ed_mesh_load(manifestVfsPath) -> true | nil, why"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_mesh_unload", &cfunc_EdMeshUnload, nullptr, "<global>", "ed_mesh_unload()"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_mesh_mode",
+        &cfunc_EdMeshMode,
+        nullptr,
+        "<global>",
+        "ed_mesh_mode([mode]) -> mode (0 height field, 1 mesh, 2 both)"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_mesh_info", &cfunc_EdMeshInfo, nullptr, "<global>", "ed_mesh_info() -> table | nil"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_mesh_height", &cfunc_EdMeshHeight, nullptr, "<global>", "ed_mesh_height(x, z [, ceiling]) -> y | nil"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_mesh_ray",
+        &cfunc_EdMeshRay,
+        nullptr,
+        "<global>",
+        "ed_mesh_ray(ox, oy, oz, dx, dy, dz [, maxDistance]) -> t, x, y, z, nx, ny, nz, patch, material | nil"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_mesh_pick",
+        &cfunc_EdMeshPick,
+        nullptr,
+        "<global>",
+        "ed_mesh_pick(px, py, vw, vh) -> t, x, y, z, nx, ny, nz, patch, material | nil, ox, oy, oz, dx, dy, dz"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_mesh_range", &cfunc_EdMeshRange, nullptr, "<global>", "ed_mesh_range([margin]) -> low, high | nil"
+      );
     }
   };
 

@@ -72,8 +72,8 @@ namespace moho
     [[nodiscard]] static CD3DTextureBatcher& GetArgbAtlas();
 
     /**
-     * Editor addition: the device is being reset or destroyed. The sheet is released; the next `GetCompositeTexture` creates
-     * a new one and uploads the retained CPU copy of the whole atlas.
+     * Editor addition: the device is being reset or destroyed. The sheet is released; the next `GetCompositeTexture`
+     * creates a new one and uploads the retained CPU copy of the whole atlas.
      */
     void OnDeviceExit();
 
@@ -158,11 +158,17 @@ namespace moho
     std::int32_t mFormat = 12;              // editor addition: gal format token of the atlas sheet
   };
 
-  static_assert(sizeof(CD3DTextureBatcher::TextureAtlasEntry) == 0x18, "CD3DTextureBatcher::TextureAtlasEntry size must be 0x18");
+  static_assert(
+    sizeof(CD3DTextureBatcher::TextureAtlasEntry) == 0x18,
+    "CD3DTextureBatcher::TextureAtlasEntry size must be 0x18"
+  );
   static_assert(offsetof(CD3DTextureBatcher, mWidth) == 0x00, "CD3DTextureBatcher::mWidth offset must be 0x00");
   static_assert(offsetof(CD3DTextureBatcher, mHeight) == 0x04, "CD3DTextureBatcher::mHeight offset must be 0x04");
   static_assert(offsetof(CD3DTextureBatcher, mRects) == 0x08, "CD3DTextureBatcher::mRects offset must be 0x08");
-  static_assert(offsetof(CD3DTextureBatcher, mDynTexSheet) == 0x18, "CD3DTextureBatcher::mDynTexSheet offset must be 0x18");
+  static_assert(
+    offsetof(CD3DTextureBatcher, mDynTexSheet) == 0x18,
+    "CD3DTextureBatcher::mDynTexSheet offset must be 0x18"
+  );
   static_assert(offsetof(CD3DTextureBatcher, mMap) == 0x20, "CD3DTextureBatcher::mMap offset must be 0x20");
   static_assert(offsetof(CD3DTextureBatcher, mDirty) == 0x2C, "CD3DTextureBatcher::mDirty offset must be 0x2C");
   static_assert(offsetof(CD3DTextureBatcher, mPixels) == 0x30, "CD3DTextureBatcher::mPixels offset must be 0x30");

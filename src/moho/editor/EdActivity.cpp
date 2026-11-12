@@ -49,7 +49,9 @@ namespace moho::editor::activity
     }
 
     /** Every change goes through here: the tracker's epoch moves and the time of the change is kept (sinceChangeMs). */
-    void TouchNow(const std::uint32_t reasons)
+    void TouchNow(
+      const std::uint32_t reasons
+    )
     {
       if (reasons != 0u) {
         gTracker.Touch(reasons);
@@ -94,12 +96,17 @@ namespace moho::editor::activity
       const GeomCamera3& view = camera->CameraGetView();
       CameraStamp now;
       now.valid = true;
-      static_assert(sizeof(now.viewProjection) == sizeof(view.viewProjection), "GeomCamera3::viewProjection is 16 floats");
+      static_assert(
+        sizeof(now.viewProjection) == sizeof(view.viewProjection), "GeomCamera3::viewProjection is 16 floats"
+      );
       static_assert(sizeof(now.viewport) == sizeof(view.viewport), "GeomCamera3::viewport is 16 floats");
       std::memcpy(now.viewProjection, &view.viewProjection, sizeof(now.viewProjection));
       std::memcpy(now.viewport, &view.viewport, sizeof(now.viewport));
-      if (gCameraStamp.valid && (std::memcmp(gCameraStamp.viewProjection, now.viewProjection, sizeof(now.viewProjection)) != 0 ||
-                                 std::memcmp(gCameraStamp.viewport, now.viewport, sizeof(now.viewport)) != 0)) {
+      if (
+        gCameraStamp.valid &&
+        (std::memcmp(gCameraStamp.viewProjection, now.viewProjection, sizeof(now.viewProjection)) != 0 ||
+         std::memcmp(gCameraStamp.viewport, now.viewport, sizeof(now.viewport)) != 0)
+      ) {
         TouchNow(kCamera);
       }
       gCameraStamp = now;
@@ -110,8 +117,10 @@ namespace moho::editor::activity
       std::uint32_t bits = 0;
       CWldSession* const session = WLD_GetActiveSession();
       if (session != nullptr) {
-        if (session->mWldMap != nullptr && session->mWldMap->mTerrainRes != nullptr && session->mWldMap->mTerrainRes->mMap != nullptr &&
-            session->mWldMap->mTerrainRes->mMap->mWaterEnabled != 0) {
+        if (
+          session->mWldMap != nullptr && session->mWldMap->mTerrainRes != nullptr &&
+          session->mWldMap->mTerrainRes->mMap != nullptr && session->mWldMap->mTerrainRes->mMap->mWaterEnabled != 0
+        ) {
           bits |= kAmbientWater;
         }
         if (gLastGameTick >= 0 && session->mGameTick != gLastGameTick) {
@@ -126,7 +135,9 @@ namespace moho::editor::activity
     }
 
     // ed_scene_dirty([consume]) -> epoch, reasons, ambient
-    int __cdecl cfunc_EdSceneDirty(lua_State* const L)
+    int __cdecl cfunc_EdSceneDirty(
+      lua_State* const L
+    )
     {
       const bool consume = lua_type(L, 1) == LUA_TNIL || lua_toboolean(L, 1) != 0;
       PollCamera();
@@ -138,15 +149,22 @@ namespace moho::editor::activity
     }
 
     // ed_scene_touch([reasons]) -> epoch
-    int __cdecl cfunc_EdSceneTouch(lua_State* const L)
+    int __cdecl cfunc_EdSceneTouch(
+      lua_State* const L
+    )
     {
-      const std::uint32_t reasons = lua_type(L, 1) == LUA_TNUMBER ? static_cast<std::uint32_t>(lua_tonumber(L, 1)) : static_cast<std::uint32_t>(kScript);
+      const std::uint32_t reasons = lua_type(L, 1) == LUA_TNUMBER ? static_cast<std::uint32_t>(lua_tonumber(L, 1))
+                                                                  : static_cast<std::uint32_t>(kScript);
       TouchNow(reasons != 0u ? reasons : static_cast<std::uint32_t>(kScript));
       lua_pushnumber(L, static_cast<lua_Number>(gTracker.Epoch()));
       return 1;
     }
 
-    void PutNumber(lua_State* const L, const char* const key, const double value)
+    void PutNumber(
+      lua_State* const L,
+      const char* const key,
+      const double value
+    )
     {
       lua_pushstring(L, key);
       lua_pushnumber(L, static_cast<lua_Number>(value));
@@ -158,8 +176,11 @@ namespace moho::editor::activity
     //   focused        1 when a window of this process has the foreground
     //   sinceChangeMs  ms since the scene epoch last moved (as seen by ed_scene_dirty; poll it for this to be current)
     //   inputs         how many input changes were seen by the polls so far
-    //   wait           RecommendedWaitMs for a hold time of 2 s: 0 = draw at the full rate, else the longest the pacer may wait between frames
-    int __cdecl cfunc_EdSceneActivity(lua_State* const L)
+    //   wait           RecommendedWaitMs for a hold time of 2 s: 0 = draw at the full rate, else the longest the pacer
+    //   may wait between frames
+    int __cdecl cfunc_EdSceneActivity(
+      lua_State* const L
+    )
     {
       PollCamera();
       const std::uint32_t now = NowTick();
@@ -194,18 +215,35 @@ namespace moho::editor::activity
       EdActivityLuaBootstrap()
       {
         auto& set = UserLuaInitSet();
-        (void)new CScrLuaBinder(set, "ed_scene_dirty", &cfunc_EdSceneDirty, nullptr, "<global>",
-                                "ed_scene_dirty([consume=true]) -> epoch, reasons (1 camera, 2 overlay, 4 heights, 8 script), ambient (1 water, 2 sky, 4 simulation ticks)");
-        (void)new CScrLuaBinder(set, "ed_scene_touch", &cfunc_EdSceneTouch, nullptr, "<global>", "ed_scene_touch([reasons=8]) -> epoch");
-        (void)new CScrLuaBinder(set, "ed_scene_activity", &cfunc_EdSceneActivity, nullptr, "<global>",
-                                "ed_scene_activity() -> { idleMs, focused, sinceChangeMs, inputs, wait }");
+        (void)new CScrLuaBinder(
+          set,
+          "ed_scene_dirty",
+          &cfunc_EdSceneDirty,
+          nullptr,
+          "<global>",
+          "ed_scene_dirty([consume=true]) -> epoch, reasons (1 camera, 2 overlay, 4 heights, 8 script), ambient (1 "
+          "water, 2 sky, 4 simulation ticks)"
+        );
+        (void)new CScrLuaBinder(
+          set, "ed_scene_touch", &cfunc_EdSceneTouch, nullptr, "<global>", "ed_scene_touch([reasons=8]) -> epoch"
+        );
+        (void)new CScrLuaBinder(
+          set,
+          "ed_scene_activity",
+          &cfunc_EdSceneActivity,
+          nullptr,
+          "<global>",
+          "ed_scene_activity() -> { idleMs, focused, sinceChangeMs, inputs, wait }"
+        );
       }
     };
 
     const EdActivityLuaBootstrap gEdActivityLuaBootstrap{};
   } // namespace
 
-  void Touch(const std::uint32_t reasons) noexcept
+  void Touch(
+    const std::uint32_t reasons
+  ) noexcept
   {
     TouchNow(reasons);
   }

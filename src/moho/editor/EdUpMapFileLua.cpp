@@ -1,26 +1,34 @@
-// EDITOR: the "up" natives of the exact save (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP3): upstream's classic `.scmap` writer with its
-// stored records, the text-preserving `_save.lua` / `_scenario.lua` edit and the vault zip, bound to Lua over EdUpCommon.h. The logic is upstream's
-// (src/editor/doc/EdMapFile, EdImageChunks, EdSaveFile, EdLuaText, EdPackage); this unit holds only what ours adds to it: where the "unchanged" evidence comes
-// from (the live heights, water and masks of the session, not an EdDocument), the round trip check, and the table <-> struct glue.
+// EDITOR: the "up" natives of the exact save (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP3):
+// upstream's classic `.scmap` writer with its stored records, the text-preserving `_save.lua` / `_scenario.lua` edit
+// and the vault zip, bound to Lua over EdUpCommon.h. The logic is upstream's (src/editor/doc/EdMapFile, EdImageChunks,
+// EdSaveFile, EdLuaText, EdPackage); this unit holds only what ours adds to it: where the "unchanged" evidence comes
+// from (the live heights, water and masks of the session, not an EdDocument), the round trip check, and the table <->
+// struct glue.
 //
 //   ed_mapfile_capture(vfsMapPath)       -> { images = n, props = n, preview = bytes } | nil, message
-//        Reads the records of the file the open session's map was loaded from (the preview chunk, the DDS image chunks, the props' 15 floats) and remembers
-//        what the writer needs to tell "unchanged" later: a hash of the heights, the water levels and planes, the strata mask revision. Call it right after
-//        the map is loaded, before anything is edited (map.lua LoadDocument does).
-//   ed_mapfile_state()                   -> { captured, heights, water, masks, images, props } (heights / water / masks: still as captured)
-//   ed_mapfile_save(diskPath[, { engine = bool }]) -> { writer = 'exact' | 'engine', kept = n, images = n } | nil, message
-//        'exact': upstream's WriteMapFile with the captured records: an untouched map writes the bytes it was read from, an edited one changes only what was
-//        edited. 'engine': CWldMap::MapSaveToDiskPath, used when `engine = true` (mesh terrain maps), when nothing was captured, or when the captured file was
-//        not a classic v2 `.scmap` (container 3 / 4 maps keep the engine's own writer; this writer is version 60 only).
+//        Reads the records of the file the open session's map was loaded from (the preview chunk, the DDS image chunks,
+//        the props' 15 floats) and remembers what the writer needs to tell "unchanged" later: a hash of the heights,
+//        the water levels and planes, the strata mask revision. Call it right after the map is loaded, before anything
+//        is edited (map.lua LoadDocument does).
+//   ed_mapfile_state()                   -> { captured, heights, water, masks, images, props } (heights / water /
+//   masks: still as captured) ed_mapfile_save(diskPath[, { engine = bool }]) -> { writer = 'exact' | 'engine', kept =
+//   n, images = n } | nil, message
+//        'exact': upstream's WriteMapFile with the captured records: an untouched map writes the bytes it was read
+//        from, an edited one changes only what was edited. 'engine': CWldMap::MapSaveToDiskPath, used when `engine =
+//        true` (mesh terrain maps), when nothing was captured, or when the captured file was not a classic v2 `.scmap`
+//        (container 3 / 4 maps keep the engine's own writer; this writer is version 60 only).
 //   ed_mapfile_roundtrip(folder[, deep]) -> { ok, stable, sameAsOriginal, differences } | nil, message
-//        The save check of the editor's board task WPE.5 on the open map (upstream's EdRoundTrip without EdDocument): saves into `folder`, saves again,
-//        compares the two files and the original; `deep` also reads the file back into a second map and compares what was read.
+//        The save check of the editor's board task WPE.5 on the open map (upstream's EdRoundTrip without EdDocument):
+//        saves into `folder`, saves again, compares the two files and the original; `deep` also reads the file back
+//        into a second map and compares what was read.
 //   ed_game_file_read(vfsPath)           -> string or nil     a whole game file (folder or archive)
-//   ed_savefile_entries(text)            -> { markers, areas, armies, chains } | nil, message         the blocks of a `_save.lua` as SaveFile parses them
-//   ed_savefile_write(text, entries)     -> text | nil, message     the file's text with the entries of the given blocks written back, the rest as it was
-//   ed_luatext_fields(text, name)        -> { {key, text, from, to}, ... }, { from, to } | nil, message     the fields of `name = { ... }` in file order (1-based inclusive text positions), and the table's own span
-//   ed_package_plan(diskFolder)          -> { folder, version, files = n, errors = {..}, warnings = {..} }
-//   ed_package_start(diskFolder, zipPath) -> job ; ed_package_poll(job) -> { done, progress, ok, error, errors, warnings, files, bytes } ; _cancel / _free
+//   ed_savefile_entries(text)            -> { markers, areas, armies, chains } | nil, message         the blocks of a
+//   `_save.lua` as SaveFile parses them ed_savefile_write(text, entries)     -> text | nil, message     the file's text
+//   with the entries of the given blocks written back, the rest as it was ed_luatext_fields(text, name)        -> {
+//   {key, text, from, to}, ... }, { from, to } | nil, message     the fields of `name = { ... }` in file order (1-based
+//   inclusive text positions), and the table's own span ed_package_plan(diskFolder)          -> { folder, version,
+//   files = n, errors = {..}, warnings = {..} } ed_package_start(diskFolder, zipPath) -> job ; ed_package_poll(job) ->
+//   { done, progress, ok, error, errors, warnings, files, bytes } ; _cancel / _free
 
 #include <algorithm>
 #include <cmath>
@@ -57,7 +65,8 @@ namespace
   namespace fs = std::filesystem;
   using faf::editor::MapFileRecords;
 
-  // ---- what the writer knows of the map as it was loaded -------------------------------------------------------------------------------------------
+  // ---- what the writer knows of the map as it was loaded
+  // -------------------------------------------------------------------------------------------
 
   struct WaterSources
   {
@@ -65,11 +74,15 @@ namespace
     float elevation = 0.0f;
     float deep = 0.0f;
     float abyss = 0.0f;
-    std::uint64_t planes = 0; // foam, flatness and depth bias: the water map is made from them, the levels and the heights
-    bool operator==(const WaterSources& o) const
+    std::uint64_t planes =
+      0; // foam, flatness and depth bias: the water map is made from them, the levels and the heights
+    bool operator==(
+      const WaterSources& o
+    ) const
     {
-      return enabled == o.enabled && std::memcmp(&elevation, &o.elevation, sizeof(float)) == 0 && std::memcmp(&deep, &o.deep, sizeof(float)) == 0 &&
-             std::memcmp(&abyss, &o.abyss, sizeof(float)) == 0 && planes == o.planes;
+      return enabled == o.enabled && std::memcmp(&elevation, &o.elevation, sizeof(float)) == 0 &&
+        std::memcmp(&deep, &o.deep, sizeof(float)) == 0 && std::memcmp(&abyss, &o.abyss, sizeof(float)) == 0 &&
+        planes == o.planes;
     }
   };
 
@@ -90,7 +103,11 @@ namespace
     return capture;
   }
 
-  [[nodiscard]] std::uint64_t Fnv(const void* const data, const std::size_t size, std::uint64_t hash = 14695981039346656037ULL)
+  [[nodiscard]] std::uint64_t Fnv(
+    const void* const data,
+    const std::size_t size,
+    std::uint64_t hash = 14695981039346656037ULL
+  )
   {
     const auto* const bytes = static_cast<const unsigned char*>(data);
     std::size_t i = 0;
@@ -118,16 +135,23 @@ namespace
     return map != nullptr ? static_cast<moho::CWldTerrainRes*>(map->mTerrainRes) : nullptr;
   }
 
-  [[nodiscard]] std::uint64_t HeightsHash(moho::CWldTerrainRes& terrain)
+  [[nodiscard]] std::uint64_t HeightsHash(
+    moho::CWldTerrainRes& terrain
+  )
   {
     const moho::CHeightField* const field = terrain.GetHeightField();
     if (field == nullptr || field->data == nullptr) {
       return 0;
     }
-    return Fnv(field->data, static_cast<std::size_t>(field->width) * static_cast<std::size_t>(field->height) * sizeof(field->data[0]));
+    return Fnv(
+      field->data,
+      static_cast<std::size_t>(field->width) * static_cast<std::size_t>(field->height) * sizeof(field->data[0])
+    );
   }
 
-  [[nodiscard]] WaterSources WaterNow(moho::CWldTerrainRes& terrain)
+  [[nodiscard]] WaterSources WaterNow(
+    moho::CWldTerrainRes& terrain
+  )
   {
     WaterSources water;
     if (terrain.mMap != nullptr) {
@@ -142,7 +166,8 @@ namespace
     }
     const std::size_t bytes = static_cast<std::size_t>(static_cast<std::int32_t>(size.x * size.y));
     std::uint64_t hash = 14695981039346656037ULL;
-    for (std::uint8_t* const plane : {terrain.GetWaterFoam(), terrain.GetWaterFlatness(), terrain.GetWaterDepthBias()}) {
+    for (std::uint8_t* const plane :
+         {terrain.GetWaterFoam(), terrain.GetWaterFlatness(), terrain.GetWaterDepthBias()}) {
       if (plane != nullptr && bytes != 0) {
         hash = Fnv(plane, bytes, hash);
       }
@@ -156,9 +181,12 @@ namespace
     TheCapture() = Capture{};
   }
 
-  // ---- ed_mapfile_* ----------------------------------------------------------------------------------------------------------------------------------
+  // ---- ed_mapfile_*
+  // ----------------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_MapFileCapture(lua_State* const L)
+  int __cdecl cfunc_MapFileCapture(
+    lua_State* const L
+  )
   {
     const std::string source = up::ArgString(L, 1, "ed_mapfile_capture");
     moho::CWldMap* const map = ActiveMap();
@@ -197,7 +225,10 @@ namespace
     bool masks = false;
   };
 
-  [[nodiscard]] Unchanged UnchangedNow(const Capture& capture, moho::CWldTerrainRes& terrain)
+  [[nodiscard]] Unchanged UnchangedNow(
+    const Capture& capture,
+    moho::CWldTerrainRes& terrain
+  )
   {
     Unchanged u;
     u.heights = HeightsHash(terrain) == capture.heights;
@@ -206,7 +237,9 @@ namespace
     return u;
   }
 
-  int __cdecl cfunc_MapFileState(lua_State* const L)
+  int __cdecl cfunc_MapFileState(
+    lua_State* const L
+  )
   {
     const Capture& capture = TheCapture();
     moho::CWldTerrainRes* const terrain = ActiveTerrain();
@@ -224,8 +257,12 @@ namespace
     return 1;
   }
 
-  /** The images in the file's order: the normal maps, the two stratum masks, the water map; each kept while what it is made from is as loaded. */
-  [[nodiscard]] std::vector<bool> KeepImages(const Capture& capture, moho::CWldTerrainRes& terrain)
+  /** The images in the file's order: the normal maps, the two stratum masks, the water map; each kept while what it is
+   * made from is as loaded. */
+  [[nodiscard]] std::vector<bool> KeepImages(
+    const Capture& capture,
+    moho::CWldTerrainRes& terrain
+  )
   {
     const std::size_t count = capture.records.images.size();
     std::vector<bool> keep(count, false);
@@ -239,8 +276,13 @@ namespace
     return keep;
   }
 
-  /** The exact writer on the open map: false with `error`. `kept` is how many of the file's images went back as they were. */
-  [[nodiscard]] bool SaveExact(const fs::path& path, std::size_t& kept, std::string& error)
+  /** The exact writer on the open map: false with `error`. `kept` is how many of the file's images went back as they
+   * were. */
+  [[nodiscard]] bool SaveExact(
+    const fs::path& path,
+    std::size_t& kept,
+    std::string& error
+  )
   {
     moho::CWldMap* const map = ActiveMap();
     moho::CWldTerrainRes* const terrain = ActiveTerrain();
@@ -249,17 +291,21 @@ namespace
       error = "no map is open";
       return false;
     }
-    // Until the terrain is ready for drawing (Finalize builds its normal map, which the file carries) the writer would write leftover memory.
+    // Until the terrain is ready for drawing (Finalize builds its normal map, which the file carries) the writer would
+    // write leftover memory.
     if (!terrain->GetBool()) {
       error = "the map is not ready yet (its terrain is still being prepared)";
       return false;
     }
     capture.records.keepImages = KeepImages(capture, *terrain);
-    kept = static_cast<std::size_t>(std::count(capture.records.keepImages.begin(), capture.records.keepImages.end(), true));
+    kept =
+      static_cast<std::size_t>(std::count(capture.records.keepImages.begin(), capture.records.keepImages.end(), true));
     return faf::editor::WriteMapFile(*map, capture.records, path, error);
   }
 
-  int __cdecl cfunc_MapFileSave(lua_State* const L)
+  int __cdecl cfunc_MapFileSave(
+    lua_State* const L
+  )
   {
     const std::string path = up::ArgString(L, 1, "ed_mapfile_save");
     const bool forceEngine = up::FieldBool(L, 2, "engine", false);
@@ -295,8 +341,11 @@ namespace
     return 1;
   }
 
-  /** A whole game file by its virtual path (`/maps/x/x_save.lua`, from a folder or an archive): the text a save is made against. */
-  int __cdecl cfunc_GameFileRead(lua_State* const L)
+  /** A whole game file by its virtual path (`/maps/x/x_save.lua`, from a folder or an archive): the text a save is made
+   * against. */
+  int __cdecl cfunc_GameFileRead(
+    lua_State* const L
+  )
   {
     std::string bytes;
     if (!faf::editor::ReadGameFile(up::ArgString(L, 1, "ed_game_file_read"), bytes)) {
@@ -307,15 +356,21 @@ namespace
     return 1;
   }
 
-  // ---- the round trip check ----------------------------------------------------------------------------------------------------------------------------
+  // ---- the round trip check
+  // ----------------------------------------------------------------------------------------------------------------------------
 
-  [[nodiscard]] std::vector<char> FileBytes(const fs::path& path)
+  [[nodiscard]] std::vector<char> FileBytes(
+    const fs::path& path
+  )
   {
     std::ifstream in(path, std::ios::binary);
     return std::vector<char>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
   }
 
-  void Note(std::string& differences, const std::string& what)
+  void Note(
+    std::string& differences,
+    const std::string& what
+  )
   {
     if (!differences.empty()) {
       differences += "; ";
@@ -323,19 +378,30 @@ namespace
     differences += what;
   }
 
-  /** What a second map read from the saved file holds, against the open one (the part of upstream's EdRoundTrip that needs no document). */
-  void CompareRead(moho::CWldMap& a, moho::CWldMap& b, std::string& differences)
+  /** What a second map read from the saved file holds, against the open one (the part of upstream's EdRoundTrip that
+   * needs no document). */
+  void CompareRead(
+    moho::CWldMap& a,
+    moho::CWldMap& b,
+    std::string& differences
+  )
   {
     const moho::CHeightField* const fa = a.mTerrainRes->GetHeightField();
     const moho::CHeightField* const fb = b.mTerrainRes->GetHeightField();
     if (fa == nullptr || fb == nullptr || fa->width != fb->width || fa->height != fb->height) {
       Note(differences, "height field size");
-    } else if (std::memcmp(fa->data, fb->data, static_cast<std::size_t>(fa->width) * static_cast<std::size_t>(fa->height) * 2u) != 0) {
+    } else if (
+      std::memcmp(
+        fa->data, fb->data, static_cast<std::size_t>(fa->width) * static_cast<std::size_t>(fa->height) * 2u
+      ) != 0
+    ) {
       Note(differences, "heights");
     }
     // (a map without water is written with the -10000 sentinel for its levels: only the flag counts then)
-    if (a.mTerrainRes->IsWaterEnabled() != b.mTerrainRes->IsWaterEnabled() ||
-        (a.mTerrainRes->IsWaterEnabled() && a.mTerrainRes->GetWaterElevation() != b.mTerrainRes->GetWaterElevation())) {
+    if (
+      a.mTerrainRes->IsWaterEnabled() != b.mTerrainRes->IsWaterEnabled() ||
+      (a.mTerrainRes->IsWaterEnabled() && a.mTerrainRes->GetWaterElevation() != b.mTerrainRes->GetWaterElevation())
+    ) {
       Note(differences, "water");
     }
     const auto& pa = a.mProps->mEntries;
@@ -345,25 +411,34 @@ namespace
     } else {
       for (std::size_t i = 0; i < pa.size(); ++i) {
         const bool path = std::strcmp(pa[i].mBlueprintPath.c_str(), pb[i].mBlueprintPath.c_str()) != 0;
-        const bool position = std::memcmp(&pa[i].mTransform.pos_, &pb[i].mTransform.pos_, sizeof(pa[i].mTransform.pos_)) != 0;
-        // (a rotation that went through the file as a matrix may come back a few bits apart; a changed rotation is far more)
+        const bool position =
+          std::memcmp(&pa[i].mTransform.pos_, &pb[i].mTransform.pos_, sizeof(pa[i].mTransform.pos_)) != 0;
+        // (a rotation that went through the file as a matrix may come back a few bits apart; a changed rotation is far
+        // more)
         const Wm3::Quatf& qa = pa[i].mTransform.orient_;
         const Wm3::Quatf& qb = pb[i].mTransform.orient_;
-        const bool orientation = std::fabs(qa.w - qb.w) > 1e-5f || std::fabs(qa.x - qb.x) > 1e-5f || std::fabs(qa.y - qb.y) > 1e-5f || std::fabs(qa.z - qb.z) > 1e-5f;
+        const bool orientation = std::fabs(qa.w - qb.w) > 1e-5f || std::fabs(qa.x - qb.x) > 1e-5f ||
+          std::fabs(qa.y - qb.y) > 1e-5f || std::fabs(qa.z - qb.z) > 1e-5f;
         const bool scale = std::memcmp(&pa[i].mScale, &pb[i].mScale, sizeof(pa[i].mScale)) != 0;
         if (path || position || orientation || scale) {
-          Note(differences, "prop " + std::to_string(i) + (path ? " path" : "") + (position ? " position" : "") + (orientation ? " rotation" : "") +
-                              (scale ? " scale" : ""));
+          Note(
+            differences,
+            "prop " + std::to_string(i) + (path ? " path" : "") + (position ? " position" : "") +
+              (orientation ? " rotation" : "") + (scale ? " scale" : "")
+          );
           break;
         }
       }
     }
   }
 
-  int __cdecl cfunc_MapFileRoundTrip(lua_State* const L)
+  int __cdecl cfunc_MapFileRoundTrip(
+    lua_State* const L
+  )
   {
     const std::string folder = up::ArgString(L, 1, "ed_mapfile_roundtrip");
-    const bool deep = up::FieldBool(L, 2, "deep", false) || (lua_type(L, 2) == LUA_TBOOLEAN && lua_toboolean(L, 2) != 0);
+    const bool deep =
+      up::FieldBool(L, 2, "deep", false) || (lua_type(L, 2) == LUA_TBOOLEAN && lua_toboolean(L, 2) != 0);
     moho::CWldMap* const map = ActiveMap();
     const Capture& capture = TheCapture();
     if (map == nullptr || !capture.valid || capture.terrain != ActiveTerrain()) {
@@ -383,7 +458,8 @@ namespace
     }
     if (deep) {
       MapFileRecords reread;
-      std::unique_ptr<moho::CWldMap> other = faf::editor::ReadMapFile(first, LuaPlus::LuaState::CastState(L), reread, error);
+      std::unique_ptr<moho::CWldMap> other =
+        faf::editor::ReadMapFile(first, LuaPlus::LuaState::CastState(L), reread, error);
       if (other == nullptr) {
         Note(differences, "read back: " + error);
       } else {
@@ -414,9 +490,14 @@ namespace
     return 1;
   }
 
-  // ---- _save.lua --------------------------------------------------------------------------------------------------------------------------------------
+  // ---- _save.lua
+  // --------------------------------------------------------------------------------------------------------------------------------------
 
-  void PushEntries(lua_State* const L, const char* const key, const std::vector<faf::editor::SaveEntry>& entries)
+  void PushEntries(
+    lua_State* const L,
+    const char* const key,
+    const std::vector<faf::editor::SaveEntry>& entries
+  )
   {
     lua_pushstring(L, key);
     lua_newtable(L);
@@ -436,7 +517,9 @@ namespace
     lua_settable(L, -3);
   }
 
-  int __cdecl cfunc_SaveFileEntries(lua_State* const L)
+  int __cdecl cfunc_SaveFileEntries(
+    lua_State* const L
+  )
   {
     faf::editor::SaveFile file;
     std::string error;
@@ -459,8 +542,14 @@ namespace
     return 1;
   }
 
-  /** The entries of t[key] (an array of { name, keys, values }); false when t[key] is no table (the block is then left as read). */
-  [[nodiscard]] bool ReadEntries(lua_State* const L, const int table, const char* const key, std::vector<faf::editor::SaveEntry>& out)
+  /** The entries of t[key] (an array of { name, keys, values }); false when t[key] is no table (the block is then left
+   * as read). */
+  [[nodiscard]] bool ReadEntries(
+    lua_State* const L,
+    const int table,
+    const char* const key,
+    std::vector<faf::editor::SaveEntry>& out
+  )
   {
     if (up::PushField(L, table, key) != LUA_TTABLE) {
       lua_settop(L, -2);
@@ -488,7 +577,9 @@ namespace
     return true;
   }
 
-  int __cdecl cfunc_SaveFileWrite(lua_State* const L)
+  int __cdecl cfunc_SaveFileWrite(
+    lua_State* const L
+  )
   {
     faf::editor::SaveFile file;
     std::string error;
@@ -530,9 +621,12 @@ namespace
     return 1;
   }
 
-  // ---- Lua text ---------------------------------------------------------------------------------------------------------------------------------------
+  // ---- Lua text
+  // ---------------------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_LuaTextFields(lua_State* const L)
+  int __cdecl cfunc_LuaTextFields(
+    lua_State* const L
+  )
   {
     const std::string text = up::ArgString(L, 1, "ed_luatext_fields");
     const std::string name = up::ArgString(L, 2, "ed_luatext_fields");
@@ -558,22 +652,33 @@ namespace
     return 2;
   }
 
-  // ---- package ------------------------------------------------------------------------------------------------------------------------------------------
+  // ---- package
+  // ------------------------------------------------------------------------------------------------------------------------------------------
 
-  [[nodiscard]] std::string Lower(std::string s)
+  [[nodiscard]] std::string Lower(
+    std::string s
+  )
   {
-    std::transform(s.begin(), s.end(), s.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(s.begin(), s.end(), s.begin(), [](const unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
     return s;
   }
 
-  [[nodiscard]] bool EndsWith(const std::string& s, const char* const tail)
+  [[nodiscard]] bool EndsWith(
+    const std::string& s,
+    const char* const tail
+  )
   {
     const std::size_t n = std::strlen(tail);
     return s.size() >= n && s.compare(s.size() - n, n, tail) == 0;
   }
 
-  /** The files of a map folder that go to the vault: the editor's sidecar (`*_editor.lua`, FAF Studio's) is not one of them, as pack_map.py left it out. */
-  [[nodiscard]] std::vector<std::string> FolderFiles(const fs::path& folder)
+  /** The files of a map folder that go to the vault: the editor's sidecar (`*_editor.lua`, FAF Studio's) is not one of
+   * them, as pack_map.py left it out. */
+  [[nodiscard]] std::vector<std::string> FolderFiles(
+    const fs::path& folder
+  )
   {
     std::vector<std::string> out;
     for (const std::string& file : faf::editor::FilesUnder(folder)) {
@@ -584,7 +689,9 @@ namespace
     return out;
   }
 
-  [[nodiscard]] std::string TopScenario(const std::vector<std::string>& files)
+  [[nodiscard]] std::string TopScenario(
+    const std::vector<std::string>& files
+  )
   {
     for (const std::string& file : files) {
       if (file.find('/') == std::string::npos && EndsWith(Lower(file), "_scenario.lua")) {
@@ -594,13 +701,19 @@ namespace
     return {};
   }
 
-  [[nodiscard]] std::string ReadAll(const fs::path& path)
+  [[nodiscard]] std::string ReadAll(
+    const fs::path& path
+  )
   {
     const std::vector<char> bytes = FileBytes(path);
     return std::string(bytes.begin(), bytes.end());
   }
 
-  [[nodiscard]] faf::editor::PackagePlan PlanFolder(const fs::path& folder, std::vector<std::string>& files, std::string& scenarioFile)
+  [[nodiscard]] faf::editor::PackagePlan PlanFolder(
+    const fs::path& folder,
+    std::vector<std::string>& files,
+    std::string& scenarioFile
+  )
   {
     files = FolderFiles(folder);
     scenarioFile = TopScenario(files);
@@ -608,7 +721,10 @@ namespace
     return faf::editor::PlanPackage(folder.filename().string(), scenario, files);
   }
 
-  void PushPlan(lua_State* const L, const faf::editor::PackagePlan& plan)
+  void PushPlan(
+    lua_State* const L,
+    const faf::editor::PackagePlan& plan
+  )
   {
     up::SetString(L, "folder", plan.folder);
     up::SetNumber(L, "version", plan.version);
@@ -617,7 +733,9 @@ namespace
     up::SetStringList(L, "warnings", plan.warnings);
   }
 
-  int __cdecl cfunc_PackagePlan(lua_State* const L)
+  int __cdecl cfunc_PackagePlan(
+    lua_State* const L
+  )
   {
     const fs::path folder = fs::path(up::ArgString(L, 1, "ed_package_plan")).lexically_normal();
     std::error_code ec;
@@ -648,7 +766,11 @@ namespace
     return jobs;
   }
 
-  PackageResult MakePackage(const fs::path& folder, const fs::path& zipPath, up::JobContext& job)
+  PackageResult MakePackage(
+    const fs::path& folder,
+    const fs::path& zipPath,
+    up::JobContext& job
+  )
   {
     PackageResult result;
     std::vector<std::string> files;
@@ -691,19 +813,25 @@ namespace
     return result;
   }
 
-  int __cdecl cfunc_PackageStart(lua_State* const L)
+  int __cdecl cfunc_PackageStart(
+    lua_State* const L
+  )
   {
     fs::path folder = fs::path(up::ArgString(L, 1, "ed_package_start")).lexically_normal();
     if (!folder.has_filename()) {
       folder = folder.parent_path();
     }
     const fs::path zipPath(up::ArgString(L, 2, "ed_package_start"));
-    const int id = PackageJobs().Start([folder, zipPath](up::JobContext& job) { return MakePackage(folder, zipPath, job); });
+    const int id = PackageJobs().Start([folder, zipPath](up::JobContext& job) {
+      return MakePackage(folder, zipPath, job);
+    });
     lua_pushnumber(L, id);
     return 1;
   }
 
-  int __cdecl cfunc_PackagePoll(lua_State* const L)
+  int __cdecl cfunc_PackagePoll(
+    lua_State* const L
+  )
   {
     const int id = static_cast<int>(luaL_checknumber(L, 1));
     const up::JobStatus status = PackageJobs().Poll(id);
@@ -723,13 +851,17 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_PackageCancel(lua_State* const L)
+  int __cdecl cfunc_PackageCancel(
+    lua_State* const L
+  )
   {
     PackageJobs().Cancel(static_cast<int>(luaL_checknumber(L, 1)));
     return 0;
   }
 
-  int __cdecl cfunc_PackageFree(lua_State* const L)
+  int __cdecl cfunc_PackageFree(
+    lua_State* const L
+  )
   {
     PackageJobs().Free(static_cast<int>(luaL_checknumber(L, 1)));
     return 0;
@@ -739,24 +871,44 @@ namespace
   {
     EdUpMapFileBootstrap()
     {
-      moho::editor::OnSessionEnd([] { ForgetCapture(); });
+      moho::editor::OnSessionEnd([] {
+        ForgetCapture();
+      });
     }
   };
 
   const EdUpMapFileBootstrap gBootstrap{};
 
   const up::Natives gEdUpMapFileNatives{{
-    {"ed_mapfile_capture", &cfunc_MapFileCapture, "ed_mapfile_capture(vfsMapPath) -> { images, props, preview, valid } | nil, message"},
-    {"ed_mapfile_state", &cfunc_MapFileState, "ed_mapfile_state() -> { captured, heights, water, masks, images, props }"},
-    {"ed_mapfile_save", &cfunc_MapFileSave, "ed_mapfile_save(diskPath[, { engine = bool }]) -> { writer = 'exact' | 'engine', kept, images } | nil, message"},
-    {"ed_mapfile_roundtrip", &cfunc_MapFileRoundTrip, "ed_mapfile_roundtrip(folder[, deep]) -> { ok, stable, sameAsOriginal, differences, file } | nil, message"},
-    {"ed_game_file_read", &cfunc_GameFileRead, "ed_game_file_read(vfsPath) -> string or nil (a game file from a folder or an archive)"},
-    {"ed_savefile_entries", &cfunc_SaveFileEntries, "ed_savefile_entries(text) -> { markers, areas, armies, chains } | nil, message"},
+    {"ed_mapfile_capture",
+     &cfunc_MapFileCapture,
+     "ed_mapfile_capture(vfsMapPath) -> { images, props, preview, valid } | nil, message"},
+    {"ed_mapfile_state",
+     &cfunc_MapFileState,
+     "ed_mapfile_state() -> { captured, heights, water, masks, images, props }"},
+    {"ed_mapfile_save",
+     &cfunc_MapFileSave,
+     "ed_mapfile_save(diskPath[, { engine = bool }]) -> { writer = 'exact' | 'engine', kept, images } | nil, message"},
+    {"ed_mapfile_roundtrip",
+     &cfunc_MapFileRoundTrip,
+     "ed_mapfile_roundtrip(folder[, deep]) -> { ok, stable, sameAsOriginal, differences, file } | nil, message"},
+    {"ed_game_file_read",
+     &cfunc_GameFileRead,
+     "ed_game_file_read(vfsPath) -> string or nil (a game file from a folder or an archive)"},
+    {"ed_savefile_entries",
+     &cfunc_SaveFileEntries,
+     "ed_savefile_entries(text) -> { markers, areas, armies, chains } | nil, message"},
     {"ed_savefile_write", &cfunc_SaveFileWrite, "ed_savefile_write(text, entries) -> text | nil, message"},
-    {"ed_luatext_fields", &cfunc_LuaTextFields, "ed_luatext_fields(text, name) -> { {key, text, from, to}, ... } | nil, message"},
-    {"ed_package_plan", &cfunc_PackagePlan, "ed_package_plan(diskFolder) -> { folder, version, files, errors, warnings } | nil, message"},
+    {"ed_luatext_fields",
+     &cfunc_LuaTextFields,
+     "ed_luatext_fields(text, name) -> { {key, text, from, to}, ... } | nil, message"},
+    {"ed_package_plan",
+     &cfunc_PackagePlan,
+     "ed_package_plan(diskFolder) -> { folder, version, files, errors, warnings } | nil, message"},
     {"ed_package_start", &cfunc_PackageStart, "ed_package_start(diskFolder, zipPath) -> job"},
-    {"ed_package_poll", &cfunc_PackagePoll, "ed_package_poll(job) -> { done, progress, ok, error, errors, warnings, bytes } | nil, message"},
+    {"ed_package_poll",
+     &cfunc_PackagePoll,
+     "ed_package_poll(job) -> { done, progress, ok, error, errors, warnings, bytes } | nil, message"},
     {"ed_package_cancel", &cfunc_PackageCancel, "ed_package_cancel(job)"},
     {"ed_package_free", &cfunc_PackageFree, "ed_package_free(job)"},
   }};

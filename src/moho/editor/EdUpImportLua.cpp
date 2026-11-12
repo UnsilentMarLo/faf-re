@@ -1,21 +1,29 @@
-// EDITOR: the FAFME importers / exporters as Lua natives (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP2): FAForeverMapEditor's preset files over
-// upstream's logic (faf_editor_logic: EdMarkerPreset, EdUnitPreset, EdPropPaint, EdLayerPreset, EdLighting, EdSkybox, EdWaterPreset, EdJson). Text in, text out and plain
-// Lua tables; no engine object is touched and no file is read here (Lua reads and writes the file: ed_read_file / ed_write_file), so every native is also a pure function.
+// EDITOR: the FAFME importers / exporters as Lua natives (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package
+// WP2): FAForeverMapEditor's preset files over upstream's logic (faf_editor_logic: EdMarkerPreset, EdUnitPreset,
+// EdPropPaint, EdLayerPreset, EdLighting, EdSkybox, EdWaterPreset, EdJson). Text in, text out and plain Lua tables; no
+// engine object is touched and no file is read here (Lua reads and writes the file: ed_read_file / ed_write_file), so
+// every native is also a pure function.
 //
-// Failures are `nil, message`; a wrong argument type is a Lua error (EdUpCommon.h). Vectors are arrays {x, y, z}; the environment values use the names of environment.lua
-// (light_mult, sun_x, ..., fog_end; dome_ox, ..., cirrus4_dz; water_on, w_color_r, ...), so `Environment.Capture` / `Environment.Apply` parts go in and out unchanged.
+// Failures are `nil, message`; a wrong argument type is a Lua error (EdUpCommon.h). Vectors are arrays {x, y, z}; the
+// environment values use the names of environment.lua (light_mult, sun_x, ..., fog_end; dome_ox, ..., cirrus4_dz;
+// water_on, w_color_r, ...), so `Environment.Capture` / `Environment.Apply` parts go in and out unchanged.
 //
-//   .fafmapmarkers   ed_fafmapmarkers_write(markers, { names, width, height }) -> text            markers = list of { name, type, position, orientation, adjacentTo }
-//                    ed_fafmapmarkers_read(text, { existing, reserved })          -> { markers, skipped, links }   markers = list of { name, type, position, orientation, links }
-//   .scunits         ed_scunits_write(units)                                      -> text            units = list of { bp, x, y, z, heading | orientation, orders, platoon }
+//   .fafmapmarkers   ed_fafmapmarkers_write(markers, { names, width, height }) -> text            markers = list of {
+//   name, type, position, orientation, adjacentTo }
+//                    ed_fafmapmarkers_read(text, { existing, reserved })          -> { markers, skipped, links }
+//                    markers = list of { name, type, position, orientation, links }
+//   .scunits         ed_scunits_write(units)                                      -> text            units = list of {
+//   bp, x, y, z, heading | orientation, orders, platoon }
 //                    ed_scunits_read(text, { width, height, fit })                -> { units, centre, moved }
-//   .proppaintset    ed_proppaintset_write(entries) -> text                       entries = list of { blueprint, rotationMin, rotationMax, scaleMin, scaleMax, chance }
+//   .proppaintset    ed_proppaintset_write(entries) -> text                       entries = list of { blueprint,
+//   rotationMin, rotationMax, scaleMin, scaleMax, chance }
 //                    ed_proppaintset_read(text) -> entries
-//   .scmsl           ed_scmsl_write(layer) -> text      ed_scmsl_read(text) -> layer          layer = { albedo, normals, albedoSize, normalsSize }
-//   .scmst           ed_scmst_write({ shader, layers }) -> text                   ed_scmst_read(text) -> { shader, layers }   (ten layers, Stratum0 .. Stratum9)
-//   .scmlighting     ed_scmlighting_write(num) -> text                            ed_scmlighting_read(text) -> num
-//   .scmskybox       ed_scmskybox_write({ num, texts, billboards }) -> text       ed_scmskybox_read(text) -> { num, texts, billboards }   billboards = flat list, 10 numbers each
-//   .scmwtr          ed_scmwtr_write({ num, texts }) -> text                      ed_scmwtr_read(text) -> { num, texts }
+//   .scmsl           ed_scmsl_write(layer) -> text      ed_scmsl_read(text) -> layer          layer = { albedo,
+//   normals, albedoSize, normalsSize } .scmst           ed_scmst_write({ shader, layers }) -> text ed_scmst_read(text)
+//   -> { shader, layers }   (ten layers, Stratum0 .. Stratum9) .scmlighting     ed_scmlighting_write(num) -> text
+//   ed_scmlighting_read(text) -> num .scmskybox       ed_scmskybox_write({ num, texts, billboards }) -> text
+//   ed_scmskybox_read(text) -> { num, texts, billboards }   billboards = flat list, 10 numbers each .scmwtr
+//   ed_scmwtr_write({ num, texts }) -> text                      ed_scmwtr_read(text) -> { num, texts }
 
 #include <string>
 #include <vector>
@@ -39,10 +47,17 @@ namespace
   namespace up = moho::editor::up;
   namespace fe = faf::editor;
 
-  // ---- table helpers -------------------------------------------------------------------------------------------------------------------------
+  // ---- table helpers
+  // -------------------------------------------------------------------------------------------------------------------------
 
   /** The array t[key] as up to `n` numbers into `out` (missing entries keep their value). */
-  void FieldArray(lua_State* const L, const int index, const char* const key, float* const out, const int n)
+  void FieldArray(
+    lua_State* const L,
+    const int index,
+    const char* const key,
+    float* const out,
+    const int n
+  )
   {
     if (up::PushField(L, index, key) == LUA_TTABLE) {
       const int table = lua_gettop(L);
@@ -58,7 +73,12 @@ namespace
   }
 
   /** Adds t[key] = { v[0], ... v[n-1] } to the table on top of the stack. */
-  void SetArray(lua_State* const L, const char* const key, const float* const v, const int n)
+  void SetArray(
+    lua_State* const L,
+    const char* const key,
+    const float* const v,
+    const int n
+  )
   {
     lua_pushstring(L, key);
     lua_newtable(L);
@@ -69,7 +89,12 @@ namespace
     lua_settable(L, -3);
   }
 
-  void SetArrayD(lua_State* const L, const char* const key, const double* const v, const int n)
+  void SetArrayD(
+    lua_State* const L,
+    const char* const key,
+    const double* const v,
+    const int n
+  )
   {
     lua_pushstring(L, key);
     lua_newtable(L);
@@ -82,7 +107,11 @@ namespace
 
   /** Calls `each(entryIndex)` for t[1], t[2], ... while they are tables (the entry is on the stack at that index). */
   template <class Each>
-  void ForEachEntry(lua_State* const L, const int list, Each&& each)
+  void ForEachEntry(
+    lua_State* const L,
+    const int list,
+    Each&& each
+  )
   {
     if (lua_type(L, list) != LUA_TTABLE) {
       return;
@@ -99,20 +128,30 @@ namespace
   }
 
   /** t[key] as a sub-table argument index on top of the stack: pushes it (nil if absent); the caller pops. */
-  int PushSub(lua_State* const L, const int index, const char* const key)
+  int PushSub(
+    lua_State* const L,
+    const int index,
+    const char* const key
+  )
   {
     return up::PushField(L, index, key);
   }
 
-  int PushText(lua_State* const L, const std::string& text)
+  int PushText(
+    lua_State* const L,
+    const std::string& text
+  )
   {
     lua_pushlstring(L, text.data(), text.size());
     return 1;
   }
 
-  // ---- .fafmapmarkers ------------------------------------------------------------------------------------------------------------------------
+  // ---- .fafmapmarkers
+  // ------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_FafmapmarkersWrite(lua_State* const L)
+  int __cdecl cfunc_FafmapmarkersWrite(
+    lua_State* const L
+  )
   {
     const int list = 1;
     const int opts = 2;
@@ -139,7 +178,9 @@ namespace
     return PushText(L, fe::MarkersToFafmapmarkers(markers, names, width, height));
   }
 
-  int __cdecl cfunc_FafmapmarkersRead(lua_State* const L)
+  int __cdecl cfunc_FafmapmarkersRead(
+    lua_State* const L
+  )
   {
     const std::string text = up::ArgString(L, 1, "ed_fafmapmarkers_read");
     const int opts = 2;
@@ -181,9 +222,12 @@ namespace
     return 1;
   }
 
-  // ---- .scunits ------------------------------------------------------------------------------------------------------------------------------
+  // ---- .scunits
+  // ------------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_ScunitsWrite(lua_State* const L)
+  int __cdecl cfunc_ScunitsWrite(
+    lua_State* const L
+  )
   {
     std::vector<fe::SaveUnit> units;
     ForEachEntry(L, 1, [&](const int entry) {
@@ -203,7 +247,9 @@ namespace
     return PushText(L, fe::UnitsToScunits(units));
   }
 
-  int __cdecl cfunc_ScunitsRead(lua_State* const L)
+  int __cdecl cfunc_ScunitsRead(
+    lua_State* const L
+  )
   {
     const std::string text = up::ArgString(L, 1, "ed_scunits_read");
     std::vector<fe::SaveUnit> units;
@@ -240,9 +286,12 @@ namespace
     return 1;
   }
 
-  // ---- .proppaintset -------------------------------------------------------------------------------------------------------------------------
+  // ---- .proppaintset
+  // -------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_PropPaintWrite(lua_State* const L)
+  int __cdecl cfunc_PropPaintWrite(
+    lua_State* const L
+  )
   {
     std::vector<fe::PropPaintEntry> entries;
     ForEachEntry(L, 1, [&](const int entry) {
@@ -258,7 +307,9 @@ namespace
     return PushText(L, fe::PaintSetToProppaintset(entries));
   }
 
-  int __cdecl cfunc_PropPaintRead(lua_State* const L)
+  int __cdecl cfunc_PropPaintRead(
+    lua_State* const L
+  )
   {
     const std::string text = up::ArgString(L, 1, "ed_proppaintset_read");
     std::vector<fe::PropPaintEntry> entries;
@@ -280,9 +331,13 @@ namespace
     return 1;
   }
 
-  // ---- .scmsl, .scmst ------------------------------------------------------------------------------------------------------------------------
+  // ---- .scmsl, .scmst
+  // ------------------------------------------------------------------------------------------------------------------------
 
-  fe::LayerSettings ReadLayer(lua_State* const L, const int index)
+  fe::LayerSettings ReadLayer(
+    lua_State* const L,
+    const int index
+  )
   {
     fe::LayerSettings layer;
     layer.albedo = up::FieldString(L, index, "albedo");
@@ -292,7 +347,10 @@ namespace
     return layer;
   }
 
-  void PushLayer(lua_State* const L, const fe::LayerSettings& layer)
+  void PushLayer(
+    lua_State* const L,
+    const fe::LayerSettings& layer
+  )
   {
     lua_newtable(L);
     up::SetString(L, "albedo", layer.albedo);
@@ -301,12 +359,16 @@ namespace
     up::SetNumber(L, "normalsSize", layer.normalsSize);
   }
 
-  int __cdecl cfunc_ScmslWrite(lua_State* const L)
+  int __cdecl cfunc_ScmslWrite(
+    lua_State* const L
+  )
   {
     return PushText(L, fe::LayerToScmsl(ReadLayer(L, 1)));
   }
 
-  int __cdecl cfunc_ScmslRead(lua_State* const L)
+  int __cdecl cfunc_ScmslRead(
+    lua_State* const L
+  )
   {
     fe::LayerSettings layer;
     std::string error;
@@ -317,17 +379,23 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_ScmstWrite(lua_State* const L)
+  int __cdecl cfunc_ScmstWrite(
+    lua_State* const L
+  )
   {
     std::vector<fe::LayerSettings> layers;
     if (PushSub(L, 1, "layers") == LUA_TTABLE) {
-      ForEachEntry(L, lua_gettop(L), [&](const int entry) { layers.push_back(ReadLayer(L, entry)); });
+      ForEachEntry(L, lua_gettop(L), [&](const int entry) {
+        layers.push_back(ReadLayer(L, entry));
+      });
     }
     lua_settop(L, -2);
     return PushText(L, fe::LayersToScmst(up::FieldString(L, 1, "shader"), layers));
   }
 
-  int __cdecl cfunc_ScmstRead(lua_State* const L)
+  int __cdecl cfunc_ScmstRead(
+    lua_State* const L
+  )
   {
     std::string shader;
     std::vector<fe::LayerSettings> layers;
@@ -347,7 +415,8 @@ namespace
     return 1;
   }
 
-  // ---- the environment values by name (environment.lua's) ------------------------------------------------------------------------------------
+  // ---- the environment values by name (environment.lua's)
+  // ------------------------------------------------------------------------------------
 
   struct Lane
   {
@@ -356,7 +425,11 @@ namespace
   };
 
   /** `num` (the table at `index`, may be nil) into the lanes named in it; returns how many were set. */
-  int ReadNumbers(lua_State* const L, const int index, const std::vector<Lane>& lanes)
+  int ReadNumbers(
+    lua_State* const L,
+    const int index,
+    const std::vector<Lane>& lanes
+  )
   {
     int set = 0;
     for (const Lane& lane : lanes) {
@@ -369,23 +442,35 @@ namespace
     return set;
   }
 
-  void WriteNumbers(lua_State* const L, const std::vector<Lane>& lanes)
+  void WriteNumbers(
+    lua_State* const L,
+    const std::vector<Lane>& lanes
+  )
   {
     for (const Lane& lane : lanes) {
       up::SetNumber(L, lane.name.c_str(), *lane.value);
     }
   }
 
-  void Three(std::vector<Lane>& lanes, const char* const a, const char* const b, const char* const c, float* const v)
+  void Three(
+    std::vector<Lane>& lanes,
+    const char* const a,
+    const char* const b,
+    const char* const c,
+    float* const v
+  )
   {
     lanes.push_back({a, v});
     lanes.push_back({b, v + 1});
     lanes.push_back({c, v + 2});
   }
 
-  // ---- .scmlighting --------------------------------------------------------------------------------------------------------------------------
+  // ---- .scmlighting
+  // --------------------------------------------------------------------------------------------------------------------------
 
-  std::vector<Lane> LightingLanes(fe::LightingState& s)
+  std::vector<Lane> LightingLanes(
+    fe::LightingState& s
+  )
   {
     std::vector<Lane> lanes;
     lanes.push_back({"light_mult", &s.multiplier});
@@ -402,14 +487,18 @@ namespace
     return lanes;
   }
 
-  int __cdecl cfunc_ScmlightingWrite(lua_State* const L)
+  int __cdecl cfunc_ScmlightingWrite(
+    lua_State* const L
+  )
   {
     fe::LightingState state;
     (void)ReadNumbers(L, 1, LightingLanes(state));
     return PushText(L, fe::LightingToScmlighting(state));
   }
 
-  int __cdecl cfunc_ScmlightingRead(lua_State* const L)
+  int __cdecl cfunc_ScmlightingRead(
+    lua_State* const L
+  )
   {
     fe::LightingState state;
     std::string error;
@@ -421,9 +510,12 @@ namespace
     return 1;
   }
 
-  // ---- .scmskybox ----------------------------------------------------------------------------------------------------------------------------
+  // ---- .scmskybox
+  // ----------------------------------------------------------------------------------------------------------------------------
 
-  std::vector<Lane> SkyLanes(fe::SkyboxState& s)
+  std::vector<Lane> SkyLanes(
+    fe::SkyboxState& s
+  )
   {
     std::vector<Lane> lanes;
     Three(lanes, "dome_ox", "dome_oy", "dome_oz", s.position);
@@ -446,7 +538,9 @@ namespace
     return lanes;
   }
 
-  int __cdecl cfunc_ScmskyboxWrite(lua_State* const L)
+  int __cdecl cfunc_ScmskyboxWrite(
+    lua_State* const L
+  )
   {
     fe::SkyboxState sky;
     // Values the table does not have keep the file format's defaults (SkyboxState's).
@@ -477,7 +571,9 @@ namespace
     return PushText(L, fe::SkyboxToScmskybox(sky));
   }
 
-  int __cdecl cfunc_ScmskyboxRead(lua_State* const L)
+  int __cdecl cfunc_ScmskyboxRead(
+    lua_State* const L
+  )
   {
     fe::SkyboxState sky;
     std::string error;
@@ -508,9 +604,12 @@ namespace
     return 1;
   }
 
-  // ---- .scmwtr -------------------------------------------------------------------------------------------------------------------------------
+  // ---- .scmwtr
+  // -------------------------------------------------------------------------------------------------------------------------------
 
-  std::vector<Lane> WaterLanes(fe::WaterState& w)
+  std::vector<Lane> WaterLanes(
+    fe::WaterState& w
+  )
   {
     std::vector<Lane> lanes;
     fe::WaterNumbers& s = w.shader;
@@ -542,9 +641,12 @@ namespace
     return lanes;
   }
 
-  constexpr const char* kWaterTexts[6] = {"water_cubemap", "water_ramp", "water_wave1", "water_wave2", "water_wave3", "water_wave4"};
+  constexpr const char* kWaterTexts[6] =
+    {"water_cubemap", "water_ramp", "water_wave1", "water_wave2", "water_wave3", "water_wave4"};
 
-  int __cdecl cfunc_ScmwtrWrite(lua_State* const L)
+  int __cdecl cfunc_ScmwtrWrite(
+    lua_State* const L
+  )
   {
     fe::WaterState water;
     if (PushSub(L, 1, "num") == LUA_TTABLE) {
@@ -563,7 +665,9 @@ namespace
     return PushText(L, fe::WaterToScmwtr(water));
   }
 
-  int __cdecl cfunc_ScmwtrRead(lua_State* const L)
+  int __cdecl cfunc_ScmwtrRead(
+    lua_State* const L
+  )
   {
     fe::WaterState water;
     std::string error;
@@ -586,10 +690,16 @@ namespace
   }
 
   const up::Natives gEdUpImportNatives{{
-    {"ed_fafmapmarkers_write", &cfunc_FafmapmarkersWrite, "ed_fafmapmarkers_write(markers, { names, width, height }) -> text"},
-    {"ed_fafmapmarkers_read", &cfunc_FafmapmarkersRead, "ed_fafmapmarkers_read(text, { existing, reserved }) -> { markers, skipped, links } | nil, message"},
+    {"ed_fafmapmarkers_write",
+     &cfunc_FafmapmarkersWrite,
+     "ed_fafmapmarkers_write(markers, { names, width, height }) -> text"},
+    {"ed_fafmapmarkers_read",
+     &cfunc_FafmapmarkersRead,
+     "ed_fafmapmarkers_read(text, { existing, reserved }) -> { markers, skipped, links } | nil, message"},
     {"ed_scunits_write", &cfunc_ScunitsWrite, "ed_scunits_write(units) -> text"},
-    {"ed_scunits_read", &cfunc_ScunitsRead, "ed_scunits_read(text, { width, height, fit }) -> { units, centre, moved } | nil, message"},
+    {"ed_scunits_read",
+     &cfunc_ScunitsRead,
+     "ed_scunits_read(text, { width, height, fit }) -> { units, centre, moved } | nil, message"},
     {"ed_proppaintset_write", &cfunc_PropPaintWrite, "ed_proppaintset_write(entries) -> text"},
     {"ed_proppaintset_read", &cfunc_PropPaintRead, "ed_proppaintset_read(text) -> entries | nil, message"},
     {"ed_scmsl_write", &cfunc_ScmslWrite, "ed_scmsl_write(layer) -> text"},

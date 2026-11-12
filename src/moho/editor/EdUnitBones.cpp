@@ -1,15 +1,19 @@
-// EDITOR: the bones of a unit as the renderer draws them right now (docs/projects/MOD_UNIT_EDITOR_DESIGN.md, unit viewer).
+// EDITOR: the bones of a unit as the renderer draws them right now (docs/projects/MOD_UNIT_EDITOR_DESIGN.md, unit
+// viewer).
 //
-//   ed_camera_info() -> fovRad, eyeDistance, focusX, focusY, focusZ, heading, pitch, targetZoom, viewportX, viewportY, viewportW, viewportH
-//   ed_lod_info([entityId]) -> table: eye position, heading, pitch, zoom, fov, lodScale, the LOD plane (viewport.r[1]), viewport, and for an entity its LOD depth, cutoffs, selected LOD
-//   ed_unit_bones(entityId) -> { { name, parent, x, y, z, fx, fy, fz, ux, uy, uz }, ... } | nil, message
-//   ed_units_snapshot([out]) -> out, n   every unit of the world session in one call, five entries per unit: entity id, x, y, z, blueprint id (see the function)
+//   ed_camera_info() -> fovRad, eyeDistance, focusX, focusY, focusZ, heading, pitch, targetZoom, viewportX, viewportY,
+//   viewportW, viewportH ed_lod_info([entityId]) -> table: eye position, heading, pitch, zoom, fov, lodScale, the LOD
+//   plane (viewport.r[1]), viewport, and for an entity its LOD depth, cutoffs, selected LOD ed_unit_bones(entityId) ->
+//   { { name, parent, x, y, z, fx, fy, fz, ux, uy, uz }, ... } | nil, message ed_units_snapshot([out]) -> out, n every
+//   unit of the world session in one call, five entries per unit: entity id, x, y, z, blueprint id (see the function)
 //
-// One entry per bone of the entity's mesh instance (the pose is already in world space), in bone order (parent = index of the parent bone, -1 for the root; Lua counts from 1 for the list, the indices
-// are the engine's bone indices counting from 0). (x, y, z) is the world position of the bone, (fx, fy, fz) the world direction of the bone's +z axis (the
-// way it points), (ux, uy, uz) its +y axis. The pose is the interpolated pose of the current frame (MeshInstance::ComputeDebugPose), so a call per frame follows the animation
-// exactly, unlike the sim, which only knows the pose of the last tick. Works for units (static-pose mesh instances); props and projectiles answer nil.
-// The entity id is the sim's (Entity:GetEntityId()); the viewer's sim callback EdUnitInfo writes it for the unit it spawned.
+// One entry per bone of the entity's mesh instance (the pose is already in world space), in bone order (parent = index
+// of the parent bone, -1 for the root; Lua counts from 1 for the list, the indices are the engine's bone indices
+// counting from 0). (x, y, z) is the world position of the bone, (fx, fy, fz) the world direction of the bone's +z axis
+// (the way it points), (ux, uy, uz) its +y axis. The pose is the interpolated pose of the current frame
+// (MeshInstance::ComputeDebugPose), so a call per frame follows the animation exactly, unlike the sim, which only knows
+// the pose of the last tick. Works for units (static-pose mesh instances); props and projectiles answer nil. The entity
+// id is the sim's (Entity:GetEntityId()); the viewer's sim callback EdUnitInfo writes it for the unit it spawned.
 
 #include <cmath>
 #include <cstdint>
@@ -38,7 +42,13 @@ namespace moho
 namespace
 {
   // v rotated by the unit quaternion q (w, x, y, z lanes of Wm3's storage: m_afTuple[0] = w)
-  void Rotate(const Wm3::Quatf& q, const float x, const float y, const float z, float* const out)
+  void Rotate(
+    const Wm3::Quatf& q,
+    const float x,
+    const float y,
+    const float z,
+    float* const out
+  )
   {
     const float w = q.m_afTuple[0];
     const float qx = q.m_afTuple[1];
@@ -53,7 +63,9 @@ namespace
     out[2] = z + w * tz + (qx * ty - qy * tx);
   }
 
-  int __cdecl cfunc_EdUnitBones(lua_State* const L)
+  int __cdecl cfunc_EdUnitBones(
+    lua_State* const L
+  )
   {
     const auto fail = [&](const char* const message) {
       lua_pushnil(L);
@@ -83,7 +95,8 @@ namespace
     for (std::size_t i = 0; i < count; ++i) {
       const moho::CAniPoseBone& bone = bones[i];
       const moho::VTransform& t = bone.GetCompositeTransform();
-      // the pose of a mesh instance is already in the world: the composite transform of a bone carries the entity's position and orientation
+      // the pose of a mesh instance is already in the world: the composite transform of a bone carries the entity's
+      // position and orientation
       float f[3];
       float u[3];
       Rotate(t.orient_, 0.0f, 0.0f, 1.0f, f);
@@ -114,10 +127,14 @@ namespace
   }
 
   // ed_units_snapshot([out]) -> out, n
-  // Every unit of the world session as one flat array, five entries per unit: entity id, x, y, z (the newest position the sim sent) and the blueprint id
-  // ("uel0001"). `out` (optional) is a table to fill and return: one table can be kept and reused every frame (entries 1 .. 5 n are written, the rest is left alone);
-  // n is the number of units. Units marked for deletion are left out. One call instead of a Lua loop over GetUnits / entity queries.
-  int __cdecl cfunc_EdUnitsSnapshot(lua_State* const L)
+  // Every unit of the world session as one flat array, five entries per unit: entity id, x, y, z (the newest position
+  // the sim sent) and the blueprint id
+  // ("uel0001"). `out` (optional) is a table to fill and return: one table can be kept and reused every frame (entries
+  // 1 .. 5 n are written, the rest is left alone); n is the number of units. Units marked for deletion are left out.
+  // One call instead of a Lua loop over GetUnits / entity queries.
+  int __cdecl cfunc_EdUnitsSnapshot(
+    lua_State* const L
+  )
   {
     if (lua_type(L, 1) == LUA_TTABLE) {
       lua_pushvalue(L, 1);
@@ -132,7 +149,7 @@ namespace
           continue;
         }
         const moho::REntityBlueprint* const blueprint = entity->mParams.mBlueprint;
-        const Wm3::Vec3f position = entity->GetInterpolatedPosition(1.0f);       // the newest pose the sim sent
+        const Wm3::Vec3f position = entity->GetInterpolatedPosition(1.0f); // the newest pose the sim sent
         const int base = 5 * n;
         const lua_Number numbers[4] = {static_cast<lua_Number>(entityId), position.x, position.y, position.z};
         for (int k = 0; k < 4; ++k) {
@@ -150,10 +167,14 @@ namespace
     return 2;
   }
 
-  // ed_camera_info() -> fovRad, eyeDistance, focusX, focusY, focusZ, heading, pitch, targetZoom, viewportX, viewportY, viewportW, viewportH | nil
-  // The world camera as it is now: the field of view the engine derives from the zoom, the real distance of the eye from the focus point (what mesh LODs measure), the focus
-  // point, the heading / pitch and the viewport the projection uses (the editor draws the world through the whole window and clips it to the viewport panel).
-  int __cdecl cfunc_EdCameraInfo(lua_State* const L)
+  // ed_camera_info() -> fovRad, eyeDistance, focusX, focusY, focusZ, heading, pitch, targetZoom, viewportX, viewportY,
+  // viewportW, viewportH | nil The world camera as it is now: the field of view the engine derives from the zoom, the
+  // real distance of the eye from the focus point (what mesh LODs measure), the focus point, the heading / pitch and
+  // the viewport the projection uses (the editor draws the world through the whole window and clips it to the viewport
+  // panel).
+  int __cdecl cfunc_EdCameraInfo(
+    lua_State* const L
+  )
   {
     moho::CameraImpl* const camera = moho::CAM_GetManager()->GetCamera("WorldCamera");
     if (camera == nullptr) {
@@ -163,15 +184,31 @@ namespace
     Wm3::Vector2f origin;
     Wm3::Vector2f size;
     camera->CameraGetViewport(origin, size);
-    const lua_Number values[12] = {camera->mFarFov, camera->mZoom, camera->mOffset.x, camera->mOffset.y, camera->mOffset.z, camera->mHeading, camera->mFarPitch,
-                                   camera->mTargetZoom, origin.x, origin.y, size.x, size.y};
+    const lua_Number values[12] = {
+      camera->mFarFov,
+      camera->mZoom,
+      camera->mOffset.x,
+      camera->mOffset.y,
+      camera->mOffset.z,
+      camera->mHeading,
+      camera->mFarPitch,
+      camera->mTargetZoom,
+      origin.x,
+      origin.y,
+      size.x,
+      size.y
+    };
     for (const lua_Number v : values) {
       lua_pushnumber(L, v);
     }
     return 12;
   }
 
-  void SetNumberField(lua_State* const L, const char* const key, const lua_Number value)
+  void SetNumberField(
+    lua_State* const L,
+    const char* const key,
+    const lua_Number value
+  )
   {
     lua_pushstring(L, key);
     lua_pushnumber(L, value);
@@ -180,11 +217,16 @@ namespace
 
   // ed_lod_info([entityId]) -> { camera numbers..., [entity numbers...] } | nil
   // The numbers a mesh LOD decision is made from (camera diagnostics; the user sends them when units or props vanish):
-  //   camera:  eyeX eyeY eyeZ (the real eye position of the last frame), heading pitch zoom (the target zoom) eyeDistance fov, lodScale, lodRowA..D (viewport.r[1]: the plane the LOD depth is
+  //   camera:  eyeX eyeY eyeZ (the real eye position of the last frame), heading pitch zoom (the target zoom)
+  //   eyeDistance fov, lodScale, lodRowA..D (viewport.r[1]: the plane the LOD depth is
   //            measured against), viewportX/Y/W/H, ren_MeshDissolve
-  //   entity:  x y z (interpolated position of the mesh instance), depth (what MeshRenderer::Batch compares with the cutoffs), distance (straight line eye to instance), lod (selected LOD,
-  //            0 based, -1 = none, culled), lodCount, cutoff1..cutoffN, maxCutoff, dissolve, hidden, quatDepth (the retired quaternion based value, for comparison: must not be what is used now)
-  int __cdecl cfunc_EdLodInfo(lua_State* const L)
+  //   entity:  x y z (interpolated position of the mesh instance), depth (what MeshRenderer::Batch compares with the
+  //   cutoffs), distance (straight line eye to instance), lod (selected LOD,
+  //            0 based, -1 = none, culled), lodCount, cutoff1..cutoffN, maxCutoff, dissolve, hidden, quatDepth (the
+  //            retired quaternion based value, for comparison: must not be what is used now)
+  int __cdecl cfunc_EdLodInfo(
+    lua_State* const L
+  )
   {
     moho::CameraImpl* const camera = moho::CAM_GetManager()->GetCamera("WorldCamera");
     if (camera == nullptr) {
@@ -222,7 +264,9 @@ namespace
       moho::MeshInstance* const instance = entity != nullptr ? entity->mMeshInstance : nullptr;
       if (instance != nullptr) {
         const Wm3::Vec3f& p = instance->interpolatedPosition;
-        const float depth = moho::MeshLodDepth(cam.viewport.r[1].x, cam.viewport.r[1].y, cam.viewport.r[1].z, cam.viewport.r[1].w, p.x, p.y, p.z);
+        const float depth = moho::MeshLodDepth(
+          cam.viewport.r[1].x, cam.viewport.r[1].y, cam.viewport.r[1].z, cam.viewport.r[1].w, p.x, p.y, p.z
+        );
         const Wm3::Quatf& q = cam.tranform.orient_;
         const float dx = p.x - cam.tranform.pos_.x;
         const float dy = p.y - cam.tranform.pos_.y;
@@ -232,7 +276,11 @@ namespace
         SetNumberField(L, "z", p.z);
         SetNumberField(L, "depth", depth);
         SetNumberField(L, "distance", std::sqrt(dx * dx + dy * dy + dz * dz));
-        SetNumberField(L, "quatDepth", moho::MeshLodDepth(q.m_afTuple[0], q.m_afTuple[1], q.m_afTuple[2], q.m_afTuple[3], p.x, p.y, p.z));
+        SetNumberField(
+          L,
+          "quatDepth",
+          moho::MeshLodDepth(q.m_afTuple[0], q.m_afTuple[1], q.m_afTuple[2], q.m_afTuple[3], p.x, p.y, p.z)
+        );
         SetNumberField(L, "dissolve", instance->dissolve);
         SetNumberField(L, "hidden", instance->isHidden != 0u ? 1.0 : 0.0);
         const boost::shared_ptr<moho::Mesh> mesh = instance->GetMesh();
@@ -270,10 +318,40 @@ namespace
   {
     EdUnitBonesLuaBootstrap()
     {
-      (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_camera_info", &cfunc_EdCameraInfo, nullptr, "<global>", "ed_camera_info() -> fov, eye, focus x y z, heading, pitch, targetZoom, viewport x y w h");
-      (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_lod_info", &cfunc_EdLodInfo, nullptr, "<global>", "ed_lod_info([entityId]) -> table of the camera and LOD numbers (eye, heading, pitch, zoom, fov, LOD row, viewport; with an entity id its depth, cutoffs and selected LOD) | nil");
-      (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_units_snapshot", &cfunc_EdUnitsSnapshot, nullptr, "<global>", "ed_units_snapshot([out]) -> out, n: five entries per unit of the world session: entity id, x, y, z, blueprint id");
-      (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_unit_bones", &cfunc_EdUnitBones, nullptr, "<global>", "ed_unit_bones(entityId) -> list of bones | nil, message");
+      (void)new moho::CScrLuaBinder(
+        UserLuaInitSet(),
+        "ed_camera_info",
+        &cfunc_EdCameraInfo,
+        nullptr,
+        "<global>",
+        "ed_camera_info() -> fov, eye, focus x y z, heading, pitch, targetZoom, viewport x y w h"
+      );
+      (void)new moho::CScrLuaBinder(
+        UserLuaInitSet(),
+        "ed_lod_info",
+        &cfunc_EdLodInfo,
+        nullptr,
+        "<global>",
+        "ed_lod_info([entityId]) -> table of the camera and LOD numbers (eye, heading, pitch, zoom, fov, LOD row, "
+        "viewport; with an entity id its depth, cutoffs and selected LOD) | nil"
+      );
+      (void)new moho::CScrLuaBinder(
+        UserLuaInitSet(),
+        "ed_units_snapshot",
+        &cfunc_EdUnitsSnapshot,
+        nullptr,
+        "<global>",
+        "ed_units_snapshot([out]) -> out, n: five entries per unit of the world session: entity id, x, y, z, blueprint "
+        "id"
+      );
+      (void)new moho::CScrLuaBinder(
+        UserLuaInitSet(),
+        "ed_unit_bones",
+        &cfunc_EdUnitBones,
+        nullptr,
+        "<global>",
+        "ed_unit_bones(entityId) -> list of bones | nil, message"
+      );
     }
   };
 

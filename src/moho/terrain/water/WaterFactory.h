@@ -14,7 +14,8 @@ namespace moho
   [[nodiscard]] WaterSurface* CreateWaterFidelity(IWldTerrainRes* terrainResource);
 
   /**
-   * EDITOR: rebuilds the water surface quad of every fidelity that exists, from the terrain's current water switch and elevation.
+   * EDITOR: rebuilds the water surface quad of every fidelity that exists, from the terrain's current water switch and
+   * elevation.
    */
   void EdRefreshWaterSurfaces(IWldTerrainRes* terrainResource);
 } // namespace moho

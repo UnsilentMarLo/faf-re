@@ -61,8 +61,8 @@ namespace moho
     const float frameSeconds
   )
   {
-    // EDITOR: the free camera (cam_Free, which only lifts the map-edge clamp here) never hides resource splats or strategic icons
-    // (user decision, MAP_EDITOR_DESIGN.md section 9); only an active mouse rotation does.
+    // EDITOR: the free camera (cam_Free, which only lifts the map-edge clamp here) never hides resource splats or
+    // strategic icons (user decision, MAP_EDITOR_DESIGN.md section 9); only an active mouse rotation does.
     if (!mCameraRotationActive) {
       if (mEnableResourceRendering) {
         GeomCamera3* const resourceView = const_cast<GeomCamera3*>(&mCamera->CameraGetView());
@@ -221,7 +221,9 @@ namespace moho
    * Stores the orthographic toggle and mirrors it onto the camera. Going
    * orthographic disables camera shake; leaving it re-enables shake.
    */
-  void CUIWorldView::SetOrthographic(const bool orthographicEnabled)
+  void CUIWorldView::SetOrthographic(
+    const bool orthographicEnabled
+  )
   {
     mOrthographic = orthographicEnabled;
 
@@ -313,7 +315,9 @@ namespace moho
    * `UserUnit+0x148` (`sizeof(UserEntity)`), slot 7 `GetBlueprint`, and tests
    * `IsBeingBuilt` through slot 13 of the primary vtable.
    */
-  UserUnit* PickPathPreviewSubject(WeakSet<UserEntity>& selection)
+  UserUnit* PickPathPreviewSubject(
+    WeakSet<UserEntity>& selection
+  )
   {
     UserUnit* subject = nullptr;
     float deepest = 0.0f;
@@ -321,8 +325,10 @@ namespace moho
     for (UserEntity* const entity : selection) {
       if (UserUnit* const unit = entity->IsUserUnit(); unit != nullptr) {
         const RUnitBlueprint* const blueprint = unit->GetBlueprint();
-        if (blueprint != nullptr && blueprint->Physics.ResolvedFootprint != nullptr && !unit->IsBeingBuilt()
-            && blueprint->mSizeZ > deepest) {
+        if (
+          blueprint != nullptr && blueprint->Physics.ResolvedFootprint != nullptr && !unit->IsBeingBuilt() &&
+          blueprint->mSizeZ > deepest
+        ) {
           deepest = blueprint->mSizeZ;
           subject = unit;
         }
@@ -347,7 +353,10 @@ namespace moho
    * span. The `>= 0.0f` guards on the `fabs` results are NaN guards, not
    * dead code - both are kept.
    */
-  [[nodiscard]] bool AreSkirtsAdjacent(const gpg::Rect2f& a, const gpg::Rect2f& b) noexcept
+  [[nodiscard]] bool AreSkirtsAdjacent(
+    const gpg::Rect2f& a,
+    const gpg::Rect2f& b
+  ) noexcept
   {
     if (std::fabs(a.x0 - b.x1) < 1.0f || std::fabs(a.x1 - b.x0) < 1.0f) {
       return (a.z0 >= b.z0 && b.z1 >= a.z1) || (b.z0 >= a.z0 && a.z1 >= b.z1);
@@ -355,8 +364,8 @@ namespace moho
 
     const float zFront = std::fabs(a.z0 - b.z1);
     const float zBack = std::fabs(a.z1 - b.z0);
-    return ((zFront >= 0.0f && zFront < 1.0f) || (zBack >= 0.0f && zBack < 1.0f))
-        && ((a.x0 >= b.x0 && b.x1 >= a.x1) || (b.x0 >= a.x0 && a.x1 >= b.x1));
+    return ((zFront >= 0.0f && zFront < 1.0f) || (zBack >= 0.0f && zBack < 1.0f)) &&
+      ((a.x0 >= b.x0 && b.x1 >= a.x1) || (b.x0 >= a.x0 && a.x1 >= b.x1));
   }
 
   /**
@@ -393,7 +402,9 @@ namespace moho
    * return rather than folded into the loop guards below.
    */
   void DrawBuildDragAdjacencyHighlights(
-    CBuildDragPreview& buildDrag, CD3DPrimBatcher* const batcher, CameraImpl* const camera
+    CBuildDragPreview& buildDrag,
+    CD3DPrimBatcher* const batcher,
+    CameraImpl* const camera
   )
   {
     constexpr std::uint32_t kDefaultSkirtColor = 0xD800D800u;
@@ -432,8 +443,10 @@ namespace moho
       }
 
       const Wm3::Vec3f& unitPosition = iunit->GetPosition();
-      if (camera->CameraGetView().viewport.ProjectViewportDepthRow1(unitPosition)
-          >= buildDrag.mActiveBuildMesh->mIconFadeInZoom) {
+      if (
+        camera->CameraGetView().viewport.ProjectViewportDepthRow1(unitPosition) >=
+        buildDrag.mActiveBuildMesh->mIconFadeInZoom
+      ) {
         continue;
       }
 
@@ -457,15 +470,29 @@ namespace moho
         }
       }
 
-      DrawUnitSkirt(heightField, iunit->GetBlueprint(), camera->CameraGetView(), iunit->GetPosition(),
-        buildDrag.mSession, batcher, color);
+      DrawUnitSkirt(
+        heightField,
+        iunit->GetBlueprint(),
+        camera->CameraGetView(),
+        iunit->GetPosition(),
+        buildDrag.mSession,
+        batcher,
+        color
+      );
     }
 
     for (std::size_t i = 0; i < buildDrag.mMeshes.size(); ++i) {
       MeshInstance* const previewMesh = buildDrag.mMeshes[i].get();
       previewMesh->UpdateInterpolatedFields();
-      DrawUnitSkirt(heightField, buildDrag.mBlueprints[i], camera->CameraGetView(),
-        previewMesh->interpolatedPosition, buildDrag.mSession, batcher, static_cast<std::uint32_t>(previewMesh->color));
+      DrawUnitSkirt(
+        heightField,
+        buildDrag.mBlueprints[i],
+        camera->CameraGetView(),
+        previewMesh->interpolatedPosition,
+        buildDrag.mSession,
+        batcher,
+        static_cast<std::uint32_t>(previewMesh->color)
+      );
     }
 
     batcher->Flush();
@@ -503,7 +530,11 @@ namespace moho
    * `ERuleBPUnitCommandCaps` enumerant `3`, while `COMMOD_BuildAnchored`
    * is a real, semantically exact match for "draw the build-assist radius").
    */
-  void DrawCommandGraph(CameraImpl* const camera, CBuildDragPreview& buildDrag, CD3DPrimBatcher* const batcher)
+  void DrawCommandGraph(
+    CameraImpl* const camera,
+    CBuildDragPreview& buildDrag,
+    CD3DPrimBatcher* const batcher
+  )
   {
     // Held for the whole pass and released on the way out (0x00853F0B).
     const boost::shared_ptr<UICommandGraph> graph = buildDrag.mSession->GetCommandGraph(false);
@@ -535,8 +566,16 @@ namespace moho
           const float buildAssistRadius = blueprint->Economy.MaxBuildDistance;
           if (buildAssistRadius > 0.0f) {
             DRAW_Circle(
-              batcher, 0.0f, GetIUnitBridge(unit)->GetPosition(), Wm3::Vector3f{0.0f, 1.0f, 0.0f}, 0.0f, 0u, 0u,
-              nullptr, false, buildAssistRadius
+              batcher,
+              0.0f,
+              GetIUnitBridge(unit)->GetPosition(),
+              Wm3::Vector3f{0.0f, 1.0f, 0.0f},
+              0.0f,
+              0u,
+              0u,
+              nullptr,
+              false,
+              buildAssistRadius
             );
             batcher->Flush();
             break;
@@ -567,7 +606,9 @@ namespace moho
    * `[ebp+10h]` (0x0086ED55..0x0086ED72); `frameSeconds` is not read.
    */
   void CUIWorldView::RenderCommandGraph(
-    CD3DPrimBatcher* const batcher, const std::int32_t gameTick, const float tickFraction,
+    CD3DPrimBatcher* const batcher,
+    const std::int32_t gameTick,
+    const float tickFraction,
     [[maybe_unused]] const float frameSeconds
   )
   {
@@ -623,8 +664,15 @@ namespace moho
    * real integer parameter) - declared here as `float` directly.
    */
   void EmitHermiteRibbonSegments(
-    CD3DPrimBatcher& batcher, const Wm3::Vector3f& p0, const Wm3::Vector3f& p1, const Wm3::Vector3f& t0,
-    const Wm3::Vector3f& t1, const float width, const std::uint32_t color, const float uStart, const float aspectRatio
+    CD3DPrimBatcher& batcher,
+    const Wm3::Vector3f& p0,
+    const Wm3::Vector3f& p1,
+    const Wm3::Vector3f& t0,
+    const Wm3::Vector3f& t1,
+    const float width,
+    const std::uint32_t color,
+    const float uStart,
+    const float aspectRatio
   )
   {
     std::int32_t segmentCount = ui_CurveSegments + 1;

@@ -1,17 +1,20 @@
 // Editor natives for the terrain strata (texture layers and their paint masks):
 //
-//   ed_stratum_info()                          -> maskWidth, maskHeight   (the two RGBA mask textures; 8 lanes = strata 0..7)
-//   ed_stratum_layer(i)                        -> path, tileSize, tileCount   i = 0..9 albedo (lower, strata 0..7, upper), 10..19 normals
-//   ed_stratum_set_layer(i, path, tileSize)    -> true | nil, message   loads the texture and applies the size against the map
-//   ed_stratum_read(stratum, x0, z0, x1, z1)   -> values, x0, z0, x1, z1   mask bytes of the rectangle (clamped), row major
-//   ed_stratum_write(stratum, x0, z0, x1, z1, values[, defer]) -> number of cells written; with defer the texture is not uploaded yet
-//   ed_stratum_flush()                         -> uploads the masks written with defer (a stroke of many dabs uploads once)
+//   ed_stratum_info()                          -> maskWidth, maskHeight   (the two RGBA mask textures; 8 lanes = strata
+//   0..7) ed_stratum_layer(i)                        -> path, tileSize, tileCount   i = 0..9 albedo (lower, strata
+//   0..7, upper), 10..19 normals ed_stratum_set_layer(i, path, tileSize)    -> true | nil, message   loads the texture
+//   and applies the size against the map ed_stratum_read(stratum, x0, z0, x1, z1)   -> values, x0, z0, x1, z1   mask
+//   bytes of the rectangle (clamped), row major ed_stratum_write(stratum, x0, z0, x1, z1, values[, defer]) -> number of
+//   cells written; with defer the texture is not uploaded yet ed_stratum_flush()                         -> uploads the
+//   masks written with defer (a stroke of many dabs uploads once)
 //
-// The masks are the engine's own dynamic textures. They are locked with D3DLOCK_DISCARD, so the engine's partial UpdateStratumMask / GetStratumMask
-// cannot be used on a live texture: a copy of the eight masks is kept here (MaskShadow) and a change rewrites the whole mask texture it belongs
-// to in one lock. The terrain renderer and the map writer read the same textures. Undo of mask edits is the Lua side's (editor/strata.lua).
+// The masks are the engine's own dynamic textures. They are locked with D3DLOCK_DISCARD, so the engine's partial
+// UpdateStratumMask / GetStratumMask cannot be used on a live texture: a copy of the eight masks is kept here
+// (MaskShadow) and a change rewrites the whole mask texture it belongs to in one lock. The terrain renderer and the map
+// writer read the same textures. Undo of mask edits is the Lua side's (editor/strata.lua).
 //
-//   ed_stratum_shader([name])                  -> terrain technique name; 'TTerrain' blends strata 0..3 only, 'TTerrainXP' all eight
+//   ed_stratum_shader([name])                  -> terrain technique name; 'TTerrain' blends strata 0..3 only,
+//   'TTerrainXP' all eight
 
 #include <algorithm>
 #include <cmath>
@@ -46,19 +49,24 @@ namespace
     return session->mWldMap->mTerrainRes;
   }
 
-  moho::CStratumMaterial* LayerOf(moho::StratumMaterial& m, const int i)
+  moho::CStratumMaterial* LayerOf(
+    moho::StratumMaterial& m,
+    const int i
+  )
   {
     moho::CStratumMaterial* const table[20] = {
-      &m.mLowerAlbedoTexture,   &m.mStratum0AlbedoTexture, &m.mStratum1AlbedoTexture, &m.mStratum2AlbedoTexture,
+      &m.mLowerAlbedoTexture,    &m.mStratum0AlbedoTexture, &m.mStratum1AlbedoTexture, &m.mStratum2AlbedoTexture,
       &m.mStratum3AlbedoTexture, &m.mStratum4AlbedoTexture, &m.mStratum5AlbedoTexture, &m.mStratum6AlbedoTexture,
-      &m.mStratum7AlbedoTexture, &m.mUpperAlbedoTexture,   &m.mLowerNormalTexture,    &m.mStratum0NormalTexture,
+      &m.mStratum7AlbedoTexture, &m.mUpperAlbedoTexture,    &m.mLowerNormalTexture,    &m.mStratum0NormalTexture,
       &m.mStratum1NormalTexture, &m.mStratum2NormalTexture, &m.mStratum3NormalTexture, &m.mStratum4NormalTexture,
       &m.mStratum5NormalTexture, &m.mStratum6NormalTexture, &m.mStratum7NormalTexture, &m.mUpperNormalTexture,
     };
     return (i >= 0 && i < 20) ? table[i] : nullptr;
   }
 
-  int __cdecl cfunc_EdStratumInfo(lua_State* const L)
+  int __cdecl cfunc_EdStratumInfo(
+    lua_State* const L
+  )
   {
     moho::IWldTerrainRes* const res = Terrain();
     if (res == nullptr) {
@@ -71,7 +79,9 @@ namespace
     return 2;
   }
 
-  int __cdecl cfunc_EdStratumLayer(lua_State* const L)
+  int __cdecl cfunc_EdStratumLayer(
+    lua_State* const L
+  )
   {
     moho::IWldTerrainRes* const res = Terrain();
     const int i = static_cast<int>(luaL_checknumber(L, 1));
@@ -90,7 +100,9 @@ namespace
     return 3;
   }
 
-  int __cdecl cfunc_EdStratumSetLayer(lua_State* const L)
+  int __cdecl cfunc_EdStratumSetLayer(
+    lua_State* const L
+  )
   {
     moho::IWldTerrainRes* const res = Terrain();
     const int i = static_cast<int>(luaL_checknumber(L, 1));
@@ -109,17 +121,20 @@ namespace
     }
     layer->mPath.assign(path);
     layer->mSize = size;
-    layer->mTextureSheet = {};      // load the new texture
-    const Wm3::Vector2f maxSize{static_cast<float>(res->mMap->mHeightField->width - 1),
-                                     static_cast<float>(res->mMap->mHeightField->height - 1)};
+    layer->mTextureSheet = {}; // load the new texture
+    const Wm3::Vector2f maxSize{
+      static_cast<float>(res->mMap->mHeightField->width - 1), static_cast<float>(res->mMap->mHeightField->height - 1)
+    };
     moho::CStratumMaterial::SetSize(maxSize, *layer);
     lua_pushboolean(L, layer->mTextureSheet.px != nullptr ? 1 : 0);
     return 1;
   }
 
-  // ed_stratum_shader([name]) -> the terrain technique name; with a name it is changed. 'TTerrain' blends strata 0..3 only (painted layers 1..4),
-  // 'TTerrainXP' all eight.
-  int __cdecl cfunc_EdStratumShader(lua_State* const L)
+  // ed_stratum_shader([name]) -> the terrain technique name; with a name it is changed. 'TTerrain' blends strata 0..3
+  // only (painted layers 1..4), 'TTerrainXP' all eight.
+  int __cdecl cfunc_EdStratumShader(
+    lua_State* const L
+  )
   {
     moho::IWldTerrainRes* const res = Terrain();
     if (res == nullptr) {
@@ -134,10 +149,10 @@ namespace
     return 1;
   }
 
-  // The mask textures are locked with D3DLOCK_DISCARD (CD3DDynamicTextureSheet::Lock on a dynamic texture), so a partial update through
-  // UpdateStratumMask leaves everything outside the rectangle undefined (it showed as diagonal stripes), and reading a lane back is not
-  // reliable either. The masks are therefore kept here, one byte array per stratum, read from the texture once, and a change always writes
-  // a whole mask texture (four lanes, one lock).
+  // The mask textures are locked with D3DLOCK_DISCARD (CD3DDynamicTextureSheet::Lock on a dynamic texture), so a
+  // partial update through UpdateStratumMask leaves everything outside the rectangle undefined (it showed as diagonal
+  // stripes), and reading a lane back is not reliable either. The masks are therefore kept here, one byte array per
+  // stratum, read from the texture once, and a change always writes a whole mask texture (four lanes, one lock).
   struct MaskShadow
   {
     const void* terrain = nullptr;
@@ -146,20 +161,27 @@ namespace
     int h = 0;
     std::vector<std::uint8_t> lane[8];
     bool loaded[2] = {false, false};
-    bool dirty[2] = {false, false};   // written to the shadow, not yet to the texture (ed_stratum_write with defer)
+    bool dirty[2] = {false, false}; // written to the shadow, not yet to the texture (ed_stratum_write with defer)
   };
 
   MaskShadow gShadow;
-  std::uint64_t gMaskRevision = 0;      // EDITOR: bumped by every change of a mask (StratumMaskRevision)
+  std::uint64_t gMaskRevision = 0; // EDITOR: bumped by every change of a mask (StratumMaskRevision)
 
-  moho::CD3DDynamicTextureSheet* MaskSheet(moho::StratumMaterial& m, const int which)
+  moho::CD3DDynamicTextureSheet* MaskSheet(
+    moho::StratumMaterial& m,
+    const int which
+  )
   {
     return reinterpret_cast<moho::CD3DDynamicTextureSheet*>(which != 0 ? m.mStratumMask1.px : m.mStratumMask0.px);
   }
 
-  // The texture the engine holds must be exactly w x h (a map loaded from a file brings its own mask textures): a larger mask size than the texture
-  // would write past the locked memory.
-  bool SheetFits(moho::CD3DDynamicTextureSheet* const sheet, const int w, const int h)
+  // The texture the engine holds must be exactly w x h (a map loaded from a file brings its own mask textures): a
+  // larger mask size than the texture would write past the locked memory.
+  bool SheetFits(
+    moho::CD3DDynamicTextureSheet* const sheet,
+    const int w,
+    const int h
+  )
   {
     Wm3::Vector3f dim{};
     if (sheet->GetDimensions(&dim) == nullptr) {
@@ -169,7 +191,10 @@ namespace
   }
 
   // Makes the shadow of mask texture `which` (0: strata 0..3, 1: 4..7) valid. false when there is no mask.
-  bool EnsureShadow(moho::IWldTerrainRes* const res, const int which)
+  bool EnsureShadow(
+    moho::IWldTerrainRes* const res,
+    const int which
+  )
   {
     moho::StratumMaterial& m = res->GetStratumMaterial();
     const int w = static_cast<int>(m.mStratumMaskWidth);
@@ -179,7 +204,8 @@ namespace
       return false;
     }
     if (gShadow.terrain != res || gShadow.w != w || gShadow.h != h || gShadow.sheet[which] != sheet) {
-      // another map, another size, or the engine replaced the texture (edit mode clones): the copy of this mask is stale
+      // another map, another size, or the engine replaced the texture (edit mode clones): the copy of this mask is
+      // stale
       if (gShadow.terrain != res || gShadow.w != w || gShadow.h != h) {
         gShadow = MaskShadow{};
         gShadow.terrain = res;
@@ -206,7 +232,9 @@ namespace
       gShadow.lane[which * 4 + i].assign(count, 0);
     }
     for (int y = 0; y < h; ++y) {
-      const auto* row = reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(bits) + static_cast<std::size_t>(y) * pitch);
+      const auto* row = reinterpret_cast<const std::uint32_t*>(
+        static_cast<const std::uint8_t*>(bits) + static_cast<std::size_t>(y) * pitch
+      );
       for (int x = 0; x < w; ++x) {
         const std::uint32_t px = row[x];
         const std::size_t at = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
@@ -218,11 +246,14 @@ namespace
     }
     // the lock may have discarded the contents: write back exactly what was read
     for (int y = 0; y < h; ++y) {
-      auto* row = reinterpret_cast<std::uint32_t*>(static_cast<std::uint8_t*>(bits) + static_cast<std::size_t>(y) * pitch);
+      auto* row =
+        reinterpret_cast<std::uint32_t*>(static_cast<std::uint8_t*>(bits) + static_cast<std::size_t>(y) * pitch);
       for (int x = 0; x < w; ++x) {
         const std::size_t at = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
-        row[x] = (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 3][at]) << 24) | (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 0][at]) << 16) |
-                 (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 1][at]) << 8) | static_cast<std::uint32_t>(gShadow.lane[which * 4 + 2][at]);
+        row[x] = (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 3][at]) << 24) |
+          (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 0][at]) << 16) |
+          (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 1][at]) << 8) |
+          static_cast<std::uint32_t>(gShadow.lane[which * 4 + 2][at]);
       }
     }
     (void)sheet->Unlock();
@@ -231,7 +262,10 @@ namespace
   }
 
   // Writes the whole mask texture `which` from the shadow (one lock, four lanes).
-  void UploadShadow(moho::IWldTerrainRes* const res, const int which)
+  void UploadShadow(
+    moho::IWldTerrainRes* const res,
+    const int which
+  )
   {
     moho::StratumMaterial& m = res->GetStratumMaterial();
     moho::CD3DDynamicTextureSheet* const sheet = MaskSheet(m, which);
@@ -247,18 +281,27 @@ namespace
       return;
     }
     for (int y = 0; y < h; ++y) {
-      auto* row = reinterpret_cast<std::uint32_t*>(static_cast<std::uint8_t*>(bits) + static_cast<std::size_t>(y) * pitch);
+      auto* row =
+        reinterpret_cast<std::uint32_t*>(static_cast<std::uint8_t*>(bits) + static_cast<std::size_t>(y) * pitch);
       for (int x = 0; x < w; ++x) {
         const std::size_t at = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
-        row[x] = (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 3][at]) << 24) | (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 0][at]) << 16) |
-                 (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 1][at]) << 8) | static_cast<std::uint32_t>(gShadow.lane[which * 4 + 2][at]);
+        row[x] = (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 3][at]) << 24) |
+          (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 0][at]) << 16) |
+          (static_cast<std::uint32_t>(gShadow.lane[which * 4 + 1][at]) << 8) |
+          static_cast<std::uint32_t>(gShadow.lane[which * 4 + 2][at]);
       }
     }
     (void)sheet->Unlock();
     gShadow.dirty[which] = false;
   }
 
-  void ClampMask(const moho::StratumMaterial& m, int& x0, int& z0, int& x1, int& z1)
+  void ClampMask(
+    const moho::StratumMaterial& m,
+    int& x0,
+    int& z0,
+    int& x1,
+    int& z1
+  )
   {
     x0 = std::max(0, x0);
     z0 = std::max(0, z0);
@@ -266,7 +309,9 @@ namespace
     z1 = std::min(static_cast<int>(m.mStratumMaskHeight) - 1, z1);
   }
 
-  int __cdecl cfunc_EdStratumRead(lua_State* const L)
+  int __cdecl cfunc_EdStratumRead(
+    lua_State* const L
+  )
   {
     moho::IWldTerrainRes* const res = Terrain();
     const int stratum = static_cast<int>(luaL_checknumber(L, 1));
@@ -299,7 +344,12 @@ namespace
     for (int z = z0; z <= z1; ++z) {
       for (int x = x0; x <= x1; ++x, ++index) {
         lua_pushnumber(L, static_cast<lua_Number>(index));
-        lua_pushnumber(L, static_cast<lua_Number>(full[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)]));
+        lua_pushnumber(
+          L,
+          static_cast<lua_Number>(
+            full[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)]
+          )
+        );
         lua_settable(L, -3);
       }
     }
@@ -310,7 +360,9 @@ namespace
     return 5;
   }
 
-  int __cdecl cfunc_EdStratumWrite(lua_State* const L)
+  int __cdecl cfunc_EdStratumWrite(
+    lua_State* const L
+  )
   {
     moho::IWldTerrainRes* const res = Terrain();
     const int stratum = static_cast<int>(luaL_checknumber(L, 1));
@@ -356,7 +408,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdStratumFlush(lua_State* const L)
+  int __cdecl cfunc_EdStratumFlush(
+    lua_State* const L
+  )
   {
     moho::IWldTerrainRes* const res = Terrain();
     if (res != nullptr && gShadow.terrain == res) {
@@ -371,16 +425,21 @@ namespace
     return 1;
   }
 
-  // ---- the size of the masks ----------------------------------------------------------------------------------------------------------------------
-  // A mask keeps the resolution it is given: the size rule is StratumMaskSize.h (docs/RENDERER_BACKENDS.md, "Stratum mask resolution"): never less than half the map's size, at most
-  // max(2048, 2 x the map's size in cells), 8192 at the very most. The shipped exe resamples every mask to half the map's size when it loads a map, so a bigger mask only shows in an exe
-  // that keeps it; the editor draws and saves what it is given.
+  // ---- the size of the masks
+  // ----------------------------------------------------------------------------------------------------------------------
+  // A mask keeps the resolution it is given: the size rule is StratumMaskSize.h (docs/RENDERER_BACKENDS.md, "Stratum
+  // mask resolution"): never less than half the map's size, at most max(2048, 2 x the map's size in cells), 8192 at the
+  // very most. The shipped exe resamples every mask to half the map's size when it loads a map, so a bigger mask only
+  // shows in an exe that keeps it; the editor draws and saves what it is given.
   struct MaskRange
   {
     int minW = 0, minH = 0, maxW = 0, maxH = 0;
   };
 
-  bool MaskRangeOf(moho::IWldTerrainRes* const res, MaskRange& r)
+  bool MaskRangeOf(
+    moho::IWldTerrainRes* const res,
+    MaskRange& r
+  )
   {
     if (res == nullptr || res->mMap == nullptr || res->mMap->mHeightField.get() == nullptr) {
       return false;
@@ -394,16 +453,20 @@ namespace
     return r.minW > 0 && r.minH > 0;
   }
 
-  // One axis of a resample: the source taps of every destination texel. Growing: linear between the two nearest texel centres. Shrinking: the area the destination texel covers.
+  // One axis of a resample: the source taps of every destination texel. Growing: linear between the two nearest texel
+  // centres. Shrinking: the area the destination texel covers.
   struct AxisTaps
   {
-    std::vector<int> first;          // first source index of each destination texel
+    std::vector<int> first; // first source index of each destination texel
     std::vector<int> count;
-    std::vector<float> weight;       // count weights per destination texel, back to back
-    std::vector<std::size_t> start;  // offset of the weights of each destination texel
+    std::vector<float> weight;      // count weights per destination texel, back to back
+    std::vector<std::size_t> start; // offset of the weights of each destination texel
   };
 
-  AxisTaps MakeTaps(const int src, const int dst)
+  AxisTaps MakeTaps(
+    const int src,
+    const int dst
+  )
   {
     AxisTaps t;
     t.first.resize(static_cast<std::size_t>(dst));
@@ -442,7 +505,15 @@ namespace
     return t;
   }
 
-  std::vector<std::uint8_t> ResampleMask(const std::vector<std::uint8_t>& src, const int sw, const int sh, const AxisTaps& tx, const AxisTaps& tz, const int dw, const int dh)
+  std::vector<std::uint8_t> ResampleMask(
+    const std::vector<std::uint8_t>& src,
+    const int sw,
+    const int sh,
+    const AxisTaps& tx,
+    const AxisTaps& tz,
+    const int dw,
+    const int dh
+  )
   {
     std::vector<float> mid(static_cast<std::size_t>(dw) * static_cast<std::size_t>(sh));
     for (int y = 0; y < sh; ++y) {
@@ -451,7 +522,8 @@ namespace
       for (int x = 0; x < dw; ++x) {
         const float* wt = tx.weight.data() + tx.start[static_cast<std::size_t>(x)];
         float sum = 0.0f;
-        for (int k = 0, a = tx.first[static_cast<std::size_t>(x)], n = tx.count[static_cast<std::size_t>(x)]; k < n; ++k) {
+        for (int k = 0, a = tx.first[static_cast<std::size_t>(x)], n = tx.count[static_cast<std::size_t>(x)]; k < n;
+             ++k) {
           sum += wt[k] * static_cast<float>(row[a + k]);
         }
         out[x] = sum;
@@ -466,7 +538,8 @@ namespace
       for (int x = 0; x < dw; ++x) {
         float sum = 0.0f;
         for (int k = 0; k < n; ++k) {
-          sum += wt[k] * mid[static_cast<std::size_t>(a + k) * static_cast<std::size_t>(dw) + static_cast<std::size_t>(x)];
+          sum +=
+            wt[k] * mid[static_cast<std::size_t>(a + k) * static_cast<std::size_t>(dw) + static_cast<std::size_t>(x)];
         }
         out[x] = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, sum + 0.5f)));
       }
@@ -474,7 +547,10 @@ namespace
     return dst;
   }
 
-  void AdoptMaskSheet(boost::SharedPtrRaw<moho::RD3DTextureResource>& mask, const boost::shared_ptr<moho::CD3DDynamicTextureSheet>& sheet)
+  void AdoptMaskSheet(
+    boost::SharedPtrRaw<moho::RD3DTextureResource>& mask,
+    const boost::shared_ptr<moho::CD3DDynamicTextureSheet>& sheet
+  )
   {
     const boost::SharedPtrRaw<moho::CD3DDynamicTextureSheet> borrow = boost::SharedPtrRawFromSharedBorrow(sheet);
     boost::SharedPtrRaw<moho::RD3DTextureResource> reinterpreted{};
@@ -484,7 +560,9 @@ namespace
   }
 
   // ed_stratum_limits() -> minW, minH, maxW, maxH   the sizes the masks may have on this map (nil without a map)
-  int __cdecl cfunc_EdStratumLimits(lua_State* const L)
+  int __cdecl cfunc_EdStratumLimits(
+    lua_State* const L
+  )
   {
     MaskRange r;
     if (!MaskRangeOf(Terrain(), r)) {
@@ -498,8 +576,11 @@ namespace
     return 4;
   }
 
-  // ed_stratum_set_size(w[, h]) -> true | nil, message   gives the eight masks another resolution (growing: linear, shrinking: area average); the paint is kept
-  int __cdecl cfunc_EdStratumSetSize(lua_State* const L)
+  // ed_stratum_set_size(w[, h]) -> true | nil, message   gives the eight masks another resolution (growing: linear,
+  // shrinking: area average); the paint is kept
+  int __cdecl cfunc_EdStratumSetSize(
+    lua_State* const L
+  )
   {
     moho::IWldTerrainRes* const res = Terrain();
     MaskRange r;
@@ -517,7 +598,10 @@ namespace
       return fail("a mask is not smaller than half the map's size (the exe raises it to that when it loads the map)");
     }
     if (w > r.maxW || h > r.maxH) {
-      return fail("a mask is not bigger than two texels per world unit (and 2048 on any map, 8192 at the most): a map does not use more");
+      return fail(
+        "a mask is not bigger than two texels per world unit (and 2048 on any map, 8192 at the most): a map does not "
+        "use more"
+      );
     }
     moho::StratumMaterial& m = res->GetStratumMaterial();
     const int sw = static_cast<int>(m.mStratumMaskWidth);
@@ -580,24 +664,78 @@ namespace
   {
     EdStrataLuaBootstrap()
     {
-      moho::editor::OnSessionEnd([] { gShadow = MaskShadow{}; });   // keyed by terrain / sheet pointers: stale after the session
+      moho::editor::OnSessionEnd([] {
+        gShadow = MaskShadow{};
+      }); // keyed by terrain / sheet pointers: stale after the session
       auto& set = UserLuaInitSet();
-      (void)new moho::CScrLuaBinder(set, "ed_stratum_info", &cfunc_EdStratumInfo, nullptr, "<global>", "ed_stratum_info() -> maskWidth, maskHeight");
-      (void)new moho::CScrLuaBinder(set, "ed_stratum_layer", &cfunc_EdStratumLayer, nullptr, "<global>",
-                                    "ed_stratum_layer(i) -> path, tileSize, tileCount (0..9 albedo, 10..19 normal)");
-      (void)new moho::CScrLuaBinder(set, "ed_stratum_set_layer", &cfunc_EdStratumSetLayer, nullptr, "<global>",
-                                    "ed_stratum_set_layer(i, path, tileSize) -> loaded | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_stratum_shader", &cfunc_EdStratumShader, nullptr, "<global>",
-                                    "ed_stratum_shader([name]) -> terrain technique name (TTerrain: strata 0..3, TTerrainXP: all eight)");
-      (void)new moho::CScrLuaBinder(set, "ed_stratum_read", &cfunc_EdStratumRead, nullptr, "<global>",
-                                    "ed_stratum_read(stratum, x0, z0, x1, z1) -> values, x0, z0, x1, z1");
-      (void)new moho::CScrLuaBinder(set, "ed_stratum_flush", &cfunc_EdStratumFlush, nullptr, "<global>", "ed_stratum_flush() -> uploads deferred mask writes");
-      (void)new moho::CScrLuaBinder(set, "ed_stratum_write", &cfunc_EdStratumWrite, nullptr, "<global>",
-                                    "ed_stratum_write(stratum, x0, z0, x1, z1, values) -> cells written");
-      (void)new moho::CScrLuaBinder(set, "ed_stratum_limits", &cfunc_EdStratumLimits, nullptr, "<global>",
-                                    "ed_stratum_limits() -> minW, minH, maxW, maxH (the sizes the masks may have)");
-      (void)new moho::CScrLuaBinder(set, "ed_stratum_set_size", &cfunc_EdStratumSetSize, nullptr, "<global>",
-                                    "ed_stratum_set_size(w[, h]) -> true | nil, message (the eight masks get another resolution, the paint is resampled)");
+      (void)new moho::CScrLuaBinder(
+        set, "ed_stratum_info", &cfunc_EdStratumInfo, nullptr, "<global>", "ed_stratum_info() -> maskWidth, maskHeight"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_stratum_layer",
+        &cfunc_EdStratumLayer,
+        nullptr,
+        "<global>",
+        "ed_stratum_layer(i) -> path, tileSize, tileCount (0..9 albedo, 10..19 normal)"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_stratum_set_layer",
+        &cfunc_EdStratumSetLayer,
+        nullptr,
+        "<global>",
+        "ed_stratum_set_layer(i, path, tileSize) -> loaded | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_stratum_shader",
+        &cfunc_EdStratumShader,
+        nullptr,
+        "<global>",
+        "ed_stratum_shader([name]) -> terrain technique name (TTerrain: strata 0..3, TTerrainXP: all eight)"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_stratum_read",
+        &cfunc_EdStratumRead,
+        nullptr,
+        "<global>",
+        "ed_stratum_read(stratum, x0, z0, x1, z1) -> values, x0, z0, x1, z1"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_stratum_flush",
+        &cfunc_EdStratumFlush,
+        nullptr,
+        "<global>",
+        "ed_stratum_flush() -> uploads deferred mask writes"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_stratum_write",
+        &cfunc_EdStratumWrite,
+        nullptr,
+        "<global>",
+        "ed_stratum_write(stratum, x0, z0, x1, z1, values) -> cells written"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_stratum_limits",
+        &cfunc_EdStratumLimits,
+        nullptr,
+        "<global>",
+        "ed_stratum_limits() -> minW, minH, maxW, maxH (the sizes the masks may have)"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_stratum_set_size",
+        &cfunc_EdStratumSetSize,
+        nullptr,
+        "<global>",
+        "ed_stratum_set_size(w[, h]) -> true | nil, message (the eight masks get another resolution, the paint is "
+        "resampled)"
+      );
     }
   };
 
@@ -607,7 +745,12 @@ namespace
 // EDITOR: whole-mask access for the field engine (EdStrata.h).
 namespace moho::editor
 {
-  bool StratumMaskRead(const int stratum, std::vector<std::uint8_t>& out, int& w, int& h)
+  bool StratumMaskRead(
+    const int stratum,
+    std::vector<std::uint8_t>& out,
+    int& w,
+    int& h
+  )
   {
     moho::IWldTerrainRes* const res = Terrain();
     if (res == nullptr || stratum < 0 || stratum > 7 || !EnsureShadow(res, stratum / 4)) {
@@ -619,10 +762,18 @@ namespace moho::editor
     return true;
   }
 
-  bool StratumMaskWrite(const int stratum, const std::uint8_t* const data, const int w, const int h)
+  bool StratumMaskWrite(
+    const int stratum,
+    const std::uint8_t* const data,
+    const int w,
+    const int h
+  )
   {
     moho::IWldTerrainRes* const res = Terrain();
-    if (res == nullptr || data == nullptr || stratum < 0 || stratum > 7 || !EnsureShadow(res, stratum / 4) || w != gShadow.w || h != gShadow.h) {
+    if (
+      res == nullptr || data == nullptr || stratum < 0 || stratum > 7 || !EnsureShadow(res, stratum / 4) ||
+      w != gShadow.w || h != gShadow.h
+    ) {
       return false;
     }
     gShadow.lane[stratum].assign(data, data + static_cast<std::size_t>(w) * static_cast<std::size_t>(h));

@@ -1,17 +1,22 @@
-// EDITOR: the math of one round terrain brush dab (raise, lower, plateau, flatten, smooth, noise, terrace, plane) on a grid of 16-bit height words.
+// EDITOR: the math of one round terrain brush dab (raise, lower, plateau, flatten, smooth, noise, terrace, plane) on a
+// grid of 16-bit height words.
 //
-// This is a port of the sample loop of editor/runtime/lua/editor/terrain.lua (DabOne, Weight, Noise, BoxBlur) so a dab costs one native call
-// instead of a few ten thousand Lua operations. It is a header-only pure function (no engine types) so it can be tested on its own
-// (moho/editor/tests/EdBrushTest.cpp); the Lua native and the document write are EdBrush.cpp.
+// This is a port of the sample loop of editor/runtime/lua/editor/terrain.lua (DabOne, Weight, Noise, BoxBlur) so a dab
+// costs one native call instead of a few ten thousand Lua operations. It is a header-only pure function (no engine
+// types) so it can be tested on its own (moho/editor/tests/EdBrushTest.cpp); the Lua native and the document write are
+// EdBrush.cpp.
 //
-// The game's Lua numbers are 32-bit floats and every Lua operation rounds its result to a float. The code below keeps that: one statement per
-// operation, `float` locals, so a dab gives the same words as the Lua loop (the self test compares the two when the native exists). Do not
-// "simplify" an expression into a different operation order, and build with /fp:precise (the default), not /fp:fast.
+// The game's Lua numbers are 32-bit floats and every Lua operation rounds its result to a float. The code below keeps
+// that: one statement per operation, `float` locals, so a dab gives the same words as the Lua loop (the self test
+// compares the two when the native exists). Do not "simplify" an expression into a different operation order, and build
+// with /fp:precise (the default), not /fp:fast.
 //
-// The noise mode is smooth value noise on a lattice (terrain.lua ValueNoise / SmoothNoise): the lattice values come from a seeded integer hash whose
-// intermediates stay below 2^24, so the Lua VM's floats and these integers agree exactly.
+// The noise mode is smooth value noise on a lattice (terrain.lua ValueNoise / SmoothNoise): the lattice values come
+// from a seeded integer hash whose intermediates stay below 2^24, so the Lua VM's floats and these integers agree
+// exactly.
 //
-// Units: heights are words, 128 per world unit; a dab at (cx, cz) in sample coordinates with a radius in samples; words are clamped to 0..65535.
+// Units: heights are words, 128 per world unit; a dab at (cx, cz) in sample coordinates with a radius in samples; words
+// are clamped to 0..65535.
 #pragma once
 
 #include <algorithm>
@@ -26,9 +31,11 @@
 namespace moho::editor::brush
 {
   /**
-   * A brush shape mask (editor/runtime/lua/editor/brushes.lua): an n x n grid of weights 0..1 over the unit square -1..1 (row major, z outer, x fastest: sample (i, j) lies at
-   * u = -1 + 2 i / (n - 1), v = -1 + 2 j / (n - 1)), uploaded once per shape by ed_brush_shape_set and referred to by a handle number. Lua rasterises procedural shapes and loads
-   * image masks into it; a dab turns it by an angle and reads it bilinearly (ShapeSampler), exactly as brushes.lua Weight does for the Lua loop.
+   * A brush shape mask (editor/runtime/lua/editor/brushes.lua): an n x n grid of weights 0..1 over the unit square
+   * -1..1 (row major, z outer, x fastest: sample (i, j) lies at u = -1 + 2 i / (n - 1), v = -1 + 2 j / (n - 1)),
+   * uploaded once per shape by ed_brush_shape_set and referred to by a handle number. Lua rasterises procedural shapes
+   * and loads image masks into it; a dab turns it by an angle and reads it bilinearly (ShapeSampler), exactly as
+   * brushes.lua Weight does for the Lua loop.
    */
   struct Shape
   {
@@ -36,7 +43,8 @@ namespace moho::editor::brush
     std::vector<float> values;
   };
 
-  /** The shapes uploaded so far, by handle (one instance for the whole exe: an inline function's static is shared by every translation unit). */
+  /** The shapes uploaded so far, by handle (one instance for the whole exe: an inline function's static is shared by
+   * every translation unit). */
   [[nodiscard]] inline std::map<int, Shape>& ShapeRegistry()
   {
     static std::map<int, Shape> shapes;
@@ -47,9 +55,16 @@ namespace moho::editor::brush
   constexpr std::size_t kMaxShapes = 4096;
 
   /** Stores (or replaces) the shape `handle`; false for a bad size or a full registry. */
-  [[nodiscard]] inline bool SetShape(const int handle, const int n, std::vector<float>&& values)
+  [[nodiscard]] inline bool SetShape(
+    const int handle,
+    const int n,
+    std::vector<float>&& values
+  )
   {
-    if (handle <= 0 || n < 2 || n > kMaxShapeSize || values.size() != static_cast<std::size_t>(n) * static_cast<std::size_t>(n)) {
+    if (
+      handle <= 0 || n < 2 || n > kMaxShapeSize ||
+      values.size() != static_cast<std::size_t>(n) * static_cast<std::size_t>(n)
+    ) {
       return false;
     }
     std::map<int, Shape>& shapes = ShapeRegistry();
@@ -63,7 +78,9 @@ namespace moho::editor::brush
   }
 
   /** The shape of a handle, or null. */
-  [[nodiscard]] inline const Shape* FindShape(const int handle)
+  [[nodiscard]] inline const Shape* FindShape(
+    const int handle
+  )
   {
     const std::map<int, Shape>& shapes = ShapeRegistry();
     const auto it = shapes.find(handle);
@@ -71,9 +88,10 @@ namespace moho::editor::brush
   }
 
   /**
-   * brushes.lua Weight() on a shape grid: the mask value at the offset (dx, dz) from the centre of a brush of radius r, the mask turned by `angle` degrees. One operation per statement
-   * (float roundings as in the Lua VM), the same order as the Lua source:
-   *   u = (dx c + dz s) / r,  v = (-dx s + dz c) / r,  0 beyond u^2 + v^2 > 1.6,  bilinear read of the grid, 0 outside it.
+   * brushes.lua Weight() on a shape grid: the mask value at the offset (dx, dz) from the centre of a brush of radius r,
+   * the mask turned by `angle` degrees. One operation per statement (float roundings as in the Lua VM), the same order
+   * as the Lua source: u = (dx c + dz s) / r,  v = (-dx s + dz c) / r,  0 beyond u^2 + v^2 > 1.6,  bilinear read of the
+   * grid, 0 outside it.
    */
   struct ShapeSampler
   {
@@ -82,7 +100,11 @@ namespace moho::editor::brush
     float s = 0.0f;
 
     ShapeSampler() = default;
-    ShapeSampler(const Shape* const sh, const float angleDegrees) : shape(sh)
+    ShapeSampler(
+      const Shape* const sh,
+      const float angleDegrees
+    )
+      : shape(sh)
     {
       // math.rad(angle) = angle * (pi / 180) in double, stored as a float; cos / sin of that float, stored as floats
       const float a = static_cast<float>(static_cast<double>(angleDegrees) * (3.14159265358979323846 / 180.0));
@@ -90,7 +112,11 @@ namespace moho::editor::brush
       s = static_cast<float>(std::sin(static_cast<double>(a)));
     }
 
-    [[nodiscard]] float At(const float dx, const float dz, const float r) const
+    [[nodiscard]] float At(
+      const float dx,
+      const float dz,
+      const float r
+    ) const
     {
       float p = dx * c;
       float q = dz * s;
@@ -123,9 +149,12 @@ namespace moho::editor::brush
       const float tz = fz - static_cast<float>(z0);
       const float* const g = shape->values.data();
       const float a00 = g[static_cast<std::size_t>(z0) * static_cast<std::size_t>(n) + static_cast<std::size_t>(x0)];
-      const float a10 = g[static_cast<std::size_t>(z0) * static_cast<std::size_t>(n) + static_cast<std::size_t>(x0 + 1)];
-      const float a01 = g[static_cast<std::size_t>(z0 + 1) * static_cast<std::size_t>(n) + static_cast<std::size_t>(x0)];
-      const float a11 = g[static_cast<std::size_t>(z0 + 1) * static_cast<std::size_t>(n) + static_cast<std::size_t>(x0 + 1)];
+      const float a10 =
+        g[static_cast<std::size_t>(z0) * static_cast<std::size_t>(n) + static_cast<std::size_t>(x0 + 1)];
+      const float a01 =
+        g[static_cast<std::size_t>(z0 + 1) * static_cast<std::size_t>(n) + static_cast<std::size_t>(x0)];
+      const float a11 =
+        g[static_cast<std::size_t>(z0 + 1) * static_cast<std::size_t>(n) + static_cast<std::size_t>(x0 + 1)];
       const float ix = 1.0f - tx;
       const float iz = 1.0f - tz;
       float t0 = a00 * ix;
@@ -150,12 +179,16 @@ namespace moho::editor::brush
     Noise,
     /** Towards the nearest step of `Dab::step` (upstream's HeightBrushMode::Terrace, WP7). */
     Terrace,
-    /** Towards the plane height = planeX * x + planeZ * z + planeC in words (upstream's HeightBrushMode::Plane, WP7). */
+    /** Towards the plane height = planeX * x + planeZ * z + planeC in words (upstream's HeightBrushMode::Plane, WP7).
+     */
     Plane,
   };
 
   /** Mode from the name terrain.lua uses; false for a mode this file does not do (the Lua path keeps it). */
-  [[nodiscard]] inline bool ModeFromName(const char* const name, Mode& out)
+  [[nodiscard]] inline bool ModeFromName(
+    const char* const name,
+    Mode& out
+  )
   {
     if (name == nullptr) {
       return false;
@@ -166,9 +199,14 @@ namespace moho::editor::brush
       Mode mode;
     };
     static const Entry kModes[] = {
-      {"raise", Mode::Raise},   {"lower", Mode::Lower},   {"plateau", Mode::Plateau},
-      {"flatten", Mode::Flatten}, {"smooth", Mode::Smooth}, {"noise", Mode::Noise},
-      {"terrace", Mode::Terrace}, {"plane", Mode::Plane},
+      {"raise", Mode::Raise},
+      {"lower", Mode::Lower},
+      {"plateau", Mode::Plateau},
+      {"flatten", Mode::Flatten},
+      {"smooth", Mode::Smooth},
+      {"noise", Mode::Noise},
+      {"terrace", Mode::Terrace},
+      {"plane", Mode::Plane},
     };
     for (const Entry& e : kModes) {
       if (std::strcmp(name, e.name) == 0) {
@@ -179,40 +217,53 @@ namespace moho::editor::brush
     return false;
   }
 
-  /** One dab. Everything is in the units of terrain.lua: the strength is world units per dab for raise / lower / noise, a blend share for the others. */
+  /** One dab. Everything is in the units of terrain.lua: the strength is world units per dab for raise / lower / noise,
+   * a blend share for the others. */
   struct Dab
   {
-    float cx = 0.0f;         // centre in sample coordinates
+    float cx = 0.0f; // centre in sample coordinates
     float cz = 0.0f;
-    float radius = 1.0f;     // samples
+    float radius = 1.0f; // samples
     Mode mode = Mode::Raise;
     float strength = 1.0f;
     int dir = 1;             // -1 inverts the brush
     float falloff = 1.0f;    // 0..1, the share of the radius the edge falls off over
     float level = -1.0f;     // flatten / plateau target in world units; < 0 = the ground under the centre of the dab
     int seed = 0;            // noise: the stroke id
-    float noiseScale = 8.0f;      // noise: lattice cell size in samples (>= 1)
-    int noiseOctaves = 2;         // noise: 1..4 layers, each one with half the cell size
-    float noiseRoughness = 0.5f;  // noise: the share of the amplitude the next octave keeps (0..1)
-    const Shape* shape = nullptr;  // optional brush shape mask: replaces the round falloff profile (falloff is then unused)
-    float shapeAngle = 0.0f;       // degrees the mask is turned (brushes.lua Angle + the stroke's random turn)
-    float step = 5.0f;             // terrace: the step height in world units (upstream's default is 640 words = 5 units)
-    bool planeSet = false;         // plane: the plane below is valid (a dab of the plane mode with it unset changes nothing)
-    double planeX = 0.0;           // plane: height words = planeX * x + planeZ * z + planeC at sample (x, z) (faf::editor::PlaneThrough makes them from three points)
+    float noiseScale = 8.0f; // noise: lattice cell size in samples (>= 1)
+    int noiseOctaves = 2;    // noise: 1..4 layers, each one with half the cell size
+    float noiseRoughness = 0.5f; // noise: the share of the amplitude the next octave keeps (0..1)
+    const Shape* shape =
+      nullptr;               // optional brush shape mask: replaces the round falloff profile (falloff is then unused)
+    float shapeAngle = 0.0f; // degrees the mask is turned (brushes.lua Angle + the stroke's random turn)
+    float step = 5.0f;       // terrace: the step height in world units (upstream's default is 640 words = 5 units)
+    bool planeSet = false;   // plane: the plane below is valid (a dab of the plane mode with it unset changes nothing)
+    double planeX = 0.0;     // plane: height words = planeX * x + planeZ * z + planeC at sample (x, z)
+                             // (faf::editor::PlaneThrough makes them from three points)
     double planeZ = 0.0;
     double planeC = 0.0;
   };
 
-  /** Inclusive sample window of a dab (what the Lua path read: one sample beyond the brush on every side), clamped to a width x height grid. */
+  /** Inclusive sample window of a dab (what the Lua path read: one sample beyond the brush on every side), clamped to a
+   * width x height grid. */
   struct Window
   {
     int x0 = 0;
     int z0 = 0;
     int x1 = -1;
     int z1 = -1;
-    [[nodiscard]] bool Empty() const { return x1 < x0 || z1 < z0; }
-    [[nodiscard]] int Width() const { return Empty() ? 0 : x1 - x0 + 1; }
-    [[nodiscard]] int Height() const { return Empty() ? 0 : z1 - z0 + 1; }
+    [[nodiscard]] bool Empty() const
+    {
+      return x1 < x0 || z1 < z0;
+    }
+    [[nodiscard]] int Width() const
+    {
+      return Empty() ? 0 : x1 - x0 + 1;
+    }
+    [[nodiscard]] int Height() const
+    {
+      return Empty() ? 0 : z1 - z0 + 1;
+    }
     [[nodiscard]] std::size_t Count() const
     {
       return static_cast<std::size_t>(Width()) * static_cast<std::size_t>(Height());
@@ -221,8 +272,8 @@ namespace moho::editor::brush
 
   struct Result
   {
-    int changed = 0;         // samples whose word changed
-    float level = -1.0f;     // the flatten / plateau level used, world units (-1 for the other modes)
+    int changed = 0;     // samples whose word changed
+    float level = -1.0f; // the flatten / plateau level used, world units (-1 for the other modes)
     bool usedLevel = false;
   };
 
@@ -232,11 +283,16 @@ namespace moho::editor::brush
     constexpr float kPi = 3.14159265f;
 
     /**
-     * terrain.lua Hash(): a hash of (x, z, stroke) in -1..1 (the value of one lattice point of the smooth noise below). Every intermediate stays below 2^24, so it is exact in the game's 32-bit float Lua numbers
-     * and in these integers alike (the first version multiplied by 374761393 and took math.mod: in 32-bit floats that product lost its low bits and
-     * the hash was -1 nearly everywhere). Keep it the same as the Lua function.
+     * terrain.lua Hash(): a hash of (x, z, stroke) in -1..1 (the value of one lattice point of the smooth noise below).
+     * Every intermediate stays below 2^24, so it is exact in the game's 32-bit float Lua numbers and in these integers
+     * alike (the first version multiplied by 374761393 and took math.mod: in 32-bit floats that product lost its low
+     * bits and the hash was -1 nearly everywhere). Keep it the same as the Lua function.
      */
-    [[nodiscard]] inline float Noise(const int x, const int z, const int seed)
+    [[nodiscard]] inline float Noise(
+      const int x,
+      const int z,
+      const int seed
+    )
     {
       const int a = ((x % 4093) * 1103 + 17) % 4093;
       const int b = ((z % 4091) * 1999 + 31) % 4091;
@@ -252,12 +308,18 @@ namespace moho::editor::brush
     }
 
     /**
-     * terrain.lua ValueNoise(): smooth noise in -1..1 at the sample (x, z). The lattice has one random value (the hash above, per lattice point) every
-     * `cell` samples; the value at a point is the bilinear blend of the four corners with a smoothstep weight, so it is continuous and has no
-     * per-sample speckle. It depends on the world position only, so the dabs of one stroke join into continuous bumps. One operation per statement
-     * (float roundings as in the Lua VM).
+     * terrain.lua ValueNoise(): smooth noise in -1..1 at the sample (x, z). The lattice has one random value (the hash
+     * above, per lattice point) every `cell` samples; the value at a point is the bilinear blend of the four corners
+     * with a smoothstep weight, so it is continuous and has no per-sample speckle. It depends on the world position
+     * only, so the dabs of one stroke join into continuous bumps. One operation per statement (float roundings as in
+     * the Lua VM).
      */
-    [[nodiscard]] inline float ValueNoise(const int x, const int z, const float cell, const int seed)
+    [[nodiscard]] inline float ValueNoise(
+      const int x,
+      const int z,
+      const float cell,
+      const int seed
+    )
     {
       const float fx = static_cast<float>(x) / cell;
       const float fz = static_cast<float>(z) / cell;
@@ -289,10 +351,18 @@ namespace moho::editor::brush
     }
 
     /**
-     * terrain.lua SmoothNoise(): up to four octaves of ValueNoise, each with half the cell size of the one before and `roughness` times its amplitude,
-     * divided by the sum of the amplitudes so the result stays in -1..1. Octaves whose cell would be under one sample are left out.
+     * terrain.lua SmoothNoise(): up to four octaves of ValueNoise, each with half the cell size of the one before and
+     * `roughness` times its amplitude, divided by the sum of the amplitudes so the result stays in -1..1. Octaves whose
+     * cell would be under one sample are left out.
      */
-    [[nodiscard]] inline float SmoothNoise(const int x, const int z, const int seed, const float scale, const int octaves, const float roughness)
+    [[nodiscard]] inline float SmoothNoise(
+      const int x,
+      const int z,
+      const int seed,
+      const float scale,
+      const int octaves,
+      const float roughness
+    )
     {
       float cell = scale;
       if (cell < 1.0f) {
@@ -327,14 +397,18 @@ namespace moho::editor::brush
       return total / norm;
     }
 
-    /** terrain.lua Weight() for the round brush: 0 outside the radius, 1 inside the flat part, a cosine edge between. */
+    /** terrain.lua Weight() for the round brush: 0 outside the radius, 1 inside the flat part, a cosine edge between.
+     */
     struct Profile
     {
       float radius = 1.0f;
       float inner = 0.0f;
       float width = 1.0f;
 
-      Profile(const float r, const float falloff)
+      Profile(
+        const float r,
+        const float falloff
+      )
       {
         radius = r;
         float f = falloff;
@@ -349,7 +423,9 @@ namespace moho::editor::brush
         inner = r - width;
       }
 
-      [[nodiscard]] float At(const float distance) const
+      [[nodiscard]] float At(
+        const float distance
+      ) const
       {
         if (distance >= radius) {
           return 0.0f;
@@ -367,7 +443,13 @@ namespace moho::editor::brush
     };
 
     /** terrain.lua BoxBlur(): a box blur of a w x h grid with half width kr, edge samples repeated, running sums. */
-    inline void BoxBlur(const std::vector<float>& src, const int w, const int h, const int kr, std::vector<float>& out)
+    inline void BoxBlur(
+      const std::vector<float>& src,
+      const int w,
+      const int h,
+      const int kr,
+      std::vector<float>& out
+    )
     {
       const float n = static_cast<float>(2 * kr + 1);
       std::vector<float> tmp(src.size());
@@ -387,17 +469,25 @@ namespace moho::editor::brush
       for (int x = 0; x < w; ++x) {
         float sum = 0.0f;
         for (int k = -kr; k <= kr; ++k) {
-          sum = sum + tmp[static_cast<std::size_t>(std::min(std::max(k, 0), h - 1)) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)];
+          sum = sum +
+            tmp[static_cast<std::size_t>(std::min(std::max(k, 0), h - 1)) * static_cast<std::size_t>(w) +
+                static_cast<std::size_t>(x)];
         }
         for (int z = 0; z < h; ++z) {
           out[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] = sum / n;
-          sum = sum + tmp[static_cast<std::size_t>(std::min(z + kr + 1, h - 1)) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)];
-          sum = sum - tmp[static_cast<std::size_t>(std::max(z - kr, 0)) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)];
+          sum = sum +
+            tmp[static_cast<std::size_t>(std::min(z + kr + 1, h - 1)) * static_cast<std::size_t>(w) +
+                static_cast<std::size_t>(x)];
+          sum = sum -
+            tmp[static_cast<std::size_t>(std::max(z - kr, 0)) * static_cast<std::size_t>(w) +
+                static_cast<std::size_t>(x)];
         }
       }
     }
 
-    [[nodiscard]] inline std::uint16_t ToWord(const float value)
+    [[nodiscard]] inline std::uint16_t ToWord(
+      const float value
+    )
     {
       const float v = std::floor(value + 0.5f);
       if (v < 0.0f) {
@@ -411,11 +501,15 @@ namespace moho::editor::brush
   } // namespace detail
 
   /**
-   * The terrace and plane kernels of upstream's HeightBrush (src/editor/tools/EdHeightBrush.cpp, BrushedHeight): the height a sample is pulled towards. The pull itself is
-   * `old + (target - old) * k` as for flatten; k is min(1, strength * 0.2 * weight) here (upstream's blend is min(1, strength * 8 * seconds) times the weight).
-   * EdBrushUpTest compares both against ApplyHeightBrush.
+   * The terrace and plane kernels of upstream's HeightBrush (src/editor/tools/EdHeightBrush.cpp, BrushedHeight): the
+   * height a sample is pulled towards. The pull itself is `old + (target - old) * k` as for flatten; k is min(1,
+   * strength * 0.2 * weight) here (upstream's blend is min(1, strength * 8 * seconds) times the weight). EdBrushUpTest
+   * compares both against ApplyHeightBrush.
    */
-  [[nodiscard]] inline float TerraceTarget(const float old, const float stepWords)
+  [[nodiscard]] inline float TerraceTarget(
+    const float old,
+    const float stepWords
+  )
   {
     const float step = std::max(1.0f, stepWords);
     float t = old / step;
@@ -424,13 +518,23 @@ namespace moho::editor::brush
     return t * step;
   }
 
-  [[nodiscard]] inline float PlaneTarget(const double planeX, const double planeZ, const double planeC, const int x, const int z)
+  [[nodiscard]] inline float PlaneTarget(
+    const double planeX,
+    const double planeZ,
+    const double planeC,
+    const int x,
+    const int z
+  )
   {
     return static_cast<float>(planeX * x + planeZ * z + planeC);
   }
 
   /** The window a dab reads and may write, clamped to the grid (empty when the brush is off the map). */
-  [[nodiscard]] inline Window WindowOf(const Dab& dab, const int gridWidth, const int gridHeight)
+  [[nodiscard]] inline Window WindowOf(
+    const Dab& dab,
+    const int gridWidth,
+    const int gridHeight
+  )
   {
     const float lo_x = dab.cx - dab.radius;
     const float lo_z = dab.cz - dab.radius;
@@ -445,10 +549,16 @@ namespace moho::editor::brush
   }
 
   /**
-   * Applies a dab to the window `win` of a grid. `before` is the grid's content over the window (row major, x fastest); `after` receives the new
-   * content (same size; samples the brush does not reach are copied). Returns the number of changed samples and the level used.
+   * Applies a dab to the window `win` of a grid. `before` is the grid's content over the window (row major, x fastest);
+   * `after` receives the new content (same size; samples the brush does not reach are copied). Returns the number of
+   * changed samples and the level used.
    */
-  inline Result ApplyWindow(const Dab& dab, const Window& win, const std::uint16_t* const before, std::uint16_t* const after)
+  inline Result ApplyWindow(
+    const Dab& dab,
+    const Window& win,
+    const std::uint16_t* const before,
+    std::uint16_t* const after
+  )
   {
     Result result;
     if (win.Empty()) {
@@ -466,14 +576,18 @@ namespace moho::editor::brush
     const float dir = dab.dir < 0 ? -1.0f : 1.0f;
     const float strength = dab.strength;
 
-    // flatten / plateau: the level is the ground under the dab centre unless the stroke already has one (world units; words / 128 is exact)
+    // flatten / plateau: the level is the ground under the dab centre unless the stroke already has one (world units;
+    // words / 128 is exact)
     float levelWord = 0.0f;
     if (dab.mode == Mode::Flatten || dab.mode == Mode::Plateau) {
       float level = dab.level;
       if (!(level >= 0.0f)) {
         const int cxi = std::min(std::max(static_cast<int>(std::floor(dab.cx + 0.5f)), win.x0), win.x1);
         const int czi = std::min(std::max(static_cast<int>(std::floor(dab.cz + 0.5f)), win.z0), win.z1);
-        const float centre = static_cast<float>(before[static_cast<std::size_t>(czi - win.z0) * static_cast<std::size_t>(w) + static_cast<std::size_t>(cxi - win.x0)]);
+        const float centre =
+          static_cast<float>(before
+                               [static_cast<std::size_t>(czi - win.z0) * static_cast<std::size_t>(w) +
+                                static_cast<std::size_t>(cxi - win.x0)]);
         level = centre / static_cast<float>(detail::kWord);
       }
       result.level = level;
@@ -481,7 +595,8 @@ namespace moho::editor::brush
       levelWord = level * static_cast<float>(detail::kWord);
     }
 
-    // smooth: the blur widens with the strength (3 x 3 at low strength, up to a quarter of the radius, at most 6 samples), two passes
+    // smooth: the blur widens with the strength (3 x 3 at low strength, up to a quarter of the radius, at most 6
+    // samples), two passes
     std::vector<float> blurred;
     if (dab.mode == Mode::Smooth) {
       std::vector<float> src(count);
@@ -506,7 +621,8 @@ namespace moho::editor::brush
     const bool shaped = dab.shape != nullptr && dab.shape->n >= 2;
     const ShapeSampler sampler(shaped ? dab.shape : nullptr, dab.shapeAngle);
     const float word = static_cast<float>(detail::kWord);
-    // squared distance beyond which the weight is surely 0 (a loose bound: the exact test is the float distance in Profile::At)
+    // squared distance beyond which the weight is surely 0 (a loose bound: the exact test is the float distance in
+    // Profile::At)
     const float farD2 = r * r * 1.001f + 1.0f;
     int changed = 0;
     for (int z = win.z0; z <= win.z1; ++z) {
@@ -618,11 +734,21 @@ namespace moho::editor::brush
   }
 
   /**
-   * The weights a shaped brush gives the samples x0..x1 / z0..z1 (row major, z outer) for a brush of radius r at (cx, cz): what terrain.lua Weight returns per sample (0 at and beyond the
-   * radius, else the mask). The erosion brush takes such a list for its window (ed_erode_dab, opts.weights).
+   * The weights a shaped brush gives the samples x0..x1 / z0..z1 (row major, z outer) for a brush of radius r at (cx,
+   * cz): what terrain.lua Weight returns per sample (0 at and beyond the radius, else the mask). The erosion brush
+   * takes such a list for its window (ed_erode_dab, opts.weights).
    */
   inline void FillShapeWeights(
-    const Shape& shape, const float angleDegrees, const float cx, const float cz, const float r, const int x0, const int z0, const int x1, const int z1, std::vector<float>& out
+    const Shape& shape,
+    const float angleDegrees,
+    const float cx,
+    const float cz,
+    const float r,
+    const int x0,
+    const int z0,
+    const int x1,
+    const int z1,
+    std::vector<float>& out
   )
   {
     out.clear();
@@ -644,9 +770,15 @@ namespace moho::editor::brush
     }
   }
 
-  /** A whole dab on a grid of width x height words: the window, the new window content and the result. Used by the tests. */
+  /** A whole dab on a grid of width x height words: the window, the new window content and the result. Used by the
+   * tests. */
   inline Result ComputeDab(
-    const std::uint16_t* const grid, const int gridWidth, const int gridHeight, const Dab& dab, Window& window, std::vector<std::uint16_t>& after
+    const std::uint16_t* const grid,
+    const int gridWidth,
+    const int gridHeight,
+    const Dab& dab,
+    Window& window,
+    std::vector<std::uint16_t>& after
   )
   {
     window = WindowOf(dab, gridWidth, gridHeight);

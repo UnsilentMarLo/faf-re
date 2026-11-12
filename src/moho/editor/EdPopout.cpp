@@ -48,8 +48,9 @@ namespace moho
   {
     struct Popout;
 
-    // A pop-out is redrawn when it is dirty (creation, resize, input, a device reset, `ed_window_invalidate` from Lua) and at
-    // least every kHeartbeatMs otherwise, so Lua-driven changes without an explicit invalidate still show up quickly.
+    // A pop-out is redrawn when it is dirty (creation, resize, input, a device reset, `ed_window_invalidate` from Lua)
+    // and at least every kHeartbeatMs otherwise, so Lua-driven changes without an explicit invalidate still show up
+    // quickly.
     constexpr unsigned long long kHeartbeatMs = 100;
     constexpr int kDirtyFrames = 3; // a change is drawn for a few frames (layout settles, hover states)
 
@@ -63,7 +64,13 @@ namespace moho
 
     std::deque<Event> gEvents;
 
-    void PostEvent(const int id, const char* const kind, const int a, const int b, const bool coalesce)
+    void PostEvent(
+      const int id,
+      const char* const kind,
+      const int a,
+      const int b,
+      const bool coalesce
+    )
     {
       if (id < 0) {
         return; // the window is still being created
@@ -86,25 +93,41 @@ namespace moho
     class EdPopoutView final : public wxWindow
     {
     public:
-      EdPopoutView(wxWindow* const parent, Popout* const owner)
+      EdPopoutView(
+        wxWindow* const parent,
+        Popout* const owner
+      )
         : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, 0, wxT("edpopout"))
         , mOwner(owner)
       {}
 
-      void OnPaint(wxPaintEvent& event)
+      void OnPaint(
+        wxPaintEvent& event
+      )
       {
         (void)event;
         wxPaintDC dc(this); // validates the update region; the engine draws the content
         MarkDirty();
       }
 
-      void OnEraseBackground(wxEraseEvent& event) { (void)event; }
+      void OnEraseBackground(
+        wxEraseEvent& event
+      )
+      {
+        (void)event;
+      }
 
-      long MSWWindowProc(const WXUINT message, const WXWPARAM wParam, const WXLPARAM lParam) override
+      long MSWWindowProc(
+        const WXUINT message,
+        const WXWPARAM wParam,
+        const WXLPARAM lParam
+      ) override
       {
         // Input and focus changes mean the UI may look different next frame (hover, caret, selection).
-        if ((message >= WM_MOUSEFIRST && message <= WM_MOUSELAST) || message == WM_KEYDOWN || message == WM_KEYUP || message == WM_CHAR ||
-            message == WM_SETFOCUS || message == WM_KILLFOCUS || message == WM_MOUSELEAVE) {
+        if (
+          (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST) || message == WM_KEYDOWN || message == WM_KEYUP ||
+          message == WM_CHAR || message == WM_SETFOCUS || message == WM_KILLFOCUS || message == WM_MOUSELEAVE
+        ) {
           MarkDirty();
         }
         return wxWindow::MSWWindowProc(message, wParam, lParam);
@@ -117,15 +140,27 @@ namespace moho
       DECLARE_EVENT_TABLE()
     };
 
-    BEGIN_EVENT_TABLE(EdPopoutView, wxWindow)
-      EVT_PAINT(EdPopoutView::OnPaint)
-      EVT_ERASE_BACKGROUND(EdPopoutView::OnEraseBackground)
+    BEGIN_EVENT_TABLE(
+      EdPopoutView,
+      wxWindow
+    )
+    EVT_PAINT(
+      EdPopoutView::OnPaint
+    )
+    EVT_ERASE_BACKGROUND(
+      EdPopoutView::OnEraseBackground
+    )
     END_EVENT_TABLE()
 
     class EdPopoutFrame final : public wxFrame
     {
     public:
-      EdPopoutFrame(const wxString& title, const wxPoint& position, const wxSize& size, Popout* const owner)
+      EdPopoutFrame(
+        const wxString& title,
+        const wxPoint& position,
+        const wxSize& size,
+        Popout* const owner
+      )
         : wxFrame(nullptr, -1, title, position, size, wxDEFAULT_FRAME_STYLE)
         , mOwner(owner)
       {}
@@ -139,10 +174,19 @@ namespace moho
       DECLARE_EVENT_TABLE()
     };
 
-    BEGIN_EVENT_TABLE(EdPopoutFrame, wxFrame)
-      EVT_CLOSE(EdPopoutFrame::OnClose)
-      EVT_SIZE(EdPopoutFrame::OnSize)
-      EVT_MOVE(EdPopoutFrame::OnMove)
+    BEGIN_EVENT_TABLE(
+      EdPopoutFrame,
+      wxFrame
+    )
+    EVT_CLOSE(
+      EdPopoutFrame::OnClose
+    )
+    EVT_SIZE(
+      EdPopoutFrame::OnSize
+    )
+    EVT_MOVE(
+      EdPopoutFrame::OnMove
+    )
     END_EVENT_TABLE()
 
     struct Popout
@@ -150,13 +194,16 @@ namespace moho
       int id = -1; // = the Maui root-frame index
       EdPopoutFrame* frame = nullptr;
       EdPopoutView* view = nullptr;
-      Microsoft::WRL::ComPtr<IDXGISwapChain1> chain;        // the window's own flip-model swap chain on the game's Direct3D 11 device
-      boost::shared_ptr<CD3DRenderTarget> target;          // what the frame is drawn into (the engine's targets, copied to the chain's buffer)
+      Microsoft::WRL::ComPtr<IDXGISwapChain1>
+        chain; // the window's own flip-model swap chain on the game's Direct3D 11 device
+      boost::shared_ptr<CD3DRenderTarget>
+        target; // what the frame is drawn into (the engine's targets, copied to the chain's buffer)
       int chainWidth = 0;
       int chainHeight = 0;
       int dirty = kDirtyFrames;
       unsigned long long lastDrawMs = 0;
-      bool deferClose = false; // true: the X button only posts a 'close' event, Lua decides (re-dock panels, then destroy)
+      bool deferClose =
+        false; // true: the X button only posts a 'close' event, Lua decides (re-dock panels, then destroy)
       std::string capturePath;
       std::string lastError;
     };
@@ -196,9 +243,16 @@ namespace moho
 
     std::wstring Widen(const char* text);
 
-    // The window's picture as a PNG (what ed_window_capture writes): the target's texture is copied to a staging texture and encoded by WIC. The format is the
-    // swap chain's, B8G8R8A8; the alpha is made opaque (the PNG encoder takes 32bppBGRA).
-    bool CapturePng(ID3D11Device* const dev, ID3D11DeviceContext* const ctx, ID3D11Texture2D* const texture, const std::string& path, std::string& error)
+    // The window's picture as a PNG (what ed_window_capture writes): the target's texture is copied to a staging
+    // texture and encoded by WIC. The format is the swap chain's, B8G8R8A8; the alpha is made opaque (the PNG encoder
+    // takes 32bppBGRA).
+    bool CapturePng(
+      ID3D11Device* const dev,
+      ID3D11DeviceContext* const ctx,
+      ID3D11Texture2D* const texture,
+      const std::string& path,
+      std::string& error
+    )
     {
       D3D11_TEXTURE2D_DESC desc{};
       texture->GetDesc(&desc);
@@ -222,7 +276,9 @@ namespace moho
         return false;
       }
       bool ok = false;
-      HRESULT hr = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);   // already initialized by the window system: S_FALSE / RPC_E_CHANGED_MODE are fine
+      HRESULT hr = ::CoInitializeEx(
+        nullptr, COINIT_APARTMENTTHREADED
+      ); // already initialized by the window system: S_FALSE / RPC_E_CHANGED_MODE are fine
       (void)hr;
       Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
       Microsoft::WRL::ComPtr<IWICStream> stream;
@@ -232,7 +288,8 @@ namespace moho
       WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
       std::vector<std::uint8_t> opaque(static_cast<std::size_t>(desc.Width) * desc.Height * 4u);
       for (UINT row = 0; row < desc.Height; ++row) {
-        const std::uint8_t* const src = static_cast<const std::uint8_t*>(mapped.pData) + static_cast<std::size_t>(row) * mapped.RowPitch;
+        const std::uint8_t* const src =
+          static_cast<const std::uint8_t*>(mapped.pData) + static_cast<std::size_t>(row) * mapped.RowPitch;
         std::uint8_t* const dst = opaque.data() + static_cast<std::size_t>(row) * desc.Width * 4u;
         std::memcpy(dst, src, static_cast<std::size_t>(desc.Width) * 4u);
         for (UINT x = 0; x < desc.Width; ++x) {
@@ -240,12 +297,17 @@ namespace moho
         }
       }
       const std::wstring widePath = Widen(path.c_str());
-      if (SUCCEEDED(::CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) && SUCCEEDED(factory->CreateStream(&stream)) &&
-          SUCCEEDED(stream->InitializeFromFilename(widePath.c_str(), GENERIC_WRITE)) && SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
-          SUCCEEDED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) && SUCCEEDED(encoder->CreateNewFrame(&frame, &properties)) && SUCCEEDED(frame->Initialize(properties.Get())) &&
-          SUCCEEDED(frame->SetSize(desc.Width, desc.Height)) && SUCCEEDED(frame->SetPixelFormat(&format)) &&
-          SUCCEEDED(frame->WritePixels(desc.Height, desc.Width * 4u, static_cast<UINT>(opaque.size()), opaque.data())) && SUCCEEDED(frame->Commit()) &&
-          SUCCEEDED(encoder->Commit())) {
+      if (
+        SUCCEEDED(::CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) &&
+        SUCCEEDED(factory->CreateStream(&stream)) &&
+        SUCCEEDED(stream->InitializeFromFilename(widePath.c_str(), GENERIC_WRITE)) &&
+        SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
+        SUCCEEDED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) &&
+        SUCCEEDED(encoder->CreateNewFrame(&frame, &properties)) && SUCCEEDED(frame->Initialize(properties.Get())) &&
+        SUCCEEDED(frame->SetSize(desc.Width, desc.Height)) && SUCCEEDED(frame->SetPixelFormat(&format)) &&
+        SUCCEEDED(frame->WritePixels(desc.Height, desc.Width * 4u, static_cast<UINT>(opaque.size()), opaque.data())) &&
+        SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit())
+      ) {
         ok = true;
       } else {
         error = "capture: the PNG could not be written";
@@ -254,7 +316,9 @@ namespace moho
       return ok;
     }
 
-    void ReleaseChain(Popout& p)
+    void ReleaseChain(
+      Popout& p
+    )
     {
       p.target.reset();
       p.chain.Reset();
@@ -262,8 +326,13 @@ namespace moho
       p.chainHeight = 0;
     }
 
-    // The swap chain and the target are made at the window's real client size (wx 2.4.2 reports a few pixels more than asked).
-    bool CreateChain(Popout& p, const int width, const int height)
+    // The swap chain and the target are made at the window's real client size (wx 2.4.2 reports a few pixels more than
+    // asked).
+    bool CreateChain(
+      Popout& p,
+      const int width,
+      const int height
+    )
     {
       ID3D11Device* const dev = RawDevice();
       CD3DDevice* const device = D3D_GetDevice();
@@ -272,7 +341,8 @@ namespace moho
       }
       ReleaseChain(p);
 
-      // the target the engine draws into: the same kind of target the main frame's scene uses (format 2, as WRenViewport's head sized targets)
+      // the target the engine draws into: the same kind of target the main frame's scene uses (format 2, as
+      // WRenViewport's head sized targets)
       constexpr int kPopoutTargetFormat = 2;
       device->GetResources()->CreateRenderTarget(p.target, width, height, kPopoutTargetFormat);
       boost::shared_ptr<gpg::gal::RenderTarget> surface{};
@@ -292,7 +362,10 @@ namespace moho
       Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
       Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
       Microsoft::WRL::ComPtr<IDXGIFactory2> factory;
-      if (FAILED(dev->QueryInterface(IID_PPV_ARGS(&dxgiDevice))) || FAILED(dxgiDevice->GetAdapter(&adapter)) || FAILED(adapter->GetParent(IID_PPV_ARGS(&factory)))) {
+      if (
+        FAILED(dev->QueryInterface(IID_PPV_ARGS(&dxgiDevice))) || FAILED(dxgiDevice->GetAdapter(&adapter)) ||
+        FAILED(adapter->GetParent(IID_PPV_ARGS(&factory)))
+      ) {
         ReleaseChain(p);
         p.lastError = "no DXGI factory for the device";
         return false;
@@ -300,23 +373,39 @@ namespace moho
       DXGI_SWAP_CHAIN_DESC1 desc{};
       desc.Width = static_cast<UINT>(width);
       desc.Height = static_cast<UINT>(height);
-      desc.Format = targetDesc.Format;   // the copy needs the same format as the target
+      desc.Format = targetDesc.Format; // the copy needs the same format as the target
       desc.SampleDesc.Count = 1;
       desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
       desc.BufferCount = 2;
       desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
       desc.Scaling = DXGI_SCALING_NONE;
       desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-      const HRESULT hr = factory->CreateSwapChainForHwnd(dev, reinterpret_cast<HWND>(p.view->GetHWND()), &desc, nullptr, nullptr, &p.chain);
+      const HRESULT hr = factory->CreateSwapChainForHwnd(
+        dev, reinterpret_cast<HWND>(p.view->GetHWND()), &desc, nullptr, nullptr, &p.chain
+      );
       if (FAILED(hr) || !p.chain) {
         char text[96];
-        std::snprintf(text, sizeof(text), "CreateSwapChainForHwnd failed 0x%08lX (format %u)", static_cast<unsigned long>(hr), static_cast<unsigned>(targetDesc.Format));
+        std::snprintf(
+          text,
+          sizeof(text),
+          "CreateSwapChainForHwnd failed 0x%08lX (format %u)",
+          static_cast<unsigned long>(hr),
+          static_cast<unsigned>(targetDesc.Format)
+        );
         p.lastError = text;
         ReleaseChain(p);
         return false;
       }
-      (void)factory->MakeWindowAssociation(reinterpret_cast<HWND>(p.view->GetHWND()), DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
-      gpg::Logf("EDITOR popout %d: swap chain %dx%d, DXGI format %u, flip-discard", p.id, width, height, static_cast<unsigned>(targetDesc.Format));
+      (void)factory->MakeWindowAssociation(
+        reinterpret_cast<HWND>(p.view->GetHWND()), DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES
+      );
+      gpg::Logf(
+        "EDITOR popout %d: swap chain %dx%d, DXGI format %u, flip-discard",
+        p.id,
+        width,
+        height,
+        static_cast<unsigned>(targetDesc.Format)
+      );
       p.chainWidth = width;
       p.chainHeight = height;
       p.dirty = kDirtyFrames;
@@ -324,14 +413,20 @@ namespace moho
       return true;
     }
 
-    // Device reset / shutdown: the engine's render targets are released on the exit event (type 1), so the pop-outs' targets go with them and are made again lazily by
-    // RenderAll (their swap chains would survive, they are released with them for simplicity).
+    // Device reset / shutdown: the engine's render targets are released on the exit event (type 1), so the pop-outs'
+    // targets go with them and are made again lazily by RenderAll (their swap chains would survive, they are released
+    // with them for simplicity).
     class DeviceListener final : public Listener<const SD3DDeviceEvent&>
     {
     public:
-      DeviceListener() { D3D_GetDevice()->AddListener(this); }
+      DeviceListener()
+      {
+        D3D_GetDevice()->AddListener(this);
+      }
 
-      void OnEvent(const SD3DDeviceEvent& event) override
+      void OnEvent(
+        const SD3DDeviceEvent& event
+      ) override
       {
         if (event.mEventType == 1u) {
           for (auto& entry : gPopouts) {
@@ -347,7 +442,9 @@ namespace moho
       (void)listener;
     }
 
-    void DestroyPopout(Popout* const p)
+    void DestroyPopout(
+      Popout* const p
+    )
     {
       if (p == nullptr) {
         return;
@@ -372,7 +469,9 @@ namespace moho
       }
     }
 
-    void EdPopoutFrame::OnClose(wxCloseEvent& event)
+    void EdPopoutFrame::OnClose(
+      wxCloseEvent& event
+    )
     {
       (void)event;
       if (mOwner == nullptr) {
@@ -384,7 +483,9 @@ namespace moho
       }
     }
 
-    void EdPopoutFrame::OnSize(wxSizeEvent& event)
+    void EdPopoutFrame::OnSize(
+      wxSizeEvent& event
+    )
     {
       event.Skip();
       if (mOwner != nullptr && mOwner->view != nullptr) {
@@ -395,7 +496,9 @@ namespace moho
       }
     }
 
-    void EdPopoutFrame::OnMove(wxMoveEvent& event)
+    void EdPopoutFrame::OnMove(
+      wxMoveEvent& event
+    )
     {
       event.Skip();
       if (mOwner != nullptr) {
@@ -404,23 +507,38 @@ namespace moho
       }
     }
 
-    // ---- monitors -------------------------------------------------------------------------------------------------------
+    // ---- monitors
+    // -------------------------------------------------------------------------------------------------------
     struct MonitorInfo
     {
       int x, y, w, h, wx, wy, ww, wh;
       bool primary;
     };
 
-    BOOL CALLBACK MonitorEnum(HMONITOR monitor, HDC, LPRECT, LPARAM data)
+    BOOL CALLBACK MonitorEnum(
+      HMONITOR monitor,
+      HDC,
+      LPRECT,
+      LPARAM data
+    )
     {
       MONITORINFO info{};
       info.cbSize = sizeof(info);
       if (GetMonitorInfoW(monitor, &info)) {
         auto* const list = reinterpret_cast<std::vector<MonitorInfo>*>(data);
-        list->push_back(MonitorInfo{info.rcMonitor.left, info.rcMonitor.top, info.rcMonitor.right - info.rcMonitor.left,
-                                    info.rcMonitor.bottom - info.rcMonitor.top, info.rcWork.left, info.rcWork.top,
-                                    info.rcWork.right - info.rcWork.left, info.rcWork.bottom - info.rcWork.top,
-                                    (info.dwFlags & MONITORINFOF_PRIMARY) != 0});
+        list->push_back(
+          MonitorInfo{
+            info.rcMonitor.left,
+            info.rcMonitor.top,
+            info.rcMonitor.right - info.rcMonitor.left,
+            info.rcMonitor.bottom - info.rcMonitor.top,
+            info.rcWork.left,
+            info.rcWork.top,
+            info.rcWork.right - info.rcWork.left,
+            info.rcWork.bottom - info.rcWork.top,
+            (info.dwFlags & MONITORINFOF_PRIMARY) != 0
+          }
+        );
       }
       return TRUE;
     }
@@ -432,7 +550,9 @@ namespace moho
       return list;
     }
 
-    int MonitorIndexOf(HWND window)
+    int MonitorIndexOf(
+      HWND window
+    )
     {
       HMONITOR target = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
       MONITORINFO info{};
@@ -473,7 +593,10 @@ namespace moho
       gpg::gal::Device* const gal = D3D_GetDevice() != nullptr ? D3D_GetDevice()->GetGalDevice() : nullptr;
       CUIManager* const ui = UiManager();
       WRenViewport* const viewport = ren_Viewport;
-      if (context == nullptr || gal == nullptr || ui == nullptr || viewport == nullptr || viewport->GetPrimBatcher() == nullptr) {
+      if (
+        context == nullptr || gal == nullptr || ui == nullptr || viewport == nullptr ||
+        viewport->GetPrimBatcher() == nullptr
+      ) {
         return;
       }
       CD3DPrimBatcher* const batcher = viewport->GetPrimBatcher();
@@ -520,7 +643,8 @@ namespace moho
         auto* const surfaceD3D11 = static_cast<gpg::gal::RenderTargetD3D11*>(surface.get());
         Microsoft::WRL::ComPtr<ID3D11Texture2D> back;
         if (surfaceD3D11 != nullptr && SUCCEEDED(p.chain->GetBuffer(0, IID_PPV_ARGS(&back)))) {
-          // the UI of this window is drawn into the target (no depth: the UI techniques have depth disabled), then copied to the swap chain's buffer
+          // the UI of this window is drawn into the target (no depth: the UI techniques have depth disabled), then
+          // copied to the swap chain's buffer
           const gpg::gal::OutputContext output(surface, boost::shared_ptr<gpg::gal::DepthStencilTarget>());
           gal->ClearTarget(&output);
           gal->Clear(true, false, false, 0xFF222428u, 1.0f, 0);
@@ -532,12 +656,14 @@ namespace moho
 
           if (wantsCapture) {
             std::string error;
-            p.lastError = CapturePng(RawDevice(), context, surfaceD3D11->GetTexture(), p.capturePath, error) ? "capture saved" : error;   // reported by ed_window_get_rect until the next error
+            p.lastError = CapturePng(RawDevice(), context, surfaceD3D11->GetTexture(), p.capturePath, error)
+              ? "capture saved"
+              : error; // reported by ed_window_get_rect until the next error
             p.capturePath.clear();
           }
 
           context->CopyResource(back.Get(), surfaceD3D11->GetTexture());
-          (void)p.chain->Present(0, 0);   // never block the single main thread on a pop-out
+          (void)p.chain->Present(0, 0); // never block the single main thread on a pop-out
         }
 
         // Back to the main frame's targets (the next WRenViewport::Render rebinds them anyway).
@@ -551,13 +677,18 @@ namespace moho
 
   namespace
   {
-    Popout* Find(lua_State* const state, const int argument)
+    Popout* Find(
+      lua_State* const state,
+      const int argument
+    )
     {
       const auto it = gPopouts.find(static_cast<int>(lua_tonumber(state, argument)));
       return it == gPopouts.end() ? nullptr : it->second;
     }
 
-    std::wstring Widen(const char* const text)
+    std::wstring Widen(
+      const char* const text
+    )
     {
       const int n = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
       std::wstring wide(static_cast<std::size_t>(n > 0 ? n : 1), L'\0');
@@ -566,7 +697,9 @@ namespace moho
     }
 
     // ed_window_create(x, y, w, h [, title]) -> id | nil, message
-    int __cdecl cfunc_EdWindowCreate(lua_State* const state)
+    int __cdecl cfunc_EdWindowCreate(
+      lua_State* const state
+    )
     {
       if (D3D_GetDevice() == nullptr || UiManager() == nullptr) {
         lua_pushnil(state);
@@ -583,8 +716,10 @@ namespace moho
       Popout* const p = new Popout();
       p->frame = new EdPopoutFrame(wxString(Widen(title).c_str()), wxPoint(x, y), wxSize(w, h), p);
       p->view = new EdPopoutView(p->frame, p);
-      // EDITOR: the main window owns the pop-out (a Win32 owner, not a wx parent: wx would delete the frame with its parent behind our back). An owned window always stays in front of
-      // its owner and goes away with it, so a pop-out that opens while the main window takes the focus (the Run window of a test run) no longer ends up behind it with nothing to bring it back.
+      // EDITOR: the main window owns the pop-out (a Win32 owner, not a wx parent: wx would delete the frame with its
+      // parent behind our back). An owned window always stays in front of its owner and goes away with it, so a pop-out
+      // that opens while the main window takes the focus (the Run window of a test run) no longer ends up behind it
+      // with nothing to bring it back.
       if (sMainWindow != nullptr) {
         const HWND owner = reinterpret_cast<HWND>(sMainWindow->GetHWND());
         const HWND self = reinterpret_cast<HWND>(p->frame->GetHWND());
@@ -611,7 +746,9 @@ namespace moho
     }
 
     // ed_window_destroy(id) -> bool
-    int __cdecl cfunc_EdWindowDestroy(lua_State* const state)
+    int __cdecl cfunc_EdWindowDestroy(
+      lua_State* const state
+    )
     {
       Popout* const p = Find(state, 1);
       if (p == nullptr) {
@@ -623,8 +760,11 @@ namespace moho
       return 1;
     }
 
-    // ed_window_get_rect(id) -> x, y, w, h (outer), clientW, clientH, chainW, chainH, framesDrawn, lastError, monitor (1-based)   (nil if unknown)
-    int __cdecl cfunc_EdWindowGetRect(lua_State* const state)
+    // ed_window_get_rect(id) -> x, y, w, h (outer), clientW, clientH, chainW, chainH, framesDrawn, lastError, monitor
+    // (1-based)   (nil if unknown)
+    int __cdecl cfunc_EdWindowGetRect(
+      lua_State* const state
+    )
     {
       Popout* const p = Find(state, 1);
       if (p == nullptr || p->frame == nullptr) {
@@ -649,22 +789,31 @@ namespace moho
     }
 
     // ed_window_set_rect(id, x, y, w, h) -> bool
-    int __cdecl cfunc_EdWindowSetRect(lua_State* const state)
+    int __cdecl cfunc_EdWindowSetRect(
+      lua_State* const state
+    )
     {
       Popout* const p = Find(state, 1);
       if (p == nullptr || p->frame == nullptr) {
         lua_pushboolean(state, 0);
         return 1;
       }
-      p->frame->SetSize(static_cast<int>(lua_tonumber(state, 2)), static_cast<int>(lua_tonumber(state, 3)),
-                        static_cast<int>(lua_tonumber(state, 4)), static_cast<int>(lua_tonumber(state, 5)));
+      p->frame->SetSize(
+        static_cast<int>(lua_tonumber(state, 2)),
+        static_cast<int>(lua_tonumber(state, 3)),
+        static_cast<int>(lua_tonumber(state, 4)),
+        static_cast<int>(lua_tonumber(state, 5))
+      );
       p->dirty = kDirtyFrames;
       lua_pushboolean(state, 1);
       return 1;
     }
 
-    // ed_window_raise(id) -> bool   (restores the window when it is minimised and brings it to the front, with the keyboard focus)
-    int __cdecl cfunc_EdWindowRaise(lua_State* const state)
+    // ed_window_raise(id) -> bool   (restores the window when it is minimised and brings it to the front, with the
+    // keyboard focus)
+    int __cdecl cfunc_EdWindowRaise(
+      lua_State* const state
+    )
     {
       Popout* const p = Find(state, 1);
       if (p == nullptr || p->frame == nullptr) {
@@ -685,8 +834,11 @@ namespace moho
       return 1;
     }
 
-    // ed_window_capture(id, path) -> bool   (the PNG is written by the next frame, just before the present; absolute path, forward slashes)
-    int __cdecl cfunc_EdWindowCapture(lua_State* const state)
+    // ed_window_capture(id, path) -> bool   (the PNG is written by the next frame, just before the present; absolute
+    // path, forward slashes)
+    int __cdecl cfunc_EdWindowCapture(
+      lua_State* const state
+    )
     {
       Popout* const p = Find(state, 1);
       const char* const path = lua_isstring(state, 2) ? lua_tostring(state, 2) : nullptr;
@@ -700,7 +852,9 @@ namespace moho
     }
 
     // ed_window_invalidate(id) -> bool   (redraw within the next frames; Lua calls it when a panel's content changed)
-    int __cdecl cfunc_EdWindowInvalidate(lua_State* const state)
+    int __cdecl cfunc_EdWindowInvalidate(
+      lua_State* const state
+    )
     {
       Popout* const p = Find(state, 1);
       if (p == nullptr) {
@@ -713,7 +867,9 @@ namespace moho
     }
 
     // ed_window_set_title(id, title) -> bool
-    int __cdecl cfunc_EdWindowSetTitle(lua_State* const state)
+    int __cdecl cfunc_EdWindowSetTitle(
+      lua_State* const state
+    )
     {
       Popout* const p = Find(state, 1);
       if (p == nullptr || p->frame == nullptr || !lua_isstring(state, 2)) {
@@ -725,8 +881,11 @@ namespace moho
       return 1;
     }
 
-    // ed_window_set_defer_close(id, bool) -> bool   (true: the X button only posts a 'close' event and Lua destroys the window)
-    int __cdecl cfunc_EdWindowSetDeferClose(lua_State* const state)
+    // ed_window_set_defer_close(id, bool) -> bool   (true: the X button only posts a 'close' event and Lua destroys the
+    // window)
+    int __cdecl cfunc_EdWindowSetDeferClose(
+      lua_State* const state
+    )
     {
       Popout* const p = Find(state, 1);
       if (p == nullptr) {
@@ -738,8 +897,11 @@ namespace moho
       return 1;
     }
 
-    // ed_window_poll_event() -> id, kind, a, b | nil     kinds: 'close', 'move' (x, y), 'size' (client w, h); move / size are coalesced
-    int __cdecl cfunc_EdWindowPollEvent(lua_State* const state)
+    // ed_window_poll_event() -> id, kind, a, b | nil     kinds: 'close', 'move' (x, y), 'size' (client w, h); move /
+    // size are coalesced
+    int __cdecl cfunc_EdWindowPollEvent(
+      lua_State* const state
+    )
     {
       if (gEvents.empty()) {
         lua_pushnil(state);
@@ -754,8 +916,11 @@ namespace moho
       return 4;
     }
 
-    // ed_main_window_rect() -> clientScreenX, clientScreenY, clientW, clientH, outerX, outerY, outerW, outerH   (the editor's main window; nil without one)
-    int __cdecl cfunc_EdMainWindowRect(lua_State* const state)
+    // ed_main_window_rect() -> clientScreenX, clientScreenY, clientW, clientH, outerX, outerY, outerW, outerH   (the
+    // editor's main window; nil without one)
+    int __cdecl cfunc_EdMainWindowRect(
+      lua_State* const state
+    )
     {
       wxWindow* const main = sMainWindow;
       if (main == nullptr) {
@@ -783,14 +948,18 @@ namespace moho
     }
 
     // ed_monitor_count() -> n
-    int __cdecl cfunc_EdMonitorCount(lua_State* const state)
+    int __cdecl cfunc_EdMonitorCount(
+      lua_State* const state
+    )
     {
       lua_pushnumber(state, static_cast<lua_Number>(Monitors().size()));
       return 1;
     }
 
     // ed_monitor_info(i) -> x, y, w, h, workX, workY, workW, workH, primary     (i = 1..n, screen coordinates)
-    int __cdecl cfunc_EdMonitorInfo(lua_State* const state)
+    int __cdecl cfunc_EdMonitorInfo(
+      lua_State* const state
+    )
     {
       const std::vector<MonitorInfo> list = Monitors();
       const int i = static_cast<int>(lua_tonumber(state, 1)) - 1;
@@ -820,7 +989,11 @@ namespace moho
       return fallbackSet;
     }
 
-    void Bind(const char* const name, int(__cdecl* const function)(lua_State*), const char* const help)
+    void Bind(
+      const char* const name,
+      int(__cdecl* const function)(lua_State*),
+      const char* const help
+    )
     {
       (void)new CScrLuaBinder(UserLuaInitSet(), name, function, nullptr, "<global>", help);
     }
@@ -831,8 +1004,11 @@ namespace moho
       {
         Bind("ed_window_create", &cfunc_EdWindowCreate, "ed_window_create(x, y, w, h [, title]) -> id | nil, message");
         Bind("ed_window_destroy", &cfunc_EdWindowDestroy, "ed_window_destroy(id) -> bool");
-        Bind("ed_window_get_rect", &cfunc_EdWindowGetRect,
-             "ed_window_get_rect(id) -> x, y, w, h, clientW, clientH, chainW, chainH, framesDrawn, lastError, monitor");
+        Bind(
+          "ed_window_get_rect",
+          &cfunc_EdWindowGetRect,
+          "ed_window_get_rect(id) -> x, y, w, h, clientW, clientH, chainW, chainH, framesDrawn, lastError, monitor"
+        );
         Bind("ed_window_set_rect", &cfunc_EdWindowSetRect, "ed_window_set_rect(id, x, y, w, h) -> bool");
         Bind("ed_window_raise", &cfunc_EdWindowRaise, "ed_window_raise(id) -> bool");
         Bind("ed_window_capture", &cfunc_EdWindowCapture, "ed_window_capture(id, absolutePath) -> bool");
@@ -840,9 +1016,17 @@ namespace moho
         Bind("ed_window_set_title", &cfunc_EdWindowSetTitle, "ed_window_set_title(id, title) -> bool");
         Bind("ed_window_set_defer_close", &cfunc_EdWindowSetDeferClose, "ed_window_set_defer_close(id, bool) -> bool");
         Bind("ed_window_poll_event", &cfunc_EdWindowPollEvent, "ed_window_poll_event() -> id, kind, a, b | nil");
-        Bind("ed_main_window_rect", &cfunc_EdMainWindowRect, "ed_main_window_rect() -> clientScreenX, clientScreenY, clientW, clientH, outerX, outerY, outerW, outerH");
+        Bind(
+          "ed_main_window_rect",
+          &cfunc_EdMainWindowRect,
+          "ed_main_window_rect() -> clientScreenX, clientScreenY, clientW, clientH, outerX, outerY, outerW, outerH"
+        );
         Bind("ed_monitor_count", &cfunc_EdMonitorCount, "ed_monitor_count() -> n");
-        Bind("ed_monitor_info", &cfunc_EdMonitorInfo, "ed_monitor_info(i) -> x, y, w, h, workX, workY, workW, workH, primary");
+        Bind(
+          "ed_monitor_info",
+          &cfunc_EdMonitorInfo,
+          "ed_monitor_info(i) -> x, y, w, h, workX, workY, workW, workH, primary"
+        );
       }
     };
 

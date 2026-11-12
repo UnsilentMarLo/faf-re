@@ -1,10 +1,14 @@
-// Stand-alone test of the parallel normal map update (CWldTerrainRes::UpdateNormalMap in moho/sim/CWldMap.cpp, ed_par_normalmap).
-//   links: moho/editor/EdFieldCore.cpp (the worker pool) and moho/render/textures/DXTCodec.cpp (the engine's own DXT block encoders)
-//   g++ -std=c++20 -O2 -I src/sdk src/sdk/moho/editor/tests/EdNormalMapParTest.cpp src/sdk/moho/editor/EdFieldCore.cpp src/sdk/moho/render/textures/DXTCodec.cpp -o EdNormalMapParTest -pthread
+// Stand-alone test of the parallel normal map update (CWldTerrainRes::UpdateNormalMap in moho/sim/CWldMap.cpp,
+// ed_par_normalmap).
+//   links: moho/editor/EdFieldCore.cpp (the worker pool) and moho/render/textures/DXTCodec.cpp (the engine's own DXT
+//   block encoders) g++ -std=c++20 -O2 -I src/sdk src/sdk/moho/editor/tests/EdNormalMapParTest.cpp
+//   src/sdk/moho/editor/EdFieldCore.cpp src/sdk/moho/render/textures/DXTCodec.cpp -o EdNormalMapParTest -pthread
 //
-// The engine function needs a CHeightField and a D3D texture; this test carries a MODEL of it (the same loops in the same order, GetElevation / GetNormal / EncodeNormalLaneByte copied
-// from moho/sim/STIMap.cpp and CWldMap.cpp, the encoders linked from the engine) and proves what the change claims: the bytes written by the batched, pool-parallel loop are
-// identical to the serial loop, for any thread count, any rectangle (aligned or not, clipped by the field edge) and any batch size, and rows never write outside their own span.
+// The engine function needs a CHeightField and a D3D texture; this test carries a MODEL of it (the same loops in the
+// same order, GetElevation / GetNormal / EncodeNormalLaneByte copied from moho/sim/STIMap.cpp and CWldMap.cpp, the
+// encoders linked from the engine) and proves what the change claims: the bytes written by the batched, pool-parallel
+// loop are identical to the serial loop, for any thread count, any rectangle (aligned or not, clipped by the field
+// edge) and any batch size, and rows never write outside their own span.
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -19,15 +23,15 @@
 
 static int gFailures = 0;
 static int gChecks = 0;
-#define CHECK(cond, ...)                               \
-  do {                                                 \
-    ++gChecks;                                         \
-    if (!(cond)) {                                     \
-      ++gFailures;                                     \
-      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-      std::printf(__VA_ARGS__);                        \
-      std::printf("\n");                               \
-    }                                                  \
+#define CHECK(cond, ...)                                                                                               \
+  do {                                                                                                                 \
+    ++gChecks;                                                                                                         \
+    if (!(cond)) {                                                                                                     \
+      ++gFailures;                                                                                                     \
+      std::printf("FAIL %s:%d: ", __FILE__, __LINE__);                                                                 \
+      std::printf(__VA_ARGS__);                                                                                        \
+      std::printf("\n");                                                                                               \
+    }                                                                                                                  \
   } while (0)
 
 namespace
@@ -38,10 +42,19 @@ namespace
     int height = 0;
     std::vector<std::uint16_t> data;
 
-    static int Clamp(int v, int hi) { return std::max(0, std::min(v, hi)); }
+    static int Clamp(
+      int v,
+      int hi
+    )
+    {
+      return std::max(0, std::min(v, hi));
+    }
 
     // CHeightField::GetElevation
-    float GetElevation(const float x, const float z) const
+    float GetElevation(
+      const float x,
+      const float z
+    ) const
     {
       const int fx = static_cast<int>(std::floor(static_cast<double>(x)));
       const int fz = static_cast<int>(std::floor(static_cast<double>(z)));
@@ -63,7 +76,12 @@ namespace
     }
 
     // CHeightField::GetNormal (x and z lanes)
-    void GetNormal(const float x, const float z, float& nx, float& nz) const
+    void GetNormal(
+      const float x,
+      const float z,
+      float& nx,
+      float& nz
+    ) const
     {
       const float top = GetElevation(x, z - 0.5f);
       const float left = GetElevation(x - 0.5f, z);
@@ -82,7 +100,9 @@ namespace
     }
   };
 
-  std::uint8_t EncodeLane(const float lane)
+  std::uint8_t EncodeLane(
+    const float lane
+  )
   {
     int encoded = static_cast<int>((lane + 1.0f) * 128.0f);
     encoded = std::max(0, std::min(encoded, 255));
@@ -94,12 +114,32 @@ namespace
     int x0, z0, x1, z1;
   };
 
-  int AlignDown4(const int v) { return v & ~3; }
-  int AlignUp4(const int v) { return (v + 3) & ~3; }
+  int AlignDown4(
+    const int v
+  )
+  {
+    return v & ~3;
+  }
+  int AlignUp4(
+    const int v
+  )
+  {
+    return (v + 3) & ~3;
+  }
 
-  // One tile of CWldTerrainRes::UpdateNormalMap. `parallel` selects the new batched path (the engine's `blockCount >= threshold && enabled` test is the caller's).
-  void UpdateTile(const Field& field, const Rect lockRect, const int tileXBase, const int tileZBase, std::uint8_t* const locked, const std::size_t pitch, const bool parallel,
-                  const int batchRows, int* const ticks)
+  // One tile of CWldTerrainRes::UpdateNormalMap. `parallel` selects the new batched path (the engine's `blockCount >=
+  // threshold && enabled` test is the caller's).
+  void UpdateTile(
+    const Field& field,
+    const Rect lockRect,
+    const int tileXBase,
+    const int tileZBase,
+    std::uint8_t* const locked,
+    const std::size_t pitch,
+    const bool parallel,
+    const int batchRows,
+    int* const ticks
+  )
   {
     const auto encodeBlockRow = [&](const int localZ, std::uint8_t* const rowBytes) {
       auto* out = reinterpret_cast<std::uint64_t*>(rowBytes);
@@ -110,7 +150,12 @@ namespace
           for (int c = 0; c < 4; ++c) {
             float fx = 0;
             float fz = 0;
-            field.GetNormal(static_cast<float>(tileXBase + localX + c) + 0.5f, static_cast<float>(tileZBase + localZ + r) + 0.5f, fx, fz);
+            field.GetNormal(
+              static_cast<float>(tileXBase + localX + c) + 0.5f,
+              static_cast<float>(tileZBase + localZ + r) + 0.5f,
+              fx,
+              fz
+            );
             nx[r * 4 + c] = EncodeLane(fx);
             nz[r * 4 + c] = EncodeLane(fz);
           }
@@ -145,14 +190,25 @@ namespace
     }
   }
 
-  // The whole function: tiles, clipping, locking (a fresh zeroed texture per call), for a rectangle `rect` (x1 / z1 exclusive, like the engine).
-  std::vector<std::uint8_t> UpdateMap(const Field& field, const int tileW, const int tileH, const Rect rect, const bool parallel, const int batchRows, int* const ticks)
+  // The whole function: tiles, clipping, locking (a fresh zeroed texture per call), for a rectangle `rect` (x1 / z1
+  // exclusive, like the engine).
+  std::vector<std::uint8_t> UpdateMap(
+    const Field& field,
+    const int tileW,
+    const int tileH,
+    const Rect rect,
+    const bool parallel,
+    const int batchRows,
+    int* const ticks
+  )
   {
     const int tilesX = (field.width - 1 + tileW - 1) / tileW;
     const int tilesY = (field.height - 1 + tileH - 1) / tileH;
     const std::size_t pitch = static_cast<std::size_t>(tileW / 4) * 16;
     const std::size_t tileBytes = pitch * static_cast<std::size_t>(tileH / 4);
-    std::vector<std::uint8_t> texels(tileBytes * static_cast<std::size_t>(tilesX * tilesY), 0xCD);   // 0xCD: what an untouched byte looks like
+    std::vector<std::uint8_t> texels(
+      tileBytes * static_cast<std::size_t>(tilesX * tilesY), 0xCD
+    ); // 0xCD: what an untouched byte looks like
     std::size_t tileIndex = 0;
     for (int tz = 0; tz < field.height - 1; tz += tileH) {
       for (int tx = 0; tx < field.width - 1; tx += tileW, ++tileIndex) {
@@ -164,16 +220,22 @@ namespace
           continue;
         }
         Rect lock{AlignDown4(cx0 - tx), AlignDown4(cz0 - tz), AlignUp4(cx1 - tx), AlignUp4(cz1 - tz)};
-        // the engine's LockRect hands out the memory of the locked rectangle only: rows start at lock.z0, columns at lock.x0
+        // the engine's LockRect hands out the memory of the locked rectangle only: rows start at lock.z0, columns at
+        // lock.x0
         std::uint8_t* tileBase = texels.data() + tileIndex * tileBytes;
-        std::uint8_t* locked = tileBase + static_cast<std::size_t>(lock.z0 / 4) * pitch + static_cast<std::size_t>(lock.x0 / 4) * 16;
+        std::uint8_t* locked =
+          tileBase + static_cast<std::size_t>(lock.z0 / 4) * pitch + static_cast<std::size_t>(lock.x0 / 4) * 16;
         UpdateTile(field, lock, tx, tz, locked, pitch, parallel, batchRows, ticks);
       }
     }
     return texels;
   }
 
-  Field MakeField(const int w, const int h, const unsigned seed)
+  Field MakeField(
+    const int w,
+    const int h,
+    const unsigned seed
+  )
   {
     Field f;
     f.width = w;
@@ -183,14 +245,18 @@ namespace
     for (int z = 0; z < h; ++z) {
       for (int x = 0; x < w; ++x) {
         const double smooth = 6000.0 + 2500.0 * std::sin(x * 0.07) * std::cos(z * 0.05);
-        f.data[static_cast<std::size_t>(z) * w + x] = static_cast<std::uint16_t>(smooth + static_cast<double>(rng() % 400));
+        f.data[static_cast<std::size_t>(z) * w + x] =
+          static_cast<std::uint16_t>(smooth + static_cast<double>(rng() % 400));
       }
     }
     return f;
   }
 } // namespace
 
-int main(const int argc, char** const argv)
+int main(
+  const int argc,
+  char** const argv
+)
 {
   if (argc > 1 && std::strcmp(argv[1], "--bench") == 0) {
     // timing of the model on this machine (not a check): a 2049 x 2049 field, whole map
@@ -200,7 +266,8 @@ int main(const int argc, char** const argv)
       int ticks = 0;
       const auto t0 = std::chrono::steady_clock::now();
       const std::vector<std::uint8_t> out = UpdateMap(field, 2048, 2048, rect, parallel, 64, &ticks);
-      return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() + 0.0 * static_cast<double>(out.size());
+      return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() +
+        0.0 * static_cast<double>(out.size());
     };
     moho::editor::field::SetThreads(1);
     const double serial = time(false);
@@ -239,14 +306,24 @@ int main(const int argc, char** const argv)
           moho::editor::field::SetThreads(threads);
           int parTicks = 0;
           const std::vector<std::uint8_t> par = UpdateMap(field, tileW, tileH, rect, true, batch, &parTicks);
-          CHECK(par == serial, "case %dx%d tile %d round %d threads %d batch %d: bytes differ", c.w, c.h, c.tile, round, threads, batch);
+          CHECK(
+            par == serial,
+            "case %dx%d tile %d round %d threads %d batch %d: bytes differ",
+            c.w,
+            c.h,
+            c.tile,
+            round,
+            threads,
+            batch
+          );
           CHECK(parTicks == serialTicks, "ticks %d vs %d (one per block row either way)", parTicks, serialTicks);
         }
       }
     }
   }
 
-  // an untouched byte stays untouched: rows write only inside their rectangle (0xCD marks the texture before the update)
+  // an untouched byte stays untouched: rows write only inside their rectangle (0xCD marks the texture before the
+  // update)
   {
     const Field field = MakeField(257, 257, 99);
     int ticks = 0;
@@ -257,8 +334,14 @@ int main(const int argc, char** const argv)
     for (const std::uint8_t b : par) {
       touched += b != 0xCD ? 1u : 0u;
     }
-    const std::size_t expected = static_cast<std::size_t>((AlignUp4(100) - AlignDown4(40)) / 4) * 16 * static_cast<std::size_t>((AlignUp4(120) - AlignDown4(52)) / 4);
-    CHECK(touched <= expected && touched > expected / 2, "touched %zu bytes, the blocks of the rectangle hold %zu", touched, expected);
+    const std::size_t expected = static_cast<std::size_t>((AlignUp4(100) - AlignDown4(40)) / 4) * 16 *
+      static_cast<std::size_t>((AlignUp4(120) - AlignDown4(52)) / 4);
+    CHECK(
+      touched <= expected && touched > expected / 2,
+      "touched %zu bytes, the blocks of the rectangle hold %zu",
+      touched,
+      expected
+    );
   }
 
   moho::editor::field::SetThreads(origThreads);

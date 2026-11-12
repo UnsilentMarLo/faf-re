@@ -1,14 +1,15 @@
-// Editor natives for the terrain-type grid (one byte per map cell, the TypeCode of a /lua/TerrainTypes.lua entry; it drives effects, sounds, the
-// blocking flag and the unit style):
+// Editor natives for the terrain-type grid (one byte per map cell, the TypeCode of a /lua/TerrainTypes.lua entry; it
+// drives effects, sounds, the blocking flag and the unit style):
 //
 //   ed_tt_info()                              -> width, height   (cells; nil without a grid)
 //   ed_tt_read(x0, z0, x1, z1)                -> values, x0, z0, x1, z1   (clamped, row major)
 //   ed_tt_write(x0, z0, x1, z1, values)       -> number of cells written
-//   ed_tt_disc(cx, cz, radius, code)          -> changed, x0, z0, x1, z1   a hard disc of one code (cell units; the changed cells' rectangle), one call per brush dab
-//   ed_tt_nodes(x0, z0, nw, nh, step, csx, csz) -> values   the codes under a grid of nodes (overlay window), nw * nh numbers, one call
+//   ed_tt_disc(cx, cz, radius, code)          -> changed, x0, z0, x1, z1   a hard disc of one code (cell units; the
+//   changed cells' rectangle), one call per brush dab ed_tt_nodes(x0, z0, nw, nh, step, csx, csz) -> values   the codes
+//   under a grid of nodes (overlay window), nw * nh numbers, one call
 //
-// The grid exists twice in a running editor: in the map the world session shows and in the simulation's own copy. Both are written so the sim
-// (blocking cells, effects) sees the edit at once; the map writer saves the session's grid.
+// The grid exists twice in a running editor: in the map the world session shows and in the simulation's own copy. Both
+// are written so the sim (blocking cells, effects) sees the edit at once; the map writer saves the session's grid.
 
 #include <algorithm>
 #include <cstdint>
@@ -51,12 +52,16 @@ namespace
     return nullptr;
   }
 
-  bool HasGrid(const moho::STIMap* const m)
+  bool HasGrid(
+    const moho::STIMap* const m
+  )
   {
     return m != nullptr && m->mTerrainType.data != nullptr && m->mTerrainType.width > 0 && m->mTerrainType.height > 0;
   }
 
-  int __cdecl cfunc_EdTtInfo(lua_State* const L)
+  int __cdecl cfunc_EdTtInfo(
+    lua_State* const L
+  )
   {
     const moho::STIMap* const m = SessionMap();
     if (!HasGrid(m)) {
@@ -68,7 +73,9 @@ namespace
     return 2;
   }
 
-  int __cdecl cfunc_EdTtRead(lua_State* const L)
+  int __cdecl cfunc_EdTtRead(
+    lua_State* const L
+  )
   {
     const moho::STIMap* const m = SessionMap();
     int x0 = static_cast<int>(luaL_checknumber(L, 1));
@@ -97,7 +104,13 @@ namespace
     for (int z = z0; z <= z1; ++z) {
       for (int x = x0; x <= x1; ++x, ++index) {
         lua_pushnumber(L, static_cast<lua_Number>(index));
-        lua_pushnumber(L, static_cast<lua_Number>(m->mTerrainType.data[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)]));
+        lua_pushnumber(
+          L,
+          static_cast<lua_Number>(
+            m->mTerrainType
+              .data[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)]
+          )
+        );
         lua_settable(L, -3);
       }
     }
@@ -108,7 +121,14 @@ namespace
     return 5;
   }
 
-  void WriteGrid(moho::STIMap* const m, const int x0, const int z0, const int x1, const int z1, const std::vector<std::uint8_t>& values)
+  void WriteGrid(
+    moho::STIMap* const m,
+    const int x0,
+    const int z0,
+    const int x1,
+    const int z1,
+    const std::vector<std::uint8_t>& values
+  )
   {
     if (!HasGrid(m)) {
       return;
@@ -119,13 +139,17 @@ namespace
     for (int z = z0; z <= z1; ++z) {
       for (int x = x0; x <= x1; ++x, ++i) {
         if (x >= 0 && z >= 0 && x < w && z < h) {
-          m->mTerrainType.data[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] = values[static_cast<std::size_t>(i)];
+          m->mTerrainType
+            .data[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] =
+            values[static_cast<std::size_t>(i)];
         }
       }
     }
   }
 
-  int __cdecl cfunc_EdTtWrite(lua_State* const L)
+  int __cdecl cfunc_EdTtWrite(
+    lua_State* const L
+  )
   {
     moho::STIMap* const m = SessionMap();
     const int x0 = static_cast<int>(luaL_checknumber(L, 1));
@@ -133,7 +157,10 @@ namespace
     const int x1 = static_cast<int>(luaL_checknumber(L, 3));
     const int z1 = static_cast<int>(luaL_checknumber(L, 4));
     luaL_checktype(L, 5, LUA_TTABLE);
-    if (!HasGrid(m) || x0 > x1 || z0 > z1 || x0 < 0 || z0 < 0 || x1 >= m->mTerrainType.width || z1 >= m->mTerrainType.height) {
+    if (
+      !HasGrid(m) || x0 > x1 || z0 > z1 || x0 < 0 || z0 < 0 || x1 >= m->mTerrainType.width ||
+      z1 >= m->mTerrainType.height
+    ) {
       lua_pushnumber(L, 0);
       return 1;
     }
@@ -154,9 +181,12 @@ namespace
     return 1;
   }
 
-  // ed_tt_disc(cx, cz, radius, code): the cells whose centre is within `radius` of (cx, cz) (cell units) take `code`, in the session's grid and in the simulation's copy.
-  // Returns the number of cells that changed and their inclusive rectangle (the caller's dirty rectangle); nil without a grid.
-  int __cdecl cfunc_EdTtDisc(lua_State* const L)
+  // ed_tt_disc(cx, cz, radius, code): the cells whose centre is within `radius` of (cx, cz) (cell units) take `code`,
+  // in the session's grid and in the simulation's copy. Returns the number of cells that changed and their inclusive
+  // rectangle (the caller's dirty rectangle); nil without a grid.
+  int __cdecl cfunc_EdTtDisc(
+    lua_State* const L
+  )
   {
     moho::STIMap* const m = SessionMap();
     const float cx = static_cast<float>(luaL_checknumber(L, 1));
@@ -168,11 +198,17 @@ namespace
       return 1;
     }
     const std::uint8_t code = static_cast<std::uint8_t>(std::max(0.0, std::min(255.0, codeValue)));
-    const moho::editor::ttype::DiscResult r =
-      moho::editor::ttype::PaintDisc(m->mTerrainType.data, m->mTerrainType.width, m->mTerrainType.height, cx, cz, radius, code);
+    const moho::editor::ttype::DiscResult r = moho::editor::ttype::PaintDisc(
+      m->mTerrainType.data, m->mTerrainType.width, m->mTerrainType.height, cx, cz, radius, code
+    );
     moho::STIMap* const sim = SimMap();
-    if (sim != nullptr && sim != m && HasGrid(sim) && sim->mTerrainType.width == m->mTerrainType.width && sim->mTerrainType.height == m->mTerrainType.height) {
-      (void)moho::editor::ttype::PaintDisc(sim->mTerrainType.data, sim->mTerrainType.width, sim->mTerrainType.height, cx, cz, radius, code);
+    if (
+      sim != nullptr && sim != m && HasGrid(sim) && sim->mTerrainType.width == m->mTerrainType.width &&
+      sim->mTerrainType.height == m->mTerrainType.height
+    ) {
+      (void)moho::editor::ttype::PaintDisc(
+        sim->mTerrainType.data, sim->mTerrainType.width, sim->mTerrainType.height, cx, cz, radius, code
+      );
     }
     lua_pushnumber(L, static_cast<lua_Number>(r.changed));
     lua_pushnumber(L, static_cast<lua_Number>(r.x0));
@@ -182,8 +218,11 @@ namespace
     return 5;
   }
 
-  // ed_tt_nodes(x0, z0, nw, nh, step, csx, csz): the codes under nw x nh overlay nodes (node (i, j) at world (x0 + i * step, z0 + j * step); cells are csx x csz world units, default 1).
-  int __cdecl cfunc_EdTtNodes(lua_State* const L)
+  // ed_tt_nodes(x0, z0, nw, nh, step, csx, csz): the codes under nw x nh overlay nodes (node (i, j) at world (x0 + i *
+  // step, z0 + j * step); cells are csx x csz world units, default 1).
+  int __cdecl cfunc_EdTtNodes(
+    lua_State* const L
+  )
   {
     const moho::STIMap* const m = SessionMap();
     const int x0 = static_cast<int>(luaL_checknumber(L, 1));
@@ -204,7 +243,9 @@ namespace
       csz = 1.0f;
     }
     std::vector<std::uint8_t> out(static_cast<std::size_t>(nw) * static_cast<std::size_t>(nh));
-    moho::editor::ttype::SampleNodes(m->mTerrainType.data, m->mTerrainType.width, m->mTerrainType.height, x0, z0, nw, nh, step, csx, csz, out.data());
+    moho::editor::ttype::SampleNodes(
+      m->mTerrainType.data, m->mTerrainType.width, m->mTerrainType.height, x0, z0, nw, nh, step, csx, csz, out.data()
+    );
     lua_newtable(L);
     for (std::size_t i = 0; i < out.size(); ++i) {
       lua_pushnumber(L, static_cast<lua_Number>(i + 1));
@@ -228,11 +269,36 @@ namespace
     EdTerrainTypeLuaBootstrap()
     {
       auto& set = UserLuaInitSet();
-      (void)new moho::CScrLuaBinder(set, "ed_tt_info", &cfunc_EdTtInfo, nullptr, "<global>", "ed_tt_info() -> width, height");
-      (void)new moho::CScrLuaBinder(set, "ed_tt_read", &cfunc_EdTtRead, nullptr, "<global>", "ed_tt_read(x0, z0, x1, z1) -> values, x0, z0, x1, z1");
-      (void)new moho::CScrLuaBinder(set, "ed_tt_write", &cfunc_EdTtWrite, nullptr, "<global>", "ed_tt_write(x0, z0, x1, z1, values) -> cells written");
-      (void)new moho::CScrLuaBinder(set, "ed_tt_disc", &cfunc_EdTtDisc, nullptr, "<global>", "ed_tt_disc(cx, cz, radius, code) -> changed, x0, z0, x1, z1");
-      (void)new moho::CScrLuaBinder(set, "ed_tt_nodes", &cfunc_EdTtNodes, nullptr, "<global>", "ed_tt_nodes(x0, z0, nw, nh, step, csx, csz) -> values");
+      (void)new moho::CScrLuaBinder(
+        set, "ed_tt_info", &cfunc_EdTtInfo, nullptr, "<global>", "ed_tt_info() -> width, height"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_tt_read", &cfunc_EdTtRead, nullptr, "<global>", "ed_tt_read(x0, z0, x1, z1) -> values, x0, z0, x1, z1"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_tt_write",
+        &cfunc_EdTtWrite,
+        nullptr,
+        "<global>",
+        "ed_tt_write(x0, z0, x1, z1, values) -> cells written"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_tt_disc",
+        &cfunc_EdTtDisc,
+        nullptr,
+        "<global>",
+        "ed_tt_disc(cx, cz, radius, code) -> changed, x0, z0, x1, z1"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_tt_nodes",
+        &cfunc_EdTtNodes,
+        nullptr,
+        "<global>",
+        "ed_tt_nodes(x0, z0, nw, nh, step, csx, csz) -> values"
+      );
     }
   };
 
@@ -241,7 +307,11 @@ namespace
 
 namespace moho::editor
 {
-  bool TerrainTypeRead(std::vector<std::uint8_t>& out, int& w, int& h)
+  bool TerrainTypeRead(
+    std::vector<std::uint8_t>& out,
+    int& w,
+    int& h
+  )
   {
     const moho::STIMap* const m = SessionMap();
     if (!HasGrid(m)) {
@@ -253,7 +323,11 @@ namespace moho::editor
     return true;
   }
 
-  bool TerrainTypeWrite(const std::uint8_t* data, int w, int h)
+  bool TerrainTypeWrite(
+    const std::uint8_t* data,
+    int w,
+    int h
+  )
   {
     moho::STIMap* const m = SessionMap();
     if (!HasGrid(m) || m->mTerrainType.width != w || m->mTerrainType.height != h) {

@@ -37,11 +37,8 @@ namespace moho
   );
 
   bool ui_IdleGC = true;
-  TConVar<bool> gTConVar_ui_IdleGC(
-    "ui_IdleGC",
-    "Defer periodic UI Lua GC to the post-present frame idle window.",
-    &ui_IdleGC
-  );
+  TConVar<bool>
+    gTConVar_ui_IdleGC("ui_IdleGC", "Defer periodic UI Lua GC to the post-present frame idle window.", &ui_IdleGC);
 
   static bool sPendingUiGc = false;
   static bool sIncrementalCycleDue = false;
@@ -50,19 +47,21 @@ namespace moho
   {
     UserGcDispatcherRegistrar()
     {
-      RegisterUserGcDispatcher({
-        [](std::size_t count, std::size_t grain, void (*fn)(void*, std::size_t, std::size_t), void* context) {
-          CUserWorkerPool::Get().Run(count, grain, fn, context);
-        },
-        // Off the main thread (the scenario loader's blueprint state) the collection runs
-        // serially: it would share the pool and the GC's user-side scratch with the UI's.
-        []() { return CUserWorkerPool::IsDispatcherThread() ? CUserWorkerPool::ConfiguredWorkerCount() : 0u; },
-        &ui_ParallelMark,
-        &ui_ParallelSweep
-      });
+      RegisterUserGcDispatcher(
+        {[](std::size_t count, std::size_t grain, void (*fn)(void*, std::size_t, std::size_t), void* context) {
+        CUserWorkerPool::Get().Run(count, grain, fn, context);
+      },
+         // Off the main thread (the scenario loader's blueprint state) the collection runs
+         // serially: it would share the pool and the GC's user-side scratch with the UI's.
+         []() {
+        return CUserWorkerPool::IsDispatcherThread() ? CUserWorkerPool::ConfiguredWorkerCount() : 0u;
+      },
+         &ui_ParallelMark,
+         &ui_ParallelSweep}
+      );
     }
   } gUserGcDispatcherRegistrar;
-}
+} // namespace moho
 
 namespace
 {
@@ -73,7 +72,8 @@ namespace
    */
   std::vector<boost::shared_ptr<moho::CMauiFrame>> gRetiredFrames;
 
-  /** Editor: key handlers of closed pop-out windows whose delete had to wait for the end of an event dispatch (same rule as the frames). */
+  /** Editor: key handlers of closed pop-out windows whose delete had to wait for the end of an event dispatch (same
+   * rule as the frames). */
   std::vector<wxEvtHandler*> gRetiredHandlers;
 
   /**
@@ -124,7 +124,9 @@ namespace
    * a heap too large for the cap simply finishes its cycle over more than one
    * five-second window instead of hitching the frame.
    */
-  int ComputeIncrementalGcWorkBudget(global_State* const g)
+  int ComputeIncrementalGcWorkBudget(
+    global_State* const g
+  )
   {
     constexpr int kMinWork = 512;
     constexpr int kMaxWork = 65536;
@@ -137,24 +139,22 @@ namespace
 
     const lu_mem heapBytes = g->nblocks;
     const lu_mem thresholdBytes = g->GCthreshold;
-    const lu_mem thresholdDebt =
-      (heapBytes > thresholdBytes) ? (heapBytes - thresholdBytes) : static_cast<lu_mem>(0);
+    const lu_mem thresholdDebt = (heapBytes > thresholdBytes) ? (heapBytes - thresholdBytes) : static_cast<lu_mem>(0);
 
     // The collector's own debt (bytes allocated past the pause threshold) is
     // only maintained by the allocation-driven path; take the larger of the two
     // so a burst of allocations is paid down faster.
     lu_mem debtBytes = thresholdDebt;
-    if (const moho::lua_incremental::SState* const incremental =
-          moho::lua_incremental::Find(g);
-        incremental != nullptr && incremental->gcdebt > debtBytes) {
+    if (
+      const moho::lua_incremental::SState* const incremental = moho::lua_incremental::Find(g);
+      incremental != nullptr && incremental->gcdebt > debtBytes
+    ) {
       debtBytes = incremental->gcdebt;
     }
 
-    const double effectiveBytes =
-      static_cast<double>(heapBytes) + static_cast<double>(debtBytes);
+    const double effectiveBytes = static_cast<double>(heapBytes) + static_cast<double>(debtBytes);
     const double cycleWork = effectiveBytes * kWorkPerHeapByte;
-    const double perFrameWork =
-      cycleWork * (static_cast<double>(sGcSecondsPerFrame) / kCycleSeconds);
+    const double perFrameWork = cycleWork * (static_cast<double>(sGcSecondsPerFrame) / kCycleSeconds);
 
     int budget = static_cast<int>(perFrameWork);
     if (budget < kMinWork) {
@@ -236,7 +236,10 @@ namespace
     return ::new (outSharedFrame) boost::shared_ptr<moho::CMauiFrame>(rawFrame);
   }
 
-  [[nodiscard]] bool IsValidFrameIndex(const moho::CUIManager& manager, const int frameIdx)
+  [[nodiscard]] bool IsValidFrameIndex(
+    const moho::CUIManager& manager,
+    const int frameIdx
+  )
   {
     return frameIdx >= 0 && static_cast<std::size_t>(frameIdx) < manager.mFrames.Size();
   }
@@ -252,7 +255,9 @@ namespace
    * engineStats.Children do` raised "attempt to loop over field `Children' (a
    * nil value)" on every UI tick.
    */
-  void PublishEngineStatsToLua(LuaPlus::LuaState* const state)
+  void PublishEngineStatsToLua(
+    LuaPlus::LuaState* const state
+  )
   {
     if (state == nullptr) {
       return;
@@ -286,8 +291,7 @@ moho::CUIManager::CUIManager()
   , mUnknown6C(0.0f)
   , mGCTime(0.0f)
   , mUnknown74(0)
-{
-}
+{}
 
 /**
  * Address: 0x0084CA30 (FUN_0084CA30)
@@ -344,7 +348,10 @@ bool moho::CUIManager::Init()
 /**
  * Address: 0x0084CB70 (FUN_0084CB70)
  */
-int moho::CUIManager::AddFrame(wxWindow* const inputWindow, wxWindow* const eventHostWindow)
+int moho::CUIManager::AddFrame(
+  wxWindow* const inputWindow,
+  wxWindow* const eventHostWindow
+)
 {
   if (inputWindow == nullptr) {
     return -1;
@@ -362,7 +369,9 @@ int moho::CUIManager::AddFrame(wxWindow* const inputWindow, wxWindow* const even
 /**
  * Editor addition: see the declaration.
  */
-int moho::CUIManager::AddPopoutFrame(wxWindow* const window)
+int moho::CUIManager::AddPopoutFrame(
+  wxWindow* const window
+)
 {
   if (window == nullptr) {
     return -1;
@@ -398,9 +407,14 @@ int moho::CUIManager::AddPopoutFrame(wxWindow* const window)
 /**
  * Editor addition: see the declaration.
  */
-void moho::CUIManager::RemovePopoutFrame(const int index)
+void moho::CUIManager::RemovePopoutFrame(
+  const int index
+)
 {
-  if (index < 0 || static_cast<std::size_t>(index) >= mInputWindows.Size() || mInputWindows[static_cast<std::size_t>(index)] == nullptr) {
+  if (
+    index < 0 || static_cast<std::size_t>(index) >= mInputWindows.Size() ||
+    mInputWindows[static_cast<std::size_t>(index)] == nullptr
+  ) {
     return;
   }
 
@@ -412,14 +426,15 @@ void moho::CUIManager::RemovePopoutFrame(const int index)
   if (head < mFrames.Size() && mFrames[head]) {
     (void)window->PopEventHandler(false); // the frame's event mapper (pushed last)
     mFrames[head]->Destroy();
-    // CRASHFIX (editor): closing a pop-out from one of its own controls / keys runs here inside the event dispatch that still holds
-    // the frame: park the owner and the key handler until the next UI tick (see ReleaseFrameSharedPtrRange).
+    // CRASHFIX (editor): closing a pop-out from one of its own controls / keys runs here inside the event dispatch that
+    // still holds the frame: park the owner and the key handler until the next UI tick (see
+    // ReleaseFrameSharedPtrRange).
     if (MAUI_EventDispatchInProgress()) {
       gRetiredFrames.push_back(mFrames[head]);
     }
     mFrames[head] = boost::shared_ptr<CMauiFrame>();
   }
-  if (wxEvtHandler* const keyHandler = window->PopEventHandler(false)) {  // the key handler pushed by AddPopoutFrame
+  if (wxEvtHandler* const keyHandler = window->PopEventHandler(false)) { // the key handler pushed by AddPopoutFrame
     if (MAUI_EventDispatchInProgress()) {
       gRetiredHandlers.push_back(keyHandler);
     } else {
@@ -434,7 +449,9 @@ void moho::CUIManager::RemovePopoutFrame(const int index)
 /**
  * Address: 0x0084CC50 (FUN_0084CC50)
  */
-bool moho::CUIManager::SetNewLuaState(LuaPlus::LuaState* const state)
+bool moho::CUIManager::SetNewLuaState(
+  LuaPlus::LuaState* const state
+)
 {
   UI_ClearInputCapture();
   UI_ClearCurrentDragger();
@@ -490,7 +507,9 @@ bool moho::CUIManager::SetNewLuaState(LuaPlus::LuaState* const state)
 /**
  * Editor addition: the former body of the `SetNewLuaState` loop (Address: 0x0084CC50), shared with `AddPopoutFrame`.
  */
-void moho::CUIManager::CreateRootFrameForHead(const std::size_t head)
+void moho::CUIManager::CreateRootFrameForHead(
+  const std::size_t head
+)
 {
   {
     boost::shared_ptr<CMauiFrame> frame = CMauiFrame::Create(mLuaState);
@@ -577,7 +596,9 @@ void moho::CUIManager::ClearFrames()
 /**
  * Address: 0x0084D160 (FUN_0084D160)
  */
-void moho::CUIManager::UpdateFrameRate(const float deltaSeconds)
+void moho::CUIManager::UpdateFrameRate(
+  const float deltaSeconds
+)
 {
   FAF_PROFILE_ZONE_NAMED("UI");
   ReleaseRetiredFrames();
@@ -627,9 +648,10 @@ void moho::CUIManager::UpdateFrameRate(const float deltaSeconds)
       } else if (ui_IdleGC) {
         sPendingUiGc = true;
       } else if (mLuaState->m_state != nullptr) {
-        // EDITOR: a forced full collection of the UI state stops the main thread for as long as its live heap is big (the editor's modules and catalogs: est. tens to
-        // hundreds of ms). It runs when the heap grew by ed_ui_gc_kb or after ed_gc_max_seconds, not every 5 s whatever happens (moho/editor/EdPerf.cpp; `ed_ui_gc_kb 0` =
-        // always, as before). Lua's own threshold (heap doubled) stays in force.
+        // EDITOR: a forced full collection of the UI state stops the main thread for as long as its live heap is big
+        // (the editor's modules and catalogs: est. tens to hundreds of ms). It runs when the heap grew by ed_ui_gc_kb
+        // or after ed_gc_max_seconds, not every 5 s whatever happens (moho/editor/EdPerf.cpp; `ed_ui_gc_kb 0` = always,
+        // as before). Lua's own threshold (heap doubled) stays in force.
         if (moho::editor::perf::UiGcDue(lua_getgccount(mLuaState->m_state), 5.0f)) {
           lua_setgcthreshold(mLuaState->m_state, 0);
           moho::editor::perf::UiGcDone(lua_getgccount(mLuaState->m_state));
@@ -660,10 +682,8 @@ void moho::UI_ProcessIdleGC()
           // cycle reaches Pause again.
           sIncrementalCycleDue = false;
         }
-        const int workBudget =
-          ComputeIncrementalGcWorkBudget(uiMgr->mLuaState->m_state->l_G);
-        [[maybe_unused]] const bool done =
-            faf_lua51_gc_slice(uiMgr->mLuaState->m_state, workBudget, forceStart);
+        const int workBudget = ComputeIncrementalGcWorkBudget(uiMgr->mLuaState->m_state->l_G);
+        [[maybe_unused]] const bool done = faf_lua51_gc_slice(uiMgr->mLuaState->m_state, workBudget, forceStart);
       }
     }
     return;
@@ -693,7 +713,9 @@ bool moho::CUIManager::DoBeat()
 /**
  * Address: 0x0084D320 (FUN_0084D320)
  */
-void moho::CUIManager::SetMinimized(const bool minimized)
+void moho::CUIManager::SetMinimized(
+  const bool minimized
+)
 {
   for (std::size_t index = 0; index < mFrames.Size(); ++index) {
     if (mFrames[index]) {
@@ -705,7 +727,9 @@ void moho::CUIManager::SetMinimized(const bool minimized)
 /**
  * Address: 0x0084D360 (FUN_0084D360)
  */
-void moho::CUIManager::ClearChildren(const int frameIdx)
+void moho::CUIManager::ClearChildren(
+  const int frameIdx
+)
 {
   if (frameIdx == -1) {
     for (std::size_t index = 0; index < mFrames.Size(); ++index) {
@@ -726,7 +750,11 @@ void moho::CUIManager::ClearChildren(const int frameIdx)
 /**
  * Address: 0x0084CFC0 (FUN_0084CFC0)
  */
-void moho::CUIManager::OnResize(const int frameIdx, const int width, const int height)
+void moho::CUIManager::OnResize(
+  const int frameIdx,
+  const int width,
+  const int height
+)
 {
   if (!IsValidFrameIndex(*this, frameIdx)) {
     return;
@@ -744,7 +772,9 @@ void moho::CUIManager::OnResize(const int frameIdx, const int width, const int h
 /**
  * Address: 0x0084D3C0 (FUN_0084D3C0)
  */
-void moho::CUIManager::SetUIControlsAlpha(const float alpha)
+void moho::CUIManager::SetUIControlsAlpha(
+  const float alpha
+)
 {
   mUIControlsAlpha = alpha;
 }
@@ -760,7 +790,9 @@ float moho::CUIManager::GetUIControlsAlpha() const
 /**
  * Address: 0x0084D000 (FUN_0084D000)
  */
-void moho::CUIManager::SetCursor(CMauiCursor* const cursor)
+void moho::CUIManager::SetCursor(
+  CMauiCursor* const cursor
+)
 {
   mCursor.ResetFromObject(cursor);
 }
@@ -776,7 +808,9 @@ moho::CMauiCursor* moho::CUIManager::GetCursor() const
 /**
  * Address: 0x0084D520 (FUN_0084D520)
  */
-void moho::CUIManager::ValidateFrame(const int frameIdx)
+void moho::CUIManager::ValidateFrame(
+  const int frameIdx
+)
 {
   if (!IsValidFrameIndex(*this, frameIdx)) {
     return;
@@ -791,9 +825,12 @@ void moho::CUIManager::ValidateFrame(const int frameIdx)
 /**
  * Address: 0x0084D550 (FUN_0084D550)
  */
-void moho::CUIManager::RenderFrames(const int head, CD3DPrimBatcher* const primBatcher)
+void moho::CUIManager::RenderFrames(
+  const int head,
+  CD3DPrimBatcher* const primBatcher
+)
 {
-  moho::editor::renderstats::ScopedMs uiTimer(moho::editor::renderstats::gCur.uiMs);   // EDITOR: ed_render_stats
+  moho::editor::renderstats::ScopedMs uiTimer(moho::editor::renderstats::gCur.uiMs); // EDITOR: ed_render_stats
   primBatcher->SetToViewport(head, *this);
 
   CD3DDevice* const device = D3D_GetDevice();
@@ -813,9 +850,12 @@ void moho::CUIManager::RenderFrames(const int head, CD3DPrimBatcher* const primB
 /**
  * Address: 0x0084D5D0 (FUN_0084D5D0)
  */
-void moho::CUIManager::DrawUI(const int head, CD3DPrimBatcher* const primBatcher)
+void moho::CUIManager::DrawUI(
+  const int head,
+  CD3DPrimBatcher* const primBatcher
+)
 {
-  moho::editor::renderstats::ScopedMs uiTimer(moho::editor::renderstats::gCur.uiMs);   // EDITOR: ed_render_stats
+  moho::editor::renderstats::ScopedMs uiTimer(moho::editor::renderstats::gCur.uiMs); // EDITOR: ed_render_stats
   FAF_PROFILE_ZONE_NAMED("UI");
   primBatcher->SetToViewport(head, *this);
 
@@ -835,7 +875,10 @@ void moho::CUIManager::DrawUI(const int head, CD3DPrimBatcher* const primBatcher
 /**
  * Address: 0x0084D650 (FUN_0084D650)
  */
-void moho::CUIManager::DrawHead(const int head, CD3DPrimBatcher* const primBatcher)
+void moho::CUIManager::DrawHead(
+  const int head,
+  CD3DPrimBatcher* const primBatcher
+)
 {
   primBatcher->SetToViewport(head, *this);
 
@@ -856,7 +899,10 @@ void moho::CUIManager::DrawHead(const int head, CD3DPrimBatcher* const primBatch
  * Address: 0x0084D6D0 (FUN_0084D6D0)
  */
 void moho::CUIManager::GetControlAtCursor(
-  int* const outViewport, float* const outX, float* const outY, CMauiControl** const outControl
+  int* const outViewport,
+  float* const outX,
+  float* const outY,
+  CMauiControl** const outControl
 )
 {
   // The out-parameters are written only on a hit; the callers initialise
@@ -875,8 +921,7 @@ void moho::CUIManager::GetControlAtCursor(
     mInputWindows[head]->GetClientSize(&width, &height);
 
     if (wxRect(wxPoint(0, 0), wxSize(width, height)).Inside(x, y)) {
-      *outControl =
-        CMauiControl::GetTopmostControl(mFrames[head].get(), static_cast<float>(x), static_cast<float>(y));
+      *outControl = CMauiControl::GetTopmostControl(mFrames[head].get(), static_cast<float>(x), static_cast<float>(y));
       *outX = static_cast<float>(x);
       *outY = static_cast<float>(y);
       *outViewport = static_cast<int>(head);
@@ -900,10 +945,7 @@ void moho::CUIManager::DumpControlsUnderMouse()
     mInputWindows[head]->ScreenToClient(&localX, &localY);
 
     gpg::Logf(
-      "\n\n--- Dumping controls for head #%d at cursor position %d, %d",
-      static_cast<int>(head),
-      localX,
-      localY
+      "\n\n--- Dumping controls for head #%d at cursor position %d, %d", static_cast<int>(head), localX, localY
     );
 
     if (head < mFrames.Size() && mFrames[head]) {
@@ -918,7 +960,9 @@ void moho::CUIManager::DumpControlsUnderMouse()
 /**
  * Address: 0x0084D8E0 (FUN_0084D8E0)
  */
-void moho::CUIManager::DebugMouseOverControl(CD3DPrimBatcher* const primBatcher)
+void moho::CUIManager::DebugMouseOverControl(
+  CD3DPrimBatcher* const primBatcher
+)
 {
   int viewport = 0;
   float mouseX = 0.0f;

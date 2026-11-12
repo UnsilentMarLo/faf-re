@@ -12,14 +12,14 @@ using moho::editor::CellRect;
 using moho::editor::MapDocument;
 
 static int gFailures = 0;
-#define CHECK(cond, ...)                               \
-  do {                                                 \
-    if (!(cond)) {                                     \
-      ++gFailures;                                     \
-      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-      std::printf(__VA_ARGS__);                        \
-      std::printf("\n");                               \
-    }                                                  \
+#define CHECK(cond, ...)                                                                                               \
+  do {                                                                                                                 \
+    if (!(cond)) {                                                                                                     \
+      ++gFailures;                                                                                                     \
+      std::printf("FAIL %s:%d: ", __FILE__, __LINE__);                                                                 \
+      std::printf(__VA_ARGS__);                                                                                        \
+      std::printf("\n");                                                                                               \
+    }                                                                                                                  \
   } while (0)
 
 // The model keeps one full copy of the heights per stack position: states[i] = heights with i commands applied.
@@ -27,11 +27,17 @@ struct Harness
 {
   int w, h;
   MapDocument doc;
-  std::vector<std::uint16_t> mirror;               // what the sink saw: must always equal the document
+  std::vector<std::uint16_t> mirror; // what the sink saw: must always equal the document
   std::vector<std::vector<std::uint16_t>> states;
   std::size_t pos = 0;
 
-  Harness(const int width, const int height, std::mt19937& rng) : w(width), h(height)
+  Harness(
+    const int width,
+    const int height,
+    std::mt19937& rng
+  )
+    : w(width)
+    , h(height)
   {
     std::vector<std::uint16_t> start(static_cast<std::size_t>(w) * h);
     for (auto& v : start) {
@@ -60,7 +66,9 @@ struct Harness
     return out;
   }
 
-  void Verify(const char* what)
+  void Verify(
+    const char* what
+  )
   {
     const auto cur = Current();
     CHECK(cur == states[pos], "%s: document differs from the model at stack position %zu", what, pos);
@@ -71,14 +79,18 @@ struct Harness
 
   // One edit through the document. `newCommand` tells the model whether it opens a new stack position (a new
   // command) or merges into the top command of an open stroke.
-  void Apply(const CellRect& r, const std::vector<std::uint16_t>& words, const bool newCommand)
+  void Apply(
+    const CellRect& r,
+    const std::vector<std::uint16_t>& words,
+    const bool newCommand
+  )
   {
     const std::size_t changed = doc.EditHeights(r, words.data());
     if (changed == 0) {
       return;
     }
     if (newCommand) {
-      states.resize(pos + 1);   // the redo branch is gone
+      states.resize(pos + 1); // the redo branch is gone
       states.push_back(Current());
       pos = states.size() - 1;
     } else {
@@ -86,7 +98,11 @@ struct Harness
     }
   }
 
-  std::vector<std::uint16_t> RandomWords(std::mt19937& rng, const CellRect& r, const bool extreme)
+  std::vector<std::uint16_t> RandomWords(
+    std::mt19937& rng,
+    const CellRect& r,
+    const bool extreme
+  )
   {
     std::vector<std::uint16_t> words;
     doc.ReadRect(r, words);
@@ -103,7 +119,9 @@ struct Harness
     return words;
   }
 
-  CellRect RandomRect(std::mt19937& rng)
+  CellRect RandomRect(
+    std::mt19937& rng
+  )
   {
     CellRect r;
     r.x0 = static_cast<int>(rng() % w);
@@ -203,7 +221,7 @@ int main()
     CHECK(!t.doc.Dirty(), "clean again after redo to the clean point");
     t.doc.Undo();
     std::vector<std::uint16_t> w(1, 777);
-    t.doc.EditHeights(CellRect{3, 3, 3, 3}, w.data());   // new edit drops the redo branch holding the clean state
+    t.doc.EditHeights(CellRect{3, 3, 3, 3}, w.data()); // new edit drops the redo branch holding the clean state
     CHECK(t.doc.Dirty(), "dirty: the clean state is gone with the redo branch");
     t.doc.MarkClean();
     t.doc.ClearHistory();

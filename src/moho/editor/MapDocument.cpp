@@ -8,7 +8,9 @@
 
 namespace moho::editor
 {
-  void CellRect::Unite(const CellRect& other) noexcept
+  void CellRect::Unite(
+    const CellRect& other
+  ) noexcept
   {
     if (other.Empty()) {
       return;
@@ -28,14 +30,20 @@ namespace moho::editor
     constexpr int kTile = 32;
     constexpr int kTileCells = kTile * kTile;
 
-    [[nodiscard]] std::uint64_t TileKey(const int tx, const int tz) noexcept
+    [[nodiscard]] std::uint64_t TileKey(
+      const int tx,
+      const int tz
+    ) noexcept
     {
       return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(tz)) << 32) | static_cast<std::uint32_t>(tx);
     }
 
     // ---- delta packing: zero runs and zigzag varints -------------------------------------------------------
 
-    void PutVarint(std::vector<std::uint8_t>& out, std::uint32_t value)
+    void PutVarint(
+      std::vector<std::uint8_t>& out,
+      std::uint32_t value
+    )
     {
       while (value >= 0x80u) {
         out.push_back(static_cast<std::uint8_t>(value | 0x80u));
@@ -44,7 +52,10 @@ namespace moho::editor
       out.push_back(static_cast<std::uint8_t>(value));
     }
 
-    [[nodiscard]] std::uint32_t GetVarint(const std::vector<std::uint8_t>& in, std::size_t& at)
+    [[nodiscard]] std::uint32_t GetVarint(
+      const std::vector<std::uint8_t>& in,
+      std::size_t& at
+    )
     {
       std::uint32_t value = 0;
       int shift = 0;
@@ -59,18 +70,24 @@ namespace moho::editor
       return value;
     }
 
-    [[nodiscard]] std::uint32_t ZigZag(const std::int32_t v) noexcept
+    [[nodiscard]] std::uint32_t ZigZag(
+      const std::int32_t v
+    ) noexcept
     {
       return (static_cast<std::uint32_t>(v) << 1) ^ static_cast<std::uint32_t>(v >> 31);
     }
 
-    [[nodiscard]] std::int32_t UnZigZag(const std::uint32_t v) noexcept
+    [[nodiscard]] std::int32_t UnZigZag(
+      const std::uint32_t v
+    ) noexcept
     {
       return static_cast<std::int32_t>(v >> 1) ^ -static_cast<std::int32_t>(v & 1u);
     }
 
     // token 0 + run length = a run of zeros; any other varint is a zigzag-coded non-zero delta
-    std::vector<std::uint8_t> Pack(const std::vector<std::int32_t>& cells)
+    std::vector<std::uint8_t> Pack(
+      const std::vector<std::int32_t>& cells
+    )
     {
       std::vector<std::uint8_t> out;
       std::uint32_t run = 0;
@@ -94,7 +111,10 @@ namespace moho::editor
       return out;
     }
 
-    void Unpack(const std::vector<std::uint8_t>& in, std::vector<std::int32_t>& cells)
+    void Unpack(
+      const std::vector<std::uint8_t>& in,
+      std::vector<std::int32_t>& cells
+    )
     {
       cells.assign(static_cast<std::size_t>(kTileCells), 0);
       std::size_t at = 0;
@@ -118,15 +138,25 @@ namespace moho::editor
     class HeightStroke final : public Command
     {
     public:
-      HeightStroke(const std::uint64_t stroke, std::string label) : mStroke(stroke), mLabel(std::move(label)) {}
+      HeightStroke(
+        const std::uint64_t stroke,
+        std::string label
+      )
+        : mStroke(stroke)
+        , mLabel(std::move(label))
+      {}
 
       /** `delta` is `after - before` for `rect`, row major. */
-      void AddDab(const CellRect& rect, const std::vector<std::int32_t>& delta)
+      void AddDab(
+        const CellRect& rect,
+        const std::vector<std::int32_t>& delta
+      )
       {
         mBounds.Unite(rect);
         std::size_t i = 0;
-        // consecutive samples of a row mostly share a tile: look the tile up in the map only when it changes (a dab of radius 50 has ~8000 changed
-        // samples in ~9 tiles; one map lookup per sample was a measurable part of a brush dab)
+        // consecutive samples of a row mostly share a tile: look the tile up in the map only when it changes (a dab of
+        // radius 50 has ~8000 changed samples in ~9 tiles; one map lookup per sample was a measurable part of a brush
+        // dab)
         Tile* tile = nullptr;
         int tileX = -1;
         int tileZ = -1;
@@ -149,9 +179,16 @@ namespace moho::editor
         }
       }
 
-      void Do(MapDocument& doc) override { (void)Apply(doc, +1); }
+      void Do(
+        MapDocument& doc
+      ) override
+      {
+        (void)Apply(doc, +1);
+      }
 
-      bool Redo(MapDocument& doc) override
+      bool Redo(
+        MapDocument& doc
+      ) override
       {
         bool ok = true;
         if (mSealed) {
@@ -164,7 +201,9 @@ namespace moho::editor
         return ok;
       }
 
-      bool Undo(MapDocument& doc) override
+      bool Undo(
+        MapDocument& doc
+      ) override
       {
         bool ok = true;
         if (mSealed) {
@@ -177,7 +216,9 @@ namespace moho::editor
         return ok;
       }
 
-      bool TryMerge(Command& next) override
+      bool TryMerge(
+        Command& next
+      ) override
       {
         auto* const other = dynamic_cast<HeightStroke*>(&next);
         if (other == nullptr || mSealed || other->mSealed || mStroke == 0 || other->mStroke != mStroke) {
@@ -197,7 +238,9 @@ namespace moho::editor
         return true;
       }
 
-      void Seal(MapDocument& doc) override
+      void Seal(
+        MapDocument& doc
+      ) override
       {
         if (mSealed) {
           return;
@@ -216,9 +259,18 @@ namespace moho::editor
         mSealed = true;
       }
 
-      [[nodiscard]] std::string Label() const override { return mLabel; }
-      [[nodiscard]] CellRect Bounds() const override { return mBounds; }
-      [[nodiscard]] std::uint64_t StrokeId() const noexcept override { return mStroke; }
+      [[nodiscard]] std::string Label() const override
+      {
+        return mLabel;
+      }
+      [[nodiscard]] CellRect Bounds() const override
+      {
+        return mBounds;
+      }
+      [[nodiscard]] std::uint64_t StrokeId() const noexcept override
+      {
+        return mStroke;
+      }
 
       [[nodiscard]] std::size_t ApproxBytes() const override
       {
@@ -233,12 +285,15 @@ namespace moho::editor
     private:
       struct Tile
       {
-        std::vector<std::int32_t> raw;     // open stroke
-        std::vector<std::uint8_t> packed;  // sealed
+        std::vector<std::int32_t> raw;    // open stroke
+        std::vector<std::uint8_t> packed; // sealed
       };
 
       // buffer = the document's words over mBounds; adds sign * delta to it
-      void Accumulate(std::vector<std::uint16_t>& buffer, const int sign) const
+      void Accumulate(
+        std::vector<std::uint16_t>& buffer,
+        const int sign
+      ) const
       {
         const int width = mBounds.Width();
         std::vector<std::int32_t> cells;
@@ -275,7 +330,10 @@ namespace moho::editor
         }
       }
 
-      bool Apply(MapDocument& doc, const int sign)
+      bool Apply(
+        MapDocument& doc,
+        const int sign
+      )
       {
         if (mBounds.Empty()) {
           return true;
@@ -302,7 +360,12 @@ namespace moho::editor
   MapDocument::MapDocument() = default;
   MapDocument::~MapDocument() = default;
 
-  void MapDocument::Reset(const int width, const int height, std::vector<std::uint16_t> heights, HeightSink sink)
+  void MapDocument::Reset(
+    const int width,
+    const int height,
+    std::vector<std::uint16_t> heights,
+    HeightSink sink
+  )
   {
     mStack.clear();
     mPos = 0;
@@ -310,7 +373,9 @@ namespace moho::editor
     mStroke = 0;
     mRevision = 0;
     mSink = std::move(sink);
-    if (width <= 0 || height <= 0 || heights.size() != static_cast<std::size_t>(width) * static_cast<std::size_t>(height)) {
+    if (
+      width <= 0 || height <= 0 || heights.size() != static_cast<std::size_t>(width) * static_cast<std::size_t>(height)
+    ) {
       mWidth = 0;
       mHeight = 0;
       mHeights.clear();
@@ -321,7 +386,10 @@ namespace moho::editor
     mHeights = std::move(heights);
   }
 
-  std::uint16_t MapDocument::HeightAt(const int x, const int z) const
+  std::uint16_t MapDocument::HeightAt(
+    const int x,
+    const int z
+  ) const
   {
     if (x < 0 || z < 0 || x >= mWidth || z >= mHeight) {
       return 0;
@@ -329,7 +397,9 @@ namespace moho::editor
     return mHeights[static_cast<std::size_t>(z) * static_cast<std::size_t>(mWidth) + static_cast<std::size_t>(x)];
   }
 
-  CellRect MapDocument::Clamp(CellRect rect) const noexcept
+  CellRect MapDocument::Clamp(
+    CellRect rect
+  ) const noexcept
   {
     if (rect.x0 > rect.x1) {
       std::swap(rect.x0, rect.x1);
@@ -344,7 +414,10 @@ namespace moho::editor
     return rect;
   }
 
-  void MapDocument::ReadRect(const CellRect& rect, std::vector<std::uint16_t>& out) const
+  void MapDocument::ReadRect(
+    const CellRect& rect,
+    std::vector<std::uint16_t>& out
+  ) const
   {
     out.clear();
     if (rect.Empty() || rect.x0 < 0 || rect.z0 < 0 || rect.x1 >= mWidth || rect.z1 >= mHeight) {
@@ -355,13 +428,17 @@ namespace moho::editor
     for (int z = rect.z0; z <= rect.z1; ++z) {
       std::memcpy(
         out.data() + static_cast<std::size_t>(z - rect.z0) * rowWords,
-        mHeights.data() + static_cast<std::size_t>(z) * static_cast<std::size_t>(mWidth) + static_cast<std::size_t>(rect.x0),
+        mHeights.data() + static_cast<std::size_t>(z) * static_cast<std::size_t>(mWidth) +
+          static_cast<std::size_t>(rect.x0),
         rowWords * sizeof(std::uint16_t)
       );
     }
   }
 
-  std::uint64_t MapDocument::ChecksumWords(const CellRect& rect, const std::uint16_t* const words)
+  std::uint64_t MapDocument::ChecksumWords(
+    const CellRect& rect,
+    const std::uint16_t* const words
+  )
   {
     std::uint64_t hash = 1469598103934665603ull;
     const auto mix = [&hash](const std::uint64_t value) {
@@ -377,14 +454,19 @@ namespace moho::editor
     return hash;
   }
 
-  std::uint64_t MapDocument::Checksum(const CellRect& rect) const
+  std::uint64_t MapDocument::Checksum(
+    const CellRect& rect
+  ) const
   {
     std::vector<std::uint16_t> words;
     ReadRect(rect, words);
     return ChecksumWords(rect, words.data());
   }
 
-  void MapDocument::CommitHeights(const CellRect& rect, const std::uint16_t* const words)
+  void MapDocument::CommitHeights(
+    const CellRect& rect,
+    const std::uint16_t* const words
+  )
   {
     if (rect.Empty() || rect.x0 < 0 || rect.z0 < 0 || rect.x1 >= mWidth || rect.z1 >= mHeight) {
       return;
@@ -392,7 +474,8 @@ namespace moho::editor
     const std::size_t rowWords = static_cast<std::size_t>(rect.Width());
     for (int z = rect.z0; z <= rect.z1; ++z) {
       std::memcpy(
-        mHeights.data() + static_cast<std::size_t>(z) * static_cast<std::size_t>(mWidth) + static_cast<std::size_t>(rect.x0),
+        mHeights.data() + static_cast<std::size_t>(z) * static_cast<std::size_t>(mWidth) +
+          static_cast<std::size_t>(rect.x0),
         words + static_cast<std::size_t>(z - rect.z0) * rowWords,
         rowWords * sizeof(std::uint16_t)
       );
@@ -403,7 +486,10 @@ namespace moho::editor
     }
   }
 
-  void MapDocument::WriteExternal(const CellRect& rect, const std::uint16_t* const words)
+  void MapDocument::WriteExternal(
+    const CellRect& rect,
+    const std::uint16_t* const words
+  )
   {
     CommitHeights(rect, words);
     mStack.clear();
@@ -412,7 +498,10 @@ namespace moho::editor
     mCleanPos = -1;
   }
 
-  std::size_t MapDocument::EditHeights(const CellRect& rect, const std::uint16_t* const words)
+  std::size_t MapDocument::EditHeights(
+    const CellRect& rect,
+    const std::uint16_t* const words
+  )
   {
     if (rect.Empty() || rect.x0 < 0 || rect.z0 < 0 || rect.x1 >= mWidth || rect.z1 >= mHeight) {
       return 0;
@@ -436,7 +525,9 @@ namespace moho::editor
     return changed;
   }
 
-  void MapDocument::Execute(std::unique_ptr<Command> command)
+  void MapDocument::Execute(
+    std::unique_ptr<Command> command
+  )
   {
     command->Do(*this);
 
@@ -453,7 +544,9 @@ namespace moho::editor
     Push(std::move(command));
   }
 
-  void MapDocument::Push(std::unique_ptr<Command> command)
+  void MapDocument::Push(
+    std::unique_ptr<Command> command
+  )
   {
     mStack.push_back(std::move(command));
     ++mPos;
@@ -479,7 +572,9 @@ namespace moho::editor
     }
   }
 
-  void MapDocument::BeginStroke(const std::string& label)
+  void MapDocument::BeginStroke(
+    const std::string& label
+  )
   {
     if (mStroke != 0) {
       return;

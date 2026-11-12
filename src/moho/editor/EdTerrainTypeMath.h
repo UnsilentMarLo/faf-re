@@ -1,6 +1,8 @@
-// EDITOR: the grid math of the terrain-type natives (EdTerrainType.cpp): a hard disc of one type code, and a sample of the grid at the nodes of an overlay window. Header-only and free
-// of engine types so it can be tested on its own (moho/editor/tests/EdTerrainTypeTest.cpp). It does the same arithmetic, in 32-bit floats and one operation per statement, as the Lua
-// code it replaces (terraintype.lua Dab and NodeCodes), so the Lua fallback and the native agree cell for cell.
+// EDITOR: the grid math of the terrain-type natives (EdTerrainType.cpp): a hard disc of one type code, and a sample of
+// the grid at the nodes of an overlay window. Header-only and free of engine types so it can be tested on its own
+// (moho/editor/tests/EdTerrainTypeTest.cpp). It does the same arithmetic, in 32-bit floats and one operation per
+// statement, as the Lua code it replaces (terraintype.lua Dab and NodeCodes), so the Lua fallback and the native agree
+// cell for cell.
 #pragma once
 
 #include <algorithm>
@@ -12,15 +14,24 @@ namespace moho::editor::ttype
 {
   struct DiscResult
   {
-    int changed = 0;   // cells that held another code
-    int x0 = 0;        // inclusive cell rectangle of the cells that changed (empty when changed == 0)
+    int changed = 0; // cells that held another code
+    int x0 = 0;      // inclusive cell rectangle of the cells that changed (empty when changed == 0)
     int z0 = 0;
     int x1 = -1;
     int z1 = -1;
   };
 
-  /** Sets every cell of the w x h grid whose centre (x + 0.5, z + 0.5) lies within `radius` of (cx, cz) (all in cells) to `code`; reports the cells that changed. */
-  inline DiscResult PaintDisc(std::uint8_t* const data, const int w, const int h, const float cx, const float cz, const float radius, const std::uint8_t code)
+  /** Sets every cell of the w x h grid whose centre (x + 0.5, z + 0.5) lies within `radius` of (cx, cz) (all in cells)
+   * to `code`; reports the cells that changed. */
+  inline DiscResult PaintDisc(
+    std::uint8_t* const data,
+    const int w,
+    const int h,
+    const float cx,
+    const float cz,
+    const float radius,
+    const std::uint8_t code
+  )
   {
     DiscResult out;
     const float lowX = cx - radius;
@@ -65,8 +76,13 @@ namespace moho::editor::ttype
     return out;
   }
 
-  /** The cell a world position falls in on one axis: floor(pos / cellSize), clamped to 0 .. n - 1 (terraintype.lua NodeCodes). */
-  [[nodiscard]] inline int NodeCell(const float pos, const float cellSize, const int n)
+  /** The cell a world position falls in on one axis: floor(pos / cellSize), clamped to 0 .. n - 1 (terraintype.lua
+   * NodeCodes). */
+  [[nodiscard]] inline int NodeCell(
+    const float pos,
+    const float cellSize,
+    const int n
+  )
   {
     const float q = pos / cellSize;
     const int c = static_cast<int>(std::floor(q));
@@ -74,11 +90,20 @@ namespace moho::editor::ttype
   }
 
   /**
-   * The codes under a grid of nw x nh nodes: node (i, j) lies at world (x0 + i * step, z0 + j * step) and takes the code of the cell it is in (cells are csx x csz world units).
-   * `out` receives nw * nh codes, row major.
+   * The codes under a grid of nw x nh nodes: node (i, j) lies at world (x0 + i * step, z0 + j * step) and takes the
+   * code of the cell it is in (cells are csx x csz world units). `out` receives nw * nh codes, row major.
    */
   inline void SampleNodes(
-    const std::uint8_t* const data, const int w, const int h, const int x0, const int z0, const int nw, const int nh, const int step, const float csx, const float csz,
+    const std::uint8_t* const data,
+    const int w,
+    const int h,
+    const int x0,
+    const int z0,
+    const int nw,
+    const int nh,
+    const int step,
+    const float csx,
+    const float csz,
     std::uint8_t* const out
   )
   {

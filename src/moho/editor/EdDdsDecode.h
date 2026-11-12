@@ -1,8 +1,10 @@
-// EDITOR: DDS decoding for the editor natives (EdIcon.cpp: ed_dds_read, ed_dds_thumb), header-only and free of engine types so it can be tested on its own
-// (moho/editor/tests/EdDdsDecodeTest.cpp).
+// EDITOR: DDS decoding for the editor natives (EdIcon.cpp: ed_dds_read, ed_dds_thumb), header-only and free of engine
+// types so it can be tested on its own (moho/editor/tests/EdDdsDecodeTest.cpp).
 //
-// A DDS file is the header (128 bytes), then the base level, then the mip levels (each half the size of the one before, down to 1 x 1) when the mip count is above 1. The decoder reads
-// DXT1 / DXT3 / DXT5 and 32 bit BGRA, and can decode any level instead of the base level: a thumbnail of a 2048 x 2048 texture needs the 256 x 256 level, not 4 million texels.
+// A DDS file is the header (128 bytes), then the base level, then the mip levels (each half the size of the one before,
+// down to 1 x 1) when the mip count is above 1. The decoder reads DXT1 / DXT3 / DXT5 and 32 bit BGRA, and can decode
+// any level instead of the base level: a thumbnail of a 2048 x 2048 texture needs the 256 x 256 level, not 4 million
+// texels.
 #pragma once
 
 #include <algorithm>
@@ -19,26 +21,40 @@ namespace moho::editor::dds
     std::uint8_t r = 0, g = 0, b = 0, a = 0;
   };
 
-  enum class Format { None, Dxt1, Dxt3, Dxt5, Bgra32 };
+  enum class Format
+  {
+    None,
+    Dxt1,
+    Dxt3,
+    Dxt5,
+    Bgra32
+  };
 
   struct Header
   {
     int w = 0;
     int h = 0;
-    int mips = 0;                // the dwMipMapCount field as stored (0 or 1: no mip levels)
-    std::string fourcc;          // the four characters at offset 84 ("DXT5", or whatever bytes a 32 bit file has there)
+    int mips = 0;       // the dwMipMapCount field as stored (0 or 1: no mip levels)
+    std::string fourcc; // the four characters at offset 84 ("DXT5", or whatever bytes a 32 bit file has there)
     Format format = Format::None;
   };
 
-  inline std::uint32_t U32(const std::string& data, const std::size_t at)
+  inline std::uint32_t U32(
+    const std::string& data,
+    const std::size_t at
+  )
   {
     std::uint32_t v = 0;
     std::memcpy(&v, data.data() + at, 4);
     return v;
   }
 
-  /** Reads the header. False for a file that is not a DDS, has a side outside 1..4096 or a pixel format this decoder does not read (`out.fourcc` / `out.mips` are filled as far as they were read). */
-  inline bool ParseHeader(const std::string& data, Header& out)
+  /** Reads the header. False for a file that is not a DDS, has a side outside 1..4096 or a pixel format this decoder
+   * does not read (`out.fourcc` / `out.mips` are filled as far as they were read). */
+  inline bool ParseHeader(
+    const std::string& data,
+    Header& out
+  )
   {
     if (data.size() < 128 || std::memcmp(data.data(), "DDS ", 4) != 0) {
       return false;
@@ -69,30 +85,45 @@ namespace moho::editor::dds
   }
 
   /** The number of levels the file holds (1 when it has no mip chain). */
-  inline int Levels(const Header& h)
+  inline int Levels(
+    const Header& h
+  )
   {
     return h.mips > 1 ? h.mips : 1;
   }
 
   /** The size of a level: each side halves (never below 1). */
-  inline void LevelSize(const Header& h, const int level, int& w, int& hh)
+  inline void LevelSize(
+    const Header& h,
+    const int level,
+    int& w,
+    int& hh
+  )
   {
     w = std::max(1, h.w >> level);
     hh = std::max(1, h.h >> level);
   }
 
   /** The bytes a level of w x hh texels takes. */
-  inline std::size_t LevelBytes(const Format f, const int w, const int hh)
+  inline std::size_t LevelBytes(
+    const Format f,
+    const int w,
+    const int hh
+  )
   {
     if (f == Format::Bgra32) {
       return static_cast<std::size_t>(w) * static_cast<std::size_t>(hh) * 4;
     }
     const std::size_t block = (f == Format::Dxt1) ? 8 : 16;
-    return static_cast<std::size_t>(std::max(1, (w + 3) / 4)) * static_cast<std::size_t>(std::max(1, (hh + 3) / 4)) * block;
+    return static_cast<std::size_t>(std::max(1, (w + 3) / 4)) * static_cast<std::size_t>(std::max(1, (hh + 3) / 4)) *
+      block;
   }
 
   /** The offset of a level in the file (the base level starts at 128). */
-  inline std::size_t LevelOffset(const Header& h, const int level)
+  inline std::size_t LevelOffset(
+    const Header& h,
+    const int level
+  )
   {
     std::size_t off = 128;
     for (int i = 0; i < level; ++i) {
@@ -104,8 +135,12 @@ namespace moho::editor::dds
     return off;
   }
 
-  /** The smallest level whose shorter side is still at least `minSide` texels (0 when the file has no mips or no level is that big): a picture reduced to `minSide / 2` from it keeps its detail. */
-  inline int PickLevel(const Header& h, const int minSide)
+  /** The smallest level whose shorter side is still at least `minSide` texels (0 when the file has no mips or no level
+   * is that big): a picture reduced to `minSide / 2` from it keeps its detail. */
+  inline int PickLevel(
+    const Header& h,
+    const int minSide
+  )
   {
     int best = 0;
     const int levels = Levels(h);
@@ -121,8 +156,16 @@ namespace moho::editor::dds
     return best;
   }
 
-  /** Decodes one level into `out` (w x hh texels, row by row from the top). False when the file is too short for it or the level does not exist. */
-  inline bool DecodeLevel(const std::string& data, const Header& hd, const int level, std::vector<Px>& out, int& w, int& hh)
+  /** Decodes one level into `out` (w x hh texels, row by row from the top). False when the file is too short for it or
+   * the level does not exist. */
+  inline bool DecodeLevel(
+    const std::string& data,
+    const Header& hd,
+    const int level,
+    std::vector<Px>& out,
+    int& w,
+    int& hh
+  )
   {
     if (level < 0 || level >= Levels(hd) || hd.format == Format::None) {
       return false;
@@ -217,8 +260,12 @@ namespace moho::editor::dds
           const int y = by * 4 + (i >> 2);
           if (x < w && y < hh) {
             const int k = static_cast<int>((idx >> (2 * i)) & 3);
-            out[static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] =
-              Px{static_cast<std::uint8_t>(col[k][0]), static_cast<std::uint8_t>(col[k][1]), static_cast<std::uint8_t>(col[k][2]), static_cast<std::uint8_t>(alpha[i])};
+            out[static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] = Px{
+              static_cast<std::uint8_t>(col[k][0]),
+              static_cast<std::uint8_t>(col[k][1]),
+              static_cast<std::uint8_t>(col[k][2]),
+              static_cast<std::uint8_t>(alpha[i])
+            };
           }
         }
       }

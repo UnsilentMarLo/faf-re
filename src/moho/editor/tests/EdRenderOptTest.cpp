@@ -18,15 +18,15 @@
 
 static int gFailures = 0;
 static int gChecks = 0;
-#define CHECK(cond, ...)                               \
-  do {                                                 \
-    ++gChecks;                                         \
-    if (!(cond)) {                                     \
-      ++gFailures;                                     \
-      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-      std::printf(__VA_ARGS__);                        \
-      std::printf("\n");                               \
-    }                                                  \
+#define CHECK(cond, ...)                                                                                               \
+  do {                                                                                                                 \
+    ++gChecks;                                                                                                         \
+    if (!(cond)) {                                                                                                     \
+      ++gFailures;                                                                                                     \
+      std::printf("FAIL %s:%d: ", __FILE__, __LINE__);                                                                 \
+      std::printf(__VA_ARGS__);                                                                                        \
+      std::printf("\n");                                                                                               \
+    }                                                                                                                  \
   } while (0)
 
 namespace sc = moho::editor::shadowcache;
@@ -35,7 +35,9 @@ namespace ac = moho::editor::activity;
 
 // ---------------------------------------------------------------- shadow cache
 
-static sc::Key MakeKey(const std::uint64_t scene)
+static sc::Key MakeKey(
+  const std::uint64_t scene
+)
 {
   sc::Key k;
   k.scene = scene;
@@ -62,7 +64,8 @@ static void TestHasher()
   h2.Add(7);
   CHECK(h1.Value() == h2.Value(), "same input, same hash");
 
-  // one changed float in a block of 200 changes the hash (also the sign of zero: more misses are safe, false hits are not)
+  // one changed float in a block of 200 changes the hash (also the sign of zero: more misses are safe, false hits are
+  // not)
   std::mt19937 rng(1234);
   std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
   std::vector<float> data(200);
@@ -78,7 +81,7 @@ static void TestHasher()
   int same = 0;
   for (std::size_t i = 0; i < data.size(); ++i) {
     std::vector<float> changed = data;
-    changed[i] = std::nextafter(changed[i], 1000.0f);   // one ulp
+    changed[i] = std::nextafter(changed[i], 1000.0f); // one ulp
     if (hashOf(changed) == base) {
       ++same;
     }
@@ -164,7 +167,10 @@ static void TestDecide()
       CHECK(sc::Decide(st, o, true, false, 300) == sc::Decision::Render, "target %d", t);
     }
   }
-  CHECK(sc::Decide(st, k, true, false, 300) == sc::Decision::Reuse, "the held key is still reusable after misses on other keys");
+  CHECK(
+    sc::Decide(st, k, true, false, 300) == sc::Decision::Reuse,
+    "the held key is still reusable after misses on other keys"
+  );
 
   // invalidate
   sc::Invalidate(st);
@@ -198,7 +204,9 @@ static void TestDecide()
   sc::State wind;
   sc::Store(wind, k, sc::kTimeWind);
   CHECK(sc::Decide(wind, k, true, false, 300) == sc::Decision::Render, "a map with swaying trees is drawn every frame");
-  CHECK(sc::Decide(wind, k, true, true, 300) == sc::Decision::Reuse, "unless ren_ShadowCacheTrees says the sway may be held");
+  CHECK(
+    sc::Decide(wind, k, true, true, 300) == sc::Decision::Reuse, "unless ren_ShadowCacheTrees says the sway may be held"
+  );
   sc::State other;
   sc::Store(other, k, sc::kTimeOther);
   CHECK(sc::Decide(other, k, true, true, 300) == sc::Decision::Render, "an unknown technique is never held");
@@ -239,7 +247,9 @@ static void TestDecide()
   CHECK(sc::ClassifyDepthTechnique("DepthClip") == 0, "DepthClip");
   CHECK(sc::ClassifyDepthTechnique("SeraphimBuildDepth") == 0, "SeraphimBuildDepth");
   CHECK(sc::ClassifyDepthTechnique("UndulatingDepthClip") == sc::kTimeWind, "UndulatingDepthClip");
-  CHECK(sc::ClassifyDepthTechnique("depth") == sc::kTimeOther, "names are case sensitive, an unknown one is conservative");
+  CHECK(
+    sc::ClassifyDepthTechnique("depth") == sc::kTimeOther, "names are case sensitive, an unknown one is conservative"
+  );
   CHECK(sc::ClassifyDepthTechnique("") == sc::kTimeOther, "empty name");
   CHECK(sc::ClassifyDepthTechnique(nullptr) == sc::kTimeOther, "null name");
 }
@@ -250,13 +260,14 @@ static void TestStaleness()
 {
   struct Scene
   {
-    std::uint64_t id;       // content of the scene
-    int camera;             // light camera
-    bool wind;              // has swaying trees
-    int clock;              // the time the wind depends on
+    std::uint64_t id; // content of the scene
+    int camera;       // light camera
+    bool wind;        // has swaying trees
+    int clock;        // the time the wind depends on
   };
   const auto render = [](const Scene& s) {
-    return std::uint64_t(s.id) * 1000003u + std::uint64_t(s.camera) * 7919u + (s.wind ? std::uint64_t(s.clock) * 104729u : 0u);
+    return std::uint64_t(s.id) * 1000003u + std::uint64_t(s.camera) * 7919u +
+      (s.wind ? std::uint64_t(s.clock) * 104729u : 0u);
   };
 
   std::mt19937 rng(99);
@@ -266,9 +277,12 @@ static void TestStaleness()
   long drawn = 0, reused = 0;
   for (int frame = 0; frame < 20000; ++frame) {
     // random events: the scene changes now and then, the camera moves now and then, the trees appear / disappear
-    if (rng() % 50 == 0) scene.id = rng() % 5;
-    if (rng() % 70 == 0) scene.camera = static_cast<int>(rng() % 4);
-    if (rng() % 400 == 0) scene.wind = !scene.wind;
+    if (rng() % 50 == 0)
+      scene.id = rng() % 5;
+    if (rng() % 70 == 0)
+      scene.camera = static_cast<int>(rng() % 4);
+    if (rng() % 400 == 0)
+      scene.wind = !scene.wind;
     scene.clock = frame;
 
     // the trees are instances of the scene: they change its signature when they appear or go
@@ -297,7 +311,10 @@ static void TestUiCull()
   CHECK(!uc::QuadOutside(0, 0, 100, 100, W, H), "inside");
   CHECK(!uc::QuadOutside(-50, -50, 50, 50, W, H), "overlapping the corner");
   CHECK(!uc::QuadOutside(W - 1, H - 1, W + 100, H + 100, W, H), "touching the bottom right");
-  CHECK(!uc::QuadOutside(-10, 10, 0, 20, W, H), "right edge exactly on 0 is not outside (a zero width rectangle draws nothing anyway)");
+  CHECK(
+    !uc::QuadOutside(-10, 10, 0, 20, W, H),
+    "right edge exactly on 0 is not outside (a zero width rectangle draws nothing anyway)"
+  );
   CHECK(uc::QuadOutside(-100, 10, -1, 20, W, H), "left of the window");
   CHECK(uc::QuadOutside(W + 1, 10, W + 50, 20, W, H), "right of the window");
   CHECK(uc::QuadOutside(10, -100, 50, -0.5f, W, H), "above");
@@ -319,7 +336,8 @@ static void TestUiCull()
     for (int t = -300; t <= 300; t += 25) {
       for (int w = 0; w <= 200; w += 20) {
         for (int h = 0; h <= 200; h += 20) {
-          const float fl = static_cast<float>(l), ft = static_cast<float>(t), fr = fl + static_cast<float>(w), fb = ft + static_cast<float>(h);
+          const float fl = static_cast<float>(l), ft = static_cast<float>(t), fr = fl + static_cast<float>(w),
+                      fb = ft + static_cast<float>(h);
           const bool culled = uc::QuadOutside(fl, ft, fr, fb, 200.0f, 150.0f);
           // does the rectangle share a point with [0,200] x [0,150]?
           const bool intersects = !(fr < 0.0f || fb < 0.0f || fl > 200.0f || ft > 150.0f);
@@ -376,13 +394,17 @@ static void TestActivity()
 
   const std::uint32_t hold = 2000u;
   CHECK(ac::RecommendedWaitMs(100, 100, 0, false, hold) == 0u, "just used: full rate");
-  CHECK(ac::RecommendedWaitMs(5000, 100, 0, false, hold) == 0u, "no input but the scene changed a moment ago: full rate");
+  CHECK(
+    ac::RecommendedWaitMs(5000, 100, 0, false, hold) == 0u, "no input but the scene changed a moment ago: full rate"
+  );
   CHECK(ac::RecommendedWaitMs(100, 5000, 0, false, hold) == 0u, "input a moment ago: full rate");
   CHECK(ac::RecommendedWaitMs(5000, 5000, 0, true, hold) == 0u, "a change is pending: full rate");
   CHECK(ac::RecommendedWaitMs(5000, 5000, ac::kAmbientSim, false, hold) == 0u, "a running simulation: full rate");
   CHECK(ac::RecommendedWaitMs(5000, 5000, 0, false, hold) == 100u, "still, nothing moves: 10 Hz");
   CHECK(ac::RecommendedWaitMs(5000, 5000, ac::kAmbientWater, false, hold) == 33u, "still with water: 30 Hz");
-  CHECK(ac::RecommendedWaitMs(5000, 5000, ac::kAmbientWater | ac::kAmbientSky, false, hold) == 33u, "water and sky: 30 Hz");
+  CHECK(
+    ac::RecommendedWaitMs(5000, 5000, ac::kAmbientWater | ac::kAmbientSky, false, hold) == 33u, "water and sky: 30 Hz"
+  );
   CHECK(ac::RecommendedWaitMs(2000, 2000, 0, false, hold) == 100u, "exactly at the hold time");
   CHECK(ac::RecommendedWaitMs(1999, 5000, 0, false, hold) == 0u, "one ms short");
 }

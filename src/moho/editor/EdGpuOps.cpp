@@ -1,7 +1,9 @@
-// EDITOR GPU compute: GPU implementations of field ops, the policy and the self test. See EdGpuOps.h and docs/projects/editor/GPU_COMPUTE.md.
+// EDITOR GPU compute: GPU implementations of field ops, the policy and the self test. See EdGpuOps.h and
+// docs/projects/editor/GPU_COMPUTE.md.
 //
-// THE TEMPLATE FOR A NEW GPU OP is OpBlurGpu below (and gpu/blur_pass.hlsl, gpu/blur_params.hlsli): read the inputs, refuse what the GPU version does not handle with
-// Unsupported, upload, dispatch kernels, download into a LOCAL grid, and only then move it into `out`.
+// THE TEMPLATE FOR A NEW GPU OP is OpBlurGpu below (and gpu/blur_pass.hlsl, gpu/blur_params.hlsli): read the inputs,
+// refuse what the GPU version does not handle with Unsupported, upload, dispatch kernels, download into a LOCAL grid,
+// and only then move it into `out`.
 #pragma fp_contract(off)
 
 #include "moho/editor/EdGpuOps.h"
@@ -19,7 +21,8 @@
 #include <map>
 #include <mutex>
 
-// constant buffer structs of the kernels: the very files the kernels include (so the layouts cannot differ); inside a namespace that has the HLSL scalar type names
+// constant buffer structs of the kernels: the very files the kernels include (so the layouts cannot differ); inside a
+// namespace that has the HLSL scalar type names
 namespace moho::editor::gpu::hk
 {
   using uint = std::uint32_t;
@@ -36,7 +39,8 @@ namespace moho::editor::gpu
   using field::GridPtr;
   using field::OpArgs;
 
-  // ---- registry, policy, statistics ------------------------------------------------------------------------------------------------------------
+  // ---- registry, policy, statistics
+  // ------------------------------------------------------------------------------------------------------------
 
   namespace
   {
@@ -57,7 +61,9 @@ namespace moho::editor::gpu
     std::mutex gErrorMutex;
     std::string gLastError;
 
-    double MsSince(const std::chrono::steady_clock::time_point t0)
+    double MsSince(
+      const std::chrono::steady_clock::time_point t0
+    )
     {
       return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     }
@@ -69,14 +75,20 @@ namespace moho::editor::gpu
     return policy;
   }
 
-  void RegisterGpuOp(const char* const name, const GpuOpFn fn, const float minCells)
+  void RegisterGpuOp(
+    const char* const name,
+    const GpuOpFn fn,
+    const float minCells
+  )
   {
     const std::lock_guard<std::mutex> lock(gRegistryMutex);
     Ops()[name] = fn;
     OpMinCells()[name] = minCells;
   }
 
-  float GpuOpMinCells(const std::string& name)
+  float GpuOpMinCells(
+    const std::string& name
+  )
   {
     const std::lock_guard<std::mutex> lock(gRegistryMutex);
     const auto it = OpMinCells().find(name);
@@ -93,10 +105,18 @@ namespace moho::editor::gpu
     return names;
   }
 
-  bool SelfTestPassed() { return gSelfTestPassed.load(); }
-  void ResetSelfTestState() { gSelfTestPassed.store(false); }
+  bool SelfTestPassed()
+  {
+    return gSelfTestPassed.load();
+  }
+  void ResetSelfTestState()
+  {
+    gSelfTestPassed.store(false);
+  }
 
-  void SetBeforeUseHook(const BeforeUseFn fn)
+  void SetBeforeUseHook(
+    const BeforeUseFn fn
+  )
   {
     gHook.store(fn);
     gHookDone.store(false);
@@ -108,13 +128,17 @@ namespace moho::editor::gpu
     return gLastError;
   }
 
-  void SetLastOpError(const std::string& text)
+  void SetLastOpError(
+    const std::string& text
+  )
   {
     const std::lock_guard<std::mutex> lock(gErrorMutex);
     gLastError = text;
   }
 
-  double CellsOf(const OpArgs& args)
+  double CellsOf(
+    const OpArgs& args
+  )
   {
     const auto pick = [&](const char* key) -> const Grid* {
       const auto it = args.in.find(key);
@@ -129,7 +153,11 @@ namespace moho::editor::gpu
     return args.p.N("width", 0.0) * args.p.N("height", 0.0);
   }
 
-  bool TryRun(const std::string& name, const OpArgs& args, Grid& out)
+  bool TryRun(
+    const std::string& name,
+    const OpArgs& args,
+    Grid& out
+  )
   {
     try {
       GpuOpFn fn = nullptr;
@@ -169,10 +197,12 @@ namespace moho::editor::gpu
         return false;
       }
       if (policy.selfTestFirst && !gSelfTestPassed.load()) {
-        // the first real use on this device: prove that the kernels compile and give the CPU's results; a device that does not is switched off for the session
+        // the first real use on this device: prove that the kernels compile and give the CPU's results; a device that
+        // does not is switched off for the session
         const SelfTestReport rep = RunSelfTest(*lease);
         if (!rep.ok) {
-          std::string why = "GPU self test failed: " + (rep.error.empty() ? std::string("a kernel gave different results than the CPU") : rep.error);
+          std::string why = "GPU self test failed: " +
+            (rep.error.empty() ? std::string("a kernel gave different results than the CPU") : rep.error);
           for (const SelfTestPart& p : rep.parts) {
             if (!p.ok) {
               why += "; " + p.name + ": " + p.detail;
@@ -221,12 +251,18 @@ namespace moho::editor::gpu
     field::SetOpInterceptor(&TryRun);
   }
 
-  // ---- the template op: blur / box ---------------------------------------------------------------------------------------------------------------
+  // ---- the template op: blur / box
+  // ---------------------------------------------------------------------------------------------------------------
 
   namespace
   {
-    /** One-sided kernel k[0..r] of a symmetric normalised kernel: a private copy of MakeKernel in EdFieldCore.cpp (same arithmetic, so the weights are the same bits). */
-    std::vector<float> MakeKernel(const bool gauss, const double sigmaOrRadius, int& r)
+    /** One-sided kernel k[0..r] of a symmetric normalised kernel: a private copy of MakeKernel in EdFieldCore.cpp (same
+     * arithmetic, so the weights are the same bits). */
+    std::vector<float> MakeKernel(
+      const bool gauss,
+      const double sigmaOrRadius,
+      int& r
+    )
     {
       std::vector<float> k;
       if (gauss) {
@@ -234,7 +270,8 @@ namespace moho::editor::gpu
         std::vector<double> d(static_cast<std::size_t>(r) + 1);
         double sum = 0.0;
         for (int i = 0; i <= r; ++i) {
-          d[static_cast<std::size_t>(i)] = std::exp(-0.5 * static_cast<double>(i) * static_cast<double>(i) / (sigmaOrRadius * sigmaOrRadius));
+          d[static_cast<std::size_t>(i)] =
+            std::exp(-0.5 * static_cast<double>(i) * static_cast<double>(i) / (sigmaOrRadius * sigmaOrRadius));
           sum += (i == 0 ? 1.0 : 2.0) * d[static_cast<std::size_t>(i)];
         }
         for (const double v : d) {
@@ -249,14 +286,27 @@ namespace moho::editor::gpu
 
   } // namespace
 
-  bool BlurAffordable(const int w, const int h, const double sigma)
+  bool BlurAffordable(
+    const int w,
+    const int h,
+    const double sigma
+  )
   {
     const int r = std::max(1, static_cast<int>(std::ceil(3.0 * sigma)));
     const double work = 2.0 * static_cast<double>(w) * static_cast<double>(h) * (2.0 * r + 1.0);
-    return r <= 8192 && work <= 3.0e10;   // one dispatch this long could hit the 2 second driver reset
+    return r <= 8192 && work <= 3.0e10; // one dispatch this long could hit the 2 second driver reset
   }
 
-  bool BlurDevice(Executor& ex, const Resource& src, Resource& tmp, Resource& dst, const int w, const int h, const double sigma, std::string& err)
+  bool BlurDevice(
+    Executor& ex,
+    const Resource& src,
+    Resource& tmp,
+    Resource& dst,
+    const int w,
+    const int h,
+    const double sigma,
+    std::string& err
+  )
   {
     const KernelInfo* kernel = FindKernel("blur_pass");
     if (kernel == nullptr) {
@@ -266,7 +316,10 @@ namespace moho::editor::gpu
     int r = 0;
     const std::vector<float> weights = MakeKernel(true, sigma, r);
     std::unique_ptr<Resource> kbuf;
-    if (!MakeBuffer(ex, static_cast<u32>(weights.size()), kbuf, err) || !UploadBuffer(ex, *kbuf, weights.data(), weights.size() * 4, err)) {
+    if (
+      !MakeBuffer(ex, static_cast<u32>(weights.size()), kbuf, err) ||
+      !UploadBuffer(ex, *kbuf, weights.data(), weights.size() * 4, err)
+    ) {
       return false;
     }
     hk::BlurParams params{};
@@ -287,15 +340,25 @@ namespace moho::editor::gpu
 
   namespace
   {
-    const Grid* InputOf(const OpArgs& a, const char* const key)
+    const Grid* InputOf(
+      const OpArgs& a,
+      const char* const key
+    )
     {
       const auto it = a.in.find(key);
       return it != a.in.end() ? it->second.get() : nullptr;
     }
 
-    OpResult OpBlurGpu(Executor& ex, const OpArgs& a, const bool gauss, Grid& out, std::string& err)
+    OpResult OpBlurGpu(
+      Executor& ex,
+      const OpArgs& a,
+      const bool gauss,
+      Grid& out,
+      std::string& err
+    )
     {
-      // 1. what the GPU version does not handle goes back to the CPU op (which also reports bad inputs with its own messages)
+      // 1. what the GPU version does not handle goes back to the CPU op (which also reports bad inputs with its own
+      // messages)
       const Grid* src = InputOf(a, "a");
       if (src == nullptr || src->w < 1 || src->h < 1) {
         return OpResult::Unsupported;
@@ -308,7 +371,8 @@ namespace moho::editor::gpu
       if (mask != nullptr && !mask->SameShape(*src)) {
         mask = nullptr;
       }
-      const double radius = a.p.N("radius", 4.0) / static_cast<double>(src->cell);   // world units -> samples, as on the CPU
+      const double radius =
+        a.p.N("radius", 4.0) / static_cast<double>(src->cell); // world units -> samples, as on the CPU
       if (radius <= 1e-6) {
         return OpResult::Unsupported;
       }
@@ -316,7 +380,7 @@ namespace moho::editor::gpu
       const std::vector<float> weights = MakeKernel(gauss, radius, r);
       const double work = 2.0 * static_cast<double>(src->w) * static_cast<double>(src->h) * (2.0 * r + 1.0);
       if (r > 8192 || work > 3.0e10) {
-        return OpResult::Unsupported;   // one dispatch this long could hit the 2 second driver reset: the CPU does it
+        return OpResult::Unsupported; // one dispatch this long could hit the 2 second driver reset: the CPU does it
       }
       const std::uint64_t bytes = (mask != nullptr ? 5ull : 2ull) * src->Count() * 4ull + weights.size() * 4ull;
       if (bytes > ex.MaxBytes()) {
@@ -331,8 +395,11 @@ namespace moho::editor::gpu
       // 2. upload, two passes (x then z) over a ping-pong pair, download into a local grid
       PingPong pp;
       std::unique_ptr<Resource> kbuf;
-      if (!UploadGrid(ex, *src, pp.f[0], err) || !MakeField(ex, src->w, src->h, pp.f[1], err) ||
-          !MakeBuffer(ex, static_cast<u32>(weights.size()), kbuf, err) || !UploadBuffer(ex, *kbuf, weights.data(), weights.size() * 4, err)) {
+      if (
+        !UploadGrid(ex, *src, pp.f[0], err) || !MakeField(ex, src->w, src->h, pp.f[1], err) ||
+        !MakeBuffer(ex, static_cast<u32>(weights.size()), kbuf, err) ||
+        !UploadBuffer(ex, *kbuf, weights.data(), weights.size() * 4, err)
+      ) {
         return OpResult::Failed;
       }
       hk::BlurParams params{};
@@ -358,7 +425,10 @@ namespace moho::editor::gpu
           err = "kernel filt_lerpmask is missing";
           return OpResult::Failed;
         }
-        if (!UploadGrid(ex, *src, orig, err) || !UploadGrid(ex, *mask, mfield, err) || !MakeField(ex, src->w, src->h, blended, err)) {
+        if (
+          !UploadGrid(ex, *src, orig, err) || !UploadGrid(ex, *mask, mfield, err) ||
+          !MakeField(ex, src->w, src->h, blended, err)
+        ) {
           return OpResult::Failed;
         }
         hk::LerpMaskParams lp{};
@@ -379,8 +449,24 @@ namespace moho::editor::gpu
       return OpResult::Done;
     }
 
-    OpResult OpBlurGaussGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err) { return OpBlurGpu(ex, a, true, out, err); }
-    OpResult OpBlurBoxGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err) { return OpBlurGpu(ex, a, false, out, err); }
+    OpResult OpBlurGaussGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
+    {
+      return OpBlurGpu(ex, a, true, out, err);
+    }
+    OpResult OpBlurBoxGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
+    {
+      return OpBlurGpu(ex, a, false, out, err);
+    }
 
     struct BuiltinOps
     {
@@ -393,18 +479,26 @@ namespace moho::editor::gpu
     const BuiltinOps gBuiltinOps;
   } // namespace
 
-  // ---- self test ---------------------------------------------------------------------------------------------------------------------------------
+  // ---- self test
+  // ---------------------------------------------------------------------------------------------------------------------------------
 
   namespace
   {
-    std::string Fmt(const char* const f, const double a, const double b = 0.0, const double c = 0.0)
+    std::string Fmt(
+      const char* const f,
+      const double a,
+      const double b = 0.0,
+      const double c = 0.0
+    )
     {
       char buf[160];
       std::snprintf(buf, sizeof(buf), f, a, b, c);
       return buf;
     }
 
-    SelfTestPart PartScaleOffset(Executor& ex)
+    SelfTestPart PartScaleOffset(
+      Executor& ex
+    )
     {
       SelfTestPart part;
       part.name = "scale + offset (64 x 64)";
@@ -412,31 +506,42 @@ namespace moho::editor::gpu
       std::string err;
       do {
         const KernelInfo* k = FindKernel("scale_offset");
-        if (k == nullptr) { err = "kernel scale_offset is missing"; break; }
+        if (k == nullptr) {
+          err = "kernel scale_offset is missing";
+          break;
+        }
         const std::uint32_t n = 64 * 64;
         std::vector<float> in(n), res(n);
-        for (std::uint32_t i = 0; i < n; ++i) in[i] = static_cast<float>(i % 97) * 0.25f - 3.0f;
+        for (std::uint32_t i = 0; i < n; ++i)
+          in[i] = static_cast<float>(i % 97) * 0.25f - 3.0f;
         std::unique_ptr<Resource> a, b;
-        if (!MakeBuffer(ex, n, a, err) || !MakeBuffer(ex, n, b, err) || !UploadBuffer(ex, *a, in.data(), n * 4, err)) break;
+        if (!MakeBuffer(ex, n, a, err) || !MakeBuffer(ex, n, b, err) || !UploadBuffer(ex, *a, in.data(), n * 4, err))
+          break;
         hk::ScaleParams p{};
         p.count = n;
         p.scale = 1.5f;
         p.offset = -0.75f;
         Bindings bind;
         bind.Srv(0, *a).Uav(0, *b);
-        if (!DispatchGrid(ex, *k, n, 1, p, bind, err)) break;
-        if (!ex.Download(*b, res.data(), n * 4, err)) break;
+        if (!DispatchGrid(ex, *k, n, 1, p, bind, err))
+          break;
+        if (!ex.Download(*b, res.data(), n * 4, err))
+          break;
         double worst = 0.0;
-        for (std::uint32_t i = 0; i < n; ++i) worst = std::max(worst, static_cast<double>(std::fabs(res[i] - (in[i] * 1.5f - 0.75f))));
+        for (std::uint32_t i = 0; i < n; ++i)
+          worst = std::max(worst, static_cast<double>(std::fabs(res[i] - (in[i] * 1.5f - 0.75f))));
         part.ok = worst <= 1e-5;
         part.detail = Fmt("largest difference %g", worst);
       } while (false);
-      if (!err.empty()) part.detail = err;
+      if (!err.empty())
+        part.detail = err;
       part.ms = MsSince(t0);
       return part;
     }
 
-    SelfTestPart PartReduce(Executor& ex)
+    SelfTestPart PartReduce(
+      Executor& ex
+    )
     {
       SelfTestPart part;
       part.name = "group shared memory reduction (10000 values)";
@@ -444,36 +549,50 @@ namespace moho::editor::gpu
       std::string err;
       do {
         const KernelInfo* k = FindKernel("reduce_sum");
-        if (k == nullptr) { err = "kernel reduce_sum is missing"; break; }
+        if (k == nullptr) {
+          err = "kernel reduce_sum is missing";
+          break;
+        }
         const std::uint32_t n = 10000;
         const std::uint32_t groups = (n + 255) / 256;
         std::vector<float> in(n), res(groups);
-        for (std::uint32_t i = 0; i < n; ++i) in[i] = static_cast<float>(i % 7);   // small integers: exact sums in any order
+        for (std::uint32_t i = 0; i < n; ++i)
+          in[i] = static_cast<float>(i % 7); // small integers: exact sums in any order
         std::unique_ptr<Resource> a, b;
-        if (!MakeBuffer(ex, n, a, err) || !MakeBuffer(ex, groups, b, err) || !UploadBuffer(ex, *a, in.data(), n * 4, err)) break;
+        if (
+          !MakeBuffer(ex, n, a, err) || !MakeBuffer(ex, groups, b, err) || !UploadBuffer(ex, *a, in.data(), n * 4, err)
+        )
+          break;
         hk::ReduceParams p{};
         p.count = n;
         Bindings bind;
         bind.Srv(0, *a).Uav(0, *b);
         Groups g;
         g.x = groups;
-        if (!ex.Dispatch(*k, g, &p, static_cast<u32>(sizeof(p)), bind, err)) break;
-        if (!ex.Download(*b, res.data(), groups * 4, err)) break;
+        if (!ex.Dispatch(*k, g, &p, static_cast<u32>(sizeof(p)), bind, err))
+          break;
+        if (!ex.Download(*b, res.data(), groups * 4, err))
+          break;
         std::uint32_t wrong = 0;
         for (std::uint32_t gi = 0; gi < groups; ++gi) {
           float expect = 0.0f;
-          for (std::uint32_t i = gi * 256; i < std::min(n, gi * 256 + 256); ++i) expect += in[i];
-          if (res[gi] != expect) ++wrong;
+          for (std::uint32_t i = gi * 256; i < std::min(n, gi * 256 + 256); ++i)
+            expect += in[i];
+          if (res[gi] != expect)
+            ++wrong;
         }
         part.ok = wrong == 0;
         part.detail = wrong == 0 ? std::string("all sums equal") : Fmt("%g of %g sums differ", wrong, groups);
       } while (false);
-      if (!err.empty()) part.detail = err;
+      if (!err.empty())
+        part.detail = err;
       part.ms = MsSince(t0);
       return part;
     }
 
-    SelfTestPart PartBlur(Executor& ex)
+    SelfTestPart PartBlur(
+      Executor& ex
+    )
     {
       SelfTestPart part;
       part.name = "gaussian blur (96 x 80) against the CPU op";
@@ -493,40 +612,60 @@ namespace moho::editor::gpu
         args.p.num["radius"] = 6.0;
         Grid gpuOut, cpuOut;
         if (OpBlurGpu(ex, args, true, gpuOut, err) != OpResult::Done) {
-          if (err.empty()) err = "the GPU op refused the self test input";
+          if (err.empty())
+            err = "the GPU op refused the self test input";
           break;
         }
         std::string cpuErr;
-        if (!field::RunOpCpu("blur", args, cpuOut, cpuErr)) { err = "CPU op failed: " + cpuErr; break; }
+        if (!field::RunOpCpu("blur", args, cpuOut, cpuErr)) {
+          err = "CPU op failed: " + cpuErr;
+          break;
+        }
         double worst = 0.0;
-        for (std::size_t i = 0; i < cpuOut.v.size(); ++i) worst = std::max(worst, static_cast<double>(std::fabs(gpuOut.v[i] - cpuOut.v[i])));
-        part.ok = gpuOut.SameShape(cpuOut) && worst <= 1e-3;   // values are up to 100: a few float32 steps
+        for (std::size_t i = 0; i < cpuOut.v.size(); ++i)
+          worst = std::max(worst, static_cast<double>(std::fabs(gpuOut.v[i] - cpuOut.v[i])));
+        part.ok = gpuOut.SameShape(cpuOut) && worst <= 1e-3; // values are up to 100: a few float32 steps
         part.detail = Fmt("largest difference %g (values up to 100)", worst);
       } while (false);
-      if (!err.empty()) part.detail = err;
+      if (!err.empty())
+        part.detail = err;
       part.ms = MsSince(t0);
       return part;
     }
 
-    SelfTestPart PartTexture(Executor& ex)
+    SelfTestPart PartTexture(
+      Executor& ex
+    )
     {
       SelfTestPart part;
       part.name = "texture sampling (32 x 24 to 64 x 48)";
       const auto t0 = std::chrono::steady_clock::now();
       std::string err;
       do {
-        if (!ex.SupportsTextures()) { err = "textures are not supported by this device"; break; }
+        if (!ex.SupportsTextures()) {
+          err = "textures are not supported by this device";
+          break;
+        }
         const KernelInfo* k = FindKernel("tex_resample");
-        if (k == nullptr) { err = "kernel tex_resample is missing"; break; }
+        if (k == nullptr) {
+          err = "kernel tex_resample is missing";
+          break;
+        }
         const int sw = 32, sh = 24, dw = 64, dh = 48;
         std::vector<float> in(static_cast<std::size_t>(sw) * sh);
         for (int z = 0; z < sh; ++z)
-          for (int x = 0; x < sw; ++x) in[static_cast<std::size_t>(z) * sw + x] = static_cast<float>((x * 7 + z * 13) % 31) / 31.0f;
+          for (int x = 0; x < sw; ++x)
+            in[static_cast<std::size_t>(z) * sw + x] = static_cast<float>((x * 7 + z * 13) % 31) / 31.0f;
         Field f;
         std::unique_ptr<Resource> tex;
-        if (!MakeField(ex, sw, sh, f, err) || !UploadField(ex, f, in.data(), err) || !MakeTextureFromField(ex, f, tex, err)) break;
+        if (
+          !MakeField(ex, sw, sh, f, err) || !UploadField(ex, f, in.data(), err) ||
+          !MakeTextureFromField(ex, f, tex, err)
+        )
+          break;
         Field out;
-        if (!MakeField(ex, dw, dh, out, err)) break;
+        if (!MakeField(ex, dw, dh, out, err))
+          break;
         hk::FieldParams p{};
         p.w = dw;
         p.h = dh;
@@ -534,11 +673,17 @@ namespace moho::editor::gpu
         p.srcH = sh;
         Bindings bind;
         bind.Srv(0, *tex).Uav(0, out.R());
-        if (!DispatchGrid(ex, *k, dw, dh, p, bind, err)) break;
+        if (!DispatchGrid(ex, *k, dw, dh, p, bind, err))
+          break;
         std::vector<float> res(static_cast<std::size_t>(dw) * dh);
-        if (!DownloadField(ex, out, res.data(), err)) break;
+        if (!DownloadField(ex, out, res.data(), err))
+          break;
         double worst = 0.0;
-        const auto texel = [&](int x, int z) { return in[static_cast<std::size_t>(std::min(sh - 1, std::max(0, z))) * sw + static_cast<std::size_t>(std::min(sw - 1, std::max(0, x)))]; };
+        const auto texel = [&](int x, int z) {
+          return in
+            [static_cast<std::size_t>(std::min(sh - 1, std::max(0, z))) * sw +
+             static_cast<std::size_t>(std::min(sw - 1, std::max(0, x)))];
+        };
         for (int z = 0; z < dh; ++z) {
           for (int x = 0; x < dw; ++x) {
             const float fx = (static_cast<float>(x) + 0.5f) / static_cast<float>(dw) * static_cast<float>(sw) - 0.5f;
@@ -553,16 +698,19 @@ namespace moho::editor::gpu
             worst = std::max(worst, static_cast<double>(std::fabs(res[static_cast<std::size_t>(z) * dw + x] - expect)));
           }
         }
-        part.ok = worst <= 0.01;   // hardware filtering uses 8 bit weights: up to ~0.004 for values in 0..1
+        part.ok = worst <= 0.01; // hardware filtering uses 8 bit weights: up to ~0.004 for values in 0..1
         part.detail = Fmt("largest difference %g (values 0..1, hardware filtering allows ~0.004)", worst);
       } while (false);
-      if (!err.empty()) part.detail = err;
+      if (!err.empty())
+        part.detail = err;
       part.ms = MsSince(t0);
       return part;
     }
   } // namespace
 
-  SelfTestReport RunSelfTest(Executor& ex)
+  SelfTestReport RunSelfTest(
+    Executor& ex
+  )
   {
     SelfTestReport rep;
     const auto t0 = std::chrono::steady_clock::now();

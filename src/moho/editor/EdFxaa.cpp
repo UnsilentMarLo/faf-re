@@ -36,7 +36,8 @@ namespace
 {
   moho::TConVar<bool> gTConVar_ed_fxaa(
     "ed_fxaa",
-    "Editor: 1 = post-process anti-aliasing (FXAA) of the world view: one full-screen pass, works on every adapter without a multisampled back buffer; the UI stays crisp (default 0)",
+    "Editor: 1 = post-process anti-aliasing (FXAA) of the world view: one full-screen pass, works on every adapter "
+    "without a multisampled back buffer; the UI stays crisp (default 0)",
     &moho::ed_fxaa
   );
   moho::TConVar<float> gTConVar_ed_fxaa_subpix(
@@ -46,41 +47,46 @@ namespace
   );
   moho::TConVar<float> gTConVar_ed_fxaa_edge(
     "ed_fxaa_edge",
-    "Editor: FXAA, edges with less contrast than this fraction of the local maximum are left alone, 0.063 (more edges, softer texture) to 0.333 (fewer) (default 0.166)",
+    "Editor: FXAA, edges with less contrast than this fraction of the local maximum are left alone, 0.063 (more edges, "
+    "softer texture) to 0.333 (fewer) (default 0.166)",
     &moho::ed_fxaa_edge
   );
   moho::TConVar<bool> gTConVar_ed_fxaa_time(
     "ed_fxaa_time",
-    "Editor: 1 = the GPU time of the FXAA copy and passes is measured with Direct3D 11 timestamp queries and logged every 120 frames (default 0)",
+    "Editor: 1 = the GPU time of the FXAA copy and passes is measured with Direct3D 11 timestamp queries and logged "
+    "every 120 frames (default 0)",
     &moho::ed_fxaa_time
   );
   moho::TConVar<int> gTConVar_ed_fxaa_passes(
     "ed_fxaa_passes",
-    "Editor: FXAA, how often the pass is drawn per frame (1 to 40). Only for measuring: with 20 the frame time minus the frame time without FXAA, divided by 20 (default 1)",
+    "Editor: FXAA, how often the pass is drawn per frame (1 to 40). Only for measuring: with 20 the frame time minus "
+    "the frame time without FXAA, divided by 20 (default 1)",
     &moho::ed_fxaa_passes
   );
   moho::TConVar<float> gTConVar_ed_fxaa_edge_min(
     "ed_fxaa_edge_min",
-    "Editor: FXAA, edges with less contrast than this (0 to 1 of the luma) are left alone however small the neighbourhood is: raise it to keep fine texture detail (default 0.0833)",
+    "Editor: FXAA, edges with less contrast than this (0 to 1 of the luma) are left alone however small the "
+    "neighbourhood is: raise it to keep fine texture detail (default 0.0833)",
     &moho::ed_fxaa_edge_min
   );
 
-  constexpr int kSceneTargetFormat = 2;   // the format of WRenViewport's head sized targets (kViewportHeadTargetFormat)
+  constexpr int kSceneTargetFormat = 2; // the format of WRenViewport's head sized targets (kViewportHeadTargetFormat)
   constexpr std::int32_t kTriangleStripPrimitiveToken = 5;
   constexpr std::int32_t kQuadLastVertexIndex = 3;
 
-  // Created on first use, never destroyed at exit (the quad's vertex sheet belongs to the device, which is gone by then); ReleaseDeviceResources empties it.
+  // Created on first use, never destroyed at exit (the quad's vertex sheet belongs to the device, which is gone by
+  // then); ReleaseDeviceResources empties it.
   struct State
   {
     boost::shared_ptr<moho::CD3DRenderTarget> scene;
     int width = 0;
     int height = 0;
-    moho::CRenFrame quad;       // only used for its full-screen vertex sheet
-    bool shaderBound = false;   // the texture variable references `scene`
-    bool unavailable = false;   // the effect is missing, or the target could not be made: stay off
+    moho::CRenFrame quad;     // only used for its full-screen vertex sheet
+    bool shaderBound = false; // the texture variable references `scene`
+    bool unavailable = false; // the effect is missing, or the target could not be made: stay off
     bool announced = false;
     // ed_fxaa_time: GPU timestamps around the copy and the passes of the last frame that was measured
-    ID3D11Query* qDisjoint = nullptr;   // the frequency comes with it (D3D11_QUERY_TIMESTAMP_DISJOINT)
+    ID3D11Query* qDisjoint = nullptr; // the frequency comes with it (D3D11_QUERY_TIMESTAMP_DISJOINT)
     ID3D11Query* qT0 = nullptr;
     ID3D11Query* qT1 = nullptr;
     ID3D11Query* qT2 = nullptr;
@@ -134,7 +140,13 @@ namespace
     return var;
   }
 
-  void SetVec4(moho::ShaderVar& var, const float a, const float b, const float c, const float d)
+  void SetVec4(
+    moho::ShaderVar& var,
+    const float a,
+    const float b,
+    const float c,
+    const float d
+  )
   {
     if (var.Exists()) {
       const float v[4] = {a, b, c, d};
@@ -142,7 +154,9 @@ namespace
     }
   }
 
-  void ReleaseQueries(State& state)
+  void ReleaseQueries(
+    State& state
+  )
   {
     for (ID3D11Query** q : {&state.qDisjoint, &state.qT0, &state.qT1, &state.qT2}) {
       if (*q != nullptr) {
@@ -153,24 +167,38 @@ namespace
     state.timePending = false;
   }
 
-  ID3D11Device* RawDevice(moho::CD3DDevice* const device)
+  ID3D11Device* RawDevice(
+    moho::CD3DDevice* const device
+  )
   {
-    return device != nullptr && device->GetGalDevice() != nullptr ? moho::editor::D3D11RawDevice(device->GetGalDevice()) : nullptr;
+    return device != nullptr && device->GetGalDevice() != nullptr ? moho::editor::D3D11RawDevice(device->GetGalDevice())
+                                                                  : nullptr;
   }
 
-  ID3D11DeviceContext* RawContext(moho::CD3DDevice* const device)
+  ID3D11DeviceContext* RawContext(
+    moho::CD3DDevice* const device
+  )
   {
-    return device != nullptr && device->GetGalDevice() != nullptr ? moho::editor::D3D11RawContext(device->GetGalDevice()) : nullptr;
+    return device != nullptr && device->GetGalDevice() != nullptr
+      ? moho::editor::D3D11RawContext(device->GetGalDevice())
+      : nullptr;
   }
 
   // Reads the timestamps of the previous measured frame when they are ready; true when a new measurement may be issued.
-  bool CollectTimes(State& state, ID3D11Device* const dev, ID3D11DeviceContext* const ctx)
+  bool CollectTimes(
+    State& state,
+    ID3D11Device* const dev,
+    ID3D11DeviceContext* const ctx
+  )
   {
     if (state.qDisjoint == nullptr) {
       D3D11_QUERY_DESC disjointDesc = {D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
       D3D11_QUERY_DESC stampDesc = {D3D11_QUERY_TIMESTAMP, 0};
-      if (dev == nullptr || ctx == nullptr || FAILED(dev->CreateQuery(&disjointDesc, &state.qDisjoint)) || FAILED(dev->CreateQuery(&stampDesc, &state.qT0))
-          || FAILED(dev->CreateQuery(&stampDesc, &state.qT1)) || FAILED(dev->CreateQuery(&stampDesc, &state.qT2))) {
+      if (
+        dev == nullptr || ctx == nullptr || FAILED(dev->CreateQuery(&disjointDesc, &state.qDisjoint)) ||
+        FAILED(dev->CreateQuery(&stampDesc, &state.qT0)) || FAILED(dev->CreateQuery(&stampDesc, &state.qT1)) ||
+        FAILED(dev->CreateQuery(&stampDesc, &state.qT2))
+      ) {
         gpg::Warnf("EDITOR fxaa: this adapter has no timestamp queries; ed_fxaa_time does nothing");
         ReleaseQueries(state);
         moho::ed_fxaa_time = false;
@@ -184,9 +212,13 @@ namespace
     D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjointData = {};
     UINT64 t0 = 0, t1 = 0, t2 = 0;
     const UINT noFlush = D3D11_ASYNC_GETDATA_DONOTFLUSH;
-    if (ctx->GetData(state.qDisjoint, &disjointData, sizeof(disjointData), noFlush) != S_OK || ctx->GetData(state.qT0, &t0, sizeof(t0), noFlush) != S_OK
-        || ctx->GetData(state.qT1, &t1, sizeof(t1), noFlush) != S_OK || ctx->GetData(state.qT2, &t2, sizeof(t2), noFlush) != S_OK) {
-      return false;   // not ready yet: this frame is not measured
+    if (
+      ctx->GetData(state.qDisjoint, &disjointData, sizeof(disjointData), noFlush) != S_OK ||
+      ctx->GetData(state.qT0, &t0, sizeof(t0), noFlush) != S_OK ||
+      ctx->GetData(state.qT1, &t1, sizeof(t1), noFlush) != S_OK ||
+      ctx->GetData(state.qT2, &t2, sizeof(t2), noFlush) != S_OK
+    ) {
+      return false; // not ready yet: this frame is not measured
     }
     state.timePending = false;
     const bool disjoint = disjointData.Disjoint != FALSE;
@@ -195,8 +227,14 @@ namespace
       state.sumCopyMs += 1000.0 * static_cast<double>(t1 - t0) / static_cast<double>(freq);
       state.sumPassMs += 1000.0 * static_cast<double>(t2 - t1) / static_cast<double>(freq);
       if (++state.timeFrames >= 120) {
-        gpg::Logf("EDITOR fxaa: GPU %.3f ms per frame (copy %.3f + %d pass(es) %.3f), %d frames", (state.sumCopyMs + state.sumPassMs) / state.timeFrames, state.sumCopyMs / state.timeFrames,
-                  std::clamp(moho::ed_fxaa_passes, 1, 40), state.sumPassMs / state.timeFrames, state.timeFrames);
+        gpg::Logf(
+          "EDITOR fxaa: GPU %.3f ms per frame (copy %.3f + %d pass(es) %.3f), %d frames",
+          (state.sumCopyMs + state.sumPassMs) / state.timeFrames,
+          state.sumCopyMs / state.timeFrames,
+          std::clamp(moho::ed_fxaa_passes, 1, 40),
+          state.sumPassMs / state.timeFrames,
+          state.timeFrames
+        );
         state.sumCopyMs = state.sumPassMs = 0.0;
         state.timeFrames = 0;
       }
@@ -207,7 +245,11 @@ namespace
 
 namespace moho::edfxaa
 {
-  FrameScope::FrameScope(CD3DDevice* const device, const int head, const bool allowed)
+  FrameScope::FrameScope(
+    CD3DDevice* const device,
+    const int head,
+    const bool allowed
+  )
     : mDevice(device)
     , mHead(head)
   {
@@ -289,7 +331,12 @@ namespace moho::edfxaa
     mActive = false;
   }
 
-  void FrameScope::AddRect(const int x, const int y, const int width, const int height)
+  void FrameScope::AddRect(
+    const int x,
+    const int y,
+    const int width,
+    const int height
+  )
   {
     if (mActive && width > 0 && height > 0) {
       mRects.push_back(Rect{x, y, width, height});
@@ -303,9 +350,10 @@ namespace moho::edfxaa
     }
     State& state = GetState();
     boost::shared_ptr<moho::CD3DRenderTarget> scene = state.scene;
-    Restore();   // from here on every pass draws into the real back buffer again
+    Restore(); // from here on every pass draws into the real back buffer again
 
-    // the scene is in the off-screen target: all of it goes to the back buffer first (the Maui frames pass, the rest of the window), the world views are smoothed over it
+    // the scene is in the off-screen target: all of it goes to the back buffer first (the Maui frames pass, the rest of
+    // the window), the world views are smoothed over it
     ID3D11DeviceContext* const rawContext = ed_fxaa_time ? RawContext(mDevice) : nullptr;
     const bool timed = rawContext != nullptr && CollectTimes(state, RawDevice(mDevice), rawContext);
     if (timed) {
@@ -342,7 +390,13 @@ namespace moho::edfxaa
     VarTexture().SetRenderTargetTexture(boost::shared_ptr<moho::ID3DRenderTarget>(scene));
     state.shaderBound = true;
     SetVec4(VarFrame(), fw, fh, 1.0f / fw, 1.0f / fh);
-    SetVec4(VarParams(), std::clamp(ed_fxaa_subpix, 0.0f, 1.0f), std::clamp(ed_fxaa_edge, 0.02f, 0.5f), std::clamp(ed_fxaa_edge_min, 0.0f, 1.0f), 0.0f);
+    SetVec4(
+      VarParams(),
+      std::clamp(ed_fxaa_subpix, 0.0f, 1.0f),
+      std::clamp(ed_fxaa_edge, 0.02f, 0.5f),
+      std::clamp(ed_fxaa_edge_min, 0.0f, 1.0f),
+      0.0f
+    );
 
     for (const Rect& rect : mRects) {
       const int x0 = std::max(rect.x, 0);
@@ -352,8 +406,15 @@ namespace moho::edfxaa
       if (x1 <= x0 || y1 <= y0) {
         continue;
       }
-      // taps are clamped to the texel centres inside the rectangle, so nothing of the window around the world view bleeds in
-      SetVec4(VarRect(), (static_cast<float>(x0) + 0.5f) / fw, (static_cast<float>(y0) + 0.5f) / fh, (static_cast<float>(x1) - 0.5f) / fw, (static_cast<float>(y1) - 0.5f) / fh);
+      // taps are clamped to the texel centres inside the rectangle, so nothing of the window around the world view
+      // bleeds in
+      SetVec4(
+        VarRect(),
+        (static_cast<float>(x0) + 0.5f) / fw,
+        (static_cast<float>(y0) + 0.5f) / fh,
+        (static_cast<float>(x1) - 0.5f) / fw,
+        (static_cast<float>(y1) - 0.5f) / fh
+      );
       Wm3::Vector2i pos{x0, y0};
       Wm3::Vector2i size{x1 - x0, y1 - y0};
       mDevice->SetViewport(&pos, &size, 0.0f, 1.0f);
@@ -365,7 +426,9 @@ namespace moho::edfxaa
       quadView.endVertex = kQuadLastVertexIndex;
       std::int32_t primitiveType = kTriangleStripPrimitiveToken;
       for (int pass = 0, passes = std::clamp(ed_fxaa_passes, 1, 40); pass < passes; ++pass) {
-        (void)mDevice->DrawPrimitiveList(&quadView, &primitiveType);   // more than one pass is for measuring only (the same input and output: the same picture)
+        (void)mDevice->DrawPrimitiveList(
+          &quadView, &primitiveType
+        ); // more than one pass is for measuring only (the same input and output: the same picture)
       }
     }
 
@@ -389,8 +452,7 @@ namespace moho::edfxaa
     if (state->shaderBound) {
       try {
         VarTexture().SetRenderTargetTexture(boost::shared_ptr<moho::ID3DRenderTarget>());
-      } catch (const gpg::gal::Error&) {
-      }
+      } catch (const gpg::gal::Error&) {}
       state->shaderBound = false;
     }
     ReleaseQueries(*state);

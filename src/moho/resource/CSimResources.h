@@ -73,8 +73,9 @@ namespace moho
     void AddDepositPoint(EDepositType type, Wm3::Vec3f* pos, Wm3::Vec2i* size) override;
 
     /**
-     * Editor addition (not in the shipped binary; non-virtual, so the layout is unchanged): drops every deposit. The editor
-     * mirrors the map document's resource markers into the editing sim before asking it whether a mex / hydro can be built.
+     * Editor addition (not in the shipped binary; non-virtual, so the layout is unchanged): drops every deposit. The
+     * editor mirrors the map document's resource markers into the editing sim before asking it whether a mex / hydro
+     * can be built.
      */
     void EditorClearDeposits();
 
@@ -102,7 +103,10 @@ namespace moho
      * Address: 0x00546470 (FUN_00546470, Moho::CSimResources::DepositCollides)
      */
     void DepositCollides(
-      CGeomSolid3* solid, CHeightField* field, gpg::fastvector<ResourceDeposit>* outDeposits, EDepositType type
+      CGeomSolid3* solid,
+      CHeightField* field,
+      gpg::fastvector<ResourceDeposit>* outDeposits,
+      EDepositType type
     ) override;
 
     /**
@@ -134,11 +138,15 @@ namespace moho
      * distance as `sqrt(dx*dx + dz*dz)`.
      */
     void GetDepositsAroundPoint(
-      float x, float z, float radius, EDepositType type, gpg::fastvector<ResourceDepositDistance>* outDeposits
+      float x,
+      float z,
+      float radius,
+      EDepositType type,
+      gpg::fastvector<ResourceDepositDistance>* outDeposits
     ) const;
 
   public:
-    boost::mutex lock_;                       // +0x04
+    boost::mutex lock_;                    // +0x04
     fa::vector<ResourceDeposit> deposits_; // +0x0C
   };
 

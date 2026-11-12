@@ -1,38 +1,55 @@
-// EDITOR: the "up" natives of the particle editor (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP8): upstream's emitter / beam / trail
-// blueprint model, its curve sampling, the browser's grouping and the effect templates as node graphs, bound to Lua over EdUpCommon.h. The logic is
-// upstream's (src/editor/doc/EdEmitter, src/editor/graph/EdEffectGraph, EdNodeGraph, in faf_editor_logic); this unit is the table <-> struct glue and nothing
+// EDITOR: the "up" natives of the particle editor (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP8):
+// upstream's emitter / beam / trail blueprint model, its curve sampling, the browser's grouping and the effect
+// templates as node graphs, bound to Lua over EdUpCommon.h. The logic is upstream's (src/editor/doc/EdEmitter,
+// src/editor/graph/EdEffectGraph, EdNodeGraph, in faf_editor_logic); this unit is the table <-> struct glue and nothing
 // else. The engine side of the preview (particles, the offscreen view) is EdFxView.cpp.
 //
 // An emitter is a table (a field a table lacks keeps retail's starting value, see ed_fx_emitter_new):
-//   { blueprintId, lifetime, repeatTime, textureFrameCount, blendMode, lodCutoff, textureStripCount, sortOrder, lowFidelity, medFidelity, highFidelity,
-//     texture, rampTexture, flags = { [FlagName] = bool }, curves = { [1..21] = curve, [CurveName] = curve }, extra = { { key, text }, ... } }
-//   curve = { name, xRange, keys = { { x, y, z }, ... } }     x the time (0..xRange), y the value, z the random spread around it
+//   { blueprintId, lifetime, repeatTime, textureFrameCount, blendMode, lodCutoff, textureStripCount, sortOrder,
+//   lowFidelity, medFidelity, highFidelity,
+//     texture, rampTexture, flags = { [FlagName] = bool }, curves = { [1..21] = curve, [CurveName] = curve }, extra = {
+//     { key, text }, ... } }
+//   curve = { name, xRange, keys = { { x, y, z }, ... } }     x the time (0..xRange), y the value, z the random spread
+//   around it
 //
-//   ed_fx_info()                          -> { curves = { { name, group, caption, viewMin, viewMax, initialValue, initialSpread }, ... in the file's order },
-//                                              flags = { names }, blendModes = { names }, factions = { names }, kinds = { names } }
+//   ed_fx_info()                          -> { curves = { { name, group, caption, viewMin, viewMax, initialValue,
+//   initialSpread }, ... in the file's order },
+//                                              flags = { names }, blendModes = { names }, factions = { names }, kinds =
+//                                              { names } }
 //   ed_fx_emitter_new()                   -> emitter      retail's editor's new emitter
 //   ed_fx_emitter_parse(text)             -> emitter | nil, message       (message names the line)
-//   ed_fx_emitter_write(emitter[, original]) -> text, patched     as retail's emitter editor writes it; with `original` (the file's text as it was opened) the file's own text is edited
-//                                         instead: only the keys that changed are replaced, comments, layout and line endings stay (patched = false: the plain write was used)
-//   ed_fx_emitter_roundtrip(text)         -> { ok, identical, preserved, error, written }     parse + write + parse + compare: what the retail audit runs over every file.
-//                                         ok: reads back as the same emitter (upstream's Same); identical: the writer's text equals the file's (CRs aside); preserved: writing the
-//                                         unedited model back into the file's text gives the file's bytes
-//   ed_fx_emitter_type_tag(emitter)       -> string       the particle technique's type tag (TRamp, TRampFlat, TRampAlign, ...)
-//   ed_fx_curve_samples(keys, xRange, n)  -> { mid = {n y}, lo = {n}, hi = {n} }     SEfxCurve::GetValue at n points from 0 to xRange (lo / hi: the spread's edges)
-//   ed_fx_flat_info(kind)                 -> { { key, kind, initial, color = {r,g,b,a}, help, texture }, ... }       kind 'BeamBlueprint' | 'TrailEmitterBlueprint'
-//   ed_fx_flat_parse(text)                -> flat | nil, message         flat = { kind, fields = { { key, kind = 'number'|'bool'|'text'|'color'|'raw', number, flag, text, color = {r,g,b,a} }, ... } }
-//   ed_fx_flat_write(flat[, original])    -> text, patched          (as ed_fx_emitter_write)
-//   ed_fx_flat_roundtrip(text)            -> { ok, identical, preserved, error }
-//   ed_fx_effect_class(path)              -> factionIndex, kindIndex     the browser's grouping of a game file name (0 = "all", index into ed_fx_info().factions / kinds, 0-based)
-//   ed_fx_list_files([roots])             -> { { path, name, faction, kind }, ... }     every /effects/**/*.bp of the game's file system and of the extra virtual folders `roots` names, sorted by name
-//   ed_fx_templates(luaText)              -> { { name, paths = { ... } }, ... }          the templates of an EffectTemplates.lua that are plain lists of emitter paths
-//   ed_fx_script_effects(script, on)      -> text         the map's _script.lua with the editor's MapEditorEffects function and its call in OnPopulate (on) or both taken out (off)
-//   ed_fx_graph_node_types()              -> { { name, title, category, help, output, inputs = { { name, type } }, outputs = { ... },
-//                                                params = { { name, kind, min, max, choices = {..}, initial = {a,b,c,d}, initialText, help } } }, ... }
-//   ed_fx_graph_build(name, { { name, emitter }, ... }) -> graph    the Effect output fed by Emitter / Curve / Constant / Texture nodes
-//   ed_fx_graph_emitters(graph)           -> { { name, emitter }, ... } | nil, message      the emitters the graph makes, in the output's pin order
-//        graph = { nodes = { { id, type, x, y, params = { { v = {a,b,c,d}, text }, ... in the type's parameter order } }, ... }, links = { { fromNode, fromPin, toNode, toPin }, ... } }
-//        (pin and parameter numbers are 0-based as upstream's, ids are the graph's own)
+//   ed_fx_emitter_write(emitter[, original]) -> text, patched     as retail's emitter editor writes it; with `original`
+//   (the file's text as it was opened) the file's own text is edited
+//                                         instead: only the keys that changed are replaced, comments, layout and line
+//                                         endings stay (patched = false: the plain write was used)
+//   ed_fx_emitter_roundtrip(text)         -> { ok, identical, preserved, error, written }     parse + write + parse +
+//   compare: what the retail audit runs over every file.
+//                                         ok: reads back as the same emitter (upstream's Same); identical: the writer's
+//                                         text equals the file's (CRs aside); preserved: writing the unedited model
+//                                         back into the file's text gives the file's bytes
+//   ed_fx_emitter_type_tag(emitter)       -> string       the particle technique's type tag (TRamp, TRampFlat,
+//   TRampAlign, ...) ed_fx_curve_samples(keys, xRange, n)  -> { mid = {n y}, lo = {n}, hi = {n} } SEfxCurve::GetValue
+//   at n points from 0 to xRange (lo / hi: the spread's edges) ed_fx_flat_info(kind)                 -> { { key, kind,
+//   initial, color = {r,g,b,a}, help, texture }, ... }       kind 'BeamBlueprint' | 'TrailEmitterBlueprint'
+//   ed_fx_flat_parse(text)                -> flat | nil, message         flat = { kind, fields = { { key, kind =
+//   'number'|'bool'|'text'|'color'|'raw', number, flag, text, color = {r,g,b,a} }, ... } } ed_fx_flat_write(flat[,
+//   original])    -> text, patched          (as ed_fx_emitter_write) ed_fx_flat_roundtrip(text)            -> { ok,
+//   identical, preserved, error } ed_fx_effect_class(path)              -> factionIndex, kindIndex     the browser's
+//   grouping of a game file name (0 = "all", index into ed_fx_info().factions / kinds, 0-based)
+//   ed_fx_list_files([roots])             -> { { path, name, faction, kind }, ... }     every /effects/**/*.bp of the
+//   game's file system and of the extra virtual folders `roots` names, sorted by name ed_fx_templates(luaText) -> { {
+//   name, paths = { ... } }, ... }          the templates of an EffectTemplates.lua that are plain lists of emitter
+//   paths ed_fx_script_effects(script, on)      -> text         the map's _script.lua with the editor's
+//   MapEditorEffects function and its call in OnPopulate (on) or both taken out (off) ed_fx_graph_node_types() -> { {
+//   name, title, category, help, output, inputs = { { name, type } }, outputs = { ... },
+//                                                params = { { name, kind, min, max, choices = {..}, initial =
+//                                                {a,b,c,d}, initialText, help } } }, ... }
+//   ed_fx_graph_build(name, { { name, emitter }, ... }) -> graph    the Effect output fed by Emitter / Curve / Constant
+//   / Texture nodes ed_fx_graph_emitters(graph)           -> { { name, emitter }, ... } | nil, message      the
+//   emitters the graph makes, in the output's pin order
+//        graph = { nodes = { { id, type, x, y, params = { { v = {a,b,c,d}, text }, ... in the type's parameter order }
+//        }, ... }, links = { { fromNode, fromPin, toNode, toPin }, ... } } (pin and parameter numbers are 0-based as
+//        upstream's, ids are the graph's own)
 
 #include <algorithm>
 #include <array>
@@ -61,11 +78,18 @@ namespace
   namespace up = moho::editor::up;
   using namespace faf::editor;
 
-  // ---- small helpers ------------------------------------------------------------------------------------------------------------------------------
+  // ---- small helpers
+  // ------------------------------------------------------------------------------------------------------------------------------
 
-  /** Calls `fn(elementIndex)` for each table element of the array t[key] (the element is on top of the stack during the call). */
+  /** Calls `fn(elementIndex)` for each table element of the array t[key] (the element is on top of the stack during the
+   * call). */
   template <class Fn>
-  void EachElement(lua_State* const L, const int index, const char* const key, Fn&& fn)
+  void EachElement(
+    lua_State* const L,
+    const int index,
+    const char* const key,
+    Fn&& fn
+  )
   {
     if (up::PushField(L, index, key) == LUA_TTABLE) {
       const int list = lua_gettop(L);
@@ -86,7 +110,11 @@ namespace
 
   /** Same for an array held at stack index `index` itself. */
   template <class Fn>
-  void EachOf(lua_State* const L, const int index, Fn&& fn)
+  void EachOf(
+    lua_State* const L,
+    const int index,
+    Fn&& fn
+  )
   {
     const int list = index < 0 ? lua_gettop(L) + index + 1 : index;
     if (lua_type(L, list) != LUA_TTABLE) {
@@ -105,13 +133,23 @@ namespace
     }
   }
 
-  [[nodiscard]] float FieldFloat(lua_State* const L, const int index, const char* const key, const float fallback)
+  [[nodiscard]] float FieldFloat(
+    lua_State* const L,
+    const int index,
+    const char* const key,
+    const float fallback
+  )
   {
     return static_cast<float>(up::FieldNumber(L, index, key, static_cast<double>(fallback)));
   }
 
-  /** t[key] when it is a table (left on the stack: pop it with lua_settop(L, -2)), else pushes nil and returns false. */
-  [[nodiscard]] bool PushTable(lua_State* const L, const int index, const char* const key)
+  /** t[key] when it is a table (left on the stack: pop it with lua_settop(L, -2)), else pushes nil and returns false.
+   */
+  [[nodiscard]] bool PushTable(
+    lua_State* const L,
+    const int index,
+    const char* const key
+  )
   {
     if (up::PushField(L, index, key) == LUA_TTABLE) {
       return true;
@@ -119,7 +157,11 @@ namespace
     return false;
   }
 
-  void SetFloatArray(lua_State* const L, const char* const key, const std::array<float, 4>& values)
+  void SetFloatArray(
+    lua_State* const L,
+    const char* const key,
+    const std::array<float, 4>& values
+  )
   {
     lua_pushstring(L, key);
     lua_newtable(L);
@@ -130,7 +172,12 @@ namespace
     lua_settable(L, -3);
   }
 
-  [[nodiscard]] std::array<float, 4> ReadFloatArray(lua_State* const L, const int index, const char* const key, const std::array<float, 4>& fallback)
+  [[nodiscard]] std::array<float, 4> ReadFloatArray(
+    lua_State* const L,
+    const int index,
+    const char* const key,
+    const std::array<float, 4>& fallback
+  )
   {
     std::array<float, 4> out = fallback;
     if (up::PushField(L, index, key) == LUA_TTABLE) {
@@ -147,9 +194,14 @@ namespace
     return out;
   }
 
-  // ---- emitter <-> table --------------------------------------------------------------------------------------------------------------------------
+  // ---- emitter <-> table
+  // --------------------------------------------------------------------------------------------------------------------------
 
-  void PushCurve(lua_State* const L, const char* const name, const EmitterCurve& curve)
+  void PushCurve(
+    lua_State* const L,
+    const char* const name,
+    const EmitterCurve& curve
+  )
   {
     lua_newtable(L);
     up::SetString(L, "name", name);
@@ -166,7 +218,10 @@ namespace
     lua_settable(L, -3);
   }
 
-  void PushEmitter(lua_State* const L, const EmitterBlueprint& e)
+  void PushEmitter(
+    lua_State* const L,
+    const EmitterBlueprint& e
+  )
   {
     lua_newtable(L);
     up::SetString(L, "blueprintId", e.blueprintId);
@@ -214,7 +269,10 @@ namespace
   }
 
   /** The emitter a table describes; a field it lacks keeps retail's starting value. */
-  [[nodiscard]] EmitterBlueprint ReadEmitter(lua_State* const L, const int index)
+  [[nodiscard]] EmitterBlueprint ReadEmitter(
+    lua_State* const L,
+    const int index
+  )
   {
     EmitterBlueprint e = NewEmitter();
     e.blueprintId = up::FieldString(L, index, "blueprintId", e.blueprintId);
@@ -233,7 +291,8 @@ namespace
     if (PushTable(L, index, "flags")) {
       const int flags = lua_gettop(L);
       for (int i = 0; i < kEmitterFlagCount; ++i) {
-        e.flags[static_cast<std::size_t>(i)] = up::FieldBool(L, flags, FlagName(i), e.flags[static_cast<std::size_t>(i)]);
+        e.flags[static_cast<std::size_t>(i)] =
+          up::FieldBool(L, flags, FlagName(i), e.flags[static_cast<std::size_t>(i)]);
       }
     }
     lua_settop(L, -2);
@@ -274,9 +333,12 @@ namespace
     return e;
   }
 
-  // ---- info ---------------------------------------------------------------------------------------------------------------------------------------
+  // ---- info
+  // ---------------------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_Info(lua_State* const L)
+  int __cdecl cfunc_Info(
+    lua_State* const L
+  )
   {
     lua_newtable(L);
     lua_pushstring(L, "curves");
@@ -311,33 +373,45 @@ namespace
     return 1;
   }
 
-  // ---- emitters -----------------------------------------------------------------------------------------------------------------------------------
+  // ---- emitters
+  // -----------------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_EmitterNew(lua_State* const L)
+  int __cdecl cfunc_EmitterNew(
+    lua_State* const L
+  )
   {
     PushEmitter(L, NewEmitter());
     return 1;
   }
 
-  // ---- writing back into the file's own text ------------------------------------------------------------------------------------------------------
+  // ---- writing back into the file's own text
+  // ------------------------------------------------------------------------------------------------------
   //
-  // WriteEmitter / WriteFlatBlueprint write the layout of retail's own editor. A file made by an older version of it, or by hand, differs in layout (a key missing, another order,
-  // 'x' quotes, another number of decimals: 550 of the 2,437 emitters of the game's effects.scd), and a plain write would turn a file the user only opened into a different file.
-  // So the file's text is edited instead of replaced: each key whose value the writer would write differently for the edited model than for the model read from the text is
-  // replaced by the writer's text of that value (a key the file lacks is added before the closing brace); everything else, comments, layout, line endings, stays as it was.
-  // The result is read back and must equal the edited model, else the plain write is used (reported as `patched = false`).
+  // WriteEmitter / WriteFlatBlueprint write the layout of retail's own editor. A file made by an older version of it,
+  // or by hand, differs in layout (a key missing, another order, 'x' quotes, another number of decimals: 550 of the
+  // 2,437 emitters of the game's effects.scd), and a plain write would turn a file the user only opened into a
+  // different file. So the file's text is edited instead of replaced: each key whose value the writer would write
+  // differently for the edited model than for the model read from the text is replaced by the writer's text of that
+  // value (a key the file lacks is added before the closing brace); everything else, comments, layout, line endings,
+  // stays as it was. The result is read back and must equal the edited model, else the plain write is used (reported as
+  // `patched = false`).
 
-  [[nodiscard]] std::string WithoutCr(std::string text)
+  [[nodiscard]] std::string WithoutCr(
+    std::string text
+  )
   {
     text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
     return text;
   }
 
   /**
-   * The text with its `# comment` lines blanked (same length, so positions stay): the game's Lua takes `#` for a line comment, EdLuaText only knows `--`. Strings are left alone
-   * (a quote or a long bracket opens one, `--` comments are skipped whole).
+   * The text with its `# comment` lines blanked (same length, so positions stay): the game's Lua takes `#` for a line
+   * comment, EdLuaText only knows `--`. Strings are left alone (a quote or a long bracket opens one, `--` comments are
+   * skipped whole).
    */
-  [[nodiscard]] std::string BlankHashComments(std::string text)
+  [[nodiscard]] std::string BlankHashComments(
+    std::string text
+  )
   {
     constexpr char kQuote = '\'';
     constexpr char kNewline = '\n';
@@ -373,7 +447,10 @@ namespace
   }
 
   /** The table of a blueprint file (`EmitterBlueprint { ... }`): its fields with the positions of their values. */
-  [[nodiscard]] bool ReadBlueprintTable(const std::string& raw, LuaText& table)
+  [[nodiscard]] bool ReadBlueprintTable(
+    const std::string& raw,
+    LuaText& table
+  )
   {
     const std::string text = BlankHashComments(raw);
     const std::size_t name = text.find("Blueprint");
@@ -385,16 +462,23 @@ namespace
     return brace != std::string::npos && ReadLuaValue(text, brace, table, error) && table.isTable;
   }
 
-  [[nodiscard]] std::string ValueText(const std::string& text, const LuaText& value)
+  [[nodiscard]] std::string ValueText(
+    const std::string& text,
+    const LuaText& value
+  )
   {
     return text.substr(value.start, value.end - value.start);
   }
 
   /**
-   * `original` with the keys the edit changed replaced. `w0` is the writer's text of the model read from `original`, `w1` its text of the edited model.
-   * Empty when the files' tables cannot be read (the caller then writes `w1`).
+   * `original` with the keys the edit changed replaced. `w0` is the writer's text of the model read from `original`,
+   * `w1` its text of the edited model. Empty when the files' tables cannot be read (the caller then writes `w1`).
    */
-  [[nodiscard]] std::string PatchBlueprintText(const std::string& original, const std::string& w0, const std::string& w1)
+  [[nodiscard]] std::string PatchBlueprintText(
+    const std::string& original,
+    const std::string& w0,
+    const std::string& w1
+  )
   {
     LuaText orig, base, edit;
     if (!ReadBlueprintTable(original, orig) || !ReadBlueprintTable(w0, base) || !ReadBlueprintTable(w1, edit)) {
@@ -458,23 +542,36 @@ namespace
       }
       edits.push_back({at, at, added});
     }
-    std::stable_sort(edits.begin(), edits.end(), [](const Edit& a, const Edit& b) { return a.from > b.from; });
+    std::stable_sort(edits.begin(), edits.end(), [](const Edit& a, const Edit& b) {
+      return a.from > b.from;
+    });
     for (const Edit& e : edits) {
       out.replace(e.from, e.to - e.from, e.text);
     }
     return out;
   }
 
-  /** The upstream tests' notion of the same emitter: settings and keys as the file keeps its numbers (two decimals, keys three). */
-  [[nodiscard]] bool SameEmitter(const EmitterBlueprint& a, const EmitterBlueprint& b)
+  /** The upstream tests' notion of the same emitter: settings and keys as the file keeps its numbers (two decimals,
+   * keys three). */
+  [[nodiscard]] bool SameEmitter(
+    const EmitterBlueprint& a,
+    const EmitterBlueprint& b
+  )
   {
-    if (a.blueprintId != b.blueprintId || a.texture != b.texture || a.rampTexture != b.rampTexture || a.flags != b.flags || a.lowFidelity != b.lowFidelity ||
-        a.medFidelity != b.medFidelity || a.highFidelity != b.highFidelity || a.extra != b.extra) {
+    if (
+      a.blueprintId != b.blueprintId || a.texture != b.texture || a.rampTexture != b.rampTexture ||
+      a.flags != b.flags || a.lowFidelity != b.lowFidelity || a.medFidelity != b.medFidelity ||
+      a.highFidelity != b.highFidelity || a.extra != b.extra
+    ) {
       return false;
     }
-    const auto within = [](const float x, const float y, const float step) { return std::fabs(x - y) <= step * 0.51f; };
-    const float values[2][7] = {{a.lifetime, a.repeatTime, a.textureFrameCount, a.blendMode, a.lodCutoff, a.textureStripCount, a.sortOrder},
-                                {b.lifetime, b.repeatTime, b.textureFrameCount, b.blendMode, b.lodCutoff, b.textureStripCount, b.sortOrder}};
+    const auto within = [](const float x, const float y, const float step) {
+      return std::fabs(x - y) <= step * 0.51f;
+    };
+    const float values[2][7] = {
+      {a.lifetime, a.repeatTime, a.textureFrameCount, a.blendMode, a.lodCutoff, a.textureStripCount, a.sortOrder},
+      {b.lifetime, b.repeatTime, b.textureFrameCount, b.blendMode, b.lodCutoff, b.textureStripCount, b.sortOrder}
+    };
     for (int i = 0; i < 7; ++i) {
       if (!within(values[0][i], values[1][i], 0.01f)) {
         return false;
@@ -487,7 +584,10 @@ namespace
         return false;
       }
       for (std::size_t k = 0; k < x.keys.size(); ++k) {
-        if (!within(x.keys[k].x, y.keys[k].x, 0.001f) || !within(x.keys[k].y, y.keys[k].y, 0.001f) || !within(x.keys[k].z, y.keys[k].z, 0.001f)) {
+        if (
+          !within(x.keys[k].x, y.keys[k].x, 0.001f) || !within(x.keys[k].y, y.keys[k].y, 0.001f) ||
+          !within(x.keys[k].z, y.keys[k].z, 0.001f)
+        ) {
           return false;
         }
       }
@@ -495,7 +595,10 @@ namespace
     return true;
   }
 
-  [[nodiscard]] bool SameFlat(const FlatBlueprint& a, const FlatBlueprint& b)
+  [[nodiscard]] bool SameFlat(
+    const FlatBlueprint& a,
+    const FlatBlueprint& b
+  )
   {
     if (a.kind != b.kind || a.fields.size() != b.fields.size()) {
       return false;
@@ -503,7 +606,10 @@ namespace
     for (std::size_t i = 0; i < a.fields.size(); ++i) {
       const FlatValue& x = a.fields[i].second;
       const FlatValue& y = b.fields[i].second;
-      if (a.fields[i].first != b.fields[i].first || x.kind != y.kind || std::fabs(x.number - y.number) > 0.0051f || x.flag != y.flag || x.text != y.text) {
+      if (
+        a.fields[i].first != b.fields[i].first || x.kind != y.kind || std::fabs(x.number - y.number) > 0.0051f ||
+        x.flag != y.flag || x.text != y.text
+      ) {
         return false;
       }
       for (std::size_t c = 0; c < 4; ++c) {
@@ -515,8 +621,13 @@ namespace
     return true;
   }
 
-  /** The text of the edited emitter written into `original` (when there is one); `patched` says whether the file's own text was kept. */
-  [[nodiscard]] std::string WriteEmitterInto(const EmitterBlueprint& edited, const std::string& original, bool& patched)
+  /** The text of the edited emitter written into `original` (when there is one); `patched` says whether the file's own
+   * text was kept. */
+  [[nodiscard]] std::string WriteEmitterInto(
+    const EmitterBlueprint& edited,
+    const std::string& original,
+    bool& patched
+  )
   {
     patched = false;
     const std::string plain = WriteEmitter(edited);
@@ -537,7 +648,11 @@ namespace
     return text;
   }
 
-  [[nodiscard]] std::string WriteFlatInto(const FlatBlueprint& edited, const std::string& original, bool& patched)
+  [[nodiscard]] std::string WriteFlatInto(
+    const FlatBlueprint& edited,
+    const std::string& original,
+    bool& patched
+  )
   {
     patched = false;
     const std::string plain = WriteFlatBlueprint(edited);
@@ -558,7 +673,9 @@ namespace
     return text;
   }
 
-  int __cdecl cfunc_EmitterParse(lua_State* const L)
+  int __cdecl cfunc_EmitterParse(
+    lua_State* const L
+  )
   {
     EmitterBlueprint emitter;
     std::string error;
@@ -569,17 +686,22 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EmitterWrite(lua_State* const L)
+  int __cdecl cfunc_EmitterWrite(
+    lua_State* const L
+  )
   {
     bool patched = false;
-    const std::string original = lua_type(L, 2) == LUA_TSTRING ? std::string(lua_tostring(L, 2), lua_strlen(L, 2)) : std::string();
+    const std::string original =
+      lua_type(L, 2) == LUA_TSTRING ? std::string(lua_tostring(L, 2), lua_strlen(L, 2)) : std::string();
     const std::string text = WriteEmitterInto(ReadEmitter(L, 1), original, patched);
     lua_pushlstring(L, text.data(), text.size());
     lua_pushboolean(L, patched ? 1 : 0);
     return 2;
   }
 
-  int __cdecl cfunc_EmitterRoundTrip(lua_State* const L)
+  int __cdecl cfunc_EmitterRoundTrip(
+    lua_State* const L
+  )
   {
     const std::string raw = up::ArgString(L, 1, "ed_fx_emitter_roundtrip");
     const std::string text = WithoutCr(raw);
@@ -591,7 +713,8 @@ namespace
       up::SetString(L, "error", error);
       return 1;
     }
-    // the writer's own text, read back (ok: the same emitter within the file's precision; identical: also the same bytes as the file, CRs aside)
+    // the writer's own text, read back (ok: the same emitter within the file's precision; identical: also the same
+    // bytes as the file, CRs aside)
     const std::string written = WriteEmitter(first);
     EmitterBlueprint second;
     const bool again = ParseEmitter(written, second, error);
@@ -610,14 +733,18 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EmitterTypeTag(lua_State* const L)
+  int __cdecl cfunc_EmitterTypeTag(
+    lua_State* const L
+  )
   {
     const std::string tag = EmitterTypeTag(ReadEmitter(L, 1));
     lua_pushlstring(L, tag.data(), tag.size());
     return 1;
   }
 
-  int __cdecl cfunc_CurveSamples(lua_State* const L)
+  int __cdecl cfunc_CurveSamples(
+    lua_State* const L
+  )
   {
     EmitterCurve curve;
     curve.xRange = static_cast<float>(lua_type(L, 2) == LUA_TNUMBER ? lua_tonumber(L, 2) : 1.0);
@@ -631,7 +758,8 @@ namespace
       });
     }
     const int count = std::clamp(lua_type(L, 3) == LUA_TNUMBER ? static_cast<int>(lua_tonumber(L, 3)) : 64, 2, 4096);
-    std::vector<double> mid(static_cast<std::size_t>(count)), lo(static_cast<std::size_t>(count)), hi(static_cast<std::size_t>(count));
+    std::vector<double> mid(static_cast<std::size_t>(count)), lo(static_cast<std::size_t>(count)),
+      hi(static_cast<std::size_t>(count));
     for (int i = 0; i < count; ++i) {
       const float t = curve.xRange * static_cast<float>(i) / static_cast<float>(count - 1);
       mid[static_cast<std::size_t>(i)] = EmitterCurveValue(curve, t, 0.5f);
@@ -645,20 +773,30 @@ namespace
     return 1;
   }
 
-  // ---- beams and trails ---------------------------------------------------------------------------------------------------------------------------
+  // ---- beams and trails
+  // ---------------------------------------------------------------------------------------------------------------------------
 
-  const char* KindName(const FlatValue::Kind kind)
+  const char* KindName(
+    const FlatValue::Kind kind
+  )
   {
     switch (kind) {
-    case FlatValue::Kind::Number: return "number";
-    case FlatValue::Kind::Bool: return "bool";
-    case FlatValue::Kind::Text: return "text";
-    case FlatValue::Kind::Color: return "color";
-    default: return "raw";
+    case FlatValue::Kind::Number:
+      return "number";
+    case FlatValue::Kind::Bool:
+      return "bool";
+    case FlatValue::Kind::Text:
+      return "text";
+    case FlatValue::Kind::Color:
+      return "color";
+    default:
+      return "raw";
     }
   }
 
-  FlatValue::Kind KindOf(const std::string& name)
+  FlatValue::Kind KindOf(
+    const std::string& name
+  )
   {
     if (name == "number") {
       return FlatValue::Kind::Number;
@@ -675,7 +813,9 @@ namespace
     return FlatValue::Kind::Raw;
   }
 
-  int __cdecl cfunc_FlatInfo(lua_State* const L)
+  int __cdecl cfunc_FlatInfo(
+    lua_State* const L
+  )
   {
     const std::string kind = up::ArgString(L, 1, "ed_fx_flat_info");
     lua_newtable(L);
@@ -693,7 +833,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_FlatParse(lua_State* const L)
+  int __cdecl cfunc_FlatParse(
+    lua_State* const L
+  )
   {
     FlatBlueprint flat;
     std::string error;
@@ -719,7 +861,10 @@ namespace
     return 1;
   }
 
-  [[nodiscard]] FlatBlueprint ReadFlat(lua_State* const L, const int index)
+  [[nodiscard]] FlatBlueprint ReadFlat(
+    lua_State* const L,
+    const int index
+  )
   {
     FlatBlueprint flat;
     flat.kind = up::FieldString(L, index, "kind", "BeamBlueprint");
@@ -735,17 +880,22 @@ namespace
     return flat;
   }
 
-  int __cdecl cfunc_FlatWrite(lua_State* const L)
+  int __cdecl cfunc_FlatWrite(
+    lua_State* const L
+  )
   {
     bool patched = false;
-    const std::string original = lua_type(L, 2) == LUA_TSTRING ? std::string(lua_tostring(L, 2), lua_strlen(L, 2)) : std::string();
+    const std::string original =
+      lua_type(L, 2) == LUA_TSTRING ? std::string(lua_tostring(L, 2), lua_strlen(L, 2)) : std::string();
     const std::string text = WriteFlatInto(ReadFlat(L, 1), original, patched);
     lua_pushlstring(L, text.data(), text.size());
     lua_pushboolean(L, patched ? 1 : 0);
     return 2;
   }
 
-  int __cdecl cfunc_FlatRoundTrip(lua_State* const L)
+  int __cdecl cfunc_FlatRoundTrip(
+    lua_State* const L
+  )
   {
     const std::string raw = up::ArgString(L, 1, "ed_fx_flat_roundtrip");
     FlatBlueprint first;
@@ -766,9 +916,12 @@ namespace
     return 1;
   }
 
-  // ---- the browser --------------------------------------------------------------------------------------------------------------------------------
+  // ---- the browser
+  // --------------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_EffectClass(lua_State* const L)
+  int __cdecl cfunc_EffectClass(
+    lua_State* const L
+  )
   {
     const std::string path = up::ArgString(L, 1, "ed_fx_effect_class");
     lua_pushnumber(L, static_cast<lua_Number>(EffectFaction(path)));
@@ -776,13 +929,19 @@ namespace
     return 2;
   }
 
-  [[nodiscard]] std::string Lower(std::string text)
+  [[nodiscard]] std::string Lower(
+    std::string text
+  )
   {
-    std::transform(text.begin(), text.end(), text.begin(), [](const unsigned char c) { return static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c); });
+    std::transform(text.begin(), text.end(), text.begin(), [](const unsigned char c) {
+      return static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
+    });
     return text;
   }
 
-  int __cdecl cfunc_ListFiles(lua_State* const L)
+  int __cdecl cfunc_ListFiles(
+    lua_State* const L
+  )
   {
     struct Entry
     {
@@ -791,7 +950,8 @@ namespace
       std::string sortKey;
     };
     std::vector<Entry> entries;
-    // the game's /effects, and the folders the caller names (a mod project's `/mods/<name>/effects`, the map's own `effects`)
+    // the game's /effects, and the folders the caller names (a mod project's `/mods/<name>/effects`, the map's own
+    // `effects`)
     std::vector<std::string> roots{"/effects"};
     if (lua_type(L, 1) == LUA_TTABLE) {
       for (int i = 1;; ++i) {
@@ -822,7 +982,9 @@ namespace
         }
       }
     }
-    std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.sortKey < b.sortKey; });
+    std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+      return a.sortKey < b.sortKey;
+    });
     lua_newtable(L);
     int n = 0;
     for (const Entry& entry : entries) {
@@ -836,7 +998,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Templates(lua_State* const L)
+  int __cdecl cfunc_Templates(
+    lua_State* const L
+  )
   {
     const std::vector<EffectTemplate> templates = ParseEffectTemplates(up::ArgString(L, 1, "ed_fx_templates"));
     lua_newtable(L);
@@ -850,26 +1014,41 @@ namespace
     return 1;
   }
 
-  // ---- the effect graph ---------------------------------------------------------------------------------------------------------------------------
+  // ---- the effect graph
+  // ---------------------------------------------------------------------------------------------------------------------------
 
-  const char* PinTypeText(const PinType type)
+  const char* PinTypeText(
+    const PinType type
+  )
   {
     return PinTypeName(type);
   }
 
-  const char* ParamKindText(const ParamKind kind)
+  const char* ParamKindText(
+    const ParamKind kind
+  )
   {
     switch (kind) {
-    case ParamKind::Float: return "float";
-    case ParamKind::Int: return "int";
-    case ParamKind::Bool: return "bool";
-    case ParamKind::Color: return "color";
-    case ParamKind::Choice: return "choice";
-    default: return "text";
+    case ParamKind::Float:
+      return "float";
+    case ParamKind::Int:
+      return "int";
+    case ParamKind::Bool:
+      return "bool";
+    case ParamKind::Color:
+      return "color";
+    case ParamKind::Choice:
+      return "choice";
+    default:
+      return "text";
     }
   }
 
-  void PushPins(lua_State* const L, const char* const key, const std::vector<PinDef>& pins)
+  void PushPins(
+    lua_State* const L,
+    const char* const key,
+    const std::vector<PinDef>& pins
+  )
   {
     lua_pushstring(L, key);
     lua_newtable(L);
@@ -883,7 +1062,9 @@ namespace
     lua_settable(L, -3);
   }
 
-  int __cdecl cfunc_GraphNodeTypes(lua_State* const L)
+  int __cdecl cfunc_GraphNodeTypes(
+    lua_State* const L
+  )
   {
     lua_newtable(L);
     int n = 0;
@@ -917,7 +1098,10 @@ namespace
     return 1;
   }
 
-  void PushGraph(lua_State* const L, const NodeGraph& graph)
+  void PushGraph(
+    lua_State* const L,
+    const NodeGraph& graph
+  )
   {
     lua_newtable(L);
     lua_pushstring(L, "nodes");
@@ -955,7 +1139,9 @@ namespace
     lua_settable(L, -3);
   }
 
-  int __cdecl cfunc_GraphBuild(lua_State* const L)
+  int __cdecl cfunc_GraphBuild(
+    lua_State* const L
+  )
   {
     const std::string name = up::ArgString(L, 1, "ed_fx_graph_build");
     std::vector<std::pair<std::string, EmitterBlueprint>> emitters;
@@ -970,14 +1156,17 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_GraphEmitters(lua_State* const L)
+  int __cdecl cfunc_GraphEmitters(
+    lua_State* const L
+  )
   {
     NodeGraph graph(EffectNodeTypes());
-    std::map<int, int> ids; // the table's ids -> the graph's
+    std::map<int, int> ids;                 // the table's ids -> the graph's
     std::vector<std::pair<int, int>> nodes; // (table id, node)
     EachElement(L, 1, "nodes", [&](const int item) {
       const int old = up::FieldInt(L, item, "id", 0);
-      const int id = graph.AddNode(up::FieldString(L, item, "type"), FieldFloat(L, item, "x", 0.0f), FieldFloat(L, item, "y", 0.0f));
+      const int id =
+        graph.AddNode(up::FieldString(L, item, "type"), FieldFloat(L, item, "x", 0.0f), FieldFloat(L, item, "y", 0.0f));
       if (id == 0) {
         return;
       }
@@ -1001,7 +1190,9 @@ namespace
       const auto from = ids.find(up::FieldInt(L, item, "fromNode", -1));
       const auto to = ids.find(up::FieldInt(L, item, "toNode", -1));
       if (from != ids.end() && to != ids.end()) {
-        (void)graph.Link(from->second, up::FieldInt(L, item, "fromPin", 0), to->second, up::FieldInt(L, item, "toPin", 0));
+        (void)graph.Link(
+          from->second, up::FieldInt(L, item, "fromPin", 0), to->second, up::FieldInt(L, item, "toPin", 0)
+        );
       }
     });
     std::vector<std::pair<std::string, EmitterBlueprint>> emitters;
@@ -1022,9 +1213,12 @@ namespace
     return 1;
   }
 
-  // ---- effect decorations in the map's script ---------------------------------------------------------------------------------------------------
+  // ---- effect decorations in the map's script
+  // ---------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_ScriptEffects(lua_State* const L)
+  int __cdecl cfunc_ScriptEffects(
+    lua_State* const L
+  )
   {
     const std::string text = WithScriptEffects(up::ArgString(L, 1, "ed_fx_script_effects"), lua_toboolean(L, 2) != 0);
     lua_pushlstring(L, text.data(), text.size());
@@ -1036,31 +1230,48 @@ namespace
     {"ed_fx_emitter_new", &cfunc_EmitterNew, "ed_fx_emitter_new() -> emitter"},
     {"ed_fx_emitter_parse", &cfunc_EmitterParse, "ed_fx_emitter_parse(text) -> emitter | nil, message"},
     {"ed_fx_emitter_write", &cfunc_EmitterWrite, "ed_fx_emitter_write(emitter[, original]) -> text, patched"},
-    {"ed_fx_emitter_roundtrip", &cfunc_EmitterRoundTrip, "ed_fx_emitter_roundtrip(text) -> { ok, identical, preserved, error, written }"},
+    {"ed_fx_emitter_roundtrip",
+     &cfunc_EmitterRoundTrip,
+     "ed_fx_emitter_roundtrip(text) -> { ok, identical, preserved, error, written }"},
     {"ed_fx_emitter_type_tag", &cfunc_EmitterTypeTag, "ed_fx_emitter_type_tag(emitter) -> string"},
     {"ed_fx_curve_samples", &cfunc_CurveSamples, "ed_fx_curve_samples(keys, xRange, n) -> { mid, lo, hi }"},
-    {"ed_fx_flat_info", &cfunc_FlatInfo, "ed_fx_flat_info(kind) -> { { key, kind, initial, color, help, texture }, ... }"},
+    {"ed_fx_flat_info",
+     &cfunc_FlatInfo,
+     "ed_fx_flat_info(kind) -> { { key, kind, initial, color, help, texture }, ... }"},
     {"ed_fx_flat_parse", &cfunc_FlatParse, "ed_fx_flat_parse(text) -> flat | nil, message"},
     {"ed_fx_flat_write", &cfunc_FlatWrite, "ed_fx_flat_write(flat[, original]) -> text, patched"},
     {"ed_fx_flat_roundtrip", &cfunc_FlatRoundTrip, "ed_fx_flat_roundtrip(text) -> { ok, identical, preserved }"},
     {"ed_fx_effect_class", &cfunc_EffectClass, "ed_fx_effect_class(path) -> factionIndex, kindIndex"},
     {"ed_fx_list_files", &cfunc_ListFiles, "ed_fx_list_files([roots]) -> { { path, name, faction, kind }, ... }"},
     {"ed_fx_templates", &cfunc_Templates, "ed_fx_templates(luaText) -> { { name, paths }, ... }"},
-    {"ed_fx_graph_node_types", &cfunc_GraphNodeTypes, "ed_fx_graph_node_types() -> { { name, title, category, inputs, outputs, params }, ... }"},
+    {"ed_fx_graph_node_types",
+     &cfunc_GraphNodeTypes,
+     "ed_fx_graph_node_types() -> { { name, title, category, inputs, outputs, params }, ... }"},
     {"ed_fx_graph_build", &cfunc_GraphBuild, "ed_fx_graph_build(name, { { name, emitter }, ... }) -> graph"},
-    {"ed_fx_script_effects", &cfunc_ScriptEffects, "ed_fx_script_effects(scriptText, on) -> text   the map script with the MapEditorEffects function and its call (on) or without (off)"},
-    {"ed_fx_graph_emitters", &cfunc_GraphEmitters, "ed_fx_graph_emitters(graph) -> { { name, emitter }, ... } | nil, message"},
+    {"ed_fx_script_effects",
+     &cfunc_ScriptEffects,
+     "ed_fx_script_effects(scriptText, on) -> text   the map script with the MapEditorEffects function and its call "
+     "(on) or without (off)"},
+    {"ed_fx_graph_emitters",
+     &cfunc_GraphEmitters,
+     "ed_fx_graph_emitters(graph) -> { { name, emitter }, ... } | nil, message"},
   }};
 } // namespace
 
 namespace moho::editor::up
 {
-  faf::editor::EmitterBlueprint FxReadEmitter(lua_State* const L, const int index)
+  faf::editor::EmitterBlueprint FxReadEmitter(
+    lua_State* const L,
+    const int index
+  )
   {
     return ReadEmitter(L, index);
   }
 
-  faf::editor::FlatBlueprint FxReadFlat(lua_State* const L, const int index)
+  faf::editor::FlatBlueprint FxReadFlat(
+    lua_State* const L,
+    const int index
+  )
   {
     return ReadFlat(L, index);
   }

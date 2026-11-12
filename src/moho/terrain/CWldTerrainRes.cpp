@@ -90,7 +90,8 @@ namespace
   };
 
   [[nodiscard]] std::int32_t ClampWaterMapSampleCoordinate(
-    const std::int32_t coordinate, const std::int32_t upperInclusive
+    const std::int32_t coordinate,
+    const std::int32_t upperInclusive
   ) noexcept
   {
     if (coordinate < 0) {
@@ -102,11 +103,15 @@ namespace
     return coordinate;
   }
 
-  // Debug only (FAF_STRATUM_MASK_TEST): writes a fine pattern into a loaded stratum mask, standing in for a mapper's high-resolution mask. The
-  // map is cut into 64-texel tiles; each tile is one of four patterns, so there are hard edges between them and detail down to a single texel:
-  // vertical one-texel stripes (blue channel), horizontal one-texel stripes (green), a four-texel checker (red), a one-texel diagonal hatch
-  // (blue). `variant` 1 (the second mask) shifts the tiles by one.
-  void FillStratumMaskTestPattern(moho::CD3DDynamicTextureSheet* const sheet, const int variant)
+  // Debug only (FAF_STRATUM_MASK_TEST): writes a fine pattern into a loaded stratum mask, standing in for a mapper's
+  // high-resolution mask. The map is cut into 64-texel tiles; each tile is one of four patterns, so there are hard
+  // edges between them and detail down to a single texel: vertical one-texel stripes (blue channel), horizontal
+  // one-texel stripes (green), a four-texel checker (red), a one-texel diagonal hatch (blue). `variant` 1 (the second
+  // mask) shifts the tiles by one.
+  void FillStratumMaskTestPattern(
+    moho::CD3DDynamicTextureSheet* const sheet,
+    const int variant
+  )
   {
     if (sheet == nullptr) {
       return;
@@ -122,7 +127,9 @@ namespace
       return;
     }
     for (std::int32_t y = 0; y < height; ++y) {
-      auto* const row = reinterpret_cast<std::uint32_t*>(static_cast<std::uint8_t*>(mappedBits) + static_cast<std::size_t>(y) * pitchBytes);
+      auto* const row = reinterpret_cast<std::uint32_t*>(
+        static_cast<std::uint8_t*>(mappedBits) + static_cast<std::size_t>(y) * pitchBytes
+      );
       for (std::int32_t x = 0; x < width; ++x) {
         const int tile = ((x >> 6) + (y >> 6) + variant) & 3;
         std::uint32_t r = 0;
@@ -149,7 +156,10 @@ namespace
     gpg::Logf("Terrain: stratum mask test pattern written into a %dx%d mask", width, height);
   }
 
-  void CloneTerrainDynamicTextureForEdit(boost::shared_ptr<moho::CD3DDynamicTextureSheet>& slot, const bool archiveMode)
+  void CloneTerrainDynamicTextureForEdit(
+    boost::shared_ptr<moho::CD3DDynamicTextureSheet>& slot,
+    const bool archiveMode
+  )
   {
     moho::CD3DDevice* const device = moho::D3D_GetDevice();
     if (device == nullptr) {
@@ -157,21 +167,20 @@ namespace
     }
 
     boost::shared_ptr<moho::CD3DDynamicTextureSheet> replacement;
-    (void)device->CreateDynamicTextureSheetFromSource(
-      replacement,
-      slot.get(),
-      nullptr,
-      2,
-      archiveMode
-    );
+    (void)device->CreateDynamicTextureSheetFromSource(replacement, slot.get(), nullptr, 2, archiveMode);
     slot = replacement;
   }
-  [[nodiscard]] bool IntelRectVisibleOrGridMissing(const moho::CIntelGrid* const grid, const gpg::Rect2i& rect)
+  [[nodiscard]] bool IntelRectVisibleOrGridMissing(
+    const moho::CIntelGrid* const grid,
+    const gpg::Rect2i& rect
+  )
   {
     return grid == nullptr || grid->IsVisible(rect, false);
   }
   [[nodiscard]] float SampleTerrainHeightWordScaled(
-    const moho::CHeightField& field, const std::int32_t x, const std::int32_t z
+    const moho::CHeightField& field,
+    const std::int32_t x,
+    const std::int32_t z
   ) noexcept
   {
     constexpr float kHeightWordScale = 0.0078125f;
@@ -224,8 +233,7 @@ namespace
     const boost::shared_ptr<moho::CD3DDynamicTextureSheet>& sheet
   ) noexcept
   {
-    const boost::SharedPtrRaw<moho::CD3DDynamicTextureSheet> borrow =
-      boost::SharedPtrRawFromSharedBorrow(sheet);
+    const boost::SharedPtrRaw<moho::CD3DDynamicTextureSheet> borrow = boost::SharedPtrRawFromSharedBorrow(sheet);
 
     boost::SharedPtrRaw<moho::RD3DTextureResource> reinterpreted{};
     reinterpreted.px = reinterpret_cast<moho::RD3DTextureResource*>(borrow.px);
@@ -247,8 +255,7 @@ namespace
     const moho::ID3DDeviceResources::TextureResourceHandle& sheet
   ) noexcept
   {
-    const boost::SharedPtrRaw<moho::RD3DTextureResource> sourceBorrow =
-      boost::SharedPtrRawFromSharedBorrow(sheet);
+    const boost::SharedPtrRaw<moho::RD3DTextureResource> sourceBorrow = boost::SharedPtrRawFromSharedBorrow(sheet);
 
     boost::SharedPtrRaw<moho::CD3DDynamicTextureSheet> reinterpreted{};
     reinterpreted.px = reinterpret_cast<moho::CD3DDynamicTextureSheet*>(sourceBorrow.px);
@@ -256,11 +263,15 @@ namespace
 
     waterMap = boost::SharedPtrFromRawRetained(reinterpreted);
   }
-  [[nodiscard]] std::int32_t AlignDownTo4(const std::int32_t value) noexcept
+  [[nodiscard]] std::int32_t AlignDownTo4(
+    const std::int32_t value
+  ) noexcept
   {
     return value & ~3;
   }
-  [[nodiscard]] std::int32_t AlignUpTo4(const std::int32_t value) noexcept
+  [[nodiscard]] std::int32_t AlignUpTo4(
+    const std::int32_t value
+  ) noexcept
   {
     return (value + 3) & ~3;
   }
@@ -299,10 +310,8 @@ namespace
     const std::uint32_t safeTier = tier > 0 ? static_cast<std::uint32_t>(tier) : 0u;
     const std::uint32_t tierStep = 1u << safeTier;
 
-    const std::uint32_t widthClamp =
-      field.width > 0 ? static_cast<std::uint32_t>(field.width - 1) : 0u;
-    const std::uint32_t heightClamp =
-      field.height > 0 ? static_cast<std::uint32_t>(field.height - 1) : 0u;
+    const std::uint32_t widthClamp = field.width > 0 ? static_cast<std::uint32_t>(field.width - 1) : 0u;
+    const std::uint32_t heightClamp = field.height > 0 ? static_cast<std::uint32_t>(field.height - 1) : 0u;
 
     const std::uint32_t stepXWord = tierStep < widthClamp ? tierStep : widthClamp;
     const std::uint32_t stepZWord = tierStep < heightClamp ? tierStep : heightClamp;
@@ -319,7 +328,9 @@ namespace
     out.Max.y = maxY;
     return out;
   }
-  [[nodiscard]] std::int32_t CeilHalfCoordinate(const std::int32_t coordinate) noexcept
+  [[nodiscard]] std::int32_t CeilHalfCoordinate(
+    const std::int32_t coordinate
+  ) noexcept
   {
     return static_cast<std::int32_t>(std::ceil(static_cast<float>(coordinate) * 0.5f));
   }
@@ -333,7 +344,9 @@ namespace
     CloneTerrainDynamicTextureForEdit(sheet, archiveMode);
     AdoptDynamicSheetAsStratumMask(mask, sheet);
   }
-  [[nodiscard]] std::uint8_t EncodeNormalLaneByte(const float lane) noexcept
+  [[nodiscard]] std::uint8_t EncodeNormalLaneByte(
+    const float lane
+  ) noexcept
   {
     int encoded = static_cast<int>((lane + 1.0f) * 128.0f);
     if (encoded < 0) {
@@ -363,21 +376,11 @@ namespace
                        const std::size_t count,
                        const std::uint32_t value
                      ) {
-      (void)fa::detail::InsertFillWords(
-        storage,
-        insertAt,
-        count,
-        value,
-        throwTooLong,
-        allocateWords
-      );
+      (void)fa::detail::InsertFillWords(storage, insertAt, count, value, throwTooLong, allocateWords);
     };
 
-    auto eraseWords = [](
-                        fa::detail::vector_bool_storage* const storage,
-                        std::uint32_t* const first,
-                        std::uint32_t* const last
-                      ) {
+    auto eraseWords =
+      [](fa::detail::vector_bool_storage* const storage, std::uint32_t* const first, std::uint32_t* const last) {
       if (first == last) {
         return;
       }
@@ -390,15 +393,11 @@ namespace
       storage->end -= static_cast<std::ptrdiff_t>(last - first);
     };
 
-    (void)fa::detail::ResizeWordStorage(
-      &editWordBuffer,
-      desiredWordCount,
-      fillWord,
-      growWords,
-      eraseWords
-    );
+    (void)fa::detail::ResizeWordStorage(&editWordBuffer, desiredWordCount, fillWord, growWords, eraseWords);
   }
-  [[nodiscard]] std::int32_t FloorHalfCoordinate(const std::int32_t coordinate) noexcept
+  [[nodiscard]] std::int32_t FloorHalfCoordinate(
+    const std::int32_t coordinate
+  ) noexcept
   {
     return static_cast<std::int32_t>(std::floor(static_cast<float>(coordinate) * 0.5f));
   }
@@ -426,9 +425,18 @@ namespace
    * lake gets its depth and shoreline as the sea does, and a dry body none. Only the texels
    * `RebuildWaterMapRect` would write are written, with the same packing.
    */
-  void MarkWaterHiResDirty(const moho::CWldTerrainRes* res, std::int32_t x0, std::int32_t z0, std::int32_t x1, std::int32_t z1);
+  void MarkWaterHiResDirty(
+    const moho::CWldTerrainRes* res,
+    std::int32_t x0,
+    std::int32_t z0,
+    std::int32_t x1,
+    std::int32_t z1
+  );
 
-  void RebuildWaterMapRectWithBodies(moho::CWldTerrainRes& terrainRes, const gpg::Rect2i& updateRect)
+  void RebuildWaterMapRectWithBodies(
+    moho::CWldTerrainRes& terrainRes,
+    const gpg::Rect2i& updateRect
+  )
   {
     const moho::STIMap& map = *terrainRes.mMap;
     const moho::CHeightField& field = *map.mHeightField.get();
@@ -437,14 +445,22 @@ namespace
     const std::int32_t halfX1 = std::min(updateRect.x1, field.width - 1) >> 1;
     const std::int32_t halfZ1 = std::min(updateRect.z1, field.height - 1) >> 1;
     // EDITOR: the finer water map follows the same cells (it reads each cell's own water: FillWaterHiRes)
-    MarkWaterHiResDirty(&terrainRes, std::max(updateRect.x0, 0), std::max(updateRect.z0, 0), std::min(updateRect.x1, field.width - 1),
-                        std::min(updateRect.z1, field.height - 1));
+    MarkWaterHiResDirty(
+      &terrainRes,
+      std::max(updateRect.x0, 0),
+      std::max(updateRect.z0, 0),
+      std::min(updateRect.x1, field.width - 1),
+      std::min(updateRect.z1, field.height - 1)
+    );
     const auto halfMapWidth = static_cast<std::uint32_t>(static_cast<std::uint32_t>(field.width - 1) >> 1u);
     // The pixel buffer exists only between EnterEditMode and the end of the load; outside it
     // there is nothing to write into (the caller enters edit mode first).
     const auto texelCount = static_cast<std::size_t>(halfMapWidth) * static_cast<std::size_t>((field.height - 1) >> 1);
-    if (terrainRes.mEditWordBuffer.begin == nullptr || terrainRes.mWaterFoam == nullptr || terrainRes.mWaterFlatness == nullptr ||
-        static_cast<std::size_t>(terrainRes.mEditWordBuffer.capacityEnd - terrainRes.mEditWordBuffer.begin) < texelCount) {
+    if (
+      terrainRes.mEditWordBuffer.begin == nullptr || terrainRes.mWaterFoam == nullptr ||
+      terrainRes.mWaterFlatness == nullptr ||
+      static_cast<std::size_t>(terrainRes.mEditWordBuffer.capacityEnd - terrainRes.mEditWordBuffer.begin) < texelCount
+    ) {
       gpg::Warnf("Water bodies: the water map has no pixel buffer to rebuild");
       return;
     }
@@ -453,7 +469,8 @@ namespace
       const std::int32_t worldZ = halfZ * 2;
       for (std::int32_t halfX = halfX0; halfX < halfX1; ++halfX) {
         const std::int32_t worldX = halfX * 2;
-        const std::uint32_t pixelIndex = static_cast<std::uint32_t>(halfX) + static_cast<std::uint32_t>(halfZ) * halfMapWidth;
+        const std::uint32_t pixelIndex =
+          static_cast<std::uint32_t>(halfX) + static_cast<std::uint32_t>(halfZ) * halfMapWidth;
         const moho::SWaterOfBlock water = moho::WaterOfBlock(map, worldX, worldZ);
 
         const float h00 = SampleTerrainHeightWordScaled(field, worldX, worldZ);
@@ -484,12 +501,16 @@ namespace
     terrainRes.UpdateTexture(terrainRes.mWaterMapTexture, terrainRes.mEditWordBuffer.begin);
   }
 
-  // ---- EDITOR: the water map at a finer resolution --------------------------------------------------------------------------------------------------------
-  // The water map of a map has one texel per 2 x 2 cells (and the shore flag is "any of the four corners is land", the water alpha mask is a test against that flag with bilinear
-  // filtering): the edge of a lake is a staircase of 2 unit steps, a texel wider than the real shore. The editor keeps a second water map for RENDERING with `ed_water_hires` texels
-  // per cell (default 4, at most 4096 texels a side; 0 = the half resolution one): every texel centre reads the BILINEAR height, the flag is "the ground there is above the water",
-  // the depth byte is the exact depth there; foam and flatness come from the half resolution masks. The half resolution water map (what is saved, what the foam brush edits) is not
-  // touched: GetWaterMap() hands the finer one to the renderers, and every writer of the water map marks the cells it changed (MarkWaterHiResDirty) so only those are rebuilt.
+  // ---- EDITOR: the water map at a finer resolution
+  // -------------------------------------------------------------------------------------------------------- The water
+  // map of a map has one texel per 2 x 2 cells (and the shore flag is "any of the four corners is land", the water
+  // alpha mask is a test against that flag with bilinear filtering): the edge of a lake is a staircase of 2 unit steps,
+  // a texel wider than the real shore. The editor keeps a second water map for RENDERING with `ed_water_hires` texels
+  // per cell (default 4, at most 4096 texels a side; 0 = the half resolution one): every texel centre reads the
+  // BILINEAR height, the flag is "the ground there is above the water", the depth byte is the exact depth there; foam
+  // and flatness come from the half resolution masks. The half resolution water map (what is saved, what the foam brush
+  // edits) is not touched: GetWaterMap() hands the finer one to the renderers, and every writer of the water map marks
+  // the cells it changed (MarkWaterHiResDirty) so only those are rebuilt.
   struct WaterHiRes
   {
     boost::shared_ptr<moho::CD3DDynamicTextureSheet> sheet;
@@ -498,19 +519,27 @@ namespace
     std::int32_t height = 0;
     bool dirtyAll = true;
     bool dirty = false;
-    std::int32_t x0 = 0, z0 = 0, x1 = 0, z1 = 0;   // dirty cells, inclusive
-    std::uint32_t bodies = 0;   // WaterBodiesGeneration the texels were made for (0: the sea only): other bodies, other levels, all texels again
+    std::int32_t x0 = 0, z0 = 0, x1 = 0, z1 = 0; // dirty cells, inclusive
+    std::uint32_t bodies = 0; // WaterBodiesGeneration the texels were made for (0: the sea only): other bodies, other
+                              // levels, all texels again
   };
 
   std::unordered_map<const moho::CWldTerrainRes*, WaterHiRes> gWaterHiRes;
   float gWaterHiResTexels = 4.0f;
   moho::TConVar<float> gConWaterHiRes(
     "ed_water_hires",
-    "Editor: texels per cell of the water map used for rendering (the shore of a lake is a staircase of this size), 0 = the half resolution map of the map file (default 4, at most 4096 texels a side)",
+    "Editor: texels per cell of the water map used for rendering (the shore of a lake is a staircase of this size), 0 "
+    "= the half resolution map of the map file (default 4, at most 4096 texels a side)",
     &gWaterHiResTexels
   );
 
-  void MarkWaterHiResDirty(const moho::CWldTerrainRes* const res, const std::int32_t x0, const std::int32_t z0, const std::int32_t x1, const std::int32_t z1)
+  void MarkWaterHiResDirty(
+    const moho::CWldTerrainRes* const res,
+    const std::int32_t x0,
+    const std::int32_t z0,
+    const std::int32_t x1,
+    const std::int32_t z1
+  )
   {
     if (gWaterHiResTexels < 0.5f) {
       return;
@@ -520,21 +549,36 @@ namespace
       return;
     }
     if (!st.dirty) {
-      st.x0 = x0; st.z0 = z0; st.x1 = x1; st.z1 = z1;
+      st.x0 = x0;
+      st.z0 = z0;
+      st.x1 = x1;
+      st.z1 = z1;
       st.dirty = true;
     } else {
-      st.x0 = std::min(st.x0, x0); st.z0 = std::min(st.z0, z0);
-      st.x1 = std::max(st.x1, x1); st.z1 = std::max(st.z1, z1);
+      st.x0 = std::min(st.x0, x0);
+      st.z0 = std::min(st.z0, z0);
+      st.x1 = std::max(st.x1, x1);
+      st.z1 = std::max(st.z1, z1);
     }
   }
 
-  void ForgetWaterHiRes(const moho::CWldTerrainRes* const res)
+  void ForgetWaterHiRes(
+    const moho::CWldTerrainRes* const res
+  )
   {
     gWaterHiRes.erase(res);
   }
 
-  /// Fills the texels of the cells [cx0, cx1] x [cz0, cz1] (a cell more on every side: the bilinear taps and the filter of the alpha test reach over the border).
-  void FillWaterHiRes(const moho::CWldTerrainRes& res, WaterHiRes& st, std::int32_t cx0, std::int32_t cz0, std::int32_t cx1, std::int32_t cz1)
+  /// Fills the texels of the cells [cx0, cx1] x [cz0, cz1] (a cell more on every side: the bilinear taps and the filter
+  /// of the alpha test reach over the border).
+  void FillWaterHiRes(
+    const moho::CWldTerrainRes& res,
+    WaterHiRes& st,
+    std::int32_t cx0,
+    std::int32_t cz0,
+    std::int32_t cx1,
+    std::int32_t cz1
+  )
   {
     constexpr float kNoWaterElevation = -10000.0f;
     const moho::STIMap* const map = res.mMap;
@@ -555,8 +599,9 @@ namespace
     const float waterElevation = map->mWaterEnabled != 0u ? map->mWaterElevation : kNoWaterElevation;
     const float waterAbyssElevation = map->mWaterEnabled != 0u ? map->mWaterElevationAbyss : kNoWaterElevation;
     const float depthDenominator = waterElevation - waterAbyssElevation;
-    // With water bodies every 2 x 2 cell block has the water of its own body (the sea's, a lake's, none for a dry body), as the half resolution map takes it
-    // (RebuildWaterMapRectWithBodies): the shore of a lake is where the ground crosses the lake's level, not the sea's.
+    // With water bodies every 2 x 2 cell block has the water of its own body (the sea's, a lake's, none for a dry
+    // body), as the half resolution map takes it (RebuildWaterMapRectWithBodies): the shore of a lake is where the
+    // ground crosses the lake's level, not the sea's.
     const bool hasBodies = map->HasWaterBodies();
     const std::int32_t halfWidth = std::max(1, cellsX >> 1);
     const std::int32_t halfHeight = std::max(1, cellsZ >> 1);
@@ -606,7 +651,8 @@ namespace
         if (!(depthByte > 0.0f)) {
           depthByte = 0.0f;
         }
-        const std::size_t maskIndex = static_cast<std::size_t>(halfX) + static_cast<std::size_t>(halfZ) * static_cast<std::size_t>(halfWidth);
+        const std::size_t maskIndex =
+          static_cast<std::size_t>(halfX) + static_cast<std::size_t>(halfZ) * static_cast<std::size_t>(halfWidth);
         std::uint32_t packed = 0;
         if (res.mWaterFoam != nullptr) {
           packed |= static_cast<std::uint32_t>(res.mWaterFoam[maskIndex]) << 24u;
@@ -632,8 +678,11 @@ namespace
     (void)st.sheet->Unlock();
   }
 
-  /// The water map the renderers should use: the finer one (made and refreshed here, when something marked cells dirty), or null for the half resolution one.
-  [[nodiscard]] boost::shared_ptr<moho::CD3DDynamicTextureSheet> WaterHiResSheet(const moho::CWldTerrainRes& res)
+  /// The water map the renderers should use: the finer one (made and refreshed here, when something marked cells
+  /// dirty), or null for the half resolution one.
+  [[nodiscard]] boost::shared_ptr<moho::CD3DDynamicTextureSheet> WaterHiResSheet(
+    const moho::CWldTerrainRes& res
+  )
   {
     const float want = gWaterHiResTexels;
     if (want < 0.5f) {
@@ -644,7 +693,7 @@ namespace
     }
     const auto it = gWaterHiRes.find(&res);
     if (it == gWaterHiRes.end()) {
-      return {};    // nothing has built the water map yet: the half resolution one is what there is
+      return {}; // nothing has built the water map yet: the half resolution one is what there is
     }
     WaterHiRes& st = it->second;
     const moho::CHeightField* const field = res.mMap != nullptr ? res.mMap->mHeightField.get() : nullptr;
@@ -658,7 +707,7 @@ namespace
       --k;
     }
     if (cellsX * k > 4096 || cellsZ * k > 4096 || cellsX < 2 || cellsZ < 2) {
-      return {};    // a map this big keeps its half resolution water map
+      return {}; // a map this big keeps its half resolution water map
     }
     if (const std::uint32_t bodies = WaterBodiesGeneration(*res.mMap); bodies != st.bodies) {
       st.bodies = bodies;
@@ -692,8 +741,10 @@ namespace
     return st.sheet;
   }
 
-
-  void RebuildWaterMapRect(moho::CWldTerrainRes& terrainRes, const gpg::Rect2i& updateRect)
+  void RebuildWaterMapRect(
+    moho::CWldTerrainRes& terrainRes,
+    const gpg::Rect2i& updateRect
+  )
   {
     constexpr float kNoWaterElevation = -10000.0f;
     moho::STIMap* const map = terrainRes.mMap;
@@ -735,8 +786,7 @@ namespace
     const std::int32_t halfZ0 = z0 >> 1;
     const std::int32_t halfZ1 = z1 >> 1;
 
-    const std::uint32_t halfMapWidth =
-      static_cast<std::uint32_t>(static_cast<std::uint32_t>(field->width - 1) >> 1u);
+    const std::uint32_t halfMapWidth = static_cast<std::uint32_t>(static_cast<std::uint32_t>(field->width - 1) >> 1u);
 
     if (halfZ0 < halfZ1) {
       for (std::int32_t halfZ = halfZ0; halfZ < halfZ1; ++halfZ) {
@@ -746,7 +796,8 @@ namespace
 
         const std::int32_t worldZ = halfZ * 2;
         const float depthDenominator = waterElevation - waterAbyssElevation;
-        std::uint32_t pixelIndex = static_cast<std::uint32_t>(halfX0) + static_cast<std::uint32_t>(halfZ) * halfMapWidth;
+        std::uint32_t pixelIndex =
+          static_cast<std::uint32_t>(halfX0) + static_cast<std::uint32_t>(halfZ) * halfMapWidth;
         std::int32_t worldX = halfX0 * 2;
 
         for (std::int32_t halfX = halfX0; halfX < halfX1; ++halfX) {
@@ -799,7 +850,9 @@ namespace
    * flag that gets serialized into the map, and falls the shader name back to
    * `TTerrain`. The resolved flag is then latched so later calls are no-ops.
    */
-  void ResolveTerrainCompositeShaderUsage(moho::StratumMaterial& strata)
+  void ResolveTerrainCompositeShaderUsage(
+    moho::StratumMaterial& strata
+  )
   {
     if (strata.byte0 != 0) {
       return;
@@ -811,8 +864,7 @@ namespace
 
     const fa::string defaultUsage{"undefined", 9U};
     const fa::string usageAnnotationName{"usage", 5U};
-    const fa::string usage =
-      terrainEffect->GetStringAnnotation(strata.mShaderName, usageAnnotationName, defaultUsage);
+    const fa::string usage = terrainEffect->GetStringAnnotation(strata.mShaderName, usageAnnotationName, defaultUsage);
 
     // 0x0089F401-0x0089F420: compare(0, size(), "composite", 9) != 0 -> the
     // shader did not declare itself composite.
@@ -820,8 +872,7 @@ namespace
 
     if (notComposite) {
       gpg::Warnf(
-        "terrain shader '%s' is not specified as 'composite,' defaulting to TTerrain",
-        strata.mShaderName.c_str()
+        "terrain shader '%s' is not specified as 'composite,' defaulting to TTerrain", strata.mShaderName.c_str()
       );
       strata.byte1 = 0;
       // 0x0089F4BE re-runs basic_string(const char*, size_type) over the live
@@ -833,17 +884,21 @@ namespace
 
     strata.byte0 = 1;
   }
-  void SaveStratumLayer(gpg::BinaryWriter& writer, const moho::CStratumMaterial& layer)
+  void SaveStratumLayer(
+    gpg::BinaryWriter& writer,
+    const moho::CStratumMaterial& layer
+  )
   {
     writer.WriteString(layer.mPath);
     writer.Write(layer.mSize);
   }
-  [[nodiscard]] bool ShouldSyncDirtyRectInCameraBounds(const gpg::Rect2i& dirtyRect, const gpg::Rect2i& cameraRect) noexcept
+  [[nodiscard]] bool ShouldSyncDirtyRectInCameraBounds(
+    const gpg::Rect2i& dirtyRect,
+    const gpg::Rect2i& cameraRect
+  ) noexcept
   {
-    const bool fullyContained = dirtyRect.x0 >= cameraRect.x0
-      && dirtyRect.x1 <= cameraRect.x1
-      && dirtyRect.z0 >= cameraRect.z0
-      && dirtyRect.z1 <= cameraRect.z1;
+    const bool fullyContained = dirtyRect.x0 >= cameraRect.x0 && dirtyRect.x1 <= cameraRect.x1 &&
+      dirtyRect.z0 >= cameraRect.z0 && dirtyRect.z1 <= cameraRect.z1;
     if (fullyContained) {
       return true;
     }
@@ -896,7 +951,10 @@ namespace
    * `focusArmy` unconditionally and no evidence was found either way on
    * whether `SyncTerrain`'s `GetFocusArmy()` can return null in practice.
    */
-  [[nodiscard]] bool TerrainRectVisibleForFocusArmy(const gpg::Rect2i& rect, const moho::UserArmy* const focusArmy)
+  [[nodiscard]] bool TerrainRectVisibleForFocusArmy(
+    const gpg::Rect2i& rect,
+    const moho::UserArmy* const focusArmy
+  )
   {
     if (focusArmy == nullptr) {
       return true;
@@ -924,8 +982,8 @@ namespace
       }
 
       if (
-        IntelRectVisibleOrGridMissing(alliedArmy->mVisionReconGrid.get(), rect)
-        || IntelRectVisibleOrGridMissing(alliedArmy->mWaterReconGrid.get(), rect)
+        IntelRectVisibleOrGridMissing(alliedArmy->mVisionReconGrid.get(), rect) ||
+        IntelRectVisibleOrGridMissing(alliedArmy->mWaterReconGrid.get(), rect)
       ) {
         return true;
       }
@@ -933,7 +991,9 @@ namespace
 
     return false;
   }
-  void TickLoadingProgress(moho::CBackgroundTaskControl& loadControl)
+  void TickLoadingProgress(
+    moho::CBackgroundTaskControl& loadControl
+  )
   {
     if (loadControl.mHandle != nullptr) {
       loadControl.mHandle->UpdateLoadingProgress();
@@ -943,7 +1003,9 @@ namespace
   /**
    * Reads one length-prefixed payload (u32 size, then that many bytes) from the map stream.
    */
-  [[nodiscard]] std::vector<char> ReadSizedPayload(gpg::BinaryReader& reader)
+  [[nodiscard]] std::vector<char> ReadSizedPayload(
+    gpg::BinaryReader& reader
+  )
   {
     std::uint32_t payloadSize = 0;
     reader.ReadExact(payloadSize);
@@ -956,7 +1018,9 @@ namespace
 
   // Legacy skip-list: two discarded dwords + a finite skip countdown, each
   // seeking one record forward (asm 0x8A2164 `sub;jnz` proves finite).
-  void SkipLegacyRecordList(gpg::BinaryReader& reader)
+  void SkipLegacyRecordList(
+    gpg::BinaryReader& reader
+  )
   {
     std::uint32_t discardedA = 0;
     std::uint32_t discardedB = 0;
@@ -1038,13 +1102,17 @@ namespace
     return *maps;
   }
 
-  void DropPrebuiltNormalMap(const moho::CWldTerrainRes* const owner)
+  void DropPrebuiltNormalMap(
+    const moho::CWldTerrainRes* const owner
+  )
   {
     const std::lock_guard<std::mutex> lock(sPrebuiltNormalMapsLock);
     PrebuiltNormalMaps().erase(owner);
   }
 
-  [[nodiscard]] PrebuiltNormalMap TakePrebuiltNormalMap(const moho::CWldTerrainRes* const owner)
+  [[nodiscard]] PrebuiltNormalMap TakePrebuiltNormalMap(
+    const moho::CWldTerrainRes* const owner
+  )
   {
     const std::lock_guard<std::mutex> lock(sPrebuiltNormalMapsLock);
     auto& maps = PrebuiltNormalMaps();
@@ -1141,17 +1209,18 @@ namespace
 
     gpg::Logf(
       "Terrain: normal map encoded on the loader in %.2f s, %u threads",
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), threadCount
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(),
+      threadCount
     );
 
     const std::lock_guard<std::mutex> lock(sPrebuiltNormalMapsLock);
     PrebuiltNormalMaps()[owner] = std::move(built);
   }
 
-  /// EDITOR: normal map updates smaller than this many 4x4 blocks (a brush dab is a few dozen) stay on the calling thread.
+  /// EDITOR: normal map updates smaller than this many 4x4 blocks (a brush dab is a few dozen) stay on the calling
+  /// thread.
   constexpr std::int64_t kParallelNormalMapMinBlocks = 4096;
 } // namespace
-
 
 namespace moho
 {
@@ -1304,7 +1373,9 @@ namespace moho
    * Returns false (leaving the payload unwritten) when the chunk holds no
    * runtime texture.
    */
-  bool RWldMapPreviewChunk::Save(gpg::BinaryWriter& writer)
+  bool RWldMapPreviewChunk::Save(
+    gpg::BinaryWriter& writer
+  )
   {
     constexpr std::uint32_t kPreviewHeaderMagic = 0xBEEFFEEDU;
     constexpr std::uint32_t kPreviewChunkVersion = 2U;
@@ -1321,8 +1392,7 @@ namespace moho
     // `2 * length + 2` straight from the converted wide string.
     const std::wstring previewNameWide = gpg::STR_Utf8ToWide(mPreviewName.c_str());
     writer.Write(
-      reinterpret_cast<const char*>(previewNameWide.c_str()),
-      (previewNameWide.size() + 1U) * sizeof(wchar_t)
+      reinterpret_cast<const char*>(previewNameWide.c_str()), (previewNameWide.size() + 1U) * sizeof(wchar_t)
     );
 
     writer.Write(kPreviewMetadataEntryCount);
@@ -1365,7 +1435,9 @@ namespace moho
    * Copies playable map bounds from terrain-res internal storage into `outRect`
    * and returns `&outRect`.
    */
-  const VisibilityRect* CWldTerrainRes::GetPlayableMapRect(VisibilityRect& outRect) const
+  const VisibilityRect* CWldTerrainRes::GetPlayableMapRect(
+    VisibilityRect& outRect
+  ) const
   {
     outRect = VisibilityRect::FromRect2i(mMap->mPlayableRect);
     return &outRect;
@@ -1378,7 +1450,9 @@ namespace moho
    * Writes one playable-map rectangle through the owned terrain map and emits
    * warning text when bounds are invalid.
    */
-  bool CWldTerrainRes::SetPlayableMapRect(const VisibilityRect& rect)
+  bool CWldTerrainRes::SetPlayableMapRect(
+    const VisibilityRect& rect
+  )
   {
     STIMap* const map = mMap;
     if (map == nullptr) {
@@ -1400,25 +1474,28 @@ namespace moho
    * What it does:
    * Returns true when `worldPos` lies within the terrain playable rectangle.
    */
-  bool CWldTerrainRes::IsInPlayableRect(const Wm3::Vec3f& worldPos)
+  bool CWldTerrainRes::IsInPlayableRect(
+    const Wm3::Vec3f& worldPos
+  )
   {
     const STIMap* const map = mMap;
     const gpg::Rect2i& playableRect = map->mPlayableRect;
 
-    return static_cast<float>(playableRect.x0) <= worldPos.x
-      && static_cast<float>(playableRect.z0) <= worldPos.z
-      && worldPos.x <= static_cast<float>(playableRect.x1)
-      && worldPos.z <= static_cast<float>(playableRect.z1);
+    return static_cast<float>(playableRect.x0) <= worldPos.x && static_cast<float>(playableRect.z0) <= worldPos.z &&
+      worldPos.x <= static_cast<float>(playableRect.x1) && worldPos.z <= static_cast<float>(playableRect.z1);
   }
 
   /**
-   * Address: 0x008A1080 (FUN_008A1080, ?SetBackground@CWldTerrainRes@Moho@@UAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z)
+   * Address: 0x008A1080 (FUN_008A1080,
+   * ?SetBackground@CWldTerrainRes@Moho@@UAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z)
    *
    * What it does:
    * Stores terrain background texture path and resolves the corresponding D3D
    * texture resource handle.
    */
-  void CWldTerrainRes::SetBackground(const fa::string& texturePath)
+  void CWldTerrainRes::SetBackground(
+    const fa::string& texturePath
+  )
   {
     mBackgroundFile = texturePath;
 
@@ -1433,13 +1510,16 @@ namespace moho
   }
 
   /**
-   * Address: 0x008A11C0 (FUN_008A11C0, ?SetSkycube@CWldTerrainRes@Moho@@UAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z)
+   * Address: 0x008A11C0 (FUN_008A11C0,
+   * ?SetSkycube@CWldTerrainRes@Moho@@UAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z)
    *
    * What it does:
    * Stores terrain skycube texture path and resolves the corresponding D3D
    * texture resource handle.
    */
-  void CWldTerrainRes::SetSkycube(const fa::string& texturePath)
+  void CWldTerrainRes::SetSkycube(
+    const fa::string& texturePath
+  )
   {
     mSkycubeFile = texturePath;
 
@@ -1454,7 +1534,8 @@ namespace moho
   }
 
   /**
-   * Address: 0x008A1190 (FUN_008A1190, ?GetBackground@CWldTerrainRes@Moho@@UBE?AV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@XZ)
+   * Address: 0x008A1190 (FUN_008A1190,
+   * ?GetBackground@CWldTerrainRes@Moho@@UBE?AV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@XZ)
    *
    * What it does:
    * Returns one retained shared texture handle for terrain background.
@@ -1465,7 +1546,8 @@ namespace moho
   }
 
   /**
-   * Address: 0x008A12D0 (FUN_008A12D0, ?GetSkycube@CWldTerrainRes@Moho@@UBE?AV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@XZ)
+   * Address: 0x008A12D0 (FUN_008A12D0,
+   * ?GetSkycube@CWldTerrainRes@Moho@@UBE?AV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@XZ)
    *
    * What it does:
    * Returns one retained shared texture handle for terrain skycube.
@@ -1497,7 +1579,8 @@ namespace moho
 
   /**
    * Address: 0x008A1300 (FUN_008A1300)
-   * (FUN_008A1300, ?AddEnvLookup@CWldTerrainRes@Moho@@UAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@0@Z)
+   * (FUN_008A1300,
+   * ?AddEnvLookup@CWldTerrainRes@Moho@@UAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@0@Z)
    *
    * What it does:
    * Resolves one environment texture path, then upserts it into terrain
@@ -1518,7 +1601,10 @@ namespace moho
    * `map[key] = value` assignment, on both the cache-hit and cache-miss
    * paths alike.
    */
-  void CWldTerrainRes::AddEnvLookup(const fa::string& environmentKey, const fa::string& texturePath)
+  void CWldTerrainRes::AddEnvLookup(
+    const fa::string& environmentKey,
+    const fa::string& texturePath
+  )
   {
     ID3DDeviceResources::TextureResourceHandle texture;
     if (CD3DDevice* const device = D3D_GetDevice(); device != nullptr) {
@@ -1533,12 +1619,15 @@ namespace moho
 
   /**
    * Address: 0x008A13F0 (FUN_008A13F0)
-   * (FUN_008A13F0, ?RemoveEnvLookup@CWldTerrainRes@Moho@@UAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z)
+   * (FUN_008A13F0,
+   * ?RemoveEnvLookup@CWldTerrainRes@Moho@@UAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z)
    *
    * What it does:
    * Removes one environment-lookup entry by key when the key exists.
    */
-  void CWldTerrainRes::RemoveEnvLookup(const fa::string& environmentKey)
+  void CWldTerrainRes::RemoveEnvLookup(
+    const fa::string& environmentKey
+  )
   {
     moho::TerrainEnvironmentLookupMap& map = mEnvLookup;
     (void)map.erase(environmentKey);
@@ -1546,12 +1635,15 @@ namespace moho
 
   /**
    * Address: 0x008A1430 (FUN_008A1430)
-   * (FUN_008A1430, ?GetEnvLookup@CWldTerrainRes@Moho@@UBE?AV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@ABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z)
+   * (FUN_008A1430,
+   * ?GetEnvLookup@CWldTerrainRes@Moho@@UBE?AV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@ABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z)
    *
    * What it does:
    * Returns one environment texture by key, with `<default>` fallback.
    */
-  boost::shared_ptr<ID3DTextureSheet> CWldTerrainRes::GetEnvLookup(const fa::string& environmentKey) const
+  boost::shared_ptr<ID3DTextureSheet> CWldTerrainRes::GetEnvLookup(
+    const fa::string& environmentKey
+  ) const
   {
     const moho::TerrainEnvironmentLookupMap& map = mEnvLookup;
 
@@ -1568,13 +1660,16 @@ namespace moho
 
   /**
    * Address: 0x008A1500 (FUN_008A1500)
-   * (FUN_008A1500, ?EnumerateEnvLookup@CWldTerrainRes@Moho@@UBEXAAV?$vector@U?$pair@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V12@@std@@V?$allocator@U?$pair@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V12@@std@@@2@@std@@@Z)
+   * (FUN_008A1500,
+   * ?EnumerateEnvLookup@CWldTerrainRes@Moho@@UBEXAAV?$vector@U?$pair@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V12@@std@@V?$allocator@U?$pair@V?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@V12@@std@@@2@@std@@@Z)
    *
    * What it does:
    * Clears and rebuilds one destination list with all environment map
    * key/name pairs in RB-tree iteration order.
    */
-  void CWldTerrainRes::EnumerateEnvLookup(TerrainEnvironmentLookupPairs& outPairs) const
+  void CWldTerrainRes::EnumerateEnvLookup(
+    TerrainEnvironmentLookupPairs& outPairs
+  ) const
   {
     (void)outPairs.erase(outPairs.begin(), outPairs.end());
 
@@ -1658,7 +1753,9 @@ namespace moho
    * What it does:
    * Sets the active topographic sample-count lane.
    */
-  void CWldTerrainRes::SetTopographicSamples(const std::int32_t sampleCount)
+  void CWldTerrainRes::SetTopographicSamples(
+    const std::int32_t sampleCount
+  )
   {
     mTopographicSamples = sampleCount;
   }
@@ -1681,7 +1778,10 @@ namespace moho
    * What it does:
    * Writes one indexed hypsometric color lane.
    */
-  void CWldTerrainRes::SetHypsometricColor(const std::int32_t colorIndex, const std::uint32_t colorValue)
+  void CWldTerrainRes::SetHypsometricColor(
+    const std::int32_t colorIndex,
+    const std::uint32_t colorValue
+  )
   {
     mHypsometricColor[static_cast<std::size_t>(colorIndex)] = colorValue;
   }
@@ -1693,7 +1793,9 @@ namespace moho
    * What it does:
    * Returns one indexed hypsometric color lane.
    */
-  std::uint32_t CWldTerrainRes::GetHypsometricColor(const std::int32_t colorIndex) const
+  std::uint32_t CWldTerrainRes::GetHypsometricColor(
+    const std::int32_t colorIndex
+  ) const
   {
     return mHypsometricColor[static_cast<std::size_t>(colorIndex)];
   }
@@ -1704,7 +1806,9 @@ namespace moho
    * What it does:
    * Sets the terrain imager elevation offset lane.
    */
-  void CWldTerrainRes::SetImagerElevationOffset(const float elevationOffset)
+  void CWldTerrainRes::SetImagerElevationOffset(
+    const float elevationOffset
+  )
   {
     mImagerElevationOffset = elevationOffset;
   }
@@ -1732,14 +1836,16 @@ namespace moho
   }
 
   /**
-   * Address: 0x008A5040 (FUN_008A5040, ?GetWaterMap@CWldTerrainRes@Moho@@UBE?AV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@XZ)
+   * Address: 0x008A5040 (FUN_008A5040,
+   * ?GetWaterMap@CWldTerrainRes@Moho@@UBE?AV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@XZ)
    *
    * What it does:
    * Returns one retained shared texture handle for the terrain water map.
    */
   boost::shared_ptr<ID3DTextureSheet> CWldTerrainRes::GetWaterMap() const
   {
-    // EDITOR: the finer water map for rendering (ed_water_hires), the half resolution one when that is off or the map is too big
+    // EDITOR: the finer water map for rendering (ed_water_hires), the half resolution one when that is off or the map
+    // is too big
     const boost::shared_ptr<CD3DDynamicTextureSheet> fine = WaterHiResSheet(*this);
     if (fine.get() != nullptr) {
       return boost::static_pointer_cast<ID3DTextureSheet>(fine);
@@ -1768,7 +1874,11 @@ namespace moho
    * What it does:
    * Forwards one camera/timestep update into terrain wave simulation.
    */
-  void CWldTerrainRes::UpdateWaveSystem(const GeomCamera3& camera, const float elapsedSeconds, const std::int32_t tick)
+  void CWldTerrainRes::UpdateWaveSystem(
+    const GeomCamera3& camera,
+    const float elapsedSeconds,
+    const std::int32_t tick
+  )
   {
     mWaveSystem.Update(camera, elapsedSeconds, tick);
   }
@@ -1785,7 +1895,8 @@ namespace moho
   }
 
   /**
-   * Address: 0x008A54C0 (FUN_008A54C0, ?GetDebugDirtyRects@CWldTerrainRes@Moho@@UBEABV?$list@V?$Rect2@H@gpg@@V?$allocator@V?$Rect2@H@gpg@@@std@@@std@@XZ)
+   * Address: 0x008A54C0 (FUN_008A54C0,
+   * ?GetDebugDirtyRects@CWldTerrainRes@Moho@@UBEABV?$list@V?$Rect2@H@gpg@@V?$allocator@V?$Rect2@H@gpg@@@std@@@std@@XZ)
    *
    * What it does:
    * Returns the debug dirty-rectangle list lane.
@@ -1831,7 +1942,10 @@ namespace moho
    * reconfigures the sky dome from the fresh world bounds. Always returns true
    * (`0x008A6A46: mov al, 1`).
    */
-  bool CWldTerrainRes::Reset(const SChartSize chartSize, LuaPlus::LuaState* const state)
+  bool CWldTerrainRes::Reset(
+    const SChartSize chartSize,
+    LuaPlus::LuaState* const state
+  )
   {
 
     // 0x008A625F: the single stack-resident progress handle is zeroed at entry
@@ -1849,10 +1963,8 @@ namespace moho
 
     // 0x008A6256-0x008A62AC: a fresh sim map for the requested chart replaces the
     // previously owned one, which is destroyed only after the swap.
-    auto* const newMap = new STIMap(
-      static_cast<std::uint32_t>(chartSize.mWidth),
-      static_cast<std::uint32_t>(chartSize.mHeight)
-    );
+    auto* const newMap =
+      new STIMap(static_cast<std::uint32_t>(chartSize.mWidth), static_cast<std::uint32_t>(chartSize.mHeight));
     STIMap* const previousMap = mMap;
     mMap = newMap;
     delete previousMap;
@@ -1873,10 +1985,8 @@ namespace moho
     // 0x008A630F-0x008A6372: half-resolution debug dirty mask, swapped then freed.
     const std::int32_t halfWidth = chartSize.mWidth / 2;
     const std::int32_t halfHeight = chartSize.mHeight / 2;
-    auto* const newDirtyTerrain = new gpg::BitArray2D(
-      static_cast<unsigned int>(halfWidth),
-      static_cast<unsigned int>(halfHeight)
-    );
+    auto* const newDirtyTerrain =
+      new gpg::BitArray2D(static_cast<unsigned int>(halfWidth), static_cast<unsigned int>(halfHeight));
     gpg::BitArray2D* const previousDirtyTerrain = mDebugDirtyTerrain;
     mDebugDirtyTerrain = newDirtyTerrain;
     delete previousDirtyTerrain;
@@ -1899,12 +2009,7 @@ namespace moho
       const fa::string defaultEnvironmentKey("<default>", 9u);
 
       ID3DDeviceResources::TextureResourceHandle defaultEnvironmentTexture;
-      resources->GetTexture(
-        defaultEnvironmentTexture,
-        "/textures/environment/defaultenvcube.dds",
-        nullptr,
-        true
-      );
+      resources->GetTexture(defaultEnvironmentTexture, "/textures/environment/defaultenvcube.dds", nullptr, true);
 
       const TerrainEnvironmentLookupEntry defaultEnvironment(defaultEnvironmentName, defaultEnvironmentTexture);
       mEnvLookup[defaultEnvironmentKey] = defaultEnvironment;
@@ -1924,8 +2029,7 @@ namespace moho
     {
       ID3DDeviceResources::DynamicTextureSheetHandle sheet;
       AdoptDynamicSheetAsStratumMask(
-        mStrata.mStratumMask0,
-        resources->NewDynamicTextureSheet(sheet, halfWidth, halfHeight, 2)
+        mStrata.mStratumMask0, resources->NewDynamicTextureSheet(sheet, halfWidth, halfHeight, 2)
       );
     }
     ClearTexture(ShareAsDynamicSheet(mStrata.mStratumMask0));
@@ -1936,10 +2040,7 @@ namespace moho
       AdoptDynamicSheetAsStratumMask(
         mStrata.mStratumMask1,
         resources->NewDynamicTextureSheet(
-          sheet,
-          static_cast<int>(mStrata.mStratumMaskWidth),
-          static_cast<int>(mStrata.mStratumMaskHeight),
-          2
+          sheet, static_cast<int>(mStrata.mStratumMaskWidth), static_cast<int>(mStrata.mStratumMaskHeight), 2
         )
       );
     }
@@ -1984,10 +2085,7 @@ namespace moho
 
     // 0x008A691A-0x008A693B
     SetWaterDefaults();
-    CreateWaterMasks(
-      static_cast<std::int32_t>(waterMapDimensions.x),
-      static_cast<std::int32_t>(waterMapDimensions.y)
-    );
+    CreateWaterMasks(static_cast<std::int32_t>(waterMapDimensions.x), static_cast<std::int32_t>(waterMapDimensions.y));
 
     // 0x008A693C-0x008A6958: one edit-mode cycle republishes the freshly created
     // dynamic textures into the runtime instances the renderer samples.
@@ -2015,9 +2113,8 @@ namespace moho
     const double halfExtentXSquared = static_cast<double>(halfExtentX) * static_cast<double>(halfExtentX);
     // 0x008A69FE: `fld qword ptr [0x00E4FA18]` loads 72 degrees as the float
     // 1.2566370f widened to double (0x3FF41B2F60000000), not the double 0.4*pi.
-    const float domeRadius = static_cast<float>(
-      std::sqrt(halfExtentZSquared + halfExtentXSquared) / std::cos(0x1.41b2f6p+0)
-    );
+    const float domeRadius =
+      static_cast<float>(std::sqrt(halfExtentZSquared + halfExtentXSquared) / std::cos(0x1.41b2f6p+0));
 
     const STIMap* const map = mMap;
     const float domeElevation = map->mWaterEnabled != 0 ? map->mWaterElevation : bounds.Min.y;
@@ -2042,9 +2139,8 @@ namespace moho
     }
 
     const CHeightFieldTier* const firstTier = field->mGrids.begin();
-    const std::int32_t tierCount = firstTier != nullptr
-                                     ? static_cast<std::int32_t>(field->mGrids.end() - firstTier)
-                                     : 0;
+    const std::int32_t tierCount =
+      firstTier != nullptr ? static_cast<std::int32_t>(field->mGrids.end() - firstTier) : 0;
     return BuildTerrainTierBoundsFromHeightfield(*field, tierCount, 0, 0);
   }
 
@@ -2065,7 +2161,9 @@ namespace moho
    * What it does:
    * Sets terrain lighting multiplier.
    */
-  void CWldTerrainRes::SetLightingMultiplier(const float& multiplier)
+  void CWldTerrainRes::SetLightingMultiplier(
+    const float& multiplier
+  )
   {
     mLightingMultiplier = multiplier;
   }
@@ -2087,7 +2185,9 @@ namespace moho
    * What it does:
    * Sets sun direction vector.
    */
-  void CWldTerrainRes::SetSunDirection(const Wm3::Vector3f& direction)
+  void CWldTerrainRes::SetSunDirection(
+    const Wm3::Vector3f& direction
+  )
   {
     mSunDirection = direction;
   }
@@ -2109,7 +2209,9 @@ namespace moho
    * What it does:
    * Sets sun ambience vector.
    */
-  void CWldTerrainRes::SetSunAmbience(const Wm3::Vector3f& ambience)
+  void CWldTerrainRes::SetSunAmbience(
+    const Wm3::Vector3f& ambience
+  )
   {
     mSunAmbience = ambience;
   }
@@ -2131,7 +2233,9 @@ namespace moho
    * What it does:
    * Sets terrain specular color vector.
    */
-  void CWldTerrainRes::SetSpecularColor(const Vector4f& color)
+  void CWldTerrainRes::SetSpecularColor(
+    const Vector4f& color
+  )
   {
     mSpecularColor = color;
   }
@@ -2153,7 +2257,9 @@ namespace moho
    * What it does:
    * Sets terrain bloom strength lane.
    */
-  void CWldTerrainRes::SetBloom(const float bloom)
+  void CWldTerrainRes::SetBloom(
+    const float bloom
+  )
   {
     mBloom = bloom;
   }
@@ -2175,7 +2281,9 @@ namespace moho
    * What it does:
    * Updates primary terrain fog parameter lanes.
    */
-  void CWldTerrainRes::SetFogInfo(const SFogInfo& fogInfo)
+  void CWldTerrainRes::SetFogInfo(
+    const SFogInfo& fogInfo
+  )
   {
     mFogInfo.mStartDistance = fogInfo.mStartDistance;
     mFogInfo.mCutoffDistance = fogInfo.mCutoffDistance;
@@ -2201,7 +2309,9 @@ namespace moho
    * What it does:
    * Sets sun color vector.
    */
-  void CWldTerrainRes::SetSunColor(const Wm3::Vector3f& color)
+  void CWldTerrainRes::SetSunColor(
+    const Wm3::Vector3f& color
+  )
   {
     mSunColor = color;
   }
@@ -2223,7 +2333,9 @@ namespace moho
    * What it does:
    * Sets shadow-fill color vector.
    */
-  void CWldTerrainRes::SetShadowFillColor(const Wm3::Vector3f& color)
+  void CWldTerrainRes::SetShadowFillColor(
+    const Wm3::Vector3f& color
+  )
   {
     mShadowFillColor = color;
   }
@@ -2234,7 +2346,9 @@ namespace moho
    * What it does:
    * Toggles world-map water rendering/logic enabled flag.
    */
-  void CWldTerrainRes::WaterEnabled(const bool enabled)
+  void CWldTerrainRes::WaterEnabled(
+    const bool enabled
+  )
   {
     mMap->mWaterEnabled = static_cast<std::uint8_t>(enabled ? 1u : 0u);
   }
@@ -2245,7 +2359,9 @@ namespace moho
    * What it does:
    * Sets world-map surface water elevation.
    */
-  void CWldTerrainRes::SetWaterElevation(const float elevation)
+  void CWldTerrainRes::SetWaterElevation(
+    const float elevation
+  )
   {
     mMap->mWaterElevation = elevation;
   }
@@ -2256,7 +2372,9 @@ namespace moho
    * What it does:
    * Sets world-map deep-water threshold elevation.
    */
-  void CWldTerrainRes::SetWaterElevationDeep(const float elevation)
+  void CWldTerrainRes::SetWaterElevationDeep(
+    const float elevation
+  )
   {
     mMap->mWaterElevationDeep = elevation;
   }
@@ -2267,18 +2385,23 @@ namespace moho
    * What it does:
    * Sets world-map abyss-water threshold elevation.
    */
-  void CWldTerrainRes::SetWaterElevationAbyss(const float elevation)
+  void CWldTerrainRes::SetWaterElevationAbyss(
+    const float elevation
+  )
   {
     mMap->mWaterElevationAbyss = elevation;
   }
 
   /**
-   * Address: 0x008A6E20 (FUN_008A6E20, ?SetWaterShaderProperties@CWldTerrainRes@Moho@@EAEXABVCWaterShaderProperties@2@@Z)
+   * Address: 0x008A6E20 (FUN_008A6E20,
+   * ?SetWaterShaderProperties@CWldTerrainRes@Moho@@EAEXABVCWaterShaderProperties@2@@Z)
    *
    * What it does:
    * Copies one water-shader property block into terrain state.
    */
-  void CWldTerrainRes::SetWaterShaderProperties(const CWaterShaderProperties& properties)
+  void CWldTerrainRes::SetWaterShaderProperties(
+    const CWaterShaderProperties& properties
+  )
   {
     if (&properties != &mWaterShaderProperties) {
       mWaterShaderProperties.~CWaterShaderProperties();
@@ -2287,7 +2410,8 @@ namespace moho
   }
 
   /**
-   * Address: 0x008A6E40 (FUN_008A6E40, ?GetWaterShaderProperties@CWldTerrainRes@Moho@@EAEPAVCWaterShaderProperties@2@XZ)
+   * Address: 0x008A6E40 (FUN_008A6E40,
+   * ?GetWaterShaderProperties@CWldTerrainRes@Moho@@EAEPAVCWaterShaderProperties@2@XZ)
    *
    * What it does:
    * Returns mutable pointer to the owned water-shader property block.
@@ -2348,15 +2472,17 @@ namespace moho
    * Enables terrain edit mode, prepares packed edit-word storage, clones
    * editable stratum/water textures, then rebuilds full water-map contents.
    */
-  void CWldTerrainRes::EnterEditMode(CBackgroundTaskControl& loadControl)
+  void CWldTerrainRes::EnterEditMode(
+    CBackgroundTaskControl& loadControl
+  )
   {
     (void)loadControl;
-
 
     mEditMode = 1;
 
     const CHeightField* const field = mMap->mHeightField.get();
-    const std::int64_t cellCount = static_cast<std::int64_t>(field->width - 1) * static_cast<std::int64_t>(field->height - 1);
+    const std::int64_t cellCount =
+      static_cast<std::int64_t>(field->width - 1) * static_cast<std::int64_t>(field->height - 1);
     const std::size_t wordCount = cellCount > 0 ? static_cast<std::size_t>(cellCount >> 2) : 0u;
     EnsureTerrainEditWordCount(mEditWordBuffer, wordCount, 0u);
 
@@ -2365,10 +2491,7 @@ namespace moho
     CloneTerrainDynamicTextureForEdit(mWaterMapTexture, false);
 
     gpg::Rect2i fullRect{
-      static_cast<std::int32_t>(0x80000000u),
-      static_cast<std::int32_t>(0x80000000u),
-      0x7FFFFFFF,
-      0x7FFFFFFF
+      static_cast<std::int32_t>(0x80000000u), static_cast<std::int32_t>(0x80000000u), 0x7FFFFFFF, 0x7FFFFFFF
     };
     UpdateWaterMap(fullRect);
   }
@@ -2413,7 +2536,10 @@ namespace moho
    * Reallocates water foam/flatness/depth-bias mask lanes and initializes each
    * lane to binary default fill values (0x00/0xFF/0x7F).
    */
-  void CWldTerrainRes::CreateWaterMasks(const std::int32_t width, const std::int32_t height)
+  void CWldTerrainRes::CreateWaterMasks(
+    const std::int32_t width,
+    const std::int32_t height
+  )
   {
     const std::uint32_t maskSizeBytes = static_cast<std::uint32_t>(width * height);
 
@@ -2459,19 +2585,25 @@ namespace moho
    * What it does:
    * Rebuilds one caller-provided rectangle of the water-map texture.
    */
-  void CWldTerrainRes::UpdateWaterMap(const gpg::Rect2i& rect)
+  void CWldTerrainRes::UpdateWaterMap(
+    const gpg::Rect2i& rect
+  )
   {
     RebuildWaterMapRect(*this, rect);
   }
 
   /**
-   * Address: 0x008A5130 (FUN_008A5130, ?UpdateWaterMap@CWldTerrainRes@Moho@@QAEXAAVCBackgroundTaskControl@2@ABV?$Rect2@H@gpg@@@Z)
+   * Address: 0x008A5130 (FUN_008A5130,
+   * ?UpdateWaterMap@CWldTerrainRes@Moho@@QAEXAAVCBackgroundTaskControl@2@ABV?$Rect2@H@gpg@@@Z)
    *
    * What it does:
    * Rebuilds one caller-provided rectangle of the water-map texture while
    * preserving the original (unused) background-task-control signature lane.
    */
-  void CWldTerrainRes::UpdateWaterMap(CBackgroundTaskControl& loadControl, const gpg::Rect2i& rect)
+  void CWldTerrainRes::UpdateWaterMap(
+    CBackgroundTaskControl& loadControl,
+    const gpg::Rect2i& rect
+  )
   {
     (void)loadControl;
     RebuildWaterMapRect(*this, rect);
@@ -2484,7 +2616,9 @@ namespace moho
    * Computes normal-map tile dimensions/count, allocates one dynamic texture
    * per tile, then rebuilds full normal-map coverage.
    */
-  void CWldTerrainRes::InitNormalMap(CBackgroundTaskControl& loadControl)
+  void CWldTerrainRes::InitNormalMap(
+    CBackgroundTaskControl& loadControl
+  )
   {
     CHeightField* const field = mMap->mHeightField.get();
 
@@ -2507,7 +2641,6 @@ namespace moho
     const std::size_t tileCount = tileCountX * tileCountY;
 
     mNormalMap.resize(tileCount, boost::shared_ptr<CD3DDynamicTextureSheet>{});
-
 
     moho::CD3DDevice* const device = moho::D3D_GetDevice();
     moho::ID3DDeviceResources* const resources = device != nullptr ? device->GetResources() : nullptr;
@@ -2541,7 +2674,9 @@ namespace moho
    * Syncs queued dirty terrain rectangles from a source heightfield into the
    * active map field for camera-visible regions and updates dirty/error lanes.
    */
-  void CWldTerrainRes::SyncTerrain(const CHeightField* const source)
+  void CWldTerrainRes::SyncTerrain(
+    const CHeightField* const source
+  )
   {
     RCamManager* const cameraManager = CAM_GetManager();
     CameraImpl* const camera = cameraManager != nullptr ? cameraManager->GetCamera("WorldCamera") : nullptr;
@@ -2570,8 +2705,7 @@ namespace moho
       const gpg::Rect2i dirtyRect = *current;
 
       if (
-        ShouldSyncDirtyRectInCameraBounds(dirtyRect, cameraRect)
-        && TerrainRectVisibleForFocusArmy(dirtyRect, focusArmy)
+        ShouldSyncDirtyRectInCameraBounds(dirtyRect, cameraRect) && TerrainRectVisibleForFocusArmy(dirtyRect, focusArmy)
       ) {
         const std::int32_t sourceOffset = dirtyRect.x0 + dirtyRect.z0 * field->width;
         field->SetElevationRectRaw(dirtyRect, source->data + sourceOffset, field->width);
@@ -2623,7 +2757,9 @@ namespace moho
    * What it does:
    * Rebuilds one caller-provided normal-map rectangle with a null progress lane.
    */
-  void CWldTerrainRes::UpdateNormalMap(const gpg::Rect2i& rect)
+  void CWldTerrainRes::UpdateNormalMap(
+    const gpg::Rect2i& rect
+  )
   {
     CBackgroundTaskControl loadControl{};
     loadControl.mHandle = nullptr;
@@ -2631,13 +2767,17 @@ namespace moho
   }
 
   /**
-   * Address: 0x008A5BE0 (FUN_008A5BE0, ?UpdateNormalMap@CWldTerrainRes@Moho@@AAEXAAVCBackgroundTaskControl@2@ABV?$Rect2@H@gpg@@@Z)
+   * Address: 0x008A5BE0 (FUN_008A5BE0,
+   * ?UpdateNormalMap@CWldTerrainRes@Moho@@AAEXAAVCBackgroundTaskControl@2@ABV?$Rect2@H@gpg@@@Z)
    *
    * What it does:
    * Rebuilds one clipped normal-map rectangle across all normal-map tiles and
    * encodes each 4x4 block to DXT payload lanes.
    */
-  void CWldTerrainRes::UpdateNormalMap(CBackgroundTaskControl& loadControl, const gpg::Rect2i& rect)
+  void CWldTerrainRes::UpdateNormalMap(
+    CBackgroundTaskControl& loadControl,
+    const gpg::Rect2i& rect
+  )
   {
     const std::int32_t tileWidth = mNormalMapWidth;
     const std::int32_t tileHeight = mNormalMapHeight;
@@ -2654,7 +2794,10 @@ namespace moho
     PrebuiltNormalMap prebuilt{};
     if (rect.x0 <= 0 && rect.z0 <= 0 && rect.x1 >= field->width - 1 && rect.z1 >= field->height - 1) {
       prebuilt = TakePrebuiltNormalMap(this);
-      if (prebuilt.blocksWide != AlignUpTo4(field->width - 1) / 4 || prebuilt.blocksHigh != AlignUpTo4(field->height - 1) / 4) {
+      if (
+        prebuilt.blocksWide != AlignUpTo4(field->width - 1) / 4 ||
+        prebuilt.blocksHigh != AlignUpTo4(field->height - 1) / 4
+      ) {
         prebuilt = {};
       }
       // None, or the map changed since the loader encoded it (a map start that flattens building
@@ -2743,11 +2886,14 @@ namespace moho
 
         auto* const lockedBytes = static_cast<std::uint8_t*>(mappedBits);
         const std::int32_t blockRowCount = (lockRect.z1 - lockRect.z0 + 3) / 4;
-        const std::int64_t blockCount = static_cast<std::int64_t>(blockRowCount) * ((lockRect.x1 - lockRect.x0 + 3) / 4);
+        const std::int64_t blockCount =
+          static_cast<std::int64_t>(blockRowCount) * ((lockRect.x1 - lockRect.x0 + 3) / 4);
         if (blockCount >= kParallelNormalMapMinBlocks && moho::editor::perf::ParallelNormalMapEnabled()) {
-          // EDITOR: block rows are independent (pure reads of the height field, each writes its own row of the texture), so a big update (a map load, a whole map edit)
-          // is split over the field engine's worker pool in batches of rows; the loading progress (which is also the abort check and throws) stays on this thread, once
-          // per row after each batch. The bytes are identical to the serial loop below (docs/projects/editor/PERFORMANCE.md).
+          // EDITOR: block rows are independent (pure reads of the height field, each writes its own row of the
+          // texture), so a big update (a map load, a whole map edit) is split over the field engine's worker pool in
+          // batches of rows; the loading progress (which is also the abort check and throws) stays on this thread, once
+          // per row after each batch. The bytes are identical to the serial loop below
+          // (docs/projects/editor/PERFORMANCE.md).
           constexpr std::int32_t kBatchRows = 64;
           for (std::int32_t batchStart = 0; batchStart < blockRowCount; batchStart += kBatchRows) {
             const std::int32_t batchEnd = std::min(blockRowCount, batchStart + kBatchRows);
@@ -2797,7 +2943,9 @@ namespace moho
    * one was already under construction stalled the render thread for around
    * a minute inside `CWldSession::DoBeat`.
    */
-  void CWldTerrainRes::NotifyMapChange(const gpg::Rect2i& rect)
+  void CWldTerrainRes::NotifyMapChange(
+    const gpg::Rect2i& rect
+  )
   {
     if (!GetBool()) {
       // The map just changed, so what the loader encoded no longer holds.
@@ -2822,7 +2970,10 @@ namespace moho
     mDebugDirtyTerrain->FillRect(halfX0, halfZ0, halfX1 - halfX0, halfZ1 - halfZ0, true);
   }
 
-  void CWldTerrainRes::NotifyMapChanges(const gpg::Rect2i* const rects, const std::size_t count)
+  void CWldTerrainRes::NotifyMapChanges(
+    const gpg::Rect2i* const rects,
+    const std::size_t count
+  )
   {
     // Until the terrain is finalized, each change goes the original way (the first one finalizes).
     std::size_t next = 0;
@@ -2843,7 +2994,9 @@ namespace moho
     batch.reserve(count - next);
     for (std::size_t i = next; i < count; ++i) {
       const gpg::Rect2i& rect = rects[i];
-      if (field != nullptr && rect.x0 <= 0 && rect.z0 <= 0 && rect.x1 >= field->width - 1 && rect.z1 >= field->height - 1) {
+      if (
+        field != nullptr && rect.x0 <= 0 && rect.z0 <= 0 && rect.x1 >= field->width - 1 && rect.z1 >= field->height - 1
+      ) {
         UpdateNormalMap(rect);
       } else {
         batch.push_back(rect);
@@ -2862,12 +3015,17 @@ namespace moho
     }
   }
 
-  void CWldTerrainRes::UpdateNormalMapRects(const gpg::Rect2i* const rects, const std::size_t count)
+  void CWldTerrainRes::UpdateNormalMapRects(
+    const gpg::Rect2i* const rects,
+    const std::size_t count
+  )
   {
     const std::int32_t tileWidth = mNormalMapWidth;
     const std::int32_t tileHeight = mNormalMapHeight;
     CHeightField* const field = mMap->mHeightField.get();
-    if (count == 0u || tileWidth <= 0 || tileHeight <= 0 || field == nullptr || field->width <= 1 || field->height <= 1) {
+    if (
+      count == 0u || tileWidth <= 0 || tileHeight <= 0 || field == nullptr || field->width <= 1 || field->height <= 1
+    ) {
       return;
     }
 
@@ -2927,8 +3085,9 @@ namespace moho
         for (const gpg::Rect2i& blocks : local) {
           for (std::int32_t localZ = blocks.z0; localZ < blocks.z1; localZ += 4) {
             auto* blockOutput = reinterpret_cast<std::uint64_t*>(
-              lockBase + static_cast<std::size_t>((localZ - lockRect.z0) / 4) * pitchBytes
-            ) + static_cast<std::size_t>((blocks.x0 - lockRect.x0) / 4) * 2u;
+                                  lockBase + static_cast<std::size_t>((localZ - lockRect.z0) / 4) * pitchBytes
+                                ) +
+              static_cast<std::size_t>((blocks.x0 - lockRect.x0) / 4) * 2u;
             for (std::int32_t localX = blocks.x0; localX < blocks.x1; localX += 4) {
               EncodeNormalBlock(*field, tileXBase + localX, tileZBase + localZ, blockOutput);
               blockOutput += 2;
@@ -2941,14 +3100,16 @@ namespace moho
   }
 
   /**
-   * Address: 0x008A4CB0 (FUN_008A4CB0, ?UpdateTexture@CWldTerrainRes@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@PAI@Z)
+   * Address: 0x008A4CB0 (FUN_008A4CB0,
+   * ?UpdateTexture@CWldTerrainRes@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@PAI@Z)
    *
    * What it does:
    * Locks one dynamic texture sheet and copies packed RGBA source rows into
    * each destination pitch row before unlocking.
    */
   void CWldTerrainRes::UpdateTexture(
-    boost::shared_ptr<CD3DDynamicTextureSheet> textureSheet, const std::uint32_t* const sourcePixels
+    boost::shared_ptr<CD3DDynamicTextureSheet> textureSheet,
+    const std::uint32_t* const sourcePixels
   )
   {
     CD3DDynamicTextureSheet* const sheet = textureSheet.get();
@@ -2960,7 +3121,8 @@ namespace moho
     (void)sheet->GetDimensions(&dimensions);
 
     const std::int32_t height = static_cast<std::int32_t>(dimensions.y);
-    const std::size_t bytesPerRow = sizeof(std::uint32_t) * static_cast<std::size_t>(static_cast<std::int32_t>(dimensions.x));
+    const std::size_t bytesPerRow =
+      sizeof(std::uint32_t) * static_cast<std::size_t>(static_cast<std::int32_t>(dimensions.x));
 
     std::uint32_t pitchBytes = 0;
     void* mappedBits = nullptr;
@@ -2973,7 +3135,11 @@ namespace moho
 
     for (std::int32_t row = 0; row < height; ++row) {
       // Raw GPU upload: pixel row blob into the pitched locked surface.
-      std::copy_n(reinterpret_cast<const std::uint32_t*>(sourceRow), bytesPerRow / sizeof(std::uint32_t), reinterpret_cast<std::uint32_t*>(destinationRow));
+      std::copy_n(
+        reinterpret_cast<const std::uint32_t*>(sourceRow),
+        bytesPerRow / sizeof(std::uint32_t),
+        reinterpret_cast<std::uint32_t*>(destinationRow)
+      );
       destinationRow += pitchBytes;
       sourceRow += bytesPerRow;
     }
@@ -2982,12 +3148,15 @@ namespace moho
   }
 
   /**
-   * Address: 0x008A4DA0 (FUN_008A4DA0, ?ClearTexture@CWldTerrainRes@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@@Z)
+   * Address: 0x008A4DA0 (FUN_008A4DA0,
+   * ?ClearTexture@CWldTerrainRes@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@@Z)
    *
    * What it does:
    * Clears one lockable texture-sheet payload to zero over every mapped row.
    */
-  void CWldTerrainRes::ClearTexture(boost::shared_ptr<CD3DDynamicTextureSheet> textureSheet)
+  void CWldTerrainRes::ClearTexture(
+    boost::shared_ptr<CD3DDynamicTextureSheet> textureSheet
+  )
   {
     CD3DDynamicTextureSheet* const sheet = textureSheet.get();
     if (sheet == nullptr) {
@@ -3014,7 +3183,8 @@ namespace moho
   }
 
   /**
-   * Address: 0x008A4B90 (FUN_008A4B90, ?UpdateTextureChannel@CWldTerrainRes@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@HHHHIIPBE@Z)
+   * Address: 0x008A4B90 (FUN_008A4B90,
+   * ?UpdateTextureChannel@CWldTerrainRes@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@HHHHIIPBE@Z)
    *
    * What it does:
    * Updates one channel lane in a locked terrain RGBA texture from
@@ -3072,7 +3242,8 @@ namespace moho
   }
 
   /**
-   * Address: 0x008A4A60 (FUN_008A4A60, ?GetTextureChannel@CWldTerrainRes@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@IIPAE@Z)
+   * Address: 0x008A4A60 (FUN_008A4A60,
+   * ?GetTextureChannel@CWldTerrainRes@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@IIPAE@Z)
    *
    * What it does:
    * Locks one packed RGBA texture, extracts one caller-selected channel lane
@@ -3145,19 +3316,12 @@ namespace moho
 
     const std::int32_t channel = static_cast<std::int32_t>(static_cast<std::uint32_t>(stratumIndex) & 3u);
 
-    const boost::shared_ptr<CD3DDynamicTextureSheet> targetTexture =
-      ((stratumIndex / 4) != 0) ? ShareAsDynamicSheet(mStrata.mStratumMask1)
-                                : ShareAsDynamicSheet(mStrata.mStratumMask0);
+    const boost::shared_ptr<CD3DDynamicTextureSheet> targetTexture = ((stratumIndex / 4) != 0)
+      ? ShareAsDynamicSheet(mStrata.mStratumMask1)
+      : ShareAsDynamicSheet(mStrata.mStratumMask0);
 
     UpdateTextureChannel(
-      rowStart,
-      columnEnd,
-      targetTexture,
-      columnStart,
-      rowEnd,
-      kChannelMask[channel],
-      kChannelShift[channel],
-      sourceMask
+      rowStart, columnEnd, targetTexture, columnStart, rowEnd, kChannelMask[channel], kChannelShift[channel], sourceMask
     );
   }
 
@@ -3166,7 +3330,10 @@ namespace moho
    *
    * What it does: see the header -- the whole-mask form of the overload above.
    */
-  void CWldTerrainRes::UpdateStratumMask(const std::int32_t stratumIndex, const std::uint8_t* const sourceMask)
+  void CWldTerrainRes::UpdateStratumMask(
+    const std::int32_t stratumIndex,
+    const std::uint8_t* const sourceMask
+  )
   {
     UpdateStratumMask(stratumIndex, sourceMask, 0, 0, mStrata.mStratumMaskWidth, mStrata.mStratumMaskHeight);
   }
@@ -3178,7 +3345,10 @@ namespace moho
    * Selects one stratum-mask texture/channel lane and forwards unpacking to
    * `GetTextureChannel`.
    */
-  void CWldTerrainRes::GetStratumMask(const std::int32_t stratumIndex, std::uint8_t* const outMask)
+  void CWldTerrainRes::GetStratumMask(
+    const std::int32_t stratumIndex,
+    std::uint8_t* const outMask
+  )
   {
     // The channel itself (0x00E4BB68), not UpdateStratumMask's keep-the-others masks (0x00E4BB48): with
     // those every read came back 0.
@@ -3191,13 +3361,13 @@ namespace moho
     static constexpr std::uint32_t kChannelShift[4] = {16u, 8u, 0u, 24u};
 
     const std::int32_t channel = static_cast<std::int32_t>(static_cast<std::uint32_t>(stratumIndex) & 3u);
-    const boost::shared_ptr<CD3DDynamicTextureSheet> sourceTexture =
-      ((stratumIndex / 4) != 0) ? ShareAsDynamicSheet(mStrata.mStratumMask1)
-                                : ShareAsDynamicSheet(mStrata.mStratumMask0);
+    const boost::shared_ptr<CD3DDynamicTextureSheet> sourceTexture = ((stratumIndex / 4) != 0)
+      ? ShareAsDynamicSheet(mStrata.mStratumMask1)
+      : ShareAsDynamicSheet(mStrata.mStratumMask0);
 
-    // EDITOR: kChannelMask keeps the OTHER lanes (UpdateTextureChannel ANDs the pixel with it); GetTextureChannel isolates its lane with
-    // `pixel & mask`, so it needs the complement. With the same table the read returned the other three lanes shifted (zeros for a
-    // painted mask), which only showed once the editor read a mask back.
+    // EDITOR: kChannelMask keeps the OTHER lanes (UpdateTextureChannel ANDs the pixel with it); GetTextureChannel
+    // isolates its lane with `pixel & mask`, so it needs the complement. With the same table the read returned the
+    // other three lanes shifted (zeros for a painted mask), which only showed once the editor read a mask back.
     GetTextureChannel(sourceTexture, ~kChannelMask[channel], kChannelShift[channel], outMask);
   }
 
@@ -3208,7 +3378,9 @@ namespace moho
    * Builds shader-ready UV scale/offset lanes and texture ownership for one
    * normal-map tile index.
    */
-  SNormalMapInfo CWldTerrainRes::GetNormalMapInfo(const std::int32_t index) const
+  SNormalMapInfo CWldTerrainRes::GetNormalMapInfo(
+    const std::int32_t index
+  ) const
   {
     SNormalMapInfo outInfo{};
 
@@ -3299,7 +3471,9 @@ namespace moho
    * the three water byte planes, the terrain-type grid, the sky dome and the
    * cartographic decals. Always reports success.
    */
-  bool CWldTerrainRes::Save(gpg::BinaryWriter& writer)
+  bool CWldTerrainRes::Save(
+    gpg::BinaryWriter& writer
+  )
   {
     STIMap& map = *mMap;
     const CHeightField& heightField = *map.mHeightField.get();
@@ -3312,8 +3486,7 @@ namespace moho
     writer.Write(kTerrainHeightSampleScale);
     writer.Write(
       reinterpret_cast<const char*>(heightField.data),
-      static_cast<std::size_t>(heightField.width) * static_cast<std::size_t>(heightField.height)
-        * sizeof(std::uint16_t)
+      static_cast<std::size_t>(heightField.width) * static_cast<std::size_t>(heightField.height) * sizeof(std::uint16_t)
     );
 
     // 0x008A31FA: latch the shader's composite capability before persisting it.
@@ -3400,9 +3573,10 @@ namespace moho
     // 0x008A3D49: the water map is stored as a one-element sheet array.
     constexpr std::int32_t kWaterMapSheetCount = 1;
     writer.Write(kWaterMapSheetCount);
-    // EDITOR: a map with water bodies (ScenarioInfo.WaterBodies, put on the map by the editor) keeps the sea's water map in its file, as a map without bodies has it:
-    // the bodies are in the scenario and the game fills them again when the map loads. The sheet holds the bodies' depth and shore while they are on the map, so they
-    // are taken off for the write and put back after it.
+    // EDITOR: a map with water bodies (ScenarioInfo.WaterBodies, put on the map by the editor) keeps the sea's water
+    // map in its file, as a map without bodies has it: the bodies are in the scenario and the game fills them again
+    // when the map loads. The sheet holds the bodies' depth and shore while they are on the map, so they are taken off
+    // for the write and put back after it.
     std::unique_ptr<CWaterBodies> onTheMap;
     if (map.HasWaterBodies() && mEditWordBuffer.begin != nullptr) {
       onTheMap = std::move(map.mWaterBodies);
@@ -3443,7 +3617,9 @@ namespace moho
    * Serializes stratum-layer texture path/size lanes in save-order, then
    * delegates decal-manager persistence.
    */
-  void CWldTerrainRes::SaveTexturing(gpg::BinaryWriter& writer)
+  void CWldTerrainRes::SaveTexturing(
+    gpg::BinaryWriter& writer
+  )
   {
     const StratumMaterial& strata = mStrata;
 
@@ -3484,7 +3660,10 @@ namespace moho
    * (outLayer.mPath), then reads a 4-byte value straight into the layer's
    * float size (outLayer.mSize @ +0x34).
    */
-  void CWldTerrainRes::LoadLayer(CStratumMaterial& outLayer, gpg::BinaryReader& reader)
+  void CWldTerrainRes::LoadLayer(
+    CStratumMaterial& outLayer,
+    gpg::BinaryReader& reader
+  )
   {
     // Binary reads the string into a temporary, then assign()s the full range
     // into outLayer.mPath; the temporary is destroyed inline. RAII on `scratch`
@@ -3512,7 +3691,10 @@ namespace moho
    * layers (albedo-first / normal-second). For legacy versions (< 54) it reads
    * the historical flat layout, then forwards to the decal manager's Load.
    */
-  void CWldTerrainRes::LoadTexturing(gpg::BinaryReader& reader, const std::uint32_t version)
+  void CWldTerrainRes::LoadTexturing(
+    gpg::BinaryReader& reader,
+    const std::uint32_t version
+  )
   {
     StratumMaterial& strata = mStrata;
 
@@ -3635,8 +3817,7 @@ namespace moho
     // the water-map block's D3D_GetDevice() static singleton (asm 0x8A222A reads
     // the entry-bound resources lane, distinct from the 0x8A282C static guard).
     CD3DDevice* const entryDevice = D3D_GetDevice();
-    ID3DDeviceResources* const maskResources =
-      entryDevice != nullptr ? entryDevice->GetResources() : nullptr;
+    ID3DDeviceResources* const maskResources = entryDevice != nullptr ? entryDevice->GetResources() : nullptr;
 
     // Header: version gate, then width/height/heightScale.
     std::uint32_t version = 0;
@@ -3665,10 +3846,7 @@ namespace moho
 
     // Heightfield samples: width*height uint16 values read straight into data.
     CHeightField* const field = mMap->mHeightField.get();
-    reader.Read(
-      reinterpret_cast<char*>(field->data),
-      static_cast<std::size_t>(2 * field->width * field->height)
-    );
+    reader.Read(reinterpret_cast<char*>(field->data), static_cast<std::size_t>(2 * field->width * field->height));
 
     // Fresh decal manager (destroy the previous through its virtual dtor).
     {
@@ -3702,10 +3880,8 @@ namespace moho
     // Debug dirty-terrain bitmap sized to half resolution.
     {
       gpg::BitArray2D* const oldDirty = mDebugDirtyTerrain;
-      mDebugDirtyTerrain = new gpg::BitArray2D(
-        static_cast<std::int32_t>(mapWidth) / 2,
-        static_cast<std::int32_t>(mapHeight) / 2
-      );
+      mDebugDirtyTerrain =
+        new gpg::BitArray2D(static_cast<std::int32_t>(mapWidth) / 2, static_cast<std::int32_t>(mapHeight) / 2);
       if (oldDirty != nullptr) {
         oldDirty->~BitArray2D();
         ::operator delete(oldDirty);
@@ -3782,8 +3958,7 @@ namespace moho
     // Terrain-type grid: raw read into the map terrain-type storage.
     {
       STIMap* const map = mMap;
-      const std::size_t terrainTypeBytes =
-        static_cast<std::size_t>(map->mTerrainType.width * map->mTerrainType.height);
+      const std::size_t terrainTypeBytes = static_cast<std::size_t>(map->mTerrainType.width * map->mTerrainType.height);
       reader.Read(reinterpret_cast<char*>(map->mTerrainType.data), terrainTypeBytes);
     }
 
@@ -3809,7 +3984,10 @@ namespace moho
 
   // Part of Load (0x008A1700).
   // Environment lookups: single <default> pair before 0x37, else counted loop.
-  void CWldTerrainRes::LoadEnvironmentLookups(gpg::BinaryReader& reader, const std::uint32_t version)
+  void CWldTerrainRes::LoadEnvironmentLookups(
+    gpg::BinaryReader& reader,
+    const std::uint32_t version
+  )
   {
     if (version < 0x37u) {
       const fa::string defaultKey("<default>");
@@ -3831,7 +4009,9 @@ namespace moho
 
   // Part of Load (0x008A1700).
   // 24 streamed lighting/sun/ambience/color/shadow/specular/bloom/fog floats.
-  void CWldTerrainRes::LoadLightingAndFog(gpg::BinaryReader& reader)
+  void CWldTerrainRes::LoadLightingAndFog(
+    gpg::BinaryReader& reader
+  )
   {
     reader.ReadExact(mLightingMultiplier);
     reader.ReadExact(mSunDirection.x);
@@ -3860,7 +4040,10 @@ namespace moho
 
   // Part of Load (0x008A1700).
   // Topographic samples + hypsometric palette + imager offset.
-  void CWldTerrainRes::LoadMapPalette(gpg::BinaryReader& reader, const std::uint32_t version)
+  void CWldTerrainRes::LoadMapPalette(
+    gpg::BinaryReader& reader,
+    const std::uint32_t version
+  )
   {
     if (version < 0x38u) {
       mTopographicSamples = 20;
@@ -3934,7 +4117,10 @@ namespace moho
   // Part of Load (0x008A1700).
   // Water-map utility sheets, indexed `_utilityc%d.dds`. Index 0 becomes the
   // live water-map texture (resolved through the D3D_GetDevice() singleton).
-  void CWldTerrainRes::LoadWaterMapSheets(gpg::BinaryReader& reader, CBackgroundTaskControl& loadControl)
+  void CWldTerrainRes::LoadWaterMapSheets(
+    gpg::BinaryReader& reader,
+    CBackgroundTaskControl& loadControl
+  )
   {
     std::int32_t waterMapCount = 0;
     reader.ReadExact(waterMapCount);
@@ -3957,7 +4143,10 @@ namespace moho
 
   // Part of Load (0x008A1700).
   // Skydome: loaded directly from 0x3A onward, else derived from world bounds.
-  void CWldTerrainRes::LoadOrDeriveSkyDome(gpg::BinaryReader& reader, const std::uint32_t version)
+  void CWldTerrainRes::LoadOrDeriveSkyDome(
+    gpg::BinaryReader& reader,
+    const std::uint32_t version
+  )
   {
     if (version >= 0x3Au) {
       mSkyDome.Load(version, reader);
@@ -3969,8 +4158,7 @@ namespace moho
       const float halfX = bounds.Max.x - centerX;
       const float halfY = bounds.Min.y - centerY;
       // 0x008A2D4C: the same widened-float 72 degrees from 0x00E4FA18.
-      const float domeRadius =
-        static_cast<float>(std::sqrt(halfX * halfX + halfY * halfY) / std::cos(0x1.41b2f6p+0));
+      const float domeRadius = static_cast<float>(std::sqrt(halfX * halfX + halfY * halfY) / std::cos(0x1.41b2f6p+0));
       const float sunElevation = mMap->mWaterEnabled ? mMap->mWaterElevation : bounds.Min.y;
 
       const Wm3::Vector3f domeOrigin{centerX, centerY, centerZ};
@@ -3982,7 +4170,9 @@ namespace moho
    * Editor addition (not part of the recovered binary): the same container `MapSave` writes, to an explicit
    * disk path instead of a path resolved through the virtual file system.
    */
-  bool CWldMap::MapSaveToDiskPath(const char* const diskPath)
+  bool CWldMap::MapSaveToDiskPath(
+    const char* const diskPath
+  )
   {
     if (mMapPreviewChunk == nullptr || mTerrainRes == nullptr || mProps == nullptr || diskPath == nullptr) {
       return false;
@@ -4034,10 +4224,11 @@ namespace moho
     const std::int32_t maskTileX = (field->width - 1) >> 1;
     const std::int32_t maskTileY = (field->height - 1) >> 1;
 
-    // FAF addition: a stratum mask keeps the resolution it was saved with (StratumMaskSize.h has the rules). The shipped code copied both masks
-    // into sheets of half the map's size, which resampled every mask a mapper made at a higher resolution down to that preset (and the copy of
-    // a mask of another size is a resample on every API). A mask below half the map's size is still raised to it, as before; above it the sheet
-    // takes the mask's own size, but at most one texel per world unit (the map's size in cells).
+    // FAF addition: a stratum mask keeps the resolution it was saved with (StratumMaskSize.h has the rules). The
+    // shipped code copied both masks into sheets of half the map's size, which resampled every mask a mapper made at a
+    // higher resolution down to that preset (and the copy of a mask of another size is a resample on every API). A mask
+    // below half the map's size is still raised to it, as before; above it the sheet takes the mask's own size, but at
+    // most one texel per world unit (the map's size in cells).
     const std::int32_t mapCellsX = field->width - 1;
     const std::int32_t mapCellsY = field->height - 1;
     const auto savedExtent = [](CD3DDynamicTextureSheet* const loaded, std::int32_t& width, std::int32_t& height) {
@@ -4057,12 +4248,20 @@ namespace moho
     savedExtent(AsDynamicSheet(mStrata.mStratumMask0), saved0Width, saved0Height);
     savedExtent(AsDynamicSheet(mStrata.mStratumMask1), saved1Width, saved1Height);
 
-    // FAF_STRATUM_MASK_TEST=1 fills the loaded masks with a fine test pattern before they are copied (docs/RENDERER_BACKENDS.md): the resolution
-    // the copy keeps is then visible on any map.
-    if (const char* const testSwitch = std::getenv("FAF_STRATUM_MASK_TEST"); testSwitch != nullptr && testSwitch[0] != '\0' && testSwitch[0] != '0') {
-      // The loaded sheets are not lockable: the pattern goes into a lockable sheet of the same size that takes the loaded one's place as the
-      // source of the copy below.
-      const auto substitute = [resources](boost::SharedPtrRaw<RD3DTextureResource>& mask, const std::int32_t width, const std::int32_t height, const int variant) {
+    // FAF_STRATUM_MASK_TEST=1 fills the loaded masks with a fine test pattern before they are copied
+    // (docs/RENDERER_BACKENDS.md): the resolution the copy keeps is then visible on any map.
+    if (
+      const char* const testSwitch = std::getenv("FAF_STRATUM_MASK_TEST");
+      testSwitch != nullptr && testSwitch[0] != '\0' && testSwitch[0] != '0'
+    ) {
+      // The loaded sheets are not lockable: the pattern goes into a lockable sheet of the same size that takes the
+      // loaded one's place as the source of the copy below.
+      const auto substitute = [resources](
+                                boost::SharedPtrRaw<RD3DTextureResource>& mask,
+                                const std::int32_t width,
+                                const std::int32_t height,
+                                const int variant
+                              ) {
         if (width <= 0 || height <= 0) {
           return;
         }
@@ -4082,8 +4281,8 @@ namespace moho
     std::int32_t mask0Height = maskTileY;
     std::int32_t mask1Width = maskTileX;
     std::int32_t mask1Height = maskTileY;
-    // FAF_STRATUM_MASK_SIZE=half restores the shipped behaviour (both masks resampled to half the map's size), a number N forces N x N: for a
-    // before/after comparison and to see that the size drives the picture.
+    // FAF_STRATUM_MASK_SIZE=half restores the shipped behaviour (both masks resampled to half the map's size), a number
+    // N forces N x N: for a before/after comparison and to see that the size drives the picture.
     const char* const sizeSwitch = std::getenv("FAF_STRATUM_MASK_SIZE");
     if (sizeSwitch == nullptr || sizeSwitch[0] == '\0') {
       mask0Width = StratumMaskExtent(saved0Width, maskTileX, mapCellsX);
@@ -4094,9 +4293,20 @@ namespace moho
       mask0Width = mask0Height = mask1Width = mask1Height = std::min(forced, kStratumMaskCeiling);
     }
     gpg::Logf(
-      "Terrain: stratum masks %dx%d and %dx%d (saved in the map as %dx%d and %dx%d; half the map is %dx%d, the most %dx%d)", mask0Width, mask0Height,
-      mask1Width, mask1Height, saved0Width, saved0Height, saved1Width, saved1Height, maskTileX, maskTileY,
-      StratumMaskExtent(kStratumMaskCeiling, maskTileX, mapCellsX), StratumMaskExtent(kStratumMaskCeiling, maskTileY, mapCellsY)
+      "Terrain: stratum masks %dx%d and %dx%d (saved in the map as %dx%d and %dx%d; half the map is %dx%d, the most "
+      "%dx%d)",
+      mask0Width,
+      mask0Height,
+      mask1Width,
+      mask1Height,
+      saved0Width,
+      saved0Height,
+      saved1Width,
+      saved1Height,
+      maskTileX,
+      maskTileY,
+      StratumMaskExtent(kStratumMaskCeiling, maskTileX, mapCellsX),
+      StratumMaskExtent(kStratumMaskCeiling, maskTileY, mapCellsY)
     );
 
     mStrata.mStratumMaskWidth = static_cast<std::uint32_t>(mask0Width);
@@ -4158,7 +4368,10 @@ namespace
   // Engine addition (dedicated-server plan WPL.4): RWldMapPreviewChunk::Load's preview
   // texture (moho/sim/CWldMap.cpp, 0x008904C0), the device-resources calls it made
   // before the move.
-  boost::shared_ptr<moho::ID3DTextureSheet> LoadMapPreviewTexture(char* const payload, const std::size_t payloadSize)
+  boost::shared_ptr<moho::ID3DTextureSheet> LoadMapPreviewTexture(
+    char* const payload,
+    const std::size_t payloadSize
+  )
   {
     constexpr const char* kPreviewSheetLocation = "_mappreview.dds";
     constexpr const char* kFallbackPreviewTexture = "/textures/engine/b_fails_to_load.dds";
@@ -4193,7 +4406,9 @@ namespace moho
    * preview chunk, terrain resource and prop set into the same writer. The
    * stream is closed for both directions before it is released.
    */
-  bool CWldMap::MapSave(const gpg::StrArg mapName)
+  bool CWldMap::MapSave(
+    const gpg::StrArg mapName
+  )
   {
     // 0x00891053-0x0089106D: every owned resource must exist.
     if (mMapPreviewChunk == nullptr || mTerrainRes == nullptr || mProps == nullptr) {

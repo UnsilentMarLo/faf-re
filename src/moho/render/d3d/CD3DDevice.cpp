@@ -80,12 +80,17 @@ namespace
   float sWeightedFrameRate = 0.0f;
   std::int32_t sCurGameTick = 0;
 
-  [[nodiscard]] std::int32_t FloatToBits(const float value) noexcept
+  [[nodiscard]] std::int32_t FloatToBits(
+    const float value
+  ) noexcept
   {
     return static_cast<std::int32_t>(std::bit_cast<std::uint32_t>(value));
   }
 
-  void PublishFloatStat(moho::StatItem* item, const float value)
+  void PublishFloatStat(
+    moho::StatItem* item,
+    const float value
+  )
   {
     if (item == nullptr) {
       return;
@@ -94,7 +99,10 @@ namespace
     item->StorePrimaryBits(static_cast<std::int32_t>(FloatToBits(value)));
   }
 
-  moho::StatItem* EnsureEngineIntStat(moho::StatItem*& slot, const char* const statName)
+  moho::StatItem* EnsureEngineIntStat(
+    moho::StatItem*& slot,
+    const char* const statName
+  )
   {
     if (slot == nullptr) {
       if (moho::EngineStats* const stats = moho::GetEngineStats(); stats != nullptr) {
@@ -107,7 +115,9 @@ namespace
     return slot;
   }
 
-  int ResetStatCounter(moho::StatItem* const item)
+  int ResetStatCounter(
+    moho::StatItem* const item
+  )
   {
     if (item == nullptr) {
       return 0;
@@ -116,7 +126,10 @@ namespace
     return static_cast<int>(item->ExchangePrimaryBits(0));
   }
 
-  int AddToStatCounter(moho::StatItem* const item, const unsigned int amount)
+  int AddToStatCounter(
+    moho::StatItem* const item,
+    const unsigned int amount
+  )
   {
     if (item == nullptr) {
       return 0;
@@ -126,7 +139,10 @@ namespace
   }
 
   template <class T>
-  boost::shared_ptr<T>& CopyRetainedHandle(const boost::shared_ptr<T>& source, boost::shared_ptr<T>& out)
+  boost::shared_ptr<T>& CopyRetainedHandle(
+    const boost::shared_ptr<T>& source,
+    boost::shared_ptr<T>& out
+  )
   {
     out = source;
     return out;
@@ -141,7 +157,10 @@ namespace
    * - drops retained surface/buffer handles from tracked sheet/target lists
    * - optionally destroys all compiled effects during full teardown.
    */
-  void ResetResourcesForContextTransition(moho::CD3DDeviceResources& resources, const bool destroyEffects)
+  void ResetResourcesForContextTransition(
+    moho::CD3DDeviceResources& resources,
+    const bool destroyEffects
+  )
   {
     for (moho::CD3DEffect* const effect : resources.mEffects) {
       if (effect != nullptr && effect->mEffect) {
@@ -178,9 +197,9 @@ namespace
       depthStencil->mSurface.reset();
     }
 
-    for (auto* dynamicSheet : resources.mTextureSheet.mLink.owners_member<
-                               moho::CD3DDynamicTextureSheet,
-                               &moho::CD3DDynamicTextureSheet::mLink>()) {
+    for (auto* dynamicSheet :
+         resources.mTextureSheet.mLink
+           .owners_member<moho::CD3DDynamicTextureSheet, &moho::CD3DDynamicTextureSheet::mLink>()) {
       dynamicSheet->mTexture.reset();
     }
 
@@ -222,14 +241,16 @@ namespace
   double sPresentSeconds = 0.0;
 
   // EDITOR: device loss and reset bookkeeping (CD3DDevice::Paint / InitContext).
-  bool sDeviceNeedsRetry = false;   // a Reset failed: Paint polls the device and tries again
+  bool sDeviceNeedsRetry = false; // a Reset failed: Paint polls the device and tries again
   bool sDeviceWasLost = false;
   std::chrono::steady_clock::time_point sDeviceLostSince;
 
   class DrawStatisticsLog
   {
   public:
-    void AddFrame(const gpg::gal::DrawStatistics& frame)
+    void AddFrame(
+      const gpg::gal::DrawStatistics& frame
+    )
     {
       if (mInterval < 0) {
         mInterval = ReadInterval();
@@ -253,17 +274,24 @@ namespace
 
       const double frames = static_cast<double>(mFrames);
       gpg::Logf(
-        "Draw stats over %d frames: %.1f draw calls, %.0f primitives, %.0f vertices, %.1f state changes, %.1f KB uploaded per frame",
-        mFrames, static_cast<double>(mDrawCalls) / frames, static_cast<double>(mPrimitives) / frames,
-        static_cast<double>(mVertices) / frames, static_cast<double>(mStateChanges) / frames,
+        "Draw stats over %d frames: %.1f draw calls, %.0f primitives, %.0f vertices, %.1f state changes, %.1f KB "
+        "uploaded per frame",
+        mFrames,
+        static_cast<double>(mDrawCalls) / frames,
+        static_cast<double>(mPrimitives) / frames,
+        static_cast<double>(mVertices) / frames,
+        static_cast<double>(mStateChanges) / frames,
         static_cast<double>(mUploadBytes) / frames / 1024.0
       );
       // Wall time per frame, and the part not spent waiting in Present
       // (vsync), which is what a renderer change moves.
       const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - mStart).count();
       gpg::Logf(
-        "Frame time over %d frames: %.2f ms/frame (%.1f fps), %.2f ms/frame outside Present", mFrames,
-        1000.0 * seconds / frames, frames / seconds, 1000.0 * (seconds - sPresentSeconds) / frames
+        "Frame time over %d frames: %.2f ms/frame (%.1f fps), %.2f ms/frame outside Present",
+        mFrames,
+        1000.0 * seconds / frames,
+        frames / seconds,
+        1000.0 * (seconds - sPresentSeconds) / frames
       );
       LogEntityCounts();
       mFrames = 0;
@@ -295,11 +323,18 @@ namespace
       gpg::Logf(
         "Entity counts: ids %d (unit %d, projectile %d, prop %d, blip %d, shield %d, other %d); "
         "live Entity %d, Unit %d, Projectile %d, Prop %d, ReconBlip %d",
-        value("EntityCount"), value("EntityCount_Unit"), value("EntityCount_Projectile"),
-        value("EntityCount_Prop"), value("EntityCount_Blip"), value("EntityCount_Shield"),
-        value("EntityCount_Other"), value("Instance Counts_class moho::Entity"),
-        value("Instance Counts_class moho::Unit"), value("Instance Counts_class moho::Projectile"),
-        value("Instance Counts_class moho::Prop"), value("Instance Counts_class moho::ReconBlip")
+        value("EntityCount"),
+        value("EntityCount_Unit"),
+        value("EntityCount_Projectile"),
+        value("EntityCount_Prop"),
+        value("EntityCount_Blip"),
+        value("EntityCount_Shield"),
+        value("EntityCount_Other"),
+        value("Instance Counts_class moho::Entity"),
+        value("Instance Counts_class moho::Unit"),
+        value("Instance Counts_class moho::Projectile"),
+        value("Instance Counts_class moho::Prop"),
+        value("Instance Counts_class moho::ReconBlip")
       );
     }
 
@@ -396,13 +431,16 @@ namespace moho
    * lost again before `IDirect3DDevice9::Reset` - answers false instead of
    * propagating.
    */
-  bool CD3DDevice::InitContext(gpg::gal::DeviceContext* const context)
+  bool CD3DDevice::InitContext(
+    gpg::gal::DeviceContext* const context
+  )
   {
     if (context == nullptr) {
       return false;
     }
 
-    // EDITOR: what a device reset costs is logged (hybrid laptop GPUs: the log and the Display report show where the time goes).
+    // EDITOR: what a device reset costs is logged (hybrid laptop GPUs: the log and the Display report show where the
+    // time goes).
     using ResetClock = std::chrono::steady_clock;
     const auto resetT0 = ResetClock::now();
     auto resetT1 = resetT0;
@@ -417,8 +455,7 @@ namespace moho
 
       gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
       const int headCount = context->GetHeadCount();
-      const std::size_t lockHeadCount =
-        std::min(static_cast<std::size_t>(headCount), std::size(mRenderTargetLocks));
+      const std::size_t lockHeadCount = std::min(static_cast<std::size_t>(headCount), std::size(mRenderTargetLocks));
 
       // false = rebind, not shutdown: keep the batchers, only Reset the mesh
       // renderer. Everything else the viewport holds is released either way,
@@ -429,8 +466,15 @@ namespace moho
       }
       if (headCount > 0) {
         const gpg::gal::Head& head0 = context->GetHead(0);
-        gpg::Logf("EDITOR device reset: begin, %ux%u, anti-aliasing mode %u (type %u, quality %u), vsync %d", head0.mWidth, head0.mHeight,
-                  (head0.antialiasingHigh << 5u) | head0.antialiasingLow, head0.antialiasingHigh, head0.antialiasingLow, context->mVSync ? 1 : 0);
+        gpg::Logf(
+          "EDITOR device reset: begin, %ux%u, anti-aliasing mode %u (type %u, quality %u), vsync %d",
+          head0.mWidth,
+          head0.mHeight,
+          (head0.antialiasingHigh << 5u) | head0.antialiasingLow,
+          head0.antialiasingHigh,
+          head0.antialiasingLow,
+          context->mVSync ? 1 : 0
+        );
       }
 
       const moho::SD3DDeviceEvent deviceExitEvent{1u, false, {0u, 0u, 0u}};
@@ -448,7 +492,9 @@ namespace moho
         device->Reset(context);
       }
       resetT2 = ResetClock::now();
-      gpg::Logf("EDITOR device reset: the device reset took %.1f ms, recreating resources", elapsedMs(resetT1, resetT2));
+      gpg::Logf(
+        "EDITOR device reset: the device reset took %.1f ms, recreating resources", elapsedMs(resetT1, resetT2)
+      );
 
       for (std::size_t headIndex = 0U; headIndex < lockHeadCount; ++headIndex) {
         if (device == nullptr) {
@@ -485,13 +531,24 @@ namespace moho
       mInitialized = 1;
       sDeviceNeedsRetry = false;
       gpg::Logf(
-        "EDITOR device reset: %dx%d, release %.1f ms, device reset %.1f ms, resources %.1f ms, viewport init and UI relayout %.1f ms, total %.1f ms",
-        headCount > 0 ? context->GetHead(0).mWidth : 0, headCount > 0 ? context->GetHead(0).mHeight : 0, elapsedMs(resetT0, resetT1), elapsedMs(resetT1, resetT2),
-        elapsedMs(resetT2, resetT3), elapsedMs(resetT3, ResetClock::now()), elapsedMs(resetT0, ResetClock::now()));
+        "EDITOR device reset: %dx%d, release %.1f ms, device reset %.1f ms, resources %.1f ms, viewport init and UI "
+        "relayout %.1f ms, total %.1f ms",
+        headCount > 0 ? context->GetHead(0).mWidth : 0,
+        headCount > 0 ? context->GetHead(0).mHeight : 0,
+        elapsedMs(resetT0, resetT1),
+        elapsedMs(resetT1, resetT2),
+        elapsedMs(resetT2, resetT3),
+        elapsedMs(resetT3, ResetClock::now()),
+        elapsedMs(resetT0, ResetClock::now())
+      );
     } catch (const gpg::gal::Error& error) {
       gpg::Warnf("%s(%d) %s", error.GetFile(), error.GetLine(), error.what());
-      gpg::Warnf("EDITOR device reset failed after %.1f ms (the editor retries while the device is lost)", elapsedMs(resetT0, ResetClock::now()));
-      // The device was lost again before Reset could finish; Paint polls TestCooperativeLevel and tries again (the original waited for the next window message).
+      gpg::Warnf(
+        "EDITOR device reset failed after %.1f ms (the editor retries while the device is lost)",
+        elapsedMs(resetT0, ResetClock::now())
+      );
+      // The device was lost again before Reset could finish; Paint polls TestCooperativeLevel and tries again (the
+      // original waited for the next window message).
       sDeviceNeedsRetry = wasInitialized;
     }
     return mInitialized != 0;
@@ -531,8 +588,7 @@ namespace moho
         }
       }
 
-      const std::size_t lockHeadCount =
-        std::min(static_cast<std::size_t>(headCount), std::size(mRenderTargetLocks));
+      const std::size_t lockHeadCount = std::min(static_cast<std::size_t>(headCount), std::size(mRenderTargetLocks));
       for (std::size_t headIndex = 0U; headIndex < lockHeadCount; ++headIndex) {
         ReleaseHeadWriterLocks(headIndex);
       }
@@ -559,16 +615,22 @@ namespace moho
    * wrappers, resetting their retained surfaces first (surface px nulled at
    * 0x0042E28D, then the handle released).
    */
-  void CD3DDevice::ReleaseHeadWriterLocks(const std::size_t headIndex)
+  void CD3DDevice::ReleaseHeadWriterLocks(
+    const std::size_t headIndex
+  )
   {
-    if (auto* const renderTarget = static_cast<CD3DRenderTarget*>(mRenderTargetLocks[headIndex].get());
-        renderTarget != nullptr) {
+    if (
+      auto* const renderTarget = static_cast<CD3DRenderTarget*>(mRenderTargetLocks[headIndex].get());
+      renderTarget != nullptr
+    ) {
       renderTarget->mSurface.reset();
     }
     mRenderTargetLocks[headIndex].reset();
 
-    if (auto* const depthStencil = static_cast<CD3DDepthStencil*>(mDepthStencilLocks[headIndex].get());
-        depthStencil != nullptr) {
+    if (
+      auto* const depthStencil = static_cast<CD3DDepthStencil*>(mDepthStencilLocks[headIndex].get());
+      depthStencil != nullptr
+    ) {
       depthStencil->mSurface.reset();
     }
     mDepthStencilLocks[headIndex].reset();
@@ -596,7 +658,9 @@ namespace moho
    * from backend output contexts, refreshes fidelity-support lanes, initializes
    * device resources, and emits one device-init event.
    */
-  void CD3DDevice::SetRenViewport(WRenViewport* const viewport)
+  void CD3DDevice::SetRenViewport(
+    WRenViewport* const viewport
+  )
   {
     mViewport = viewport;
 
@@ -624,8 +688,7 @@ namespace moho
     if (headCount > 0) {
       for (int headIndex = 0; headIndex < headCount; ++headIndex) {
         const gpg::gal::Head& head = context->GetHead(static_cast<unsigned int>(headIndex));
-        supportsAdvancedShadowFidelity =
-          supportsAdvancedShadowFidelity && head.HasCapability1(kShadowFidelityFormat);
+        supportsAdvancedShadowFidelity = supportsAdvancedShadowFidelity && head.HasCapability1(kShadowFidelityFormat);
         supportsAdvancedFidelity = supportsAdvancedFidelity && head.HasCapability2(kAdvancedFidelityFormat);
       }
     }
@@ -639,13 +702,11 @@ namespace moho
       moho::shadow_FidelitySupported = supportsAdvancedShadowFidelity ? 2 : 1;
     }
 
-    const std::size_t lockHeadCount =
-      std::min(static_cast<std::size_t>(headCount), std::size(mRenderTargetLocks));
+    const std::size_t lockHeadCount = std::min(static_cast<std::size_t>(headCount), std::size(mRenderTargetLocks));
     for (std::size_t headIndex = 0U; headIndex < lockHeadCount; ++headIndex) {
       ReleaseHeadWriterLocks(headIndex);
 
-      const gpg::gal::OutputContext outputContext =
-        *device->GetHeadOutputContext(static_cast<unsigned int>(headIndex));
+      const gpg::gal::OutputContext outputContext = *device->GetHeadOutputContext(static_cast<unsigned int>(headIndex));
 
       mRenderTargetLocks[headIndex].reset(new moho::CD3DRenderTarget(this, outputContext.surface));
       mDepthStencilLocks[headIndex].reset(new moho::CD3DDepthStencil(this, outputContext.depthStencil));
@@ -755,7 +816,9 @@ namespace moho
    * What it does:
    * Returns one head width from the active GAL device context.
    */
-  int CD3DDevice::GetHeadWidth(const unsigned int headIndex)
+  int CD3DDevice::GetHeadWidth(
+    const unsigned int headIndex
+  )
   {
     if (!gpg::gal::Device::IsReady()) {
       return 0;
@@ -774,7 +837,9 @@ namespace moho
    * What it does:
    * Returns one head height from the active GAL device context.
    */
-  int CD3DDevice::GetHeadHeight(const unsigned int headIndex)
+  int CD3DDevice::GetHeadHeight(
+    const unsigned int headIndex
+  )
   {
     if (!gpg::gal::Device::IsReady()) {
       return 0;
@@ -811,7 +876,10 @@ namespace moho
    * What it does:
    * Writes one `(width,height)` pair into caller-provided output vector.
    */
-  Wm3::Vector2i* CD3DDevice::GetSize(Wm3::Vector2i* const outSize, const int headIndex)
+  Wm3::Vector2i* CD3DDevice::GetSize(
+    Wm3::Vector2i* const outSize,
+    const int headIndex
+  )
   {
     const int height = GetHeadHeight(headIndex);
     outSize->x = GetHeadWidth(headIndex);
@@ -827,7 +895,9 @@ namespace moho
    * What it does:
    * Returns one head aspect ratio as `width / height`.
    */
-  double CD3DDevice::GetAspectRatio(const int headIndex)
+  double CD3DDevice::GetAspectRatio(
+    const int headIndex
+  )
   {
     const float width = static_cast<float>(static_cast<unsigned int>(GetHeadWidth(headIndex)));
     return width / static_cast<double>(static_cast<unsigned int>(GetHeadHeight(headIndex)));
@@ -871,7 +941,10 @@ namespace moho
    * Applies one viewport payload onto the active GAL backend.
    */
   void CD3DDevice::SetViewport(
-    Wm3::Vector2i* const pos, Wm3::Vector2i* const size, const float minZ, const float maxZ
+    Wm3::Vector2i* const pos,
+    Wm3::Vector2i* const size,
+    const float minZ,
+    const float maxZ
   )
   {
     gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
@@ -889,7 +962,8 @@ namespace moho
   /**
    * Address: 0x004310D0 (FUN_004310D0, Moho::CD3DDevice::Func9)
    *
-   * boost::shared_ptr<moho::CD3DDynamicTextureSheet> &,moho::ID3DTextureSheet *,boost::detail::sp_counted_base *,int,bool
+   * boost::shared_ptr<moho::CD3DDynamicTextureSheet> &,moho::ID3DTextureSheet *,boost::detail::sp_counted_base
+   * *,int,bool
    *
    * What it does:
    * Creates one dynamic texture sheet from source dimensions (archive or
@@ -921,8 +995,9 @@ namespace moho
         }
       }
 
-      if (gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
-          device != nullptr && outSheet.get() != nullptr) {
+      if (
+        gpg::gal::Device* const device = gpg::gal::Device::GetInstance(); device != nullptr && outSheet.get() != nullptr
+      ) {
         ID3DTextureSheet::TextureHandle destinationTexture{};
         outSheet->GetTexture(destinationTexture);
 
@@ -953,14 +1028,18 @@ namespace moho
    * (FuncInfo 0x00EDDF14) - is swallowed and reported as `false`.
    */
   bool CD3DDevice::SetCursor(
-    const int hotspotX, const int hotspotY, const boost::shared_ptr<ID3DTextureSheet> cursorTexture
+    const int hotspotX,
+    const int hotspotY,
+    const boost::shared_ptr<ID3DTextureSheet> cursorTexture
   )
   {
     bool isSet = false;
     try {
       ID3DTextureSheet::TextureHandle probe{};
-      if (!gpg::gal::Device::IsReady() || cursorTexture.get() == nullptr ||
-          cursorTexture->GetTexture(probe).get() == nullptr) {
+      if (
+        !gpg::gal::Device::IsReady() || cursorTexture.get() == nullptr ||
+        cursorTexture->GetTexture(probe).get() == nullptr
+      ) {
         return false;
       }
 
@@ -971,8 +1050,7 @@ namespace moho
       mCursorContext.texture_ = cursorTexture->GetTexture(cursorPixels);
       device->SetCursor(&mCursorContext);
       isSet = true;
-    } catch (const gpg::gal::Error&) {
-    }
+    } catch (const gpg::gal::Error&) {}
 
     return isSet;
   }
@@ -985,7 +1063,9 @@ namespace moho
    * What it does:
    * Shows or hides cursor through backend dispatch and updates local cursor state.
    */
-  int CD3DDevice::ShowCursor(const bool show)
+  int CD3DDevice::ShowCursor(
+    const bool show
+  )
   {
     int result = gpg::gal::Device::IsReady() ? 1 : 0;
     if (result != 0) {
@@ -1019,8 +1099,10 @@ namespace moho
    * What it does:
    * Copies one retained render-target writer lock from indexed device storage.
    */
-  boost::shared_ptr<ID3DRenderTarget>&
-  CD3DDevice::GetWriterLock1(boost::shared_ptr<ID3DRenderTarget>& outLock, const int index)
+  boost::shared_ptr<ID3DRenderTarget>& CD3DDevice::GetWriterLock1(
+    boost::shared_ptr<ID3DRenderTarget>& outLock,
+    const int index
+  )
   {
     const auto& source = mRenderTargetLocks[static_cast<std::size_t>(index)];
     return CopyRetainedHandle(source, outLock);
@@ -1034,8 +1116,10 @@ namespace moho
    * What it does:
    * Copies one retained depth-stencil writer lock from indexed device storage.
    */
-  boost::shared_ptr<ID3DDepthStencil>&
-  CD3DDevice::GetWriterLock2(boost::shared_ptr<ID3DDepthStencil>& outLock, const int index)
+  boost::shared_ptr<ID3DDepthStencil>& CD3DDevice::GetWriterLock2(
+    boost::shared_ptr<ID3DDepthStencil>& outLock,
+    const int index
+  )
   {
     const auto& source = mDepthStencilLocks[static_cast<std::size_t>(index)];
     return CopyRetainedHandle(source, outLock);
@@ -1049,7 +1133,9 @@ namespace moho
    * What it does:
    * Copies one retained generic shared handle from runtime state lane #1.
    */
-  boost::shared_ptr<void>& CD3DDevice::Func16(boost::shared_ptr<void>& outHandle)
+  boost::shared_ptr<void>& CD3DDevice::Func16(
+    boost::shared_ptr<void>& outHandle
+  )
   {
     return CopyRetainedHandle(mWriterLockContext1, outHandle);
   }
@@ -1062,7 +1148,9 @@ namespace moho
    * What it does:
    * Copies one retained generic shared handle from runtime state lane #2.
    */
-  boost::shared_ptr<void>& CD3DDevice::Func17(boost::shared_ptr<void>& outHandle)
+  boost::shared_ptr<void>& CD3DDevice::Func17(
+    boost::shared_ptr<void>& outHandle
+  )
   {
     return CopyRetainedHandle(mWriterLockContext2, outHandle);
   }
@@ -1073,7 +1161,9 @@ namespace moho
    * What it does:
    * Copies the device's own render-target wrapper handle from runtime state.
    */
-  boost::shared_ptr<CD3DRenderTarget>& CD3DDevice::GetRenderTarget(boost::shared_ptr<CD3DRenderTarget>& outTarget)
+  boost::shared_ptr<CD3DRenderTarget>& CD3DDevice::GetRenderTarget(
+    boost::shared_ptr<CD3DRenderTarget>& outTarget
+  )
   {
     return CopyRetainedHandle(mRenderTarget, outTarget);
   }
@@ -1086,8 +1176,9 @@ namespace moho
    * What it does:
    * Copies one active depth-stencil handle from runtime state.
    */
-  boost::shared_ptr<CD3DDepthStencil>&
-  CD3DDevice::GetDepthStencil(boost::shared_ptr<CD3DDepthStencil>& outDepthStencil)
+  boost::shared_ptr<CD3DDepthStencil>& CD3DDevice::GetDepthStencil(
+    boost::shared_ptr<CD3DDepthStencil>& outDepthStencil
+  )
   {
     return CopyRetainedHandle(mDepthStencil, outDepthStencil);
   }
@@ -1100,7 +1191,13 @@ namespace moho
    * What it does:
    * Acquires indexed writer locks and dispatches `BeginScene1`.
    */
-  void CD3DDevice::BeginScene2(const int index, const bool clear, const int color, const float zValue, const int stencil)
+  void CD3DDevice::BeginScene2(
+    const int index,
+    const bool clear,
+    const int color,
+    const float zValue,
+    const int stencil
+  )
   {
     boost::shared_ptr<ID3DDepthStencil> writerLock2{};
     (void)GetWriterLock2(writerLock2, index);
@@ -1190,7 +1287,11 @@ namespace moho
    * Acquires indexed writer locks and dispatches `SetRenderTarget1`.
    */
   void CD3DDevice::SetRenderTarget2(
-    const int index, const bool clear, const int color, const float zValue, const int stencil
+    const int index,
+    const bool clear,
+    const int color,
+    const float zValue,
+    const int stencil
   )
   {
     boost::shared_ptr<ID3DDepthStencil> writerLock2{};
@@ -1269,7 +1370,9 @@ namespace moho
   void CD3DDevice::PublishDrawStatistics()
   {
     const gpg::gal::DrawStatistics submitted = gpg::gal::TakeDrawStatistics();
-    (void)AddToStatCounter(EnsureEngineIntStat(sEngineStatRenderDrawPrimCalls, "Render_DrawPrimCalls"), submitted.drawCalls);
+    (void)AddToStatCounter(
+      EnsureEngineIntStat(sEngineStatRenderDrawPrimCalls, "Render_DrawPrimCalls"), submitted.drawCalls
+    );
     (void)AddPrimStats(submitted.primitives, false);
     (void)AddVertexStats(submitted.vertices, false);
     sDrawStatisticsLog.AddFrame(submitted);
@@ -1285,11 +1388,17 @@ namespace moho
    * What it does:
    * Adds primitive-count stats, with optional unit-primitive lane update.
    */
-  int CD3DDevice::AddPrimStats(const unsigned int amount, const bool unitPrimitive)
+  int CD3DDevice::AddPrimStats(
+    const unsigned int amount,
+    const bool unitPrimitive
+  )
   {
-    int result = AddToStatCounter(EnsureEngineIntStat(sEngineStatRenderPrimitiveCount, "Render_PrimitiveCount"), amount);
+    int result =
+      AddToStatCounter(EnsureEngineIntStat(sEngineStatRenderPrimitiveCount, "Render_PrimitiveCount"), amount);
     if (unitPrimitive) {
-      (void)AddToStatCounter(EnsureEngineIntStat(sEngineStatRenderUnitPrimitiveCount, "Render_UnitPrimitiveCount"), amount);
+      (void)AddToStatCounter(
+        EnsureEngineIntStat(sEngineStatRenderUnitPrimitiveCount, "Render_UnitPrimitiveCount"), amount
+      );
     }
     return result;
   }
@@ -1302,7 +1411,10 @@ namespace moho
    * What it does:
    * Adds vertex-count stats, with optional unit-vertex lane update.
    */
-  int CD3DDevice::AddVertexStats(const unsigned int amount, const bool unitVertex)
+  int CD3DDevice::AddVertexStats(
+    const unsigned int amount,
+    const bool unitVertex
+  )
   {
     int result = AddToStatCounter(EnsureEngineIntStat(sEngineStatRenderVertexCount, "Render_VertexCount"), amount);
     if (unitVertex) {
@@ -1319,7 +1431,9 @@ namespace moho
    * What it does:
    * Adds one quad-batch count delta to render stats.
    */
-  int CD3DDevice::AddQuadBatchCount(const unsigned int amount)
+  int CD3DDevice::AddQuadBatchCount(
+    const unsigned int amount
+  )
   {
     return AddToStatCounter(EnsureEngineIntStat(sEngineStatRenderQuadBatchCount, "Render_QuadBatchCount"), amount);
   }
@@ -1332,7 +1446,9 @@ namespace moho
    * What it does:
    * Adds one text-batch count delta to render stats.
    */
-  int CD3DDevice::AddTextBatchStats(const unsigned int amount)
+  int CD3DDevice::AddTextBatchStats(
+    const unsigned int amount
+  )
   {
     return AddToStatCounter(EnsureEngineIntStat(sEngineStatRenderTextBatchCount, "Render_TextBatchCount"), amount);
   }
@@ -1346,7 +1462,9 @@ namespace moho
    * Applies one packed anti-aliasing sample option to all heads, then rebuilds
    * device context through `InitContext`.
    */
-  void CD3DDevice::SetAntiAliasingSamples(const int sampleCount)
+  void CD3DDevice::SetAntiAliasingSamples(
+    const int sampleCount
+  )
   {
     gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
     if (device == nullptr) {
@@ -1384,7 +1502,9 @@ namespace moho
    * (states 1..2, handler 0x0042FC77) only each pass's draw.
    */
   bool CD3DDevice::DrawIndexedSheetPrimitive(
-    ID3DVertexSheet* const vertexSheet, ID3DIndexSheet* const indexSheet, std::int32_t* const primitiveType
+    ID3DVertexSheet* const vertexSheet,
+    ID3DIndexSheet* const indexSheet,
+    std::int32_t* const primitiveType
   )
   {
     MSDF_FlushPendingText();
@@ -1437,7 +1557,8 @@ namespace moho
    * (states 1..2, handler 0x0042F994) only each pass's draw.
    */
   bool CD3DDevice::DrawPrimitiveList(
-    const SD3DVertexRange* const vertexSheetView, std::int32_t* const primitiveType
+    const SD3DVertexRange* const vertexSheetView,
+    std::int32_t* const primitiveType
   )
   {
     MSDF_FlushPendingText();
@@ -1538,7 +1659,10 @@ namespace moho
    * What it does:
    * Forwards color-write toggles to the active GAL backend when ready.
    */
-  void CD3DDevice::SetColorWriteState(const bool colorWrite0, const bool colorWrite1)
+  void CD3DDevice::SetColorWriteState(
+    const bool colorWrite0,
+    const bool colorWrite1
+  )
   {
     if (!gpg::gal::Device::IsReady()) {
       return;
@@ -1556,7 +1680,9 @@ namespace moho
    * What it does:
    * Stores one active effect pointer for subsequent technique selection/draw.
    */
-  bool CD3DDevice::SetCurEffect(CD3DEffect* const effect)
+  bool CD3DDevice::SetCurEffect(
+    CD3DEffect* const effect
+  )
   {
     MSDF_FlushPendingText();
     mCurEffect = effect;
@@ -1571,7 +1697,9 @@ namespace moho
    * What it does:
    * Resolves one effect by name from device resources and sets it as current.
    */
-  bool CD3DDevice::SelectFxFile(const char* const fxFileName)
+  bool CD3DDevice::SelectFxFile(
+    const char* const fxFileName
+  )
   {
     ID3DDeviceResources* const resources = GetResources();
     CD3DEffect* const effect = resources != nullptr ? resources->FindEffect(fxFileName) : nullptr;
@@ -1586,7 +1714,9 @@ namespace moho
    * What it does:
    * Selects one technique on the currently active effect.
    */
-  bool CD3DDevice::SelectTechnique(const char* const techniqueName)
+  bool CD3DDevice::SelectTechnique(
+    const char* const techniqueName
+  )
   {
     MSDF_FlushPendingText();
     CD3DEffect* const effect = GetCurEffect();
@@ -1655,7 +1785,8 @@ namespace moho
    * Forwards sheet handles to `UpdateSurface` with default whole-surface rectangles.
    */
   void CD3DDevice::UpdateSurface2(
-    CD3DDynamicTextureSheet** const sourceSheet, CD3DDynamicTextureSheet** const destinationSheet
+    CD3DDynamicTextureSheet** const sourceSheet,
+    CD3DDynamicTextureSheet** const destinationSheet
   )
   {
     UpdateSurface(*sourceSheet, *destinationSheet, nullptr, nullptr);
@@ -1698,7 +1829,8 @@ namespace moho
    * Dereferences render-target lanes and forwards to `SetViewRect`.
    */
   void CD3DDevice::SetViewRect2(
-    ID3DRenderTarget** const sourceRenderTarget, ID3DRenderTarget** const destinationRenderTarget
+    ID3DRenderTarget** const sourceRenderTarget,
+    ID3DRenderTarget** const destinationRenderTarget
   )
   {
     SetViewRect(*sourceRenderTarget, *destinationRenderTarget, nullptr, nullptr);
@@ -1714,7 +1846,8 @@ namespace moho
    * one backend `CreateRenderTarget` copy.
    */
   void CD3DDevice::SetViewRenderTarget(
-    ID3DRenderTarget* const sourceRenderTarget, ID3DTextureSheet* const destinationTextureSheet
+    ID3DRenderTarget* const sourceRenderTarget,
+    ID3DTextureSheet* const destinationTextureSheet
   )
   {
     gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
@@ -1737,7 +1870,8 @@ namespace moho
    * `SetViewRenderTarget`.
    */
   void CD3DDevice::SetViewRenderTarget2(
-    ID3DRenderTarget** const sourceRenderTarget, ID3DTextureSheet** const destinationTextureSheet
+    ID3DRenderTarget** const sourceRenderTarget,
+    ID3DTextureSheet** const destinationTextureSheet
   )
   {
     SetViewRenderTarget(*sourceRenderTarget, *destinationTextureSheet);
@@ -1773,16 +1907,14 @@ namespace moho
     try {
       gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
       (void)device->BeginScene();
-      // EDITOR: the clear is expected to throw when no depth-stencil is bound (see above); the scene it opened must still be
-      // ended, or the device keeps an open scene and every following Present fails with D3DERR_INVALIDCALL (black window after
-      // a resize drag, where this runs once per paint).
+      // EDITOR: the clear is expected to throw when no depth-stencil is bound (see above); the scene it opened must
+      // still be ended, or the device keeps an open scene and every following Present fails with D3DERR_INVALIDCALL
+      // (black window after a resize drag, where this runs once per paint).
       try {
         device->Clear(true, true, true, 0xFF000000u, 1.0f, 0);
-      } catch (const gpg::gal::Error&) {
-      }
+      } catch (const gpg::gal::Error&) {}
       device->EndScene();
-    } catch (const gpg::gal::Error&) {
-    }
+    } catch (const gpg::gal::Error&) {}
   }
 
   /**
@@ -1793,7 +1925,9 @@ namespace moho
    * What it does:
    * Stores one clear-enable state byte on the device object.
    */
-  bool CD3DDevice::Clear2(const bool clear)
+  bool CD3DDevice::Clear2(
+    const bool clear
+  )
   {
     mClearEnabled = clear ? 1u : 0u;
     return clear;
@@ -1819,19 +1953,20 @@ namespace moho
   void CD3DDevice::Paint()
   {
     if (mInitialized == 0 && sDeviceNeedsRetry && gpg::gal::Device::IsReady() && mViewport != nullptr) {
-      // EDITOR: a Reset that failed (device lost again) used to stay failed until some window message came; poll ten times a second.
+      // EDITOR: a Reset that failed (device lost again) used to stay failed until some window message came; poll ten
+      // times a second.
       static std::chrono::steady_clock::time_point sLastTry;
       const auto now = std::chrono::steady_clock::now();
       if (now - sLastTry >= std::chrono::milliseconds(100)) {
         sLastTry = now;
         gpg::gal::Device* const lostDevice = gpg::gal::Device::GetInstance();
         try {
-          // 1 = needs a reset; 0 = the device is fine but our own Reset failed half way (invalid parameters): redo it with the context the device still holds
+          // 1 = needs a reset; 0 = the device is fine but our own Reset failed half way (invalid parameters): redo it
+          // with the context the device still holds
           if (lostDevice->TestCooperativeLevel() != 2) {
             (void)InitContext(lostDevice->GetDeviceContext());
           }
-        } catch (const gpg::gal::Error&) {
-        }
+        } catch (const gpg::gal::Error&) {}
       }
       return;
     }
@@ -1847,22 +1982,29 @@ namespace moho
         if (!sDeviceWasLost) {
           sDeviceWasLost = true;
           sDeviceLostSince = std::chrono::steady_clock::now();
-          gpg::Logf("EDITOR device: lost (window minimized, session locked or the driver reset it); drawing stops until it can be reset");
+          gpg::Logf(
+            "EDITOR device: lost (window minimized, session locked or the driver reset it); drawing stops until it can "
+            "be reset"
+          );
         }
-        ::Sleep(8);   // EDITOR: a lost device is polled about 100 times a second, not as fast as the loop runs
+        ::Sleep(8); // EDITOR: a lost device is polled about 100 times a second, not as fast as the loop runs
         return;
       }
       if (sDeviceWasLost) {
         sDeviceWasLost = false;
-        gpg::Logf("EDITOR device: back after %.0f ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sDeviceLostSince).count());
+        gpg::Logf(
+          "EDITOR device: back after %.0f ms",
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sDeviceLostSince).count()
+        );
       }
       if (coop == 1) {
         gpg::gal::DeviceContext* const context = device->GetDeviceContext();
         if (!InitContext(context)) {
           return;
         }
-        // EDITOR: right after a Reset the back buffer holds nothing (swap effect DISCARD); presenting it showed black or old pixels for a frame. Draw first and show
-        // it with the next Paint (a Paint presents the previous frame, then draws the next one).
+        // EDITOR: right after a Reset the back buffer holds nothing (swap effect DISCARD); presenting it showed black
+        // or old pixels for a frame. Draw first and show it with the next Paint (a Paint presents the previous frame,
+        // then draws the next one).
         if (mClearEnabled != 0) {
           Clear();
         } else {
@@ -1872,7 +2014,8 @@ namespace moho
       }
 
       const auto presentStart = std::chrono::steady_clock::now();
-      const std::int64_t presentStartNs = moho::editor::perf::NowNs();   // EDITOR: ed_perf_loop timing (moho/editor/EdPerf.cpp)
+      const std::int64_t presentStartNs =
+        moho::editor::perf::NowNs(); // EDITOR: ed_perf_loop timing (moho/editor/EdPerf.cpp)
       {
         FAF_PROFILE_ZONE_NAMED("Present");
         device->Present();
@@ -1891,12 +2034,11 @@ namespace moho
     } catch (const gpg::gal::Error& error) {
       gpg::Warnf("%s(%d) %s", error.GetFile(), error.GetLine(), error.what());
       mSceneStarted = 0;
-      // EDITOR: a scene left open by a failed frame makes every later Present fail; closing it (an error here just means none
-      // was open) lets the next frame recover.
+      // EDITOR: a scene left open by a failed frame makes every later Present fail; closing it (an error here just
+      // means none was open) lets the next frame recover.
       try {
         device->EndScene();
-      } catch (const gpg::gal::Error&) {
-      }
+      } catch (const gpg::gal::Error&) {}
     }
   }
 
@@ -1916,7 +2058,10 @@ namespace moho
   {
     // Engine addition (dedicated-server plan WPL.4): sDeviceTextureLookup
     // (ID3DDeviceResources.h), the call cfunc_UnitWeaponDoInstaHitL made before the move.
-    void LookupDeviceTexture(ID3DDeviceResources::TextureResourceHandle& outTexture, const char* const name)
+    void LookupDeviceTexture(
+      ID3DDeviceResources::TextureResourceHandle& outTexture,
+      const char* const name
+    )
     {
       D3D_GetDevice()->GetResources()->GetTexture(outTexture, name, 0, true);
     }
@@ -2024,7 +2169,11 @@ namespace moho
    * Updates render timing globals and publishes `Frame_Time` / `Frame_FPS`
    * stat counters.
    */
-  void REN_Frame(const int gameTick, const float simDeltaSeconds, const float frameSeconds)
+  void REN_Frame(
+    const int gameTick,
+    const float simDeltaSeconds,
+    const float frameSeconds
+  )
   {
     sDeltaFrame = simDeltaSeconds;
 

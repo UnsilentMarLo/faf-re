@@ -1,40 +1,49 @@
-// EDITOR: the "up" natives of the material editor (docs/projects/editor/WP10_MATERIAL.md, work package WP10 of EDITOR_PORT_ANALYSIS.md): upstream's colour texture
-// graph (src/editor/graph/EdTextureGraph, EdNodeGraph in faf_editor_logic; the DDS encoder EdTextureBake.cpp compiled into the executable) bound to Lua over
-// EdUpCommon.h. The logic is upstream's; this unit is the table <-> struct glue, the engine's texture loader, the map's heights and masks as the terrain nodes'
-// source, and the polling jobs for a bake. Nothing of upstream's files is edited.
+// EDITOR: the "up" natives of the material editor (docs/projects/editor/WP10_MATERIAL.md, work package WP10 of
+// EDITOR_PORT_ANALYSIS.md): upstream's colour texture graph (src/editor/graph/EdTextureGraph, EdNodeGraph in
+// faf_editor_logic; the DDS encoder EdTextureBake.cpp compiled into the executable) bound to Lua over EdUpCommon.h. The
+// logic is upstream's; this unit is the table <-> struct glue, the engine's texture loader, the map's heights and masks
+// as the terrain nodes' source, and the polling jobs for a bake. Nothing of upstream's files is edited.
 //
-// A graph is a handle (an integer) of a document that lives here: the NodeGraph, its evaluator (cached per node by revision, so a slider re-runs only what is downstream
-// of it) and the size it is evaluated at. Lua keeps no copy of the graph's data but the snapshot `ed_tex_graph` returns (and the node positions, which are the graph's own).
-// Pin and parameter numbers are 0-based as upstream's, node ids are the graph's own (never reused within a graph).
+// A graph is a handle (an integer) of a document that lives here: the NodeGraph, its evaluator (cached per node by
+// revision, so a slider re-runs only what is downstream of it) and the size it is evaluated at. Lua keeps no copy of
+// the graph's data but the snapshot `ed_tex_graph` returns (and the node positions, which are the graph's own). Pin and
+// parameter numbers are 0-based as upstream's, node ids are the graph's own (never reused within a graph).
 //
-//   ed_tex_types()                         -> { { name, title, category, help, output, inputs = { { name, type, initial = {r,g,b,a} } }, outputs = { ... },
-//                                                  params = { { name, kind, min, max, choices = {..}, initial = {a,b,c,d}, initialText, help } } }, ... }
-//                                             type: 'grey' | 'colour'; kind: 'float' | 'int' | 'bool' | 'colour' | 'choice' | 'text'
-//   ed_tex_new([how])                      -> id    how 'start' (default: a noise through a gradient map into Albedo, its height into Normal), 'empty' (the Output node only)
-//   ed_tex_free(id)
-//   ed_tex_graph(id)                       -> { changes, nodes = { { id, type, x, y, revision, params = { { v = {a,b,c,d}, text }, ... } }, ... },
-//                                               links = { { fromNode, fromPin, toNode, toPin }, ... }, output = nodeId, usesTerrain = bool, size }
+//   ed_tex_types()                         -> { { name, title, category, help, output, inputs = { { name, type, initial
+//   = {r,g,b,a} } }, outputs = { ... },
+//                                                  params = { { name, kind, min, max, choices = {..}, initial =
+//                                                  {a,b,c,d}, initialText, help } } }, ... }
+//                                             type: 'grey' | 'colour'; kind: 'float' | 'int' | 'bool' | 'colour' |
+//                                             'choice' | 'text'
+//   ed_tex_new([how])                      -> id    how 'start' (default: a noise through a gradient map into Albedo,
+//   its height into Normal), 'empty' (the Output node only) ed_tex_free(id) ed_tex_graph(id)                       -> {
+//   changes, nodes = { { id, type, x, y, revision, params = { { v = {a,b,c,d}, text }, ... } }, ... },
+//                                               links = { { fromNode, fromPin, toNode, toPin }, ... }, output = nodeId,
+//                                               usesTerrain = bool, size }
 //   ed_tex_add(id, type, x, y)             -> node id | nil, message
 //   ed_tex_remove(id, node)                -> bool   (not the output node)
 //   ed_tex_move(id, node, x, y)            -> bool
-//   ed_tex_set_param(id, node, param, { v = {a,b,c,d} | n, text = s }) -> bool        param: a 0-based number or the parameter's name
-//   ed_tex_link(id, fromNode, fromPin, toNode, toPin) -> 'ok' | 'bad pin' | 'same node' | 'cycle' | 'wrong type'     (replaces the input's link)
-//   ed_tex_unlink(id, toNode, toPin)       -> bool
-//   ed_tex_save(id)                        -> text          the graph file (JSON)
-//   ed_tex_load(id, text)                  -> true | nil, message
-//   ed_tex_size(id[, size])                -> size          the size the preview evaluates at (8 .. 4096)
-//   ed_tex_terrain(id, on)                 -> true | nil, message     on: capture the open map's heights and stratum masks for the Map nodes now (off: drop them)
-//   ed_tex_eval(id[, node])                -> computed nodes, milliseconds     brings the node (or every node) up to date
-//   ed_tex_info(id, node)                  -> { warning, millis, outputs = { { size, channels }, ... } }
-//   ed_tex_image(id, node, pin, path, size[, channel]) -> true | nil, message    writes the node's output as a size x size uncompressed DDS (channel 'alpha' shows the alpha as grey)
-//   ed_tex_result(id, 'Albedo' | 'Normal' | 'Mask', path, size) -> true | nil, message   the output pin's image at the graph's size, as a DDS (as ed_tex_image)
-//   ed_tex_lit(id, path, size, mode[, yaw, lightYaw]) -> true | nil, message    a lit preview of the Albedo and Normal outputs: mode 0 a sphere, 1 a 2 x 2 plane
-//   ed_tex_bake_start(id, { size, albedo = path, normal = path, textures = bool }) -> job     the graph at `size`, Albedo as a BC3 file (`albedo`), Normal as a BC1 file (`normal`)
-//   ed_tex_bake_poll(job)                  -> { done, progress, error, albedoBytes, normalBytes, hasMask, millis }
-//   ed_tex_bake_cancel(job) / ed_tex_bake_free(job)
-//   ed_tex_bake_mask(job, w, h, x0, z0, x1, z1) -> bytes | nil, message    the finished bake's Mask output resampled to the map's mask grid (w x h, ed_stratum_info), the rectangle as
-//                                             bytes 0..255 row major: strata.lua EditMask writes them tile by tile with its undo
-//   ed_tex_dds_info(path)                  -> { width, height, mips, format } | nil, message       what a written file is (the tests read it back through the engine's own decoder)
+//   ed_tex_set_param(id, node, param, { v = {a,b,c,d} | n, text = s }) -> bool        param: a 0-based number or the
+//   parameter's name ed_tex_link(id, fromNode, fromPin, toNode, toPin) -> 'ok' | 'bad pin' | 'same node' | 'cycle' |
+//   'wrong type'     (replaces the input's link) ed_tex_unlink(id, toNode, toPin)       -> bool ed_tex_save(id) -> text
+//   the graph file (JSON) ed_tex_load(id, text)                  -> true | nil, message ed_tex_size(id[, size]) -> size
+//   the size the preview evaluates at (8 .. 4096) ed_tex_terrain(id, on)                 -> true | nil, message     on:
+//   capture the open map's heights and stratum masks for the Map nodes now (off: drop them) ed_tex_eval(id[, node]) ->
+//   computed nodes, milliseconds     brings the node (or every node) up to date ed_tex_info(id, node) -> { warning,
+//   millis, outputs = { { size, channels }, ... } } ed_tex_image(id, node, pin, path, size[, channel]) -> true | nil,
+//   message    writes the node's output as a size x size uncompressed DDS (channel 'alpha' shows the alpha as grey)
+//   ed_tex_result(id, 'Albedo' | 'Normal' | 'Mask', path, size) -> true | nil, message   the output pin's image at the
+//   graph's size, as a DDS (as ed_tex_image) ed_tex_lit(id, path, size, mode[, yaw, lightYaw]) -> true | nil, message
+//   a lit preview of the Albedo and Normal outputs: mode 0 a sphere, 1 a 2 x 2 plane ed_tex_bake_start(id, { size,
+//   albedo = path, normal = path, textures = bool }) -> job     the graph at `size`, Albedo as a BC3 file (`albedo`),
+//   Normal as a BC1 file (`normal`) ed_tex_bake_poll(job)                  -> { done, progress, error, albedoBytes,
+//   normalBytes, hasMask, millis } ed_tex_bake_cancel(job) / ed_tex_bake_free(job) ed_tex_bake_mask(job, w, h, x0, z0,
+//   x1, z1) -> bytes | nil, message    the finished bake's Mask output resampled to the map's mask grid (w x h,
+//   ed_stratum_info), the rectangle as
+//                                             bytes 0..255 row major: strata.lua EditMask writes them tile by tile with
+//                                             its undo
+//   ed_tex_dds_info(path)                  -> { width, height, mips, format } | nil, message       what a written file
+//   is (the tests read it back through the engine's own decoder)
 
 #include <algorithm>
 #include <array>
@@ -72,7 +81,8 @@ namespace
 
   constexpr float kPi = 3.14159265358979323846f;
 
-  // ---- the documents --------------------------------------------------------------------------------------------------------------------------
+  // ---- the documents
+  // --------------------------------------------------------------------------------------------------------------------------
 
   struct TexDoc
   {
@@ -82,8 +92,12 @@ namespace
     std::shared_ptr<const TerrainSource> terrain;
   };
 
-  /** A texture file of the game's files as an RGBA image (at most 1024 across: a graph's input needn't be finer; after upstream's material editor). */
-  bool LoadTexture(const std::string& path, TexImage& out)
+  /** A texture file of the game's files as an RGBA image (at most 1024 across: a graph's input needn't be finer; after
+   * upstream's material editor). */
+  bool LoadTexture(
+    const std::string& path,
+    TexImage& out
+  )
   {
     gpg::gal::imaging::ImageCodec* const codec = gpg::gal::imaging::ImageCodec::Instance();
     std::string bytes;
@@ -94,7 +108,10 @@ namespace
     options.format = DXGI_FORMAT_B8G8R8A8_UNORM;
     options.mipLevels = 1;
     gpg::gal::imaging::Image image;
-    if (FAILED(codec->Decode(bytes.data(), bytes.size(), options, image)) || image.subresources.empty() || image.format != DXGI_FORMAT_B8G8R8A8_UNORM) {
+    if (
+      FAILED(codec->Decode(bytes.data(), bytes.size(), options, image)) || image.subresources.empty() ||
+      image.format != DXGI_FORMAT_B8G8R8A8_UNORM
+    ) {
       return false;
     }
     const auto& level = image.subresources.front();
@@ -129,36 +146,56 @@ namespace
 
   int gNextDoc = 1;
 
-  TexDoc* FindDoc(lua_State* const L, const int index)
+  TexDoc* FindDoc(
+    lua_State* const L,
+    const int index
+  )
   {
     const auto found = Docs().find(static_cast<int>(luaL_checknumber(L, index)));
     return found == Docs().end() ? nullptr : &found->second;
   }
 
-  double OptNumber(lua_State* const L, const int index, const double fallback)
+  double OptNumber(
+    lua_State* const L,
+    const int index,
+    const double fallback
+  )
   {
     return lua_type(L, index) == LUA_TNUMBER ? static_cast<double>(lua_tonumber(L, index)) : fallback;
   }
 
-  const char* PinName(const PinType t)
+  const char* PinName(
+    const PinType t
+  )
   {
     return t == PinType::Color ? "colour" : "grey";
   }
 
-  const char* KindName(const ParamKind k)
+  const char* KindName(
+    const ParamKind k
+  )
   {
     switch (k) {
-    case ParamKind::Float: return "float";
-    case ParamKind::Int: return "int";
-    case ParamKind::Bool: return "bool";
-    case ParamKind::Color: return "colour";
-    case ParamKind::Choice: return "choice";
-    case ParamKind::Text: return "text";
+    case ParamKind::Float:
+      return "float";
+    case ParamKind::Int:
+      return "int";
+    case ParamKind::Bool:
+      return "bool";
+    case ParamKind::Color:
+      return "colour";
+    case ParamKind::Choice:
+      return "choice";
+    case ParamKind::Text:
+      return "text";
     }
     return "float";
   }
 
-  void PushFour(lua_State* const L, const std::array<float, 4>& v)
+  void PushFour(
+    lua_State* const L,
+    const std::array<float, 4>& v
+  )
   {
     lua_newtable(L);
     for (int i = 0; i < 4; ++i) {
@@ -167,14 +204,20 @@ namespace
     }
   }
 
-  void SetField(lua_State* const L, const char* const key) // pops the value on top into t[key] (the table below it)
+  void SetField(
+    lua_State* const L,
+    const char* const key
+  ) // pops the value on top into t[key] (the table below it)
   {
     lua_pushstring(L, key);
     lua_insert(L, -2);
     lua_settable(L, -3);
   }
 
-  void PushPins(lua_State* const L, const std::vector<PinDef>& pins)
+  void PushPins(
+    lua_State* const L,
+    const std::vector<PinDef>& pins
+  )
   {
     lua_newtable(L);
     for (std::size_t i = 0; i < pins.size(); ++i) {
@@ -187,9 +230,14 @@ namespace
     }
   }
 
-  // ---- reading a parameter value from a table --------------------------------------------------------------------------------------------------
+  // ---- reading a parameter value from a table
+  // --------------------------------------------------------------------------------------------------
 
-  bool ReadValue(lua_State* const L, const int index, ParamValue& value)
+  bool ReadValue(
+    lua_State* const L,
+    const int index,
+    ParamValue& value
+  )
   {
     if (lua_type(L, index) == LUA_TNUMBER) {
       value.value = {static_cast<float>(lua_tonumber(L, index)), 0.0f, 0.0f, 0.0f};
@@ -215,9 +263,12 @@ namespace
     return true;
   }
 
-  // ---- natives: the palette and the document ----------------------------------------------------------------------------------------------------
+  // ---- natives: the palette and the document
+  // ----------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_Types(lua_State* const L)
+  int __cdecl cfunc_Types(
+    lua_State* const L
+  )
   {
     lua_newtable(L);
     int n = 0;
@@ -253,7 +304,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_New(lua_State* const L)
+  int __cdecl cfunc_New(
+    lua_State* const L
+  )
   {
     const std::string how = lua_type(L, 1) == LUA_TSTRING ? lua_tostring(L, 1) : "start";
     TexDoc doc;
@@ -272,13 +325,17 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Free(lua_State* const L)
+  int __cdecl cfunc_Free(
+    lua_State* const L
+  )
   {
     Docs().erase(static_cast<int>(luaL_checknumber(L, 1)));
     return 0;
   }
 
-  bool UsesTerrain(const NodeGraph& graph)
+  bool UsesTerrain(
+    const NodeGraph& graph
+  )
   {
     for (const GraphNode& node : graph.Nodes()) {
       if (node.type->category == "Map") {
@@ -288,7 +345,9 @@ namespace
     return false;
   }
 
-  int __cdecl cfunc_Graph(lua_State* const L)
+  int __cdecl cfunc_Graph(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     if (doc == nullptr) {
@@ -335,7 +394,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Add(lua_State* const L)
+  int __cdecl cfunc_Add(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     const std::string type = up::ArgString(L, 2, "ed_tex_add");
@@ -349,7 +410,8 @@ namespace
     if (def->isOutput && doc->graph->OutputNode() != 0) {
       return up::Fail(L, "the graph has its output already");
     }
-    const int id = doc->graph->AddNode(type, static_cast<float>(OptNumber(L, 3, 0.0)), static_cast<float>(OptNumber(L, 4, 0.0)));
+    const int id =
+      doc->graph->AddNode(type, static_cast<float>(OptNumber(L, 3, 0.0)), static_cast<float>(OptNumber(L, 4, 0.0)));
     if (id == 0) {
       return up::Fail(L, "could not add " + type);
     }
@@ -357,14 +419,18 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Remove(lua_State* const L)
+  int __cdecl cfunc_Remove(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     lua_pushboolean(L, doc != nullptr && doc->graph->RemoveNode(static_cast<int>(luaL_checknumber(L, 2))) ? 1 : 0);
     return 1;
   }
 
-  int __cdecl cfunc_Move(lua_State* const L)
+  int __cdecl cfunc_Move(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     const int node = static_cast<int>(luaL_checknumber(L, 2));
@@ -377,7 +443,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_SetParam(lua_State* const L)
+  int __cdecl cfunc_SetParam(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     const GraphNode* const node = doc != nullptr ? doc->graph->Find(static_cast<int>(luaL_checknumber(L, 2))) : nullptr;
@@ -417,32 +485,58 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Link(lua_State* const L)
+  int __cdecl cfunc_Link(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     if (doc == nullptr) {
       return up::Fail(L, "no such graph");
     }
-    const LinkResult result = doc->graph->Link(static_cast<int>(luaL_checknumber(L, 2)), static_cast<int>(luaL_checknumber(L, 3)), static_cast<int>(luaL_checknumber(L, 4)),
-                                               static_cast<int>(luaL_checknumber(L, 5)));
+    const LinkResult result = doc->graph->Link(
+      static_cast<int>(luaL_checknumber(L, 2)),
+      static_cast<int>(luaL_checknumber(L, 3)),
+      static_cast<int>(luaL_checknumber(L, 4)),
+      static_cast<int>(luaL_checknumber(L, 5))
+    );
     switch (result) {
-    case LinkResult::Ok: lua_pushstring(L, "ok"); break;
-    case LinkResult::BadPin: lua_pushstring(L, "bad pin"); break;
-    case LinkResult::SameNode: lua_pushstring(L, "same node"); break;
-    case LinkResult::Cycle: lua_pushstring(L, "cycle"); break;
-    case LinkResult::WrongType: lua_pushstring(L, "wrong type"); break;
+    case LinkResult::Ok:
+      lua_pushstring(L, "ok");
+      break;
+    case LinkResult::BadPin:
+      lua_pushstring(L, "bad pin");
+      break;
+    case LinkResult::SameNode:
+      lua_pushstring(L, "same node");
+      break;
+    case LinkResult::Cycle:
+      lua_pushstring(L, "cycle");
+      break;
+    case LinkResult::WrongType:
+      lua_pushstring(L, "wrong type");
+      break;
     }
     return 1;
   }
 
-  int __cdecl cfunc_Unlink(lua_State* const L)
+  int __cdecl cfunc_Unlink(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
-    lua_pushboolean(L, doc != nullptr && doc->graph->Unlink(static_cast<int>(luaL_checknumber(L, 2)), static_cast<int>(luaL_checknumber(L, 3))) ? 1 : 0);
+    lua_pushboolean(
+      L,
+      doc != nullptr &&
+          doc->graph->Unlink(static_cast<int>(luaL_checknumber(L, 2)), static_cast<int>(luaL_checknumber(L, 3)))
+        ? 1
+        : 0
+    );
     return 1;
   }
 
-  int __cdecl cfunc_Save(lua_State* const L)
+  int __cdecl cfunc_Save(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     if (doc == nullptr) {
@@ -453,7 +547,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Load(lua_State* const L)
+  int __cdecl cfunc_Load(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     const std::string text = up::ArgString(L, 2, "ed_tex_load");
@@ -469,7 +565,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Size(lua_State* const L)
+  int __cdecl cfunc_Size(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     if (doc == nullptr) {
@@ -483,9 +581,12 @@ namespace
     return 1;
   }
 
-  // ---- the map's heights and masks ----------------------------------------------------------------------------------------------------------------
+  // ---- the map's heights and masks
+  // ----------------------------------------------------------------------------------------------------------------
 
-  std::shared_ptr<TerrainSource> CaptureTerrain(std::string& why)
+  std::shared_ptr<TerrainSource> CaptureTerrain(
+    std::string& why
+  )
   {
     moho::CWldSession* const session = moho::WLD_GetActiveSession();
     if (session == nullptr || session->mWldMap == nullptr || session->mWldMap->mTerrainRes == nullptr) {
@@ -504,15 +605,21 @@ namespace
     terrain->heights.resize(static_cast<std::size_t>(terrain->width) * static_cast<std::size_t>(terrain->height));
     for (int z = 0; z < terrain->height; ++z) {
       for (int x = 0; x < terrain->width; ++x) {
-        terrain->heights[static_cast<std::size_t>(z) * static_cast<std::size_t>(terrain->width) + static_cast<std::size_t>(x)] = static_cast<float>(field->GetHeightAt(x, z)) / 128.0f;
+        terrain->heights
+          [static_cast<std::size_t>(z) * static_cast<std::size_t>(terrain->width) + static_cast<std::size_t>(x)] =
+          static_cast<float>(field->GetHeightAt(x, z)) / 128.0f;
       }
     }
-    // The eight stratum masks, one texel's eight weights in one word, byte k for engine stratum k (stratum k + 1 of the Map Mask node).
+    // The eight stratum masks, one texel's eight weights in one word, byte k for engine stratum k (stratum k + 1 of the
+    // Map Mask node).
     std::vector<std::uint8_t> lane;
     int w = 0;
     int h = 0;
     for (int s = 0; s < 8; ++s) {
-      if (!moho::editor::StratumMaskRead(s, lane, w, h) || w <= 0 || h <= 0 || lane.size() < static_cast<std::size_t>(w) * static_cast<std::size_t>(h)) {
+      if (
+        !moho::editor::StratumMaskRead(s, lane, w, h) || w <= 0 || h <= 0 ||
+        lane.size() < static_cast<std::size_t>(w) * static_cast<std::size_t>(h)
+      ) {
         break;
       }
       if (s == 0) {
@@ -527,7 +634,9 @@ namespace
     return terrain;
   }
 
-  int __cdecl cfunc_Terrain(lua_State* const L)
+  int __cdecl cfunc_Terrain(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     if (doc == nullptr) {
@@ -550,22 +659,28 @@ namespace
     return 1;
   }
 
-  // ---- evaluation and pictures --------------------------------------------------------------------------------------------------------------------
+  // ---- evaluation and pictures
+  // --------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_Eval(lua_State* const L)
+  int __cdecl cfunc_Eval(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     if (doc == nullptr) {
       return up::Fail(L, "no such graph");
     }
     const auto start = std::chrono::steady_clock::now();
-    const int computed = lua_type(L, 2) == LUA_TNUMBER ? doc->eval->Evaluate(static_cast<int>(lua_tonumber(L, 2))) : doc->eval->EvaluateAll();
+    const int computed = lua_type(L, 2) == LUA_TNUMBER ? doc->eval->Evaluate(static_cast<int>(lua_tonumber(L, 2)))
+                                                       : doc->eval->EvaluateAll();
     lua_pushnumber(L, computed);
     lua_pushnumber(L, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
     return 2;
   }
 
-  int __cdecl cfunc_Info(lua_State* const L)
+  int __cdecl cfunc_Info(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     const int node = static_cast<int>(luaL_checknumber(L, 2));
@@ -590,14 +705,22 @@ namespace
   }
 
   /** `image` at `size` x size as an opaque (or alpha-as-grey) RGBA image, for a picture on screen. */
-  TexImage ForScreen(const TexImage& image, const int size, const bool alphaAsGrey)
+  TexImage ForScreen(
+    const TexImage& image,
+    const int size,
+    const bool alphaAsGrey
+  )
   {
     TexImage out;
     out.Reset(size, 4);
     for (int y = 0; y < size; ++y) {
       for (int x = 0; x < size; ++x) {
         float c[4];
-        image.Sample((static_cast<float>(x) + 0.5f) / static_cast<float>(size), (static_cast<float>(y) + 0.5f) / static_cast<float>(size), c);
+        image.Sample(
+          (static_cast<float>(x) + 0.5f) / static_cast<float>(size),
+          (static_cast<float>(y) + 0.5f) / static_cast<float>(size),
+          c
+        );
         float* p = out.Pixel(x, y);
         if (alphaAsGrey) {
           p[0] = p[1] = p[2] = c[3];
@@ -612,16 +735,27 @@ namespace
     return out;
   }
 
-  bool WriteFile(const std::string& path, const std::vector<std::uint8_t>& bytes)
+  bool WriteFile(
+    const std::string& path,
+    const std::vector<std::uint8_t>& bytes
+  )
   {
     std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec); // like ed_write_file: the folders above the file are made
+    std::filesystem::create_directories(
+      std::filesystem::path(path).parent_path(), ec
+    ); // like ed_write_file: the folders above the file are made
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     return static_cast<bool>(out);
   }
 
-  int WriteScreenImage(lua_State* const L, const TexImage& image, const std::string& path, const int size, const bool alphaAsGrey)
+  int WriteScreenImage(
+    lua_State* const L,
+    const TexImage& image,
+    const std::string& path,
+    const int size,
+    const bool alphaAsGrey
+  )
   {
     const TexImage shown = ForScreen(image, std::clamp(size, 1, 2048), alphaAsGrey);
     std::vector<std::uint8_t> bytes;
@@ -636,7 +770,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Image(lua_State* const L)
+  int __cdecl cfunc_Image(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     const int node = static_cast<int>(luaL_checknumber(L, 2));
@@ -654,7 +790,9 @@ namespace
     return WriteScreenImage(L, *image, path, size, alpha);
   }
 
-  int __cdecl cfunc_Result(lua_State* const L)
+  int __cdecl cfunc_Result(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     const std::string pin = up::ArgString(L, 2, "ed_tex_result");
@@ -670,14 +808,28 @@ namespace
     return WriteScreenImage(L, *image, path, size, false);
   }
 
-  std::uint32_t Bgra(const float r, const float g, const float b)
+  std::uint32_t Bgra(
+    const float r,
+    const float g,
+    const float b
+  )
   {
-    const auto byte = [](const float v) { return static_cast<std::uint32_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+    const auto byte = [](const float v) {
+      return static_cast<std::uint32_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
+    };
     return 0xFF000000U | (byte(r) << 16) | (byte(g) << 8) | byte(b);
   }
 
-  /** A lit preview of a stratum's albedo and normal maps (after upstream's RenderMaterialPreview, EdMaterialEditor.cpp): `mode` 0 a sphere, 1 a 2 x 2 plane. */
-  std::vector<std::uint32_t> RenderLit(const TexImage* albedo, const TexImage* normal, const int mode, const int size, const float yaw, const float lightYaw)
+  /** A lit preview of a stratum's albedo and normal maps (after upstream's RenderMaterialPreview,
+   * EdMaterialEditor.cpp): `mode` 0 a sphere, 1 a 2 x 2 plane. */
+  std::vector<std::uint32_t> RenderLit(
+    const TexImage* albedo,
+    const TexImage* normal,
+    const int mode,
+    const int size,
+    const float yaw,
+    const float lightYaw
+  )
   {
     std::vector<std::uint32_t> pixels(static_cast<std::size_t>(size) * size);
     const float lx = std::sin(lightYaw) * 0.7f;
@@ -685,7 +837,10 @@ namespace
     const float ly = 0.6f;
     const float ll = std::sqrt(lx * lx + ly * ly + lz * lz);
     const float light[3] = {lx / ll, ly / ll, lz / ll};
-    const auto shade = [&](const float u, const float v, const float (&n)[3], const float (&t)[3], const float (&b)[3], const float facing) {
+    const auto shade =
+      [&](
+        const float u, const float v, const float (&n)[3], const float (&t)[3], const float (&b)[3], const float facing
+      ) {
       float base[4] = {0.5f, 0.5f, 0.5f, 1.0f};
       if (albedo != nullptr) {
         albedo->Sample(u, v, base);
@@ -739,7 +894,9 @@ namespace
     return pixels;
   }
 
-  int __cdecl cfunc_Lit(lua_State* const L)
+  int __cdecl cfunc_Lit(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     const std::string path = up::ArgString(L, 2, "ed_tex_lit");
@@ -774,7 +931,8 @@ namespace
     return 1;
   }
 
-  // ---- a bake as a job ----------------------------------------------------------------------------------------------------------------------------
+  // ---- a bake as a job
+  // ----------------------------------------------------------------------------------------------------------------------------
 
   struct BakeResult
   {
@@ -792,8 +950,11 @@ namespace
     return *bakes;
   }
 
-  /** The texture paths a graph names (its Text parameters): they are read on the Lua thread before the job starts, so the worker never touches the game's files. */
-  std::set<std::string> TexturePaths(const NodeGraph& graph)
+  /** The texture paths a graph names (its Text parameters): they are read on the Lua thread before the job starts, so
+   * the worker never touches the game's files. */
+  std::set<std::string> TexturePaths(
+    const NodeGraph& graph
+  )
   {
     std::set<std::string> paths;
     for (const GraphNode& node : graph.Nodes()) {
@@ -806,7 +967,9 @@ namespace
     return paths;
   }
 
-  int __cdecl cfunc_BakeStart(lua_State* const L)
+  int __cdecl cfunc_BakeStart(
+    lua_State* const L
+  )
   {
     TexDoc* const doc = FindDoc(L, 1);
     if (doc == nullptr) {
@@ -885,7 +1048,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_BakePoll(lua_State* const L)
+  int __cdecl cfunc_BakePoll(
+    lua_State* const L
+  )
   {
     const int job = static_cast<int>(luaL_checknumber(L, 1));
     const up::JobStatus status = Bakes().Poll(job);
@@ -906,21 +1071,28 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_BakeCancel(lua_State* const L)
+  int __cdecl cfunc_BakeCancel(
+    lua_State* const L
+  )
   {
     Bakes().Cancel(static_cast<int>(luaL_checknumber(L, 1)));
     return 0;
   }
 
-  int __cdecl cfunc_BakeFree(lua_State* const L)
+  int __cdecl cfunc_BakeFree(
+    lua_State* const L
+  )
   {
     Bakes().Free(static_cast<int>(luaL_checknumber(L, 1)));
     return 0;
   }
 
-  int __cdecl cfunc_BakeMask(lua_State* const L)
+  int __cdecl cfunc_BakeMask(
+    lua_State* const L
+  )
   {
-    // The finished bake's Mask output over the map's mask grid (w x h), the rectangle x0..x1, z0..z1 as bytes, row major: what a tile of the stratum's mask is made of.
+    // The finished bake's Mask output over the map's mask grid (w x h), the rectangle x0..x1, z0..z1 as bytes, row
+    // major: what a tile of the stratum's mask is made of.
     const int job = static_cast<int>(luaL_checknumber(L, 1));
     const int w = static_cast<int>(luaL_checknumber(L, 2));
     const int h = static_cast<int>(luaL_checknumber(L, 3));
@@ -941,7 +1113,11 @@ namespace
     for (int z = z0; z <= z1; ++z) {
       for (int x = x0; x <= x1; ++x) {
         float c[4];
-        mask.Sample((static_cast<float>(x) + 0.5f) / static_cast<float>(w), (static_cast<float>(z) + 0.5f) / static_cast<float>(h), c);
+        mask.Sample(
+          (static_cast<float>(x) + 0.5f) / static_cast<float>(w),
+          (static_cast<float>(z) + 0.5f) / static_cast<float>(h),
+          c
+        );
         lua_pushnumber(L, static_cast<lua_Number>(std::lround(std::clamp(c[0], 0.0f, 1.0f) * 255.0f)));
         lua_rawseti(L, -2, ++index);
       }
@@ -949,7 +1125,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_DdsInfo(lua_State* const L)
+  int __cdecl cfunc_DdsInfo(
+    lua_State* const L
+  )
   {
     const std::string path = up::ArgString(L, 1, "ed_tex_dds_info");
     gpg::gal::imaging::ImageCodec* const codec = gpg::gal::imaging::ImageCodec::Instance();
@@ -978,7 +1156,8 @@ namespace
     up::SetNumber(L, "bytes", static_cast<double>(bytes.size()));
     // A pixel of the first level (B8G8R8A8) for the tests: the centre.
     const auto& level = image.subresources.front();
-    const std::uint8_t* const p = image.bytes.data() + level.offset + (level.height / 2) * level.rowPitch + (level.width / 2) * 4U;
+    const std::uint8_t* const p =
+      image.bytes.data() + level.offset + (level.height / 2) * level.rowPitch + (level.width / 2) * 4U;
     up::SetNumber(L, "centreR", p[2]);
     up::SetNumber(L, "centreG", p[1]);
     up::SetNumber(L, "centreB", p[0]);
@@ -987,30 +1166,30 @@ namespace
   }
 
   const up::Natives gEdUpTexGraphNatives{{
-      {"ed_tex_types", &cfunc_Types, "ed_tex_types() -> node types"},
-      {"ed_tex_new", &cfunc_New, "ed_tex_new([how]) -> graph id"},
-      {"ed_tex_free", &cfunc_Free, "ed_tex_free(id)"},
-      {"ed_tex_graph", &cfunc_Graph, "ed_tex_graph(id) -> snapshot"},
-      {"ed_tex_add", &cfunc_Add, "ed_tex_add(id, type, x, y) -> node id"},
-      {"ed_tex_remove", &cfunc_Remove, "ed_tex_remove(id, node) -> bool"},
-      {"ed_tex_move", &cfunc_Move, "ed_tex_move(id, node, x, y) -> bool"},
-      {"ed_tex_set_param", &cfunc_SetParam, "ed_tex_set_param(id, node, param, value) -> bool"},
-      {"ed_tex_link", &cfunc_Link, "ed_tex_link(id, fromNode, fromPin, toNode, toPin) -> result"},
-      {"ed_tex_unlink", &cfunc_Unlink, "ed_tex_unlink(id, toNode, toPin) -> bool"},
-      {"ed_tex_save", &cfunc_Save, "ed_tex_save(id) -> text"},
-      {"ed_tex_load", &cfunc_Load, "ed_tex_load(id, text) -> true | nil, message"},
-      {"ed_tex_size", &cfunc_Size, "ed_tex_size(id[, size]) -> size"},
-      {"ed_tex_terrain", &cfunc_Terrain, "ed_tex_terrain(id, on) -> true | nil, message"},
-      {"ed_tex_eval", &cfunc_Eval, "ed_tex_eval(id[, node]) -> computed, milliseconds"},
-      {"ed_tex_info", &cfunc_Info, "ed_tex_info(id, node) -> info"},
-      {"ed_tex_image", &cfunc_Image, "ed_tex_image(id, node, pin, path, size[, channel]) -> true | nil, message"},
-      {"ed_tex_result", &cfunc_Result, "ed_tex_result(id, pin, path, size) -> true | nil, message"},
-      {"ed_tex_lit", &cfunc_Lit, "ed_tex_lit(id, path, size, mode[, yaw, lightYaw]) -> true | nil, message"},
-      {"ed_tex_bake_start", &cfunc_BakeStart, "ed_tex_bake_start(id, opts) -> job"},
-      {"ed_tex_bake_poll", &cfunc_BakePoll, "ed_tex_bake_poll(job) -> status"},
-      {"ed_tex_bake_cancel", &cfunc_BakeCancel, "ed_tex_bake_cancel(job)"},
-      {"ed_tex_bake_free", &cfunc_BakeFree, "ed_tex_bake_free(job)"},
-      {"ed_tex_bake_mask", &cfunc_BakeMask, "ed_tex_bake_mask(job, w, h, x0, z0, x1, z1) -> bytes | nil, message"},
-      {"ed_tex_dds_info", &cfunc_DdsInfo, "ed_tex_dds_info(path) -> info"},
+    {"ed_tex_types", &cfunc_Types, "ed_tex_types() -> node types"},
+    {"ed_tex_new", &cfunc_New, "ed_tex_new([how]) -> graph id"},
+    {"ed_tex_free", &cfunc_Free, "ed_tex_free(id)"},
+    {"ed_tex_graph", &cfunc_Graph, "ed_tex_graph(id) -> snapshot"},
+    {"ed_tex_add", &cfunc_Add, "ed_tex_add(id, type, x, y) -> node id"},
+    {"ed_tex_remove", &cfunc_Remove, "ed_tex_remove(id, node) -> bool"},
+    {"ed_tex_move", &cfunc_Move, "ed_tex_move(id, node, x, y) -> bool"},
+    {"ed_tex_set_param", &cfunc_SetParam, "ed_tex_set_param(id, node, param, value) -> bool"},
+    {"ed_tex_link", &cfunc_Link, "ed_tex_link(id, fromNode, fromPin, toNode, toPin) -> result"},
+    {"ed_tex_unlink", &cfunc_Unlink, "ed_tex_unlink(id, toNode, toPin) -> bool"},
+    {"ed_tex_save", &cfunc_Save, "ed_tex_save(id) -> text"},
+    {"ed_tex_load", &cfunc_Load, "ed_tex_load(id, text) -> true | nil, message"},
+    {"ed_tex_size", &cfunc_Size, "ed_tex_size(id[, size]) -> size"},
+    {"ed_tex_terrain", &cfunc_Terrain, "ed_tex_terrain(id, on) -> true | nil, message"},
+    {"ed_tex_eval", &cfunc_Eval, "ed_tex_eval(id[, node]) -> computed, milliseconds"},
+    {"ed_tex_info", &cfunc_Info, "ed_tex_info(id, node) -> info"},
+    {"ed_tex_image", &cfunc_Image, "ed_tex_image(id, node, pin, path, size[, channel]) -> true | nil, message"},
+    {"ed_tex_result", &cfunc_Result, "ed_tex_result(id, pin, path, size) -> true | nil, message"},
+    {"ed_tex_lit", &cfunc_Lit, "ed_tex_lit(id, path, size, mode[, yaw, lightYaw]) -> true | nil, message"},
+    {"ed_tex_bake_start", &cfunc_BakeStart, "ed_tex_bake_start(id, opts) -> job"},
+    {"ed_tex_bake_poll", &cfunc_BakePoll, "ed_tex_bake_poll(job) -> status"},
+    {"ed_tex_bake_cancel", &cfunc_BakeCancel, "ed_tex_bake_cancel(job)"},
+    {"ed_tex_bake_free", &cfunc_BakeFree, "ed_tex_bake_free(job)"},
+    {"ed_tex_bake_mask", &cfunc_BakeMask, "ed_tex_bake_mask(job, w, h, x0, z0, x1, z1) -> bytes | nil, message"},
+    {"ed_tex_dds_info", &cfunc_DdsInfo, "ed_tex_dds_info(path) -> info"},
   }};
 } // namespace

@@ -38,10 +38,9 @@ namespace moho
   // because its header-scope yaw constants would add dynamic initializers to
   // this translation unit.
   Wm3::Vector3f* MultQuadVec(Wm3::Vector3f* dest, const Wm3::Vector3f* vec, const Wm3::Quaternionf* quat);
-  Wm3::Quaternionf* QuatCrossAdd(
-    Wm3::Quaternionf* dest, Wm3::Vector3f v1, Wm3::Vector3f v2, const Wm3::Vector3f& fallbackAxis
-  );
-}
+  Wm3::Quaternionf*
+  QuatCrossAdd(Wm3::Quaternionf* dest, Wm3::Vector3f v1, Wm3::Vector3f v2, const Wm3::Vector3f& fallbackAxis);
+} // namespace moho
 
 namespace
 {
@@ -96,7 +95,10 @@ namespace
   }
 
   [[nodiscard]] moho::CD3DPrimBatcher::Vertex MakeVertex(
-    const moho::Vector3f& position, const std::uint32_t color, const float u, const float v
+    const moho::Vector3f& position,
+    const std::uint32_t color,
+    const float u,
+    const float v
   ) noexcept
   {
     return {position.x, position.y, position.z, color, u, v};
@@ -127,7 +129,8 @@ namespace
   // canonical definition -- see its doc comment for the scalar-first layout.
 
   [[nodiscard]] moho::Vector3f RotateByQuaternion(
-    const moho::Vector3f& vector, const Wm3::Quaternionf& orientation
+    const moho::Vector3f& vector,
+    const Wm3::Quaternionf& orientation
   ) noexcept
   {
     moho::Vector3f rotated{};
@@ -181,7 +184,10 @@ namespace
     runtime.mPrimitives.push_back(static_cast<std::int16_t>(index));
   }
 
-  void InitializeIndexedVertexRemap(gpg::fastvector<std::uint16_t>& remap, const std::uint32_t sourceVertexCount)
+  void InitializeIndexedVertexRemap(
+    gpg::fastvector<std::uint16_t>& remap,
+    const std::uint32_t sourceVertexCount
+  )
   {
     remap.Clear();
     remap.Reserve(sourceVertexCount);
@@ -190,7 +196,9 @@ namespace
     }
   }
 
-  void ResetIndexedVertexRemap(gpg::fastvector<std::uint16_t>& remap) noexcept
+  void ResetIndexedVertexRemap(
+    gpg::fastvector<std::uint16_t>& remap
+  ) noexcept
   {
     const std::size_t remapSize = remap.size();
     for (std::size_t index = 0; index < remapSize; ++index) {
@@ -209,7 +217,9 @@ namespace moho
    * sheets and one dynamic index sheet from device resources, and seeds
    * identity view/projection/composite matrices.
    */
-  CD3DPrimBatcher::CD3DPrimBatcher(CD3DTextureBatcher* const textureBatcher)
+  CD3DPrimBatcher::CD3DPrimBatcher(
+    CD3DTextureBatcher* const textureBatcher
+  )
     : mTextureBatcher(textureBatcher)
   {
     auto* const runtime = this;
@@ -268,7 +278,9 @@ namespace moho
    * Selects one prim-batcher effect file/technique pair and invalidates the
    * currently uploaded composite matrix lane.
    */
-  CD3DPrimBatcher* CD3DPrimBatcher::Setup(const char* const techniqueName)
+  CD3DPrimBatcher* CD3DPrimBatcher::Setup(
+    const char* const techniqueName
+  )
   {
     EndTextRun(); // editor: pending LCD glyph quads must be drawn with their own technique first
     MSDF_FlushPendingText();
@@ -287,7 +299,9 @@ namespace moho
    * Flushes queued primitives when needed, then updates the current view matrix
    * and marks the composite matrix lane as dirty.
    */
-  void CD3DPrimBatcher::SetViewMatrix(const VMatrix4& matrix)
+  void CD3DPrimBatcher::SetViewMatrix(
+    const VMatrix4& matrix
+  )
   {
     MSDF_FlushPendingText();
     auto* const runtime = this;
@@ -306,7 +320,9 @@ namespace moho
    * Flushes queued primitives when needed, then updates the current projection
    * matrix and marks the composite matrix lane as dirty.
    */
-  void CD3DPrimBatcher::SetProjectionMatrix(const VMatrix4& matrix)
+  void CD3DPrimBatcher::SetProjectionMatrix(
+    const VMatrix4& matrix
+  )
   {
     MSDF_FlushPendingText();
     auto* const runtime = this;
@@ -325,7 +341,9 @@ namespace moho
    * Flushes queued primitives when needed, then updates both view/projection
    * matrices from one camera payload and marks the composite matrix lane dirty.
    */
-  void CD3DPrimBatcher::SetViewProjMatrix(const GeomCamera3& camera)
+  void CD3DPrimBatcher::SetViewProjMatrix(
+    const GeomCamera3& camera
+  )
   {
     MSDF_FlushPendingText();
     auto* const runtime = this;
@@ -360,7 +378,9 @@ namespace moho
    * `dispose()` -> `lock xadd [pi+8], -1` -> vslot +0x08 `destroy()`) is
    * `sp_counted_base::release()` with `weak_release()` inlined into it.
    */
-  void ResetSharedBatchTextureHandle(boost::shared_ptr<CD3DBatchTexture>& handle) noexcept
+  void ResetSharedBatchTextureHandle(
+    boost::shared_ptr<CD3DBatchTexture>& handle
+  ) noexcept
   {
     handle.reset();
   }
@@ -385,7 +405,9 @@ namespace moho
    * template instantiations, and the caller picks them per lane - +0x44 for
    * the batch texture, +0x3C for the sheet.
    */
-  void ResetSharedDynamicTextureSheetHandle(boost::shared_ptr<CD3DDynamicTextureSheet>& handle) noexcept
+  void ResetSharedDynamicTextureSheetHandle(
+    boost::shared_ptr<CD3DDynamicTextureSheet>& handle
+  ) noexcept
   {
     handle.reset();
   }
@@ -397,7 +419,9 @@ namespace moho
    * Switches between direct-texture and atlas-texture paths, flushing queued
    * primitives on mode changes and updating UV scale/border lanes.
    */
-  void CD3DPrimBatcher::SetTexture(const boost::shared_ptr<CD3DBatchTexture>& texture)
+  void CD3DPrimBatcher::SetTexture(
+    const boost::shared_ptr<CD3DBatchTexture>& texture
+  )
   {
     auto* const runtime = this;
 
@@ -434,8 +458,7 @@ namespace moho
     }
 
     // Flush when leaving the direct-sheet mode or when switching between the DXT5 and the A8R8G8B8 atlas.
-    if (!runtime->mVertices.empty() &&
-        (runtime->mDynamicTexSheet || ((runtime->mArgbAtlasInUse != nullptr) != argb))) {
+    if (!runtime->mVertices.empty() && (runtime->mDynamicTexSheet || ((runtime->mArgbAtlasInUse != nullptr) != argb))) {
       Flush();
     }
 
@@ -478,7 +501,8 @@ namespace moho
   }
 
   /**
-   * Address: 0x00438870 (FUN_00438870, ?SetTexture@CD3DPrimBatcher@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@@Z)
+   * Address: 0x00438870 (FUN_00438870,
+   * ?SetTexture@CD3DPrimBatcher@Moho@@QAEXV?$shared_ptr@VID3DTextureSheet@Moho@@@boost@@@Z)
    *
    * What it does:
    * Binds one retained dynamic texture sheet directly without going through
@@ -492,7 +516,9 @@ namespace moho
    * CD3DDynamicTextureSheet (binary directly stores the derived pointer
    * without a virtual downcast guard).
    */
-  void CD3DPrimBatcher::SetTexture(boost::shared_ptr<ID3DTextureSheet> sheet)
+  void CD3DPrimBatcher::SetTexture(
+    boost::shared_ptr<ID3DTextureSheet> sheet
+  )
   {
     auto* const runtime = this;
     EndTextRun();
@@ -522,7 +548,9 @@ namespace moho
     return {mDynamicTexSheet, mTexture, mP1x, mP1y, mP2x, mP2y};
   }
 
-  void CD3DPrimBatcher::SetTextureBinding(const TextureBinding& binding)
+  void CD3DPrimBatcher::SetTextureBinding(
+    const TextureBinding& binding
+  )
   {
     mDynamicTexSheet = binding.mSheet;
     mTexture = binding.mTexture;
@@ -552,7 +580,12 @@ namespace moho
     DrawQuadRaw(topLeft, topRight, bottomRight, bottomLeft);
   }
 
-  void CD3DPrimBatcher::SetClipRect(const float left, const float top, const float right, const float bottom)
+  void CD3DPrimBatcher::SetClipRect(
+    const float left,
+    const float top,
+    const float right,
+    const float bottom
+  )
   {
     mClipOn = true;
     mClipRect[0] = left;
@@ -605,9 +638,10 @@ namespace moho
       v.mZ = a.mZ + (b.mZ - a.mZ) * t;
       v.mU = a.mU + (b.mU - a.mU) * t;
       v.mV = a.mV + (b.mV - a.mV) * t;
-      v.mColor = a.mColor == b.mColor ? a.mColor
-                                      : (lerpChannel(a.mColor, b.mColor, t, 24) | lerpChannel(a.mColor, b.mColor, t, 16) | lerpChannel(a.mColor, b.mColor, t, 8) |
-                                         lerpChannel(a.mColor, b.mColor, t, 0));
+      v.mColor = a.mColor == b.mColor
+        ? a.mColor
+        : (lerpChannel(a.mColor, b.mColor, t, 24) | lerpChannel(a.mColor, b.mColor, t, 16) |
+           lerpChannel(a.mColor, b.mColor, t, 8) | lerpChannel(a.mColor, b.mColor, t, 0));
       return v;
     };
     Vertex out[8];
@@ -636,25 +670,27 @@ namespace moho
 
     // Engine addition: with nothing queued here and the atlas bound, an interface quad joins the
     // instanced list, which keeps submission order and is one draw (MsdfTextGpuRenderer.h).
-    if (runtime->mVertices.empty() && !runtime->mDynamicTexSheet &&
-        MsdfTextGpuRenderer::Get().QueueImageQuad(*runtime, topLeft, topRight, bottomRight, bottomLeft)) {
+    if (
+      runtime->mVertices.empty() && !runtime->mDynamicTexSheet &&
+      MsdfTextGpuRenderer::Get().QueueImageQuad(*runtime, topLeft, topRight, bottomRight, bottomLeft)
+    ) {
       return;
     }
 
     if (!runtime->mVertices.empty()) {
       const std::uint32_t vertexCount = static_cast<std::uint32_t>(runtime->mVertices.size());
       const std::uint32_t primitiveCount = static_cast<std::uint32_t>(runtime->mPrimitives.size());
-      if (runtime->mMode != static_cast<std::uint32_t>(kTriangleListPrimitiveType) ||
-          (vertexCount + 4u) > kPrimQueueCapacity ||
-          (primitiveCount + 6u) > kPrimQueueCapacity) {
+      if (
+        runtime->mMode != static_cast<std::uint32_t>(kTriangleListPrimitiveType) ||
+        (vertexCount + 4u) > kPrimQueueCapacity || (primitiveCount + 6u) > kPrimQueueCapacity
+      ) {
         Flush();
       }
     }
 
     runtime->mMode = static_cast<std::uint32_t>(kTriangleListPrimitiveType);
 
-    const std::uint16_t baseVertexIndex =
-      static_cast<std::uint16_t>(runtime->mVertices.size());
+    const std::uint16_t baseVertexIndex = static_cast<std::uint16_t>(runtime->mVertices.size());
 
     runtime->mVertices.push_back(BuildTransformedVertex(*runtime, topLeft));
     runtime->mVertices.push_back(BuildTransformedVertex(*runtime, topRight));
@@ -691,7 +727,10 @@ namespace moho
     DrawQuad(topLeftVertex, topRightVertex, bottomRightVertex, bottomLeftVertex);
   }
 
-  void CD3DPrimBatcher::DrawScreenQuads(const ScreenQuad* const quads, const std::size_t quadCount)
+  void CD3DPrimBatcher::DrawScreenQuads(
+    const ScreenQuad* const quads,
+    const std::size_t quadCount
+  )
   {
     auto* const runtime = this;
     std::size_t done = 0;
@@ -701,9 +740,10 @@ namespace moho
       if (!runtime->mVertices.empty()) {
         const std::uint32_t vertexCount = static_cast<std::uint32_t>(runtime->mVertices.size());
         const std::uint32_t primitiveCount = static_cast<std::uint32_t>(runtime->mPrimitives.size());
-        if (runtime->mMode != static_cast<std::uint32_t>(kTriangleListPrimitiveType) ||
-            (vertexCount + 4u) > kPrimQueueCapacity ||
-            (primitiveCount + 6u) > kPrimQueueCapacity) {
+        if (
+          runtime->mMode != static_cast<std::uint32_t>(kTriangleListPrimitiveType) ||
+          (vertexCount + 4u) > kPrimQueueCapacity || (primitiveCount + 6u) > kPrimQueueCapacity
+        ) {
           Flush();
         }
       }
@@ -728,8 +768,10 @@ namespace moho
         std::int16_t* indices = stagedIndices;
         for (std::size_t i = 0; i < count; ++i, vertices += 4, indices += 6) {
           const ScreenQuad& quad = quads[done + first + i];
-          vertices[0] = BuildTransformedVertex(*runtime, MakeVertex({quad.mLeft, quad.mTop, 0.0f}, quad.mColor, 0.0f, 0.0f));
-          vertices[1] = BuildTransformedVertex(*runtime, MakeVertex({quad.mRight, quad.mTop, 0.0f}, quad.mColor, 1.0f, 0.0f));
+          vertices[0] =
+            BuildTransformedVertex(*runtime, MakeVertex({quad.mLeft, quad.mTop, 0.0f}, quad.mColor, 0.0f, 0.0f));
+          vertices[1] =
+            BuildTransformedVertex(*runtime, MakeVertex({quad.mRight, quad.mTop, 0.0f}, quad.mColor, 1.0f, 0.0f));
           vertices[2] =
             BuildTransformedVertex(*runtime, MakeVertex({quad.mRight, quad.mBottom, 0.0f}, quad.mColor, 1.0f, 1.0f));
           vertices[3] =
@@ -750,18 +792,23 @@ namespace moho
     }
   }
 
-  void CD3DPrimBatcher::DrawVertexQuads(const Vertex* const quadVertices, const std::size_t quadCount)
+  void CD3DPrimBatcher::DrawVertexQuads(
+    const Vertex* const quadVertices,
+    const std::size_t quadCount
+  )
   {
     auto* const runtime = this;
     std::size_t done = 0;
     while (done < quadCount) {
-      // `DrawQuad`'s flush test, run once per block (as in DrawScreenQuads): each block ends where the next single-quad call would flush.
+      // `DrawQuad`'s flush test, run once per block (as in DrawScreenQuads): each block ends where the next single-quad
+      // call would flush.
       if (!runtime->mVertices.empty()) {
         const std::uint32_t vertexCount = static_cast<std::uint32_t>(runtime->mVertices.size());
         const std::uint32_t primitiveCount = static_cast<std::uint32_t>(runtime->mPrimitives.size());
-        if (runtime->mMode != static_cast<std::uint32_t>(kTriangleListPrimitiveType) ||
-            (vertexCount + 4u) > kPrimQueueCapacity ||
-            (primitiveCount + 6u) > kPrimQueueCapacity) {
+        if (
+          runtime->mMode != static_cast<std::uint32_t>(kTriangleListPrimitiveType) ||
+          (vertexCount + 4u) > kPrimQueueCapacity || (primitiveCount + 6u) > kPrimQueueCapacity
+        ) {
           Flush();
         }
       }
@@ -808,7 +855,10 @@ namespace moho
    * What it does:
    * Flushes on primitive-mode mismatch and appends one non-indexed quad batch.
    */
-  void CD3DPrimBatcher::DrawQuads(const Vertex* const sourceVertices, const std::uint32_t quadCount)
+  void CD3DPrimBatcher::DrawQuads(
+    const Vertex* const sourceVertices,
+    const std::uint32_t quadCount
+  )
   {
     if (quadCount == 0u) {
       return;
@@ -856,24 +906,28 @@ namespace moho
    * Emits one textured/color triangle and flushes first when mode/capacity lanes
    * would overflow.
    */
-  void CD3DPrimBatcher::DrawTri(const Vertex& v0, const Vertex& v1, const Vertex& v2)
+  void CD3DPrimBatcher::DrawTri(
+    const Vertex& v0,
+    const Vertex& v1,
+    const Vertex& v2
+  )
   {
     auto* const runtime = this;
 
     if (!runtime->mVertices.empty()) {
       const std::uint32_t vertexCount = static_cast<std::uint32_t>(runtime->mVertices.size());
       const std::uint32_t primitiveCount = static_cast<std::uint32_t>(runtime->mPrimitives.size());
-      if (runtime->mMode != static_cast<std::uint32_t>(kTriangleListPrimitiveType) ||
-          (vertexCount + 3u) > kPrimQueueCapacity ||
-          (primitiveCount + 3u) > kPrimQueueCapacity) {
+      if (
+        runtime->mMode != static_cast<std::uint32_t>(kTriangleListPrimitiveType) ||
+        (vertexCount + 3u) > kPrimQueueCapacity || (primitiveCount + 3u) > kPrimQueueCapacity
+      ) {
         Flush();
       }
     }
 
     runtime->mMode = static_cast<std::uint32_t>(kTriangleListPrimitiveType);
 
-    const std::uint16_t baseVertexIndex =
-      static_cast<std::uint16_t>(runtime->mVertices.size());
+    const std::uint16_t baseVertexIndex = static_cast<std::uint16_t>(runtime->mVertices.size());
 
     AddVert(v0);
     AddVert(v1);
@@ -891,7 +945,10 @@ namespace moho
    * Flushes on primitive-mode mismatch and appends one non-indexed triangle
    * batch.
    */
-  void CD3DPrimBatcher::DrawTriangles(const Vertex* const sourceVertices, const std::uint32_t triangleCount)
+  void CD3DPrimBatcher::DrawTriangles(
+    const Vertex* const sourceVertices,
+    const std::uint32_t triangleCount
+  )
   {
     if (triangleCount == 0u) {
       return;
@@ -939,24 +996,27 @@ namespace moho
    * Appends one textured line as 2 transformed vertices + 2 indices and
    * flushes first when primitive mode/capacity lanes would overflow.
    */
-  void CD3DPrimBatcher::DrawLine(const Vertex& start, const Vertex& end)
+  void CD3DPrimBatcher::DrawLine(
+    const Vertex& start,
+    const Vertex& end
+  )
   {
     auto* const runtime = this;
 
     if (!runtime->mVertices.empty()) {
       const std::uint32_t vertexCount = static_cast<std::uint32_t>(runtime->mVertices.size());
       const std::uint32_t primitiveCount = static_cast<std::uint32_t>(runtime->mPrimitives.size());
-      if (runtime->mMode != static_cast<std::uint32_t>(kLineListPrimitiveType) ||
-          (vertexCount + 2u) > kPrimQueueCapacity ||
-          (primitiveCount + 2u) > kPrimQueueCapacity) {
+      if (
+        runtime->mMode != static_cast<std::uint32_t>(kLineListPrimitiveType) ||
+        (vertexCount + 2u) > kPrimQueueCapacity || (primitiveCount + 2u) > kPrimQueueCapacity
+      ) {
         Flush();
       }
     }
 
     runtime->mMode = static_cast<std::uint32_t>(kLineListPrimitiveType);
 
-    const std::uint16_t baseVertexIndex =
-      static_cast<std::uint16_t>(runtime->mVertices.size());
+    const std::uint16_t baseVertexIndex = static_cast<std::uint16_t>(runtime->mVertices.size());
 
     runtime->mVertices.push_back(BuildTransformedVertex(*runtime, start));
     runtime->mVertices.push_back(BuildTransformedVertex(*runtime, end));
@@ -971,7 +1031,10 @@ namespace moho
    * What it does:
    * Flushes on primitive-mode mismatch and appends one non-indexed line batch.
    */
-  void CD3DPrimBatcher::DrawLines(const Vertex* const sourceVertices, const std::uint32_t lineCount)
+  void CD3DPrimBatcher::DrawLines(
+    const Vertex* const sourceVertices,
+    const std::uint32_t lineCount
+  )
   {
     if (lineCount == 0u) {
       return;
@@ -1015,7 +1078,9 @@ namespace moho
    * Emits one point entry; preserves original mode gate that flushes unless the
    * queued lane is triangle mode.
    */
-  void CD3DPrimBatcher::DrawPoint(const Vertex& vertex)
+  void CD3DPrimBatcher::DrawPoint(
+    const Vertex& vertex
+  )
   {
     auto* const runtime = this;
 
@@ -1025,8 +1090,7 @@ namespace moho
       } else {
         const std::uint32_t vertexCount = static_cast<std::uint32_t>(runtime->mVertices.size());
         const std::uint32_t primitiveCount = static_cast<std::uint32_t>(runtime->mPrimitives.size());
-        if ((vertexCount + 2u) > kPrimQueueCapacity ||
-            (primitiveCount + 2u) > kPrimQueueCapacity) {
+        if ((vertexCount + 2u) > kPrimQueueCapacity || (primitiveCount + 2u) > kPrimQueueCapacity) {
           Flush();
         }
       }
@@ -1034,8 +1098,7 @@ namespace moho
 
     runtime->mMode = static_cast<std::uint32_t>(kLineListPrimitiveType);
 
-    const std::uint16_t baseVertexIndex =
-      static_cast<std::uint16_t>(runtime->mVertices.size());
+    const std::uint16_t baseVertexIndex = static_cast<std::uint16_t>(runtime->mVertices.size());
     AddVert(vertex);
     AppendPrimitiveIndex(*runtime, baseVertexIndex);
   }
@@ -1158,7 +1221,9 @@ namespace moho
    * What it does:
    * Appends one UV-transformed vertex to the queued vertex stream.
    */
-  void CD3DPrimBatcher::AddVert(const Vertex& sourceVertex)
+  void CD3DPrimBatcher::AddVert(
+    const Vertex& sourceVertex
+  )
   {
     auto* const runtime = this;
     runtime->mVertices.push_back(BuildTransformedVertex(*runtime, sourceVertex));
@@ -1287,7 +1352,8 @@ namespace moho
     if (runtime->mDynamicTexSheet) {
       shaderVarPrimBatcherTexture1.GetTexture(runtime->mDynamicTexSheet);
     } else {
-      CD3DTextureBatcher* const atlas = runtime->mArgbAtlasInUse != nullptr ? runtime->mArgbAtlasInUse : runtime->mTextureBatcher;
+      CD3DTextureBatcher* const atlas =
+        runtime->mArgbAtlasInUse != nullptr ? runtime->mArgbAtlasInUse : runtime->mTextureBatcher;
       (void)atlas->GetCompositeTexture();
       shaderVarPrimBatcherTexture1.GetTexture(atlas->mDynTexSheet);
     }
@@ -1457,24 +1523,9 @@ namespace moho
     const Vector3f yOffset = RotateByQuaternion({0.0f, axisLength, 0.0f}, orientation);
     const Vector3f zOffset = RotateByQuaternion({0.0f, 0.0f, axisLength}, orientation);
 
-    DrawLine(
-      primBatcher,
-      origin,
-      origin + xOffset,
-      kAxisColorX
-    );
-    DrawLine(
-      primBatcher,
-      origin,
-      origin + yOffset,
-      kAxisColorY
-    );
-    DrawLine(
-      primBatcher,
-      origin,
-      origin + zOffset,
-      kAxisColorZ
-    );
+    DrawLine(primBatcher, origin, origin + xOffset, kAxisColorX);
+    DrawLine(primBatcher, origin, origin + yOffset, kAxisColorY);
+    DrawLine(primBatcher, origin, origin + zOffset, kAxisColorZ);
   }
 
   /**
@@ -1483,7 +1534,11 @@ namespace moho
    * What it does:
    * Draws RGB basis axes from one transform matrix (rows 0..2 as basis, row 3 as origin).
    */
-  void DRAW_WireCoords(CD3DPrimBatcher* const primBatcher, const VMatrix4& transform, const float axisLength)
+  void DRAW_WireCoords(
+    CD3DPrimBatcher* const primBatcher,
+    const VMatrix4& transform,
+    const float axisLength
+  )
   {
     if (primBatcher == nullptr) {
       return;
@@ -1494,24 +1549,9 @@ namespace moho
     const Vector3f axisY{transform.r[1].XYZ()};
     const Vector3f axisZ{transform.r[2].XYZ()};
 
-    DrawLine(
-      primBatcher,
-      origin,
-      origin + axisX * axisLength,
-      kAxisColorX
-    );
-    DrawLine(
-      primBatcher,
-      origin,
-      origin + axisY * axisLength,
-      kAxisColorY
-    );
-    DrawLine(
-      primBatcher,
-      origin,
-      origin + axisZ * axisLength,
-      kAxisColorZ
-    );
+    DrawLine(primBatcher, origin, origin + axisX * axisLength, kAxisColorX);
+    DrawLine(primBatcher, origin, origin + axisY * axisLength, kAxisColorY);
+    DrawLine(primBatcher, origin, origin + axisZ * axisLength, kAxisColorZ);
   }
 
   /**
@@ -1520,7 +1560,11 @@ namespace moho
    * What it does:
    * Draws a wireframe oriented box from `box` corners and the canonical 12 edge pairs.
    */
-  void DRAW_WireBox(CD3DPrimBatcher* const primBatcher, const Wm3::Box3f& box, const std::uint32_t color)
+  void DRAW_WireBox(
+    CD3DPrimBatcher* const primBatcher,
+    const Wm3::Box3f& box,
+    const std::uint32_t color
+  )
   {
     if (primBatcher == nullptr) {
       return;
@@ -1559,7 +1603,10 @@ namespace moho
    * bottom-left).
    */
   DrawRectRing DRAW_RectRing(
-    const float borderWidth, const Vector3f& heightAxis, const Vector3f& widthAxis, const Vector3f& topLeft
+    const float borderWidth,
+    const Vector3f& heightAxis,
+    const Vector3f& widthAxis,
+    const Vector3f& topLeft
   )
   {
     const float halfBorderWidth = borderWidth * 0.5f;
@@ -1759,7 +1806,10 @@ namespace moho
     DRAW_Circle(primBatcher, center, normal, radius, sCircleBandHalfWidth, sCircleBandColor);
   }
 
-  void DRAW_SetCircleStyle(const float bandHalfWidth, const std::uint32_t color)
+  void DRAW_SetCircleStyle(
+    const float bandHalfWidth,
+    const std::uint32_t color
+  )
   {
     sCircleBandHalfWidth = bandHalfWidth;
     sCircleBandColor = color;
@@ -1802,7 +1852,11 @@ namespace moho
    * quaternion via `RotateByQuaternion`, i.e. `Moho::MultQuadVec` in the
    * binary, to form the inner/outer cosine/sine axes handed to `DRAW_Oval`.
    */
-  DrawOvalAxes DRAW_CircleAxes(const Vector3f& normal, const float radius, const float bandHalfWidth)
+  DrawOvalAxes DRAW_CircleAxes(
+    const Vector3f& normal,
+    const float radius,
+    const float bandHalfWidth
+  )
   {
     // 0x00456213..0x00456253: v1 = +Z, v2 = `normal`, fallback axis `edi` = +X.
     Wm3::Quaternionf orientation{};
@@ -1824,7 +1878,9 @@ namespace moho
    * The angle of `DRAW_Oval`'s segment `segment` (0x00455E30: the segment
    * index times the angle step).
    */
-  float DRAW_OvalSegmentAngle(const std::uint32_t segment) noexcept
+  float DRAW_OvalSegmentAngle(
+    const std::uint32_t segment
+  ) noexcept
   {
     return static_cast<float>(segment) * kOvalAngleStep;
   }
@@ -1850,12 +1906,17 @@ namespace moho
       return;
     }
 
-    if (quadRect.x0 >= clipRect.x0 && quadRect.x1 <= clipRect.x1 && quadRect.z0 >= clipRect.z0 &&
-        quadRect.z1 <= clipRect.z1) {
+    if (
+      quadRect.x0 >= clipRect.x0 && quadRect.x1 <= clipRect.x1 && quadRect.z0 >= clipRect.z0 &&
+      quadRect.z1 <= clipRect.z1
+    ) {
       const CD3DPrimBatcher::Vertex topLeft = MakeVertex({quadRect.x0, quadRect.z0, 0.0f}, color, uvRect.x0, uvRect.z0);
-      const CD3DPrimBatcher::Vertex topRight = MakeVertex({quadRect.x1, quadRect.z0, 0.0f}, color, uvRect.x1, uvRect.z0);
-      const CD3DPrimBatcher::Vertex bottomRight = MakeVertex({quadRect.x1, quadRect.z1, 0.0f}, color, uvRect.x1, uvRect.z1);
-      const CD3DPrimBatcher::Vertex bottomLeft = MakeVertex({quadRect.x0, quadRect.z1, 0.0f}, color, uvRect.x0, uvRect.z1);
+      const CD3DPrimBatcher::Vertex topRight =
+        MakeVertex({quadRect.x1, quadRect.z0, 0.0f}, color, uvRect.x1, uvRect.z0);
+      const CD3DPrimBatcher::Vertex bottomRight =
+        MakeVertex({quadRect.x1, quadRect.z1, 0.0f}, color, uvRect.x1, uvRect.z1);
+      const CD3DPrimBatcher::Vertex bottomLeft =
+        MakeVertex({quadRect.x0, quadRect.z1, 0.0f}, color, uvRect.x0, uvRect.z1);
       primBatcher->DrawQuad(topLeft, topRight, bottomRight, bottomLeft);
       return;
     }
@@ -1934,12 +1995,14 @@ namespace moho
 
     for (float tileX = firstTileX; tileX < endTileX; tileX += 1.0f) {
       for (float tileZ = firstTileZ; tileZ < endTileZ; tileZ += 1.0f) {
-        const float mappedX0 = outputRect.x0 + (((tileX - tileX0) / (tileX1 - tileX0)) * (outputRect.x1 - outputRect.x0));
-        const float mappedX1 = outputRect.x0
-          + ((((tileX + 1.0f) - tileX0) / (tileX1 - tileX0)) * (outputRect.x1 - outputRect.x0));
-        const float mappedZ0 = outputRect.z0 + (((tileZ - tileZ0) / (tileZ1 - tileZ0)) * (outputRect.z1 - outputRect.z0));
-        const float mappedZ1 = outputRect.z0
-          + ((((tileZ + 1.0f) - tileZ0) / (tileZ1 - tileZ0)) * (outputRect.z1 - outputRect.z0));
+        const float mappedX0 =
+          outputRect.x0 + (((tileX - tileX0) / (tileX1 - tileX0)) * (outputRect.x1 - outputRect.x0));
+        const float mappedX1 =
+          outputRect.x0 + ((((tileX + 1.0f) - tileX0) / (tileX1 - tileX0)) * (outputRect.x1 - outputRect.x0));
+        const float mappedZ0 =
+          outputRect.z0 + (((tileZ - tileZ0) / (tileZ1 - tileZ0)) * (outputRect.z1 - outputRect.z0));
+        const float mappedZ1 =
+          outputRect.z0 + ((((tileZ + 1.0f) - tileZ0) / (tileZ1 - tileZ0)) * (outputRect.z1 - outputRect.z0));
 
         const gpg::Rect2f tileOutput{mappedX0, mappedZ0, mappedX1, mappedZ1};
         DRAW_ClippedQuad(primBatcher, tileOutput, kUnitUv, clippedArea, color);
@@ -1947,7 +2010,10 @@ namespace moho
     }
   }
 
-  bool UI_GetRenderViewSize(float& width, float& height) noexcept
+  bool UI_GetRenderViewSize(
+    float& width,
+    float& height
+  ) noexcept
   {
     width = gUiViewWidth;
     height = gUiViewHeight;
@@ -1961,7 +2027,10 @@ namespace moho
    * Builds per-head UI orthographic matrices from the input-window client size and
    * applies UI alpha multiplier from the owning CUIManager.
    */
-  void CD3DPrimBatcher::SetToViewport(const int head, const CUIManager& manager)
+  void CD3DPrimBatcher::SetToViewport(
+    const int head,
+    const CUIManager& manager
+  )
   {
     // EDITOR: forget the last head's size first, a head that returns early below must not be culled with it
     gUiViewWidth = 0.0f;

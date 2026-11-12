@@ -1,9 +1,14 @@
-// Stand-alone test of the GPU generator and filter kernels (gpu/gen_*.hlsl, gpu/filt_*.hlsl; EdGpuGen.cpp, EdGpuGenFilt.cpp; docs/projects/editor/GPU_COMPUTE.md, "Generator and filter kernels").
-// No GPU is needed: the kernels are compiled as C++ through gpu/hlsl_cpp_shim.h and run by the CPU emulator (tests/EdGpuEmu.h) behind the field engine's interceptor, and compared with the CPU ops.
-//   g++ -std=c++20 -O2 -ffp-contract=off -I src/sdk src/sdk/moho/editor/tests/EdGpuGenTest.cpp (sources: scripts/ed_native_tests.py) -pthread -o EdGpuGenTest
-//   EdGpuGenTest [--png DIR]      (--png writes raw float fields of the emulated GPU and CPU results for the scripts that render hillshades)
-// What is checked: GPU result against the CPU op (same arithmetic: tight tolerance; different hash or algorithm: statistics), world position invariance across cell sizes, lattice seams, isotropy,
-// range / NaN, odd sizes (1 x N, N x 1, not a multiple of 16), the Unsupported branches (the CPU op runs), that the op really ran on the (emulated) GPU and made no out of range access.
+// Stand-alone test of the GPU generator and filter kernels (gpu/gen_*.hlsl, gpu/filt_*.hlsl; EdGpuGen.cpp,
+// EdGpuGenFilt.cpp; docs/projects/editor/GPU_COMPUTE.md, "Generator and filter kernels"). No GPU is needed: the kernels
+// are compiled as C++ through gpu/hlsl_cpp_shim.h and run by the CPU emulator (tests/EdGpuEmu.h) behind the field
+// engine's interceptor, and compared with the CPU ops.
+//   g++ -std=c++20 -O2 -ffp-contract=off -I src/sdk src/sdk/moho/editor/tests/EdGpuGenTest.cpp (sources:
+//   scripts/ed_native_tests.py) -pthread -o EdGpuGenTest EdGpuGenTest [--png DIR]      (--png writes raw float fields
+//   of the emulated GPU and CPU results for the scripts that render hillshades)
+// What is checked: GPU result against the CPU op (same arithmetic: tight tolerance; different hash or algorithm:
+// statistics), world position invariance across cell sizes, lattice seams, isotropy, range / NaN, odd sizes (1 x N, N x
+// 1, not a multiple of 16), the Unsupported branches (the CPU op runs), that the op really ran on the (emulated) GPU
+// and made no out of range access.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -44,74 +49,143 @@
 #include "moho/editor/gpu/gen_island_params.hlsli"
 #include "moho/editor/gpu/gen_musgrave_params.hlsli"
 
-EMU_KERNEL_BEGIN(k_filt_bilateral)
+EMU_KERNEL_BEGIN(
+  k_filt_bilateral
+)
 #include "moho/editor/gpu/filt_bilateral.hlsl"
-EMU_KERNEL_END(filt_bilateral)
+EMU_KERNEL_END(
+  filt_bilateral
+)
 
-EMU_KERNEL_BEGIN(k_filt_blurdir)
+EMU_KERNEL_BEGIN(
+  k_filt_blurdir
+)
 #include "moho/editor/gpu/filt_blurdir.hlsl"
-EMU_KERNEL_END(filt_blurdir)
+EMU_KERNEL_END(
+  filt_blurdir
+)
 
-EMU_KERNEL_BEGIN(k_filt_diffuse)
+EMU_KERNEL_BEGIN(
+  k_filt_diffuse
+)
 #include "moho/editor/gpu/filt_diffuse.hlsl"
-EMU_KERNEL_END(filt_diffuse)
+EMU_KERNEL_END(
+  filt_diffuse
+)
 
-EMU_KERNEL_BEGIN(k_filt_dwarp)
+EMU_KERNEL_BEGIN(
+  k_filt_dwarp
+)
 #include "moho/editor/gpu/filt_dwarp.hlsl"
-EMU_KERNEL_END(filt_dwarp)
+EMU_KERNEL_END(
+  filt_dwarp
+)
 
-// the blur / box ops of the foundation (EdGpuOps.cpp) run their kernel here too: the mask blend of those ops is a filt_ kernel
-EMU_KERNEL_BEGIN(k_blur_pass)
+// the blur / box ops of the foundation (EdGpuOps.cpp) run their kernel here too: the mask blend of those ops is a filt_
+// kernel
+EMU_KERNEL_BEGIN(
+  k_blur_pass
+)
 #include "moho/editor/gpu/blur_pass.hlsl"
-EMU_KERNEL_END(blur_pass)
+EMU_KERNEL_END(
+  blur_pass
+)
 
-EMU_KERNEL_BEGIN(k_filt_lerpmask)
+EMU_KERNEL_BEGIN(
+  k_filt_lerpmask
+)
 #include "moho/editor/gpu/filt_lerpmask.hlsl"
-EMU_KERNEL_END(filt_lerpmask)
+EMU_KERNEL_END(
+  filt_lerpmask
+)
 
-EMU_KERNEL_BEGIN(k_filt_normal)
+EMU_KERNEL_BEGIN(
+  k_filt_normal
+)
 #include "moho/editor/gpu/filt_normal.hlsl"
-EMU_KERNEL_END(filt_normal)
+EMU_KERNEL_END(
+  filt_normal
+)
 
-EMU_KERNEL_BEGIN(k_filt_terrain)
+EMU_KERNEL_BEGIN(
+  k_filt_terrain
+)
 #include "moho/editor/gpu/filt_terrain.hlsl"
-EMU_KERNEL_END(filt_terrain)
+EMU_KERNEL_END(
+  filt_terrain
+)
 
-EMU_KERNEL_BEGIN(k_filt_occlusion)
+EMU_KERNEL_BEGIN(
+  k_filt_occlusion
+)
 #include "moho/editor/gpu/filt_occlusion.hlsl"
-EMU_KERNEL_END(filt_occlusion)
+EMU_KERNEL_END(
+  filt_occlusion
+)
 
-EMU_KERNEL_BEGIN(k_gen_cells)
+EMU_KERNEL_BEGIN(
+  k_gen_cells
+)
 #include "moho/editor/gpu/gen_cells.hlsl"
-EMU_KERNEL_END(gen_cells)
+EMU_KERNEL_END(
+  gen_cells
+)
 
-EMU_KERNEL_BEGIN(k_gen_craters)
+EMU_KERNEL_BEGIN(
+  k_gen_craters
+)
 #include "moho/editor/gpu/gen_craters.hlsl"
-EMU_KERNEL_END(gen_craters)
+EMU_KERNEL_END(
+  gen_craters
+)
 
-EMU_KERNEL_BEGIN(k_gen_dunes)
+EMU_KERNEL_BEGIN(
+  k_gen_dunes
+)
 #include "moho/editor/gpu/gen_dunes.hlsl"
-EMU_KERNEL_END(gen_dunes)
+EMU_KERNEL_END(
+  gen_dunes
+)
 
-EMU_KERNEL_BEGIN(k_gen_island)
+EMU_KERNEL_BEGIN(
+  k_gen_island
+)
 #include "moho/editor/gpu/gen_island.hlsl"
-EMU_KERNEL_END(gen_island)
+EMU_KERNEL_END(
+  gen_island
+)
 
-EMU_KERNEL_BEGIN(k_gen_fbmd)
+EMU_KERNEL_BEGIN(
+  k_gen_fbmd
+)
 #include "moho/editor/gpu/gen_fbmd.hlsl"
-EMU_KERNEL_END(gen_fbmd)
+EMU_KERNEL_END(
+  gen_fbmd
+)
 
-EMU_KERNEL_BEGIN(k_gen_musgrave)
+EMU_KERNEL_BEGIN(
+  k_gen_musgrave
+)
 #include "moho/editor/gpu/gen_musgrave.hlsl"
-EMU_KERNEL_END(gen_musgrave)
+EMU_KERNEL_END(
+  gen_musgrave
+)
 
-EMU_KERNEL_BEGIN(k_gen_fractal)
+EMU_KERNEL_BEGIN(
+  k_gen_fractal
+)
 #include "moho/editor/gpu/gen_fractal.hlsl"
-EMU_KERNEL_END(gen_fractal)
+EMU_KERNEL_END(
+  gen_fractal
+)
 
-EMU_KERNEL_BEGIN(k_gen_fbm)
+EMU_KERNEL_BEGIN(
+  k_gen_fbm
+)
 #include "moho/editor/gpu/gen_fbm.hlsl"
-EMU_KERNEL_END(gen_fbm)
+EMU_KERNEL_END(
+  gen_fbm
+)
 
 using namespace moho::editor;
 using field::Grid;
@@ -122,15 +196,15 @@ static int gFailures = 0;
 static int gChecks = 0;
 static std::string gPngDir;
 static bool gVerbose = false;
-#define CHECK(cond, ...)                               \
-  do {                                                 \
-    ++gChecks;                                         \
-    if (!(cond)) {                                     \
-      ++gFailures;                                     \
-      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-      std::printf(__VA_ARGS__);                        \
-      std::printf("\n");                               \
-    }                                                  \
+#define CHECK(cond, ...)                                                                                               \
+  do {                                                                                                                 \
+    ++gChecks;                                                                                                         \
+    if (!(cond)) {                                                                                                     \
+      ++gFailures;                                                                                                     \
+      std::printf("FAIL %s:%d: ", __FILE__, __LINE__);                                                                 \
+      std::printf(__VA_ARGS__);                                                                                        \
+      std::printf("\n");                                                                                               \
+    }                                                                                                                  \
   } while (0)
 
 using Num = std::map<std::string, double>;
@@ -139,7 +213,11 @@ using Inputs = std::map<std::string, GridPtr>;
 
 static gpu::EmuBackend* gBackend = nullptr;
 
-static OpArgs Args(const Num& n, const Str& s = {}, const Inputs& in = {})
+static OpArgs Args(
+  const Num& n,
+  const Str& s = {},
+  const Inputs& in = {}
+)
 {
   OpArgs a;
   a.p.num = n;
@@ -148,32 +226,49 @@ static OpArgs Args(const Num& n, const Str& s = {}, const Inputs& in = {})
   return a;
 }
 
-static std::uint64_t GpuCalls(const std::string& op)
+static std::uint64_t GpuCalls(
+  const std::string& op
+)
 {
   const auto st = field::OpStats(false);
   const auto it = st.find(op);
   return it == st.end() ? 0 : it->second.gpuCalls;
 }
 
-/** Runs `op` through RunOp with the emulated GPU; `ranOnGpu` tells whether the GPU version produced the result (false: it declined and the CPU op ran). */
-static bool RunGpu(const std::string& op, const OpArgs& a, Grid& out, bool* ranOnGpu = nullptr, std::string* errOut = nullptr)
+/** Runs `op` through RunOp with the emulated GPU; `ranOnGpu` tells whether the GPU version produced the result (false:
+ * it declined and the CPU op ran). */
+static bool RunGpu(
+  const std::string& op,
+  const OpArgs& a,
+  Grid& out,
+  bool* ranOnGpu = nullptr,
+  std::string* errOut = nullptr
+)
 {
   const std::uint64_t before = GpuCalls(op);
   std::string err;
   emu::gOob = 0;
   const bool ok = field::RunOp(op, a, out, err);
-  if (!ok && errOut != nullptr) *errOut = err;
-  if (!ok && errOut == nullptr) std::printf("op %s failed: %s\n", op.c_str(), err.c_str());
-  if (ranOnGpu != nullptr) *ranOnGpu = GpuCalls(op) == before + 1;
+  if (!ok && errOut != nullptr)
+    *errOut = err;
+  if (!ok && errOut == nullptr)
+    std::printf("op %s failed: %s\n", op.c_str(), err.c_str());
+  if (ranOnGpu != nullptr)
+    *ranOnGpu = GpuCalls(op) == before + 1;
   CHECK(emu::gOob == 0, "%s: %d out of range buffer accesses in the kernels", op.c_str(), emu::gOob);
   return ok;
 }
 
-static bool RunCpu(const std::string& op, const OpArgs& a, Grid& out)
+static bool RunCpu(
+  const std::string& op,
+  const OpArgs& a,
+  Grid& out
+)
 {
   std::string err;
   const bool ok = field::RunOpCpu(op, a, out, err);
-  if (!ok) std::printf("cpu op %s failed: %s\n", op.c_str(), err.c_str());
+  if (!ok)
+    std::printf("cpu op %s failed: %s\n", op.c_str(), err.c_str());
   return ok;
 }
 
@@ -184,13 +279,18 @@ struct Diff
   bool nan = false;
 };
 
-static Diff Compare(const Grid& a, const Grid& b)
+static Diff Compare(
+  const Grid& a,
+  const Grid& b
+)
 {
   Diff d;
-  if (!a.SameShape(b) || a.v.empty()) return d;
+  if (!a.SameShape(b) || a.v.empty())
+    return d;
   double sum = 0.0, worst = 0.0;
   for (std::size_t i = 0; i < a.v.size(); ++i) {
-    if (!std::isfinite(a.v[i]) || !std::isfinite(b.v[i])) d.nan = true;
+    if (!std::isfinite(a.v[i]) || !std::isfinite(b.v[i]))
+      d.nan = true;
     const double e = std::fabs(static_cast<double>(a.v[i]) - static_cast<double>(b.v[i]));
     sum += e;
     worst = std::max(worst, e);
@@ -200,9 +300,13 @@ static Diff Compare(const Grid& a, const Grid& b)
   return d;
 }
 
-static void WriteRaw(const std::string& name, const Grid& g)
+static void WriteRaw(
+  const std::string& name,
+  const Grid& g
+)
 {
-  if (gPngDir.empty()) return;
+  if (gPngDir.empty())
+    return;
   const std::string path = gPngDir + "/" + name + ".raw";
   if (FILE* f = std::fopen(path.c_str(), "wb")) {
     const int hd[2] = {g.w, g.h};
@@ -213,17 +317,33 @@ static void WriteRaw(const std::string& name, const Grid& g)
 }
 
 /** The GPU result must equal the CPU op's within `tol` (max abs) and must have run on the GPU. */
-static void CheckSame(const char* label, const std::string& op, const OpArgs& a, const double tol, Diff* diffOut = nullptr)
+static void CheckSame(
+  const char* label,
+  const std::string& op,
+  const OpArgs& a,
+  const double tol,
+  Diff* diffOut = nullptr
+)
 {
   Grid g, c;
   bool onGpu = false;
   const bool ok = RunGpu(op, a, g, &onGpu) && RunCpu(op, a, c);
   CHECK(ok && onGpu, "%s: the op did not run on the GPU", label);
-  if (!ok) return;
+  if (!ok)
+    return;
   const Diff d = Compare(g, c);
-  CHECK(!d.nan && d.maxAbs <= tol, "%s: GPU and CPU differ by %.3g (mean %.3g), allowed %.3g", label, d.maxAbs, d.meanAbs, tol);
-  if (gVerbose) std::printf("  %-28s max %.3g mean %.3g\n", label, d.maxAbs, d.meanAbs);
-  if (diffOut != nullptr) *diffOut = d;
+  CHECK(
+    !d.nan && d.maxAbs <= tol,
+    "%s: GPU and CPU differ by %.3g (mean %.3g), allowed %.3g",
+    label,
+    d.maxAbs,
+    d.meanAbs,
+    tol
+  );
+  if (gVerbose)
+    std::printf("  %-28s max %.3g mean %.3g\n", label, d.maxAbs, d.meanAbs);
+  if (diffOut != nullptr)
+    *diffOut = d;
   if (!gPngDir.empty() && std::strncmp(label, "render_", 7) == 0) {
     WriteRaw(std::string(label) + "_gpu", g);
     WriteRaw(std::string(label) + "_cpu", c);
@@ -231,44 +351,85 @@ static void CheckSame(const char* label, const std::string& op, const OpArgs& a,
 }
 
 /** A terrain-like input field for the filters: fractal noise (CPU op) in world units, `height` units tall. */
-static GridPtr TestTerrain(const int w, const int h, const float cell, const std::uint32_t seed, const double height = 60.0)
+static GridPtr TestTerrain(
+  const int w,
+  const int h,
+  const float cell,
+  const std::uint32_t seed,
+  const double height = 60.0
+)
 {
   auto g = std::make_shared<Grid>();
   std::string err;
-  const OpArgs a = Args({{"width", static_cast<double>(w)}, {"height", static_cast<double>(h)}, {"cell", static_cast<double>(cell)}, {"seed", static_cast<double>(seed)}, {"scale", 70.0 * cell}, {"octaves", 7}, {"ox", 17.5}, {"oz", -4.0}});
-  if (!field::RunOpCpu("fractal", a, *g, err)) std::printf("terrain failed: %s\n", err.c_str());
-  for (float& v : g->v) v *= static_cast<float>(height);
+  const OpArgs a = Args(
+    {{"width", static_cast<double>(w)},
+     {"height", static_cast<double>(h)},
+     {"cell", static_cast<double>(cell)},
+     {"seed", static_cast<double>(seed)},
+     {"scale", 70.0 * cell},
+     {"octaves", 7},
+     {"ox", 17.5},
+     {"oz", -4.0}}
+  );
+  if (!field::RunOpCpu("fractal", a, *g, err))
+    std::printf("terrain failed: %s\n", err.c_str());
+  for (float& v : g->v)
+    v *= static_cast<float>(height);
   return g;
 }
 
-// ---- kernel table ------------------------------------------------------------------------------------------------------------------------------------
+// ---- kernel table
+// ------------------------------------------------------------------------------------------------------------------------------------
 
-static bool Mine(const char* name) { return std::strncmp(name, "gen_", 4) == 0 || std::strncmp(name, "filt_", 5) == 0; }
+static bool Mine(
+  const char* name
+)
+{
+  return std::strncmp(name, "gen_", 4) == 0 || std::strncmp(name, "filt_", 5) == 0;
+}
 
 static void TestKernelTable()
 {
   int mine = 0;
   for (int i = 0; i < gpu::KernelCount(); ++i) {
     const gpu::KernelInfo& k = gpu::KernelAt(i);
-    if (!Mine(k.name)) continue;
+    if (!Mine(k.name))
+      continue;
     ++mine;
     const auto it = emu::Kernels().find(k.name);
     CHECK(it != emu::Kernels().end(), "kernel %s has an emulation in this test", k.name);
-    if (it == emu::Kernels().end()) continue;
+    if (it == emu::Kernels().end())
+      continue;
     const emu::KernelEmu& e = *it->second;
-    CHECK(static_cast<gpu::u32>(e.tx) == k.tx && static_cast<gpu::u32>(e.ty) == k.ty && static_cast<gpu::u32>(e.tz) == k.tz, "kernel %s: thread group equals the generated table", k.name);
+    CHECK(
+      static_cast<gpu::u32>(e.tx) == k.tx && static_cast<gpu::u32>(e.ty) == k.ty && static_cast<gpu::u32>(e.tz) == k.tz,
+      "kernel %s: thread group equals the generated table",
+      k.name
+    );
     gpu::u32 srv = 0, uav = 0;
-    for (const auto& r : e.srv) srv |= 1u << r.slot;
-    for (const auto& r : e.uav) uav |= 1u << r.slot;
-    CHECK(srv == k.srvMask && uav == k.uavMask, "kernel %s: resource slots (%x/%x) equal the generated table (%x/%x)", k.name, srv, uav, k.srvMask, k.uavMask);
+    for (const auto& r : e.srv)
+      srv |= 1u << r.slot;
+    for (const auto& r : e.uav)
+      uav |= 1u << r.slot;
+    CHECK(
+      srv == k.srvMask && uav == k.uavMask,
+      "kernel %s: resource slots (%x/%x) equal the generated table (%x/%x)",
+      k.name,
+      srv,
+      uav,
+      k.srvMask,
+      k.uavMask
+    );
     CHECK((e.cbData != nullptr) == (k.hasCb != 0), "kernel %s: constant buffer presence", k.name);
   }
   int emulated = 0;
-  for (const auto& kv : emu::Kernels()) emulated += Mine(kv.first.c_str()) ? 1 : 0;
+  for (const auto& kv : emu::Kernels())
+    emulated += Mine(kv.first.c_str()) ? 1 : 0;
   CHECK(mine == emulated, "the generated table has %d gen_/filt_ kernels and this test emulates %d", mine, emulated);
 }
 
-// ---- perlin simplex ridged billow ----------------------------------------------------------------------------------------------------------------------
+// ---- perlin simplex ridged billow
+// ----------------------------------------------------------------------------------------------------------------------
 
 static void TestFbmOps()
 {
@@ -299,7 +460,9 @@ static void TestFbmOps()
     Num m = base;
     m["width"] = sz.first;
     m["height"] = sz.second;
-    CheckSame(("perlin_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "perlin", Args(m), 2e-4);
+    CheckSame(
+      ("perlin_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "perlin", Args(m), 2e-4
+    );
   }
   // `like` gives the shape; a mismatch between a and like is the CPU's error (Unsupported)
   auto like = std::make_shared<Grid>(40, 30, 2.0f, 10.0f, 20.0f);
@@ -308,14 +471,27 @@ static void TestFbmOps()
   Grid g;
   bool onGpu = true;
   std::string err;
-  CHECK(!RunGpu("perlin", Args({{"width", 0}, {"height", 5}}), g, &onGpu, &err) && !onGpu && !err.empty(), "an empty size is the CPU's error: '%s'", err.c_str());
+  CHECK(
+    !RunGpu("perlin", Args({{"width", 0}, {"height", 5}}), g, &onGpu, &err) && !onGpu && !err.empty(),
+    "an empty size is the CPU's error: '%s'",
+    err.c_str()
+  );
 }
 
 /** World position: the same noise at the same place, whatever the cell size (float tolerance). */
 static void TestWorldPosition()
 {
   for (const char* op : {"perlin", "simplex", "ridged", "billow"}) {
-    Num fine = {{"width", 129}, {"height", 129}, {"seed", 4}, {"scale", 90}, {"octaves", 6}, {"rotate", 1}, {"ox", 2000.0}, {"oz", -3000.0}};
+    Num fine = {
+      {"width", 129},
+      {"height", 129},
+      {"seed", 4},
+      {"scale", 90},
+      {"octaves", 6},
+      {"rotate", 1},
+      {"ox", 2000.0},
+      {"oz", -3000.0}
+    };
     Num coarse = fine;
     coarse["width"] = 33;
     coarse["height"] = 33;
@@ -324,17 +500,28 @@ static void TestWorldPosition()
     bool a = RunGpu(op, Args(fine), f), b = RunGpu(op, Args(coarse), c);
     double worst = 0.0;
     for (int z = 0; a && b && z < 33; ++z) {
-      for (int x = 0; x < 33; ++x) worst = std::max(worst, static_cast<double>(std::fabs(f.At(x * 4, z * 4) - c.At(x, z))));
+      for (int x = 0; x < 33; ++x)
+        worst = std::max(worst, static_cast<double>(std::fabs(f.At(x * 4, z * 4) - c.At(x, z))));
     }
     CHECK(a && b && worst < 3e-4, "%s: a coarse grid differs from the fine one at the same places by %.3g", op, worst);
   }
 }
 
-// ---- fractal -------------------------------------------------------------------------------------------------------------------------------------
+// ---- fractal
+// -------------------------------------------------------------------------------------------------------------------------------------
 
 static void TestFractal()
 {
-  const Num base = {{"width", 77}, {"height", 61}, {"seed", 5}, {"scale", 30}, {"octaves", 7}, {"ox", 345.25}, {"oz", -12.5}, {"cell", 1.25}};
+  const Num base = {
+    {"width", 77},
+    {"height", 61},
+    {"seed", 5},
+    {"scale", 30},
+    {"octaves", 7},
+    {"ox", 345.25},
+    {"oz", -12.5},
+    {"cell", 1.25}
+  };
   for (const char* kind : {"fbm", "billow", "ridged"}) {
     for (const char* style : {"classic", "erosive"}) {
       for (const int warp : {0, 1, 2}) {
@@ -368,7 +555,12 @@ static void TestFractal()
     m["width"] = sz.first;
     m["height"] = sz.second;
     m["warp"] = 5;
-    CheckSame(("fractal_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "fractal", Args(m, {{"style", "erosive"}}), 4e-4);
+    CheckSame(
+      ("fractal_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(),
+      "fractal",
+      Args(m, {{"style", "erosive"}}),
+      4e-4
+    );
   }
   Num far = base;
   far["ox"] = 20000.0;
@@ -379,20 +571,40 @@ static void TestFractal()
   Grid g;
   bool onGpu = true;
   std::string err;
-  CHECK(!RunGpu("fractal", Args({{"width", 8}, {"height", 8}}, {{"kind", "bogus"}}), g, &onGpu, &err) && !onGpu && err.find("kind") != std::string::npos, "a bad kind is the CPU's error: '%s'", err.c_str());
-  CHECK(!RunGpu("fractal", Args({{"width", 8}, {"height", 8}}, {{"style", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad style is the CPU's error");
+  CHECK(
+    !RunGpu("fractal", Args({{"width", 8}, {"height", 8}}, {{"kind", "bogus"}}), g, &onGpu, &err) && !onGpu &&
+      err.find("kind") != std::string::npos,
+    "a bad kind is the CPU's error: '%s'",
+    err.c_str()
+  );
+  CHECK(
+    !RunGpu("fractal", Args({{"width", 8}, {"height", 8}}, {{"style", "bogus"}}), g, &onGpu, &err) && !onGpu,
+    "a bad style is the CPU's error"
+  );
 }
 
-// ---- musgrave, fbm_damped ------------------------------------------------------------------------------------------------------------------------
+// ---- musgrave, fbm_damped
+// ------------------------------------------------------------------------------------------------------------------------
 
 static void TestMusgraveAndDamped()
 {
-  const Num base = {{"width", 71}, {"height", 47}, {"seed", 6}, {"scale", 28}, {"octaves", 7}, {"ox", -250.5}, {"oz", 91.0}, {"cell", 1.5}};
+  const Num base = {
+    {"width", 71},
+    {"height", 47},
+    {"seed", 6},
+    {"scale", 28},
+    {"octaves", 7},
+    {"ox", -250.5},
+    {"oz", 91.0},
+    {"cell", 1.5}
+  };
   for (const char* mode : {"ridged", "hybrid", "hetero"}) {
     for (const int rot : {0, 1}) {
       Num n = base;
       n["rotate"] = rot;
-      CheckSame((std::string("musgrave_") + mode + (rot ? "_rot" : "")).c_str(), "musgrave", Args(n, {{"mode", mode}}), 5e-5);
+      CheckSame(
+        (std::string("musgrave_") + mode + (rot ? "_rot" : "")).c_str(), "musgrave", Args(n, {{"mode", mode}}), 5e-5
+      );
     }
   }
   Num n = base;
@@ -417,21 +629,32 @@ static void TestMusgraveAndDamped()
     Num m = base;
     m["width"] = sz.first;
     m["height"] = sz.second;
-    CheckSame(("musgrave_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "musgrave", Args(m), 5e-5);
-    CheckSame(("fbm_damped_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "fbm_damped", Args(m), 5e-5);
+    CheckSame(
+      ("musgrave_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "musgrave", Args(m), 5e-5
+    );
+    CheckSame(
+      ("fbm_damped_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "fbm_damped", Args(m), 5e-5
+    );
   }
   Grid g;
   bool onGpu = true;
   std::string err;
-  CHECK(!RunGpu("musgrave", Args({{"width", 8}, {"height", 8}}, {{"mode", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad mode is the CPU's error");
+  CHECK(
+    !RunGpu("musgrave", Args({{"width", 8}, {"height", 8}}, {{"mode", "bogus"}}), g, &onGpu, &err) && !onGpu,
+    "a bad mode is the CPU's error"
+  );
 }
 
-// ---- voronoi, cells, cracks ----------------------------------------------------------------------------------------------------------------------
+// ---- voronoi, cells, cracks
+// ----------------------------------------------------------------------------------------------------------------------
 
 static void TestCellular()
 {
-  const Num base = {{"width", 83}, {"height", 59}, {"seed", 8}, {"scale", 17}, {"ox", 400.5}, {"oz", -13.0}, {"cell", 1.5}};
-  for (const char* mode : {"f1", "f2", "edge", "id", "crack"}) CheckSame((std::string("voronoi_") + mode).c_str(), "voronoi", Args(base, {{"mode", mode}}), 1e-4);
+  const Num base = {
+    {"width", 83}, {"height", 59}, {"seed", 8}, {"scale", 17}, {"ox", 400.5}, {"oz", -13.0}, {"cell", 1.5}
+  };
+  for (const char* mode : {"f1", "f2", "edge", "id", "crack"})
+    CheckSame((std::string("voronoi_") + mode).c_str(), "voronoi", Args(base, {{"mode", mode}}), 1e-4);
   {
     Num n = base;
     n["jitter"] = 0.4;
@@ -445,21 +668,33 @@ static void TestCellular()
       n["smooth"] = 11;
       n["warp"] = (std::string(mode) == "f2" || std::string(mode) == "plate") ? 6.0 : 0.0;
       const std::string label = std::string("cells_") + metric + "_" + mode;
-      // an `id` or a plate level changes with the least rounding difference of a distance comparison: a few samples may pick the neighbour feature point: allow those
+      // an `id` or a plate level changes with the least rounding difference of a distance comparison: a few samples may
+      // pick the neighbour feature point: allow those
       Grid g, c;
       bool onGpu = false;
-      const bool ok = RunGpu("cells", Args(n, {{"metric", metric}, {"mode", mode}}), g, &onGpu) && RunCpu("cells", Args(n, {{"metric", metric}, {"mode", mode}}), c);
+      const bool ok = RunGpu("cells", Args(n, {{"metric", metric}, {"mode", mode}}), g, &onGpu) &&
+        RunCpu("cells", Args(n, {{"metric", metric}, {"mode", mode}}), c);
       CHECK(ok && onGpu, "%s: the op did not run on the GPU", label.c_str());
-      if (!ok) continue;
+      if (!ok)
+        continue;
       std::size_t bad = 0;
       double worst = 0.0;
       for (std::size_t i = 0; i < g.v.size(); ++i) {
         const double e = std::fabs(static_cast<double>(g.v[i]) - static_cast<double>(c.v[i]));
         worst = std::max(worst, e);
-        if (e > 2e-4) ++bad;
+        if (e > 2e-4)
+          ++bad;
       }
-      if (gVerbose) std::printf("  %-28s max %.3g, %zu of %zu samples differ\n", label.c_str(), worst, bad, g.v.size());
-      CHECK(bad * 200 <= g.v.size(), "%s: %zu of %zu samples differ from the CPU (largest %.3g)", label.c_str(), bad, g.v.size(), worst);
+      if (gVerbose)
+        std::printf("  %-28s max %.3g, %zu of %zu samples differ\n", label.c_str(), worst, bad, g.v.size());
+      CHECK(
+        bad * 200 <= g.v.size(),
+        "%s: %zu of %zu samples differ from the CPU (largest %.3g)",
+        label.c_str(),
+        bad,
+        g.v.size(),
+        worst
+      );
     }
   }
   for (const char* profile : {"v", "u", "flat"}) {
@@ -473,12 +708,23 @@ static void TestCellular()
       const OpArgs args = Args(n, {{"profile", profile}});
       const bool ok = RunGpu("cracks", args, g, &onGpu) && RunCpu("cracks", args, c);
       CHECK(ok && onGpu, "cracks %s %d: the op did not run on the GPU", profile, levels);
-      if (!ok) continue;
+      if (!ok)
+        continue;
       const Diff d = Compare(g, c);
       std::size_t bad = 0;
-      for (std::size_t i = 0; i < g.v.size(); ++i) bad += std::fabs(g.v[i] - c.v[i]) > 2e-3 ? 1 : 0;
-      if (gVerbose) std::printf("  cracks_%s_%d                max %.3g, %zu differ\n", profile, levels, d.maxAbs, bad);
-      CHECK(bad * 200 <= g.v.size(), "cracks %s %d: %zu of %zu samples differ (largest %.3g)", profile, levels, bad, g.v.size(), d.maxAbs);
+      for (std::size_t i = 0; i < g.v.size(); ++i)
+        bad += std::fabs(g.v[i] - c.v[i]) > 2e-3 ? 1 : 0;
+      if (gVerbose)
+        std::printf("  cracks_%s_%d                max %.3g, %zu differ\n", profile, levels, d.maxAbs, bad);
+      CHECK(
+        bad * 200 <= g.v.size(),
+        "cracks %s %d: %zu of %zu samples differ (largest %.3g)",
+        profile,
+        levels,
+        bad,
+        g.v.size(),
+        d.maxAbs
+      );
     }
   }
   Num nw = base;
@@ -488,16 +734,28 @@ static void TestCellular()
     Num m = base;
     m["width"] = sz.first;
     m["height"] = sz.second;
-    CheckSame(("cells_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "cells", Args(m, {{"mode", "edge"}}), 2e-4);
+    CheckSame(
+      ("cells_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(),
+      "cells",
+      Args(m, {{"mode", "edge"}}),
+      2e-4
+    );
   }
   Grid g;
   bool onGpu = true;
   std::string err;
-  CHECK(!RunGpu("cells", Args({{"width", 8}, {"height", 8}}, {{"mode", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad mode is the CPU's error");
-  CHECK(!RunGpu("cells", Args({{"width", 8}, {"height", 8}}, {{"metric", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad metric is the CPU's error");
+  CHECK(
+    !RunGpu("cells", Args({{"width", 8}, {"height", 8}}, {{"mode", "bogus"}}), g, &onGpu, &err) && !onGpu,
+    "a bad mode is the CPU's error"
+  );
+  CHECK(
+    !RunGpu("cells", Args({{"width", 8}, {"height", 8}}, {{"metric", "bogus"}}), g, &onGpu, &err) && !onGpu,
+    "a bad metric is the CPU's error"
+  );
 }
 
-// ---- craters, dunes, island ----------------------------------------------------------------------------------------------------------------------
+// ---- craters, dunes, island
+// ----------------------------------------------------------------------------------------------------------------------
 
 static void TestScatterOps()
 {
@@ -557,10 +815,14 @@ static void TestScatterOps()
   Grid g;
   bool onGpu = true;
   std::string err;
-  CHECK(!RunGpu("island", Args({{"width", 8}, {"height", 8}}, {{"output", "bogus"}}), g, &onGpu, &err) && !onGpu, "a bad island output is the CPU's error");
+  CHECK(
+    !RunGpu("island", Args({{"width", 8}, {"height", 8}}, {{"output", "bogus"}}), g, &onGpu, &err) && !onGpu,
+    "a bad island output is the CPU's error"
+  );
 }
 
-// ---- filters -------------------------------------------------------------------------------------------------------------------------------------
+// ---- filters
+// -------------------------------------------------------------------------------------------------------------------------------------
 
 static void TestOcclusion()
 {
@@ -571,19 +833,41 @@ static void TestOcclusion()
   }
   {
     Grid g;
-    CHECK(RunGpu("occlusion", Args({{"radius", 40}, {"gain", 2.0}}, {}, {{"a", ter}}), g) && field::Measure(g).sd > 0.02 && field::Measure(g).max > 0.2, "the occlusion of a rough terrain has structure (sd %.3f)", field::Measure(g).sd);
+    CHECK(
+      RunGpu("occlusion", Args({{"radius", 40}, {"gain", 2.0}}, {}, {{"a", ter}}), g) && field::Measure(g).sd > 0.02 &&
+        field::Measure(g).max > 0.2,
+      "the occlusion of a rough terrain has structure (sd %.3f)",
+      field::Measure(g).sd
+    );
   }
-  CheckSame("occlusion_params", "occlusion", Args({{"radius", 9}, {"directions", 5}, {"gain", 0.7}}, {{"mode", "both"}}, {{"a", ter}}), 5e-5);
+  CheckSame(
+    "occlusion_params",
+    "occlusion",
+    Args({{"radius", 9}, {"directions", 5}, {"gain", 0.7}}, {{"mode", "both"}}, {{"a", ter}}),
+    5e-5
+  );
   CheckSame("occlusion_big", "occlusion", Args({{"radius", 400}, {"directions", 32}}, {}, {{"a", ter}}), 5e-5);
   for (const std::pair<int, int> sz : {std::pair<int, int>{1, 19}, {23, 1}, {1, 1}, {17, 13}}) {
     const GridPtr t = TestTerrain(sz.first, sz.second, 1.0f, 5);
-    CheckSame(("occlusion_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "occlusion", Args({{"radius", 12}}, {}, {{"a", t}}), 5e-5);
+    CheckSame(
+      ("occlusion_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(),
+      "occlusion",
+      Args({{"radius", 12}}, {}, {{"a", t}}),
+      5e-5
+    );
   }
   Grid g;
   bool onGpu = true;
   std::string err;
-  CHECK(!RunGpu("occlusion", Args({}), g, &onGpu, &err) && !onGpu && !err.empty(), "a missing input is the CPU's error: '%s'", err.c_str());
-  CHECK(!RunGpu("occlusion", Args({}, {{"mode", "bogus"}}, {{"a", ter}}), g, &onGpu, &err) && !onGpu, "a bad mode is the CPU's error");
+  CHECK(
+    !RunGpu("occlusion", Args({}), g, &onGpu, &err) && !onGpu && !err.empty(),
+    "a missing input is the CPU's error: '%s'",
+    err.c_str()
+  );
+  CHECK(
+    !RunGpu("occlusion", Args({}, {{"mode", "bogus"}}, {{"a", ter}}), g, &onGpu, &err) && !onGpu,
+    "a bad mode is the CPU's error"
+  );
 }
 
 static void TestSmoothingFilters()
@@ -591,7 +875,8 @@ static void TestSmoothingFilters()
   const GridPtr ter = TestTerrain(61, 47, 1.5f, 6);
   auto mask = std::make_shared<Grid>(61, 47, 1.5f, 17.5f, -4.0f);
   for (int z = 0; z < 47; ++z) {
-    for (int x = 0; x < 61; ++x) mask->At(x, z) = static_cast<float>(x) / 60.0f;
+    for (int x = 0; x < 61; ++x)
+      mask->At(x, z) = static_cast<float>(x) / 60.0f;
   }
   for (const bool useMask : {false, true}) {
     const Inputs in = useMask ? Inputs{{"a", ter}, {"mask", mask}} : Inputs{{"a", ter}};
@@ -599,8 +884,19 @@ static void TestSmoothingFilters()
     CheckSame(("bilateral" + tag).c_str(), "bilateral", Args({{"radius", 6}, {"sigma_r", 3}}, {}, in), 1e-4);
     CheckSame(("bilateral_r1" + tag).c_str(), "bilateral", Args({{"radius", 1.5}, {"sigma_r", 0.5}}, {}, in), 1e-4);
     CheckSame(("diffuse" + tag).c_str(), "diffuse", Args({{"iterations", 15}, {"kappa", 0.6}}, {}, in), 1e-4);
-    CheckSame(("diffuse_exp" + tag).c_str(), "diffuse", Args({{"iterations", 7}, {"kappa", 0.3}, {"rate", 0.1}}, {{"g", "exp"}}, in), 1e-4);
-    for (const char* shape : {"box", "tri", "gauss"}) CheckSame((std::string("blur_dir_") + shape + tag).c_str(), "blur_dir", Args({{"angle", 37}, {"length", 25}}, {{"shape", shape}}, in), 1e-4);
+    CheckSame(
+      ("diffuse_exp" + tag).c_str(),
+      "diffuse",
+      Args({{"iterations", 7}, {"kappa", 0.3}, {"rate", 0.1}}, {{"g", "exp"}}, in),
+      1e-4
+    );
+    for (const char* shape : {"box", "tri", "gauss"})
+      CheckSame(
+        (std::string("blur_dir_") + shape + tag).c_str(),
+        "blur_dir",
+        Args({{"angle", 37}, {"length", 25}}, {{"shape", shape}}, in),
+        1e-4
+      );
   }
   for (const std::pair<int, int> sz : {std::pair<int, int>{1, 19}, {23, 1}, {1, 1}, {17, 13}}) {
     const GridPtr t = TestTerrain(sz.first, sz.second, 1.0f, 7);
@@ -609,49 +905,84 @@ static void TestSmoothingFilters()
     CheckSame(("diffuse_" + tag).c_str(), "diffuse", Args({{"iterations", 3}}, {}, {{"a", t}}), 1e-4);
     CheckSame(("blur_dir_" + tag).c_str(), "blur_dir", Args({{"length", 6}}, {}, {{"a", t}}), 1e-4);
   }
-  // Unsupported: no iterations / no length (the CPU op copies the input), a mask of another size (the CPU op reports it)
+  // Unsupported: no iterations / no length (the CPU op copies the input), a mask of another size (the CPU op reports
+  // it)
   Grid g;
   bool onGpu = true;
   std::string err;
-  CHECK(RunGpu("diffuse", Args({{"iterations", 0}}, {}, {{"a", ter}}), g, &onGpu) && !onGpu, "diffuse with 0 iterations is the CPU's");
-  CHECK(RunGpu("blur_dir", Args({{"length", 0}}, {}, {{"a", ter}}), g, &onGpu) && !onGpu, "blur_dir with length 0 is the CPU's");
+  CHECK(
+    RunGpu("diffuse", Args({{"iterations", 0}}, {}, {{"a", ter}}), g, &onGpu) && !onGpu,
+    "diffuse with 0 iterations is the CPU's"
+  );
+  CHECK(
+    RunGpu("blur_dir", Args({{"length", 0}}, {}, {{"a", ter}}), g, &onGpu) && !onGpu,
+    "blur_dir with length 0 is the CPU's"
+  );
   auto small = std::make_shared<Grid>(5, 5, 1.0f, 0.0f, 0.0f, 0.5f);
-  CHECK(!RunGpu("bilateral", Args({}, {}, {{"a", ter}, {"mask", small}}), g, &onGpu, &err) && !onGpu && !err.empty(), "a mask of another size is the CPU's error: '%s'", err.c_str());
+  CHECK(
+    !RunGpu("bilateral", Args({}, {}, {{"a", ter}, {"mask", small}}), g, &onGpu, &err) && !onGpu && !err.empty(),
+    "a mask of another size is the CPU's error: '%s'",
+    err.c_str()
+  );
 }
 
 static void TestDWarp()
 {
   const GridPtr ter = TestTerrain(67, 51, 2.0f, 8);
   auto mask = std::make_shared<Grid>(67, 51, 2.0f, 17.5f, -4.0f);
-  for (std::size_t i = 0; i < mask->v.size(); ++i) mask->v[i] = static_cast<float>(i % 7) / 6.0f;
+  for (std::size_t i = 0; i < mask->v.size(); ++i)
+    mask->v[i] = static_cast<float>(i % 7) / 6.0f;
   for (const char* kind : {"fbm", "curl", "swirl", "ripple", "pinch"}) {
     for (const char* edge : {"clamp", "wrap", "mirror"}) {
-      Num n = {{"strength", 14}, {"size", 40}, {"octaves", 4}, {"seed", 3}, {"angle", 20}, {"wavelength", 30}, {"phase", 0.7}};
-      if (std::string(kind) == "pinch") n["strength"] = 0.5;
-      if (std::string(kind) == "swirl") n["strength"] = 90;
-      CheckSame((std::string("dwarp_") + kind + "_" + edge).c_str(), "dwarp", Args(n, {{"kind", kind}, {"edge", edge}}, {{"a", ter}}), 2e-3);
+      Num n = {
+        {"strength", 14}, {"size", 40}, {"octaves", 4}, {"seed", 3}, {"angle", 20}, {"wavelength", 30}, {"phase", 0.7}
+      };
+      if (std::string(kind) == "pinch")
+        n["strength"] = 0.5;
+      if (std::string(kind) == "swirl")
+        n["strength"] = 90;
+      CheckSame(
+        (std::string("dwarp_") + kind + "_" + edge).c_str(),
+        "dwarp",
+        Args(n, {{"kind", kind}, {"edge", edge}}, {{"a", ter}}),
+        2e-3
+      );
     }
   }
   Num n = {{"strength", 25}, {"size", 55}, {"iterations", 2}, {"octaves", 5}};
   CheckSame("dwarp_fbm2", "dwarp", Args(n, {{"kind", "fbm"}}, {{"a", ter}}), 2e-3);
   n["iterations"] = 3;
   CheckSame("dwarp_fbm3_mask", "dwarp", Args(n, {{"kind", "fbm"}}, {{"a", ter}, {"mask", mask}}), 2e-3);
-  CheckSame("dwarp_swirl_centre", "dwarp", Args({{"strength", 120}, {"size", 30}, {"cx", 60}, {"cz", 20}}, {{"kind", "swirl"}}, {{"a", ter}}), 2e-3);
+  CheckSame(
+    "dwarp_swirl_centre",
+    "dwarp",
+    Args({{"strength", 120}, {"size", 30}, {"cx", 60}, {"cz", 20}}, {{"kind", "swirl"}}, {{"a", ter}}),
+    2e-3
+  );
   for (const std::pair<int, int> sz : {std::pair<int, int>{1, 19}, {23, 1}, {17, 13}}) {
     const GridPtr t = TestTerrain(sz.first, sz.second, 1.0f, 9);
-    CheckSame(("dwarp_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(), "dwarp", Args({{"strength", 5}, {"size", 10}}, {{"kind", "fbm"}, {"edge", "mirror"}}, {{"a", t}}), 2e-3);
+    CheckSame(
+      ("dwarp_" + std::to_string(sz.first) + "x" + std::to_string(sz.second)).c_str(),
+      "dwarp",
+      Args({{"strength", 5}, {"size", 10}}, {{"kind", "fbm"}, {"edge", "mirror"}}, {{"a", t}}),
+      2e-3
+    );
   }
   Grid g;
   bool onGpu = true;
   std::string err;
-  CHECK(!RunGpu("dwarp", Args({}, {{"kind", "bogus"}}, {{"a", ter}}), g, &onGpu, &err) && !onGpu, "a bad kind is the CPU's error");
+  CHECK(
+    !RunGpu("dwarp", Args({}, {{"kind", "bogus"}}, {{"a", ter}}), g, &onGpu, &err) && !onGpu,
+    "a bad kind is the CPU's error"
+  );
 }
 
 static void TestBlurMask()
 {
   const GridPtr ter = TestTerrain(66, 49, 1.0f, 13);
   auto mask = std::make_shared<Grid>(66, 49, 1.0f, 17.5f, -4.0f);
-  for (std::size_t i = 0; i < mask->v.size(); ++i) mask->v[i] = static_cast<float>(i % 11) / 8.0f - 0.2f;   // below 0 and above 1: clamped
+  for (std::size_t i = 0; i < mask->v.size(); ++i)
+    mask->v[i] = static_cast<float>(i % 11) / 8.0f - 0.2f; // below 0 and above 1: clamped
   for (const char* op : {"blur", "box"}) {
     CheckSame((std::string(op) + "_mask").c_str(), op, Args({{"radius", 4}}, {}, {{"a", ter}, {"mask", mask}}), 2e-5);
     CheckSame((std::string(op) + "_nomask").c_str(), op, Args({{"radius", 4}}, {}, {{"a", ter}}), 2e-5);
@@ -665,24 +996,47 @@ static void TestTerrainFamily()
   const GridPtr ter = TestTerrain(75, 59, 2.0f, 11);
   const Inputs in = {{"a", ter}};
   for (const int n : {1, 3, 16}) {
-    CheckSame(("slope_deg_" + std::to_string(n)).c_str(), "slope", Args({{"radius", static_cast<double>(n)}}, {}, in), 2e-3);
-    CheckSame(("slope_grad_" + std::to_string(n)).c_str(), "slope", Args({{"radius", static_cast<double>(n)}}, {{"mode", "gradient"}}, in), 1e-5);
+    CheckSame(
+      ("slope_deg_" + std::to_string(n)).c_str(), "slope", Args({{"radius", static_cast<double>(n)}}, {}, in), 2e-3
+    );
+    CheckSame(
+      ("slope_grad_" + std::to_string(n)).c_str(),
+      "slope",
+      Args({{"radius", static_cast<double>(n)}}, {{"mode", "gradient"}}, in),
+      1e-5
+    );
   }
   for (const int n : {1, 2, 32}) {
-    CheckSame(("curvature_" + std::to_string(n)).c_str(), "curvature", Args({{"radius", static_cast<double>(n)}, {"gain", 30}}, {}, in), 1e-5);
-    CheckSame(("curvature_raw_" + std::to_string(n)).c_str(), "curvature", Args({{"radius", static_cast<double>(n)}, {"raw", 1}}, {}, in), 1e-4);
+    CheckSame(
+      ("curvature_" + std::to_string(n)).c_str(),
+      "curvature",
+      Args({{"radius", static_cast<double>(n)}, {"gain", 30}}, {}, in),
+      1e-5
+    );
+    CheckSame(
+      ("curvature_raw_" + std::to_string(n)).c_str(),
+      "curvature",
+      Args({{"radius", static_cast<double>(n)}, {"raw", 1}}, {}, in),
+      1e-4
+    );
   }
   CheckSame("aspect_facing", "aspect", Args({{"azimuth", 120}, {"flat", 0.3}}, {}, in), 1e-5);
   CheckSame("aspect_degrees", "aspect", Args({{"radius", 2}}, {{"mode", "degrees"}}, in), 5e-3);
   for (const char* mode : {"shade", "lit", "shadow"}) {
-    CheckSame((std::string("hillshade_") + mode).c_str(), "hillshade", Args({{"azimuth", 300}, {"altitude", 25}, {"z", 2}, {"shadow_len", 80}}, {{"mode", mode}}, in), 1e-3);
+    CheckSame(
+      (std::string("hillshade_") + mode).c_str(),
+      "hillshade",
+      Args({{"azimuth", 300}, {"altitude", 25}, {"z", 2}, {"shadow_len", 80}}, {{"mode", mode}}, in),
+      1e-3
+    );
   }
   CheckSame("hillshade_shadows", "hillshade", Args({{"shadows", 1}, {"ambient", 0.3}}, {}, in), 1e-3);
   CheckSame("hillshade_plain", "hillshade", Args({{"z", 0.5}}, {}, in), 1e-5);
   // normal_map: three fields (x is the result, y and z the extras), shifted origin
   for (const double shift : {0.0, 1.0}) {
     for (const int sgn : {0, 1}) {
-      OpArgs args = Args({{"span", 2}, {"strength", 1.5}, {"shift", shift}, {"signed", static_cast<double>(sgn)}}, {}, in);
+      OpArgs args =
+        Args({{"span", 2}, {"strength", 1.5}, {"shift", shift}, {"signed", static_cast<double>(sgn)}}, {}, in);
       std::map<std::string, Grid> exG, exC;
       OpArgs ag = args, ac = args;
       ag.extra = &exG;
@@ -691,15 +1045,26 @@ static void TestTerrainFamily()
       bool onGpu = false;
       const bool ok = RunGpu("normal_map", ag, g, &onGpu) && RunCpu("normal_map", ac, c);
       CHECK(ok && onGpu, "normal_map: did not run on the GPU");
-      if (!ok) continue;
-      CHECK(Compare(g, c).maxAbs < 2e-5 && std::fabs(g.ox - c.ox) < 1e-6f && std::fabs(g.oz - c.oz) < 1e-6f, "normal_map x: diff %.3g, origin %.3f vs %.3f", Compare(g, c).maxAbs, g.ox, c.ox);
+      if (!ok)
+        continue;
+      CHECK(
+        Compare(g, c).maxAbs < 2e-5 && std::fabs(g.ox - c.ox) < 1e-6f && std::fabs(g.oz - c.oz) < 1e-6f,
+        "normal_map x: diff %.3g, origin %.3f vs %.3f",
+        Compare(g, c).maxAbs,
+        g.ox,
+        c.ox
+      );
       for (const char* ch : {"y", "z"}) {
-        CHECK(exG.count(ch) == 1 && exC.count(ch) == 1 && Compare(exG[ch], exC[ch]).maxAbs < 2e-5, "normal_map %s: extra output differs", ch);
+        CHECK(
+          exG.count(ch) == 1 && exC.count(ch) == 1 && Compare(exG[ch], exC[ch]).maxAbs < 2e-5,
+          "normal_map %s: extra output differs",
+          ch
+        );
         CHECK(exG.count(ch) == 1 && std::fabs(exG[ch].ox - exC[ch].ox) < 1e-6f, "normal_map %s: origin", ch);
       }
     }
   }
-  {   // without extras the op still runs
+  { // without extras the op still runs
     Grid g;
     bool onGpu = false;
     CHECK(RunGpu("normal_map", Args({}, {}, in), g, &onGpu) && onGpu, "normal_map without extra outputs");
@@ -713,23 +1078,46 @@ static void TestTerrainFamily()
     CheckSame(("hillshade_" + tag).c_str(), "hillshade", Args({}, {{"mode", "shadow"}}, {{"a", t}}), 1e-3);
     CheckSame(("normal_map_" + tag).c_str(), "normal_map", Args({}, {}, {{"a", t}}), 2e-5);
   }
-  // Unsupported: slope windows (rating / variation), bad modes, and small fields on a default policy (cheap ops stay on the CPU)
+  // Unsupported: slope windows (rating / variation), bad modes, and small fields on a default policy (cheap ops stay on
+  // the CPU)
   Grid g;
   bool onGpu = true;
   std::string err;
-  CHECK(RunGpu("slope", Args({{"window", 2}}, {{"mode", "rating"}}, in), g, &onGpu) && !onGpu, "slope rating is the CPU's");
-  CHECK(!RunGpu("slope", Args({}, {{"mode", "bogus"}}, in), g, &onGpu, &err) && !onGpu, "a bad slope mode is the CPU's error");
-  CHECK(!RunGpu("hillshade", Args({}, {{"mode", "bogus"}}, in), g, &onGpu, &err) && !onGpu, "a bad hillshade mode is the CPU's error");
-  CHECK(!RunGpu("aspect", Args({}, {{"mode", "bogus"}}, in), g, &onGpu, &err) && !onGpu, "a bad aspect mode is the CPU's error");
+  CHECK(
+    RunGpu("slope", Args({{"window", 2}}, {{"mode", "rating"}}, in), g, &onGpu) && !onGpu, "slope rating is the CPU's"
+  );
+  CHECK(
+    !RunGpu("slope", Args({}, {{"mode", "bogus"}}, in), g, &onGpu, &err) && !onGpu,
+    "a bad slope mode is the CPU's error"
+  );
+  CHECK(
+    !RunGpu("hillshade", Args({}, {{"mode", "bogus"}}, in), g, &onGpu, &err) && !onGpu,
+    "a bad hillshade mode is the CPU's error"
+  );
+  CHECK(
+    !RunGpu("aspect", Args({}, {{"mode", "bogus"}}, in), g, &onGpu, &err) && !onGpu,
+    "a bad aspect mode is the CPU's error"
+  );
   gpu::GetPolicy().minCells = 65536.0f;
-  CHECK(RunGpu("slope", Args({}, {}, in), g, &onGpu) && !onGpu, "a small field: slope stays on the CPU with the default policy");
-  CHECK(RunGpu("occlusion", Args({{"radius", 10}}, {}, in), g, &onGpu) && !onGpu, "a small field: occlusion stays on the CPU with the default policy (below ed_gpu_min_cells)");
+  CHECK(
+    RunGpu("slope", Args({}, {}, in), g, &onGpu) && !onGpu,
+    "a small field: slope stays on the CPU with the default policy"
+  );
+  CHECK(
+    RunGpu("occlusion", Args({{"radius", 10}}, {}, in), g, &onGpu) && !onGpu,
+    "a small field: occlusion stays on the CPU with the default policy (below ed_gpu_min_cells)"
+  );
   gpu::GetPolicy().minCells = 0.0f;
 }
 
-// ---- quality of the generators (the properties EdLandTest checks for the CPU ops, here for the emulated GPU result) -----------------------------------------
+// ---- quality of the generators (the properties EdLandTest checks for the CPU ops, here for the emulated GPU result)
+// -----------------------------------------
 
-static GridPtr Gen(const std::string& op, const Num& n, const Str& s = {})
+static GridPtr Gen(
+  const std::string& op,
+  const Num& n,
+  const Str& s = {}
+)
 {
   auto g = std::make_shared<Grid>();
   bool onGpu = false;
@@ -740,8 +1128,12 @@ static GridPtr Gen(const std::string& op, const Num& n, const Str& s = {})
   return g;
 }
 
-/** Mean |value - 0.5| on the coarse lattice points against the same count of other points: plain octaves all vanish on the lattice, rotated ones must not. */
-static double LatticeRatioOf(const Grid& g, const int step)
+/** Mean |value - 0.5| on the coarse lattice points against the same count of other points: plain octaves all vanish on
+ * the lattice, rotated ones must not. */
+static double LatticeRatioOf(
+  const Grid& g,
+  const int step
+)
 {
   double on = 0.0, other = 0.0;
   int n1 = 0, n2 = 0;
@@ -756,7 +1148,10 @@ static double LatticeRatioOf(const Grid& g, const int step)
   return (on / n1) / std::max(1e-9, other / n2);
 }
 
-static double MeanGradient(const Grid& g, const double cell)
+static double MeanGradient(
+  const Grid& g,
+  const double cell
+)
 {
   double sum = 0.0;
   long n = 0;
@@ -773,7 +1168,8 @@ static double MeanGradient(const Grid& g, const double cell)
 
 static void TestGeneratorQuality()
 {
-  // lattice seams: with rotate every octave is in its own frame, the plain sum vanishes on the lattice points (the artefact the option removes)
+  // lattice seams: with rotate every octave is in its own frame, the plain sum vanishes on the lattice points (the
+  // artefact the option removes)
   const Num plain = {{"width", 321}, {"height", 321}, {"seed", 3}, {"scale", 32}, {"octaves", 4}};
   Num rot = plain;
   rot["rotate"] = 1;
@@ -786,12 +1182,20 @@ static void TestGeneratorQuality()
     CHECK(v > 0.6 && v < 1.5, "GPU %s with rotate: lattice ratio %.3f", op, v);
   }
   for (const char* style : {"classic", "erosive"}) {
-    const double v = LatticeRatioOf(*Gen("fractal", {{"width", 321}, {"height", 321}, {"seed", 3}, {"scale", 32}, {"octaves", 4}}, {{"style", style}}), 32);
+    const double v = LatticeRatioOf(
+      *Gen(
+        "fractal", {{"width", 321}, {"height", 321}, {"seed", 3}, {"scale", 32}, {"octaves", 4}}, {{"style", style}}
+      ),
+      32
+    );
     CHECK(v > 0.7 && v < 1.4, "GPU fractal %s: lattice ratio %.3f", style, v);
   }
-  // isotropy: the variance of the slope along a direction does not depend on the direction (the 8 gradient noise prefers the axes)
+  // isotropy: the variance of the slope along a direction does not depend on the direction (the 8 gradient noise
+  // prefers the axes)
   for (const char* style : {"classic", "erosive"}) {
-    const GridPtr g = Gen("fractal", {{"width", 385}, {"height", 385}, {"seed", 11}, {"scale", 70}, {"octaves", 6}}, {{"style", style}});
+    const GridPtr g = Gen(
+      "fractal", {{"width", 385}, {"height", 385}, {"seed", 11}, {"scale", 70}, {"octaves", 6}}, {{"style", style}}
+    );
     double var[6] = {};
     for (int d = 0; d < 6; ++d) {
       const double a = static_cast<double>(d) * 3.14159265358979 / 6.0;
@@ -815,16 +1219,49 @@ static void TestGeneratorQuality()
   // range and NaN: every kind and style stays in 0..1 with a spread
   for (const char* kind : {"fbm", "billow", "ridged"}) {
     for (const char* style : {"classic", "erosive"}) {
-      const GridPtr g = Gen("fractal", {{"width", 193}, {"height", 161}, {"seed", 4}, {"scale", 60}, {"octaves", 10}, {"warp", 25}, {"warp_levels", 2}, {"slope_detail", 0.8}}, {{"kind", kind}, {"style", style}});
+      const GridPtr g = Gen(
+        "fractal",
+        {{"width", 193},
+         {"height", 161},
+         {"seed", 4},
+         {"scale", 60},
+         {"octaves", 10},
+         {"warp", 25},
+         {"warp_levels", 2},
+         {"slope_detail", 0.8}},
+        {{"kind", kind}, {"style", style}}
+      );
       const field::Stats s = field::Measure(*g);
       bool finite = true;
-      for (const float v : g->v) finite = finite && std::isfinite(v);
-      CHECK(finite && s.min >= 0.0f && s.max <= 1.0f && s.sd > 0.05 && s.sd < 0.3, "GPU fractal %s %s: range %.3f .. %.3f sd %.3f finite %d", kind, style, s.min, s.max, s.sd, finite ? 1 : 0);
+      for (const float v : g->v)
+        finite = finite && std::isfinite(v);
+      CHECK(
+        finite && s.min >= 0.0f && s.max <= 1.0f && s.sd > 0.05 && s.sd < 0.3,
+        "GPU fractal %s %s: range %.3f .. %.3f sd %.3f finite %d",
+        kind,
+        style,
+        s.min,
+        s.max,
+        s.sd,
+        finite ? 1 : 0
+      );
     }
   }
-  // world position: the same noise at the same place whatever the cell size, also with warp, erosive style, antialias off
+  // world position: the same noise at the same place whatever the cell size, also with warp, erosive style, antialias
+  // off
   for (const char* style : {"classic", "erosive"}) {
-    Num fine = {{"width", 129}, {"height", 129}, {"seed", 4}, {"scale", 90}, {"octaves", 8}, {"warp", 12}, {"warp_levels", 2}, {"slope_detail", 0.4}, {"ox", 3000.0}, {"oz", -2000.0}};
+    Num fine = {
+      {"width", 129},
+      {"height", 129},
+      {"seed", 4},
+      {"scale", 90},
+      {"octaves", 8},
+      {"warp", 12},
+      {"warp_levels", 2},
+      {"slope_detail", 0.4},
+      {"ox", 3000.0},
+      {"oz", -2000.0}
+    };
     Num coarse = fine;
     coarse["width"] = 33;
     coarse["height"] = 33;
@@ -833,19 +1270,25 @@ static void TestGeneratorQuality()
     const GridPtr c = Gen("fractal", coarse, {{"style", style}});
     double worst = 0.0;
     for (int z = 0; z < 33; ++z) {
-      for (int x = 0; x < 33; ++x) worst = std::max(worst, static_cast<double>(std::fabs(f->At(x * 4, z * 4) - c->At(x, z))));
+      for (int x = 0; x < 33; ++x)
+        worst = std::max(worst, static_cast<double>(std::fabs(f->At(x * 4, z * 4) - c->At(x, z))));
     }
-    CHECK(worst < 1e-3, "GPU fractal %s: a coarse grid differs from the fine one at the same places by %.3g", style, worst);
+    CHECK(
+      worst < 1e-3, "GPU fractal %s: a coarse grid differs from the fine one at the same places by %.3g", style, worst
+    );
   }
-  // antialias: a coarse preview of a detailed terrain has the slope of the low pass of the full resolution result; without it the octaves finer than the samples alias into extra slope
+  // antialias: a coarse preview of a detailed terrain has the slope of the low pass of the full resolution result;
+  // without it the octaves finer than the samples alias into extra slope
   {
-    const Num fullN = {{"width", 513}, {"height", 513}, {"seed", 6}, {"scale", 160}, {"octaves", 10}, {"persistence", 0.75}, {"cell", 1}};
+    const Num fullN = {
+      {"width", 513}, {"height", 513}, {"seed", 6}, {"scale", 160}, {"octaves", 10}, {"persistence", 0.75}, {"cell", 1}
+    };
     Num prevN = fullN;
     prevN["width"] = 65;
     prevN["height"] = 65;
     prevN["cell"] = 8;
     const GridPtr full = Gen("fractal", fullN);
-    Grid low(65, 65, 8.0f, 0.0f, 0.0f);   // box average of the full result over 8 x 8 samples (the low pass)
+    Grid low(65, 65, 8.0f, 0.0f, 0.0f); // box average of the full result over 8 x 8 samples (the low pass)
     for (int z = 0; z < 65; ++z) {
       for (int x = 0; x < 65; ++x) {
         double s = 0.0;
@@ -853,7 +1296,8 @@ static void TestGeneratorQuality()
         for (int dz = -4; dz <= 4; ++dz) {
           for (int dx = -4; dx <= 4; ++dx) {
             const int xx = x * 8 + dx, zz = z * 8 + dz;
-            if (xx < 0 || zz < 0 || xx >= 513 || zz >= 513) continue;
+            if (xx < 0 || zz < 0 || xx >= 513 || zz >= 513)
+              continue;
             s += full->At(xx, zz);
             ++n;
           }
@@ -867,21 +1311,32 @@ static void TestGeneratorQuality()
     aaN["antialias"] = 1;
     const GridPtr aa = Gen("fractal", aaN);
     const double gPoint = MeanGradient(*point, 8.0), gAa = MeanGradient(*aa, 8.0);
-    if (gVerbose) std::printf("  antialias: mean slope low pass %.5f, aliased preview %.5f, antialiased preview %.5f\n", gLow, gPoint, gAa);
+    if (gVerbose)
+      std::printf(
+        "  antialias: mean slope low pass %.5f, aliased preview %.5f, antialiased preview %.5f\n", gLow, gPoint, gAa
+      );
     CHECK(gPoint > 1.15 * gLow, "the test needs an aliased preview (%.5f vs %.5f)", gPoint, gLow);
-    CHECK(gAa < gPoint && std::fabs(gAa - gLow) < std::fabs(gPoint - gLow) * 0.5, "antialias: the preview slope %.5f is not closer to the low pass %.5f than the aliased %.5f", gAa, gLow, gPoint);
+    CHECK(
+      gAa < gPoint && std::fabs(gAa - gLow) < std::fabs(gPoint - gLow) * 0.5,
+      "antialias: the preview slope %.5f is not closer to the low pass %.5f than the aliased %.5f",
+      gAa,
+      gLow,
+      gPoint
+    );
     WriteRaw("preview_full", *full);
     WriteRaw("preview_aliased", *point);
     WriteRaw("preview_antialiased", *aa);
   }
-  // the erosive style damps the finer octaves where the terrain is steep: less roughness on the steepest quarter, relative to the flattest quarter
+  // the erosive style damps the finer octaves where the terrain is steep: less roughness on the steepest quarter,
+  // relative to the flattest quarter
   {
     auto steepRatio = [](const Grid& g) {
-      std::vector<std::pair<float, float>> v;   // (slope, roughness)
+      std::vector<std::pair<float, float>> v; // (slope, roughness)
       for (int z = 2; z + 2 < g.h; ++z) {
         for (int x = 2; x + 2 < g.w; ++x) {
           const float gx = (g.At(x + 2, z) - g.At(x - 2, z)) * 0.25f, gz = (g.At(x, z + 2) - g.At(x, z - 2)) * 0.25f;
-          const float lap = std::fabs(g.At(x + 1, z) + g.At(x - 1, z) + g.At(x, z + 1) + g.At(x, z - 1) - 4.0f * g.At(x, z));
+          const float lap =
+            std::fabs(g.At(x + 1, z) + g.At(x - 1, z) + g.At(x, z + 1) + g.At(x, z - 1) - 4.0f * g.At(x, z));
           v.push_back({std::sqrt(gx * gx + gz * gz), lap});
         }
       }
@@ -897,43 +1352,82 @@ static void TestGeneratorQuality()
     const Num n = {{"width", 257}, {"height", 257}, {"seed", 5}, {"scale", 120}, {"octaves", 9}};
     const GridPtr c = Gen("fractal", n), e = Gen("fractal", n, {{"style", "erosive"}});
     const double rc = steepRatio(*c), re = steepRatio(*e);
-    if (gVerbose) std::printf("  erosive: roughness steep / flat classic %.3f erosive %.3f\n", rc, re);
-    CHECK(re < 0.8 * rc, "erosive: the steep ground is not smoother relative to the flat ground (classic %.3f, erosive %.3f)", rc, re);
+    if (gVerbose)
+      std::printf("  erosive: roughness steep / flat classic %.3f erosive %.3f\n", rc, re);
+    CHECK(
+      re < 0.8 * rc,
+      "erosive: the steep ground is not smoother relative to the flat ground (classic %.3f, erosive %.3f)",
+      rc,
+      re
+    );
   }
   // pictures of the GPU and CPU results for the hillshade renders (scripts of the lab: --png DIR)
   if (!gPngDir.empty()) {
     for (const char* style : {"classic", "erosive"}) {
       for (const char* kind : {"fbm", "ridged"}) {
         Num n = {{"width", 513}, {"height", 513}, {"seed", 3}, {"scale", 180}, {"octaves", 9}};
-        CheckSame((std::string("render_") + kind + "_" + style).c_str(), "fractal", Args(n, {{"kind", kind}, {"style", style}}), 1e-3);
+        CheckSame(
+          (std::string("render_") + kind + "_" + style).c_str(),
+          "fractal",
+          Args(n, {{"kind", kind}, {"style", style}}),
+          1e-3
+        );
       }
     }
     Num w = {{"width", 513}, {"height", 513}, {"seed", 9}, {"scale", 220}, {"octaves", 9}, {"warp", 120}};
     CheckSame("render_warp1", "fractal", Args(w, {{"style", "erosive"}}), 1e-3);
     w["warp_levels"] = 2;
     CheckSame("render_warp2", "fractal", Args(w, {{"style", "erosive"}}), 1e-3);
-    for (const char* op : {"musgrave", "fbm_damped"}) CheckSame((std::string("render_") + op).c_str(), op, Args({{"width", 513}, {"height", 513}, {"seed", 3}, {"scale", 200}, {"octaves", 9}, {"rotate", 1}}), 1e-3);
-    CheckSame("render_cells", "cells", Args({{"width", 513}, {"height", 513}, {"scale", 90}, {"warp", 25}}, {{"mode", "plate"}}), 1e-3);
+    for (const char* op : {"musgrave", "fbm_damped"})
+      CheckSame(
+        (std::string("render_") + op).c_str(),
+        op,
+        Args({{"width", 513}, {"height", 513}, {"seed", 3}, {"scale", 200}, {"octaves", 9}, {"rotate", 1}}),
+        1e-3
+      );
+    CheckSame(
+      "render_cells",
+      "cells",
+      Args({{"width", 513}, {"height", 513}, {"scale", 90}, {"warp", 25}}, {{"mode", "plate"}}),
+      1e-3
+    );
     CheckSame("render_cracks", "cracks", Args({{"width", 513}, {"height", 513}, {"scale", 120}}), 1e-3);
-    CheckSame("render_dunes", "dunes", Args({{"width", 513}, {"height", 513}, {"wavelength", 70}, {"angle", 30}}), 1e-3);
+    CheckSame(
+      "render_dunes", "dunes", Args({{"width", 513}, {"height", 513}, {"wavelength", 70}, {"angle", 30}}), 1e-3
+    );
     CheckSame("render_craters", "craters", Args({{"width", 513}, {"height", 513}, {"scale", 120}}), 1e-3);
     CheckSame("render_island", "island", Args({{"width", 513}, {"height", 513}, {"roughness", 0.5}}), 1e-3);
-    const GridPtr ter = Gen("fractal", {{"width", 513}, {"height", 513}, {"seed", 3}, {"scale", 180}, {"octaves", 9}}, {{"style", "erosive"}});
+    const GridPtr ter = Gen(
+      "fractal", {{"width", 513}, {"height", 513}, {"seed", 3}, {"scale", 180}, {"octaves", 9}}, {{"style", "erosive"}}
+    );
     auto scaled = std::make_shared<Grid>(*ter);
-    for (float& v : scaled->v) v *= 120.0f;
-    CheckSame("render_occlusion", "occlusion", Args({{"radius", 40}, {"mode", 2}}, {{"mode", "both"}}, {{"a", scaled}}), 1e-3);
+    for (float& v : scaled->v)
+      v *= 120.0f;
+    CheckSame(
+      "render_occlusion", "occlusion", Args({{"radius", 40}, {"mode", 2}}, {{"mode", "both"}}, {{"a", scaled}}), 1e-3
+    );
     CheckSame("render_hillshade", "hillshade", Args({{"z", 1.5}}, {{"mode", "shade"}}, {{"a", scaled}}), 1e-3);
-    CheckSame("render_shadow", "hillshade", Args({{"altitude", 20}, {"shadow_len", 200}}, {{"mode", "lit"}}, {{"a", scaled}}), 1e-3);
+    CheckSame(
+      "render_shadow",
+      "hillshade",
+      Args({{"altitude", 20}, {"shadow_len", 200}}, {{"mode", "lit"}}, {{"a", scaled}}),
+      1e-3
+    );
     WriteRaw("render_height", *scaled);
   }
 }
 
-int main(int argc, char** argv)
+int main(
+  int argc,
+  char** argv
+)
 {
   for (int i = 1; i + 1 < argc; ++i) {
-    if (std::strcmp(argv[i], "--png") == 0) gPngDir = argv[i + 1];
+    if (std::strcmp(argv[i], "--png") == 0)
+      gPngDir = argv[i + 1];
   }
-  for (int i = 1; i < argc; ++i) gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
+  for (int i = 1; i < argc; ++i)
+    gVerbose = gVerbose || std::strcmp(argv[i], "-v") == 0;
   gpu::EmuBackend backend;
   gBackend = &backend;
   gpu::SetBackendForTest(&backend);

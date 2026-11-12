@@ -40,7 +40,9 @@ namespace moho
       &ren_TextureAtlasCache
     );
 
-    [[nodiscard]] AtlasCacheSlot& AtlasCacheSlotFor(const CD3DBatchTexture* const texture) noexcept
+    [[nodiscard]] AtlasCacheSlot& AtlasCacheSlotFor(
+      const CD3DBatchTexture* const texture
+    ) noexcept
     {
       const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(texture);
       return sAtlasCache[((address >> 4U) ^ (address >> 14U)) & (kAtlasCacheSlots - 1U)];
@@ -65,14 +67,15 @@ namespace moho
       return destination;
     }
 
-
     /**
      * Address: 0x00448E10 (FUN_00448E10)
      *
      * What it does:
      * Releases one batch-texture shared handle scratch lane.
      */
-    void ReleaseBatchTextureHandle(BatchTextureHandle* const scratchHandle)
+    void ReleaseBatchTextureHandle(
+      BatchTextureHandle* const scratchHandle
+    )
     {
       if (scratchHandle != nullptr) {
         scratchHandle->reset();
@@ -85,7 +88,9 @@ namespace moho
      * What it does:
      * Returns whether one 32-bit value lane is zero.
      */
-    [[nodiscard]] bool IsZero(const std::uint32_t* const valueLane)
+    [[nodiscard]] bool IsZero(
+      const std::uint32_t* const valueLane
+    )
     {
       return valueLane != nullptr && *valueLane == 0u;
     }
@@ -138,19 +143,24 @@ namespace moho
    */
   CD3DTextureBatcher::CD3DTextureBatcher()
     : CD3DTextureBatcher(kCompositeWidth, kCompositeHeight, kDynamicTextureFormat)
-  {
-  }
+  {}
 
   /**
    * Editor addition: same body as the retail constructor with a caller-chosen size and gal format token
    * (12 = DXT5, 1 byte per texel; 2 = A8R8G8B8, 4 bytes per texel).
    */
-  CD3DTextureBatcher::CD3DTextureBatcher(const std::int32_t width, const std::int32_t height)
+  CD3DTextureBatcher::CD3DTextureBatcher(
+    const std::int32_t width,
+    const std::int32_t height
+  )
     : CD3DTextureBatcher(width, height, kDynamicTextureFormat)
-  {
-  }
+  {}
 
-  CD3DTextureBatcher::CD3DTextureBatcher(const std::int32_t width, const std::int32_t height, const std::int32_t format)
+  CD3DTextureBatcher::CD3DTextureBatcher(
+    const std::int32_t width,
+    const std::int32_t height,
+    const std::int32_t format
+  )
     : mWidth(width)
     , mHeight(height)
     , mRects()
@@ -167,8 +177,10 @@ namespace moho
       }
     }
 
-    // One byte per texel, rows in blocks of four (GetCompositeTexture): 0x100000 bytes at 1024x1024; A8R8G8B8 holds four.
-    const std::size_t bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * ((format == 2) ? 4u : 1u);
+    // One byte per texel, rows in blocks of four (GetCompositeTexture): 0x100000 bytes at 1024x1024; A8R8G8B8 holds
+    // four.
+    const std::size_t bytes =
+      static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * ((format == 2) ? 4u : 1u);
     mPixels.resize(bytes);
     Reset();
   }
@@ -178,21 +190,26 @@ namespace moho
    */
   namespace
   {
-    // Tells the shared A8R8G8B8 atlas about device exits (reset / shutdown): the sheet content is lost, the CPU copy is not.
+    // Tells the shared A8R8G8B8 atlas about device exits (reset / shutdown): the sheet content is lost, the CPU copy is
+    // not.
     class ArgbAtlasListener final : public Listener<const SD3DDeviceEvent&>
     {
     public:
-      explicit ArgbAtlasListener(CD3DTextureBatcher* const atlas)
+      explicit ArgbAtlasListener(
+        CD3DTextureBatcher* const atlas
+      )
         : mAtlas(atlas)
       {
         D3D_GetDevice()->AddListener(this);
       }
 
-      void OnEvent(const SD3DDeviceEvent& event) override
+      void OnEvent(
+        const SD3DDeviceEvent& event
+      ) override
       {
-        // Type 1 = about to reset or destroy the device. A reset sends it with mShouldReleaseTextures false (CD3DDevice::
-        // InitContext), so the flag must not be required: the engine's own save / restore of dynamic sheets across a
-        // reset did not preserve this atlas cleanly (stray lines after a resize), a fresh sheet does.
+        // Type 1 = about to reset or destroy the device. A reset sends it with mShouldReleaseTextures false
+        // (CD3DDevice:: InitContext), so the flag must not be required: the engine's own save / restore of dynamic
+        // sheets across a reset did not preserve this atlas cleanly (stray lines after a resize), a fresh sheet does.
         if (event.mEventType == 1u) {
           mAtlas->OnDeviceExit();
         }
@@ -231,7 +248,7 @@ namespace moho
   {
     // FUN_00448B30: the explicit atlas-tree clear ahead of member teardown.
     std::memset(sAtlasCache, 0, sizeof(sAtlasCache));
-    ++moho::editor::renderstats::gCur.atlasResets;   // EDITOR: ed_render_stats
+    ++moho::editor::renderstats::gCur.atlasResets; // EDITOR: ed_render_stats
     mMap.clear();
   }
 
@@ -242,14 +259,16 @@ namespace moho
    * Returns cached UVs for one batch texture or allocates new atlas space,
    * uploads the texture payload, and stores one new UV mapping.
    */
-  const gpg::Rect2f* CD3DTextureBatcher::AddTexture(const boost::shared_ptr<CD3DBatchTexture>& texture)
+  const gpg::Rect2f* CD3DTextureBatcher::AddTexture(
+    const boost::shared_ptr<CD3DBatchTexture>& texture
+  )
   {
     if (!texture) {
       return nullptr;
     }
 
     AtlasCacheSlot& cacheSlot = AtlasCacheSlotFor(texture.get());
-    moho::editor::renderstats::Frame& stats = moho::editor::renderstats::gCur;   // EDITOR: ed_render_stats
+    moho::editor::renderstats::Frame& stats = moho::editor::renderstats::gCur; // EDITOR: ed_render_stats
     ++stats.atlasLookups;
     if (ren_TextureAtlasCache && cacheSlot.mTexture == texture.get() && cacheSlot.mOwner == this) {
       ++stats.atlasFastHits;
@@ -289,9 +308,9 @@ namespace moho
       // mWidth * z0 + 4 * x0. A8R8G8B8 (editor): 4 bytes per texel, a row is 4 * mWidth bytes.
       const std::size_t destinationOffset = (mFormat == 2)
         ? (static_cast<std::size_t>(mWidth) * 4u * static_cast<std::size_t>(allocatedRect.z0)) +
-            (static_cast<std::size_t>(allocatedRect.x0) * 4u)
+          (static_cast<std::size_t>(allocatedRect.x0) * 4u)
         : (static_cast<std::size_t>(mWidth) * static_cast<std::size_t>(allocatedRect.z0)) +
-            (static_cast<std::size_t>(allocatedRect.x0) * 4u);
+          (static_cast<std::size_t>(allocatedRect.x0) * 4u);
       texture->BuildTextureData(mPixels.begin() + destinationOffset, static_cast<std::uint32_t>(4 * mWidth));
       mDirty = 1;
     }
@@ -398,7 +417,11 @@ namespace moho
    * Selects the best-fit free rectangle (top-most, then left-most) that can
    * fit the requested dimensions.
    */
-  bool CD3DTextureBatcher::FindRect(gpg::Rect2i& outRect, const int width, const int height) const
+  bool CD3DTextureBatcher::FindRect(
+    gpg::Rect2i& outRect,
+    const int width,
+    const int height
+  ) const
   {
     bool found = false;
     for (gpg::Rect2i* it = mRects.begin(); it != mRects.end(); ++it) {
@@ -410,9 +433,7 @@ namespace moho
         continue;
       }
 
-      if (!found ||
-          candidate.z0 < outRect.z0 ||
-          (candidate.z0 == outRect.z0 && candidate.x0 < outRect.x0)) {
+      if (!found || candidate.z0 < outRect.z0 || (candidate.z0 == outRect.z0 && candidate.x0 < outRect.x0)) {
         outRect.x0 = candidate.x0;
         outRect.z0 = candidate.z0;
         outRect.x1 = candidate.x0 + width;
@@ -431,7 +452,9 @@ namespace moho
    * Removes one allocated rectangle from the free list and re-inserts
    * remaining split fragments.
    */
-  void CD3DTextureBatcher::AllocateRect(const gpg::Rect2i& allocatedRect)
+  void CD3DTextureBatcher::AllocateRect(
+    const gpg::Rect2i& allocatedRect
+  )
   {
     AvailableRectVector currentRects(mRects);
     mRects.clear();
@@ -439,15 +462,9 @@ namespace moho
     for (gpg::Rect2i* it = currentRects.begin(); it != currentRects.end(); ++it) {
       const gpg::Rect2i freeRect = *it;
 
-      const bool noStrictOverlap =
-        allocatedRect.x0 >= freeRect.x1 ||
-        freeRect.x0 >= allocatedRect.x1 ||
-        allocatedRect.z0 >= freeRect.z1 ||
-        freeRect.z0 >= allocatedRect.z1 ||
-        allocatedRect.x0 >= allocatedRect.x1 ||
-        allocatedRect.z0 >= allocatedRect.z1 ||
-        freeRect.x0 >= freeRect.x1 ||
-        freeRect.z0 >= freeRect.z1;
+      const bool noStrictOverlap = allocatedRect.x0 >= freeRect.x1 || freeRect.x0 >= allocatedRect.x1 ||
+        allocatedRect.z0 >= freeRect.z1 || freeRect.z0 >= allocatedRect.z1 || allocatedRect.x0 >= allocatedRect.x1 ||
+        allocatedRect.z0 >= allocatedRect.z1 || freeRect.x0 >= freeRect.x1 || freeRect.z0 >= freeRect.z1;
 
       if (noStrictOverlap) {
         AddAvailableRect(freeRect);
@@ -476,7 +493,9 @@ namespace moho
    * Inserts one free rectangle while removing dominated fragments and skipping
    * insertion when fully covered by an existing entry.
    */
-  void CD3DTextureBatcher::AddAvailableRect(const gpg::Rect2i& rect)
+  void CD3DTextureBatcher::AddAvailableRect(
+    const gpg::Rect2i& rect
+  )
   {
     gpg::Rect2i* writeIt = mRects.begin();
 
@@ -484,9 +503,7 @@ namespace moho
       const gpg::Rect2i& current = *readIt;
 
       if (current.x0 <= rect.x0) {
-        if (current.x1 >= rect.x1 &&
-            rect.z0 >= current.z0 &&
-            current.z1 >= rect.z1) {
+        if (current.x1 >= rect.x1 && rect.z0 >= current.z0 && current.z1 >= rect.z1) {
           return;
         }
         if (current.x0 < rect.x0) {

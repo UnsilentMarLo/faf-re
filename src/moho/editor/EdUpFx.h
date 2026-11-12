@@ -1,4 +1,5 @@
-// EDITOR: what the particle editor's two binding units share (EdUpFxLua.cpp: the blueprint logic as natives; EdFxView.cpp: the preview).
+// EDITOR: what the particle editor's two binding units share (EdUpFxLua.cpp: the blueprint logic as natives;
+// EdFxView.cpp: the preview).
 #pragma once
 
 #include "editor/doc/EdEmitter.h"

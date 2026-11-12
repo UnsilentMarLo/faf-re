@@ -18,14 +18,20 @@ namespace moho
   {
     namespace
     {
-      // ---- manifest -------------------------------------------------------------------------------------------------------------------
+      // ---- manifest
+      // -------------------------------------------------------------------------------------------------------------------
 
-      bool Field(const std::string& line, const char* key, std::string& out)
+      bool Field(
+        const std::string& line,
+        const char* key,
+        std::string& out
+      )
       {
         const std::string needle = std::string(key) + " = ";
         std::size_t at = 0;
         while ((at = line.find(needle, at)) != std::string::npos) {
-          const bool wordStart = at == 0 || !(std::isalnum(static_cast<unsigned char>(line[at - 1])) || line[at - 1] == '_');
+          const bool wordStart =
+            at == 0 || !(std::isalnum(static_cast<unsigned char>(line[at - 1])) || line[at - 1] == '_');
           at += needle.size();
           if (!wordStart) {
             continue;
@@ -38,7 +44,8 @@ namespace moho
             out = line.substr(at + 1, end - at - 1);
           } else {
             std::size_t end = at;
-            while (end < line.size() && (std::isdigit(static_cast<unsigned char>(line[end])) || line[end] == '.' || line[end] == '-')) {
+            while (end < line.size() &&
+                   (std::isdigit(static_cast<unsigned char>(line[end])) || line[end] == '.' || line[end] == '-')) {
               ++end;
             }
             out = line.substr(at, end - at);
@@ -49,7 +56,10 @@ namespace moho
       }
 
       template <class Fn>
-      void ForEachLine(const std::vector<std::uint8_t>& file, Fn fn)
+      void ForEachLine(
+        const std::vector<std::uint8_t>& file,
+        Fn fn
+      )
       {
         const char* p = reinterpret_cast<const char*>(file.data());
         const char* const end = p + file.size();
@@ -63,10 +73,22 @@ namespace moho
         }
       }
 
-      bool ParseManifest(const std::vector<std::uint8_t>& file, MeshMap& map)
+      bool ParseManifest(
+        const std::vector<std::uint8_t>& file,
+        MeshMap& map
+      )
       {
-        static const char* const kSlotNames[kSlots] = {"diffuse_a",    "diffuse_b", "light_mask_0", "light_mask_1", "light_mask_2",
-                                                       "normal_a",     "normal_b",  "specular",     "specular_b"};
+        static const char* const kSlotNames[kSlots] = {
+          "diffuse_a",
+          "diffuse_b",
+          "light_mask_0",
+          "light_mask_1",
+          "light_mask_2",
+          "normal_a",
+          "normal_b",
+          "specular",
+          "specular_b"
+        };
         Settings& s = map.settings;
         struct Number
         {
@@ -166,14 +188,18 @@ namespace moho
         return !map.patches.empty();
       }
 
-      inline float Read32(const std::uint8_t* p)
+      inline float Read32(
+        const std::uint8_t* p
+      )
       {
         float f;
         std::memcpy(&f, p, 4);
         return f;
       }
 
-      inline std::uint32_t ReadU32(const std::uint8_t* p)
+      inline std::uint32_t ReadU32(
+        const std::uint8_t* p
+      )
       {
         std::uint32_t v;
         std::memcpy(&v, p, 4);
@@ -181,13 +207,17 @@ namespace moho
       }
     } // namespace
 
-    // ---- file access -----------------------------------------------------------------------------------------------------------------
+    // ---- file access
+    // -----------------------------------------------------------------------------------------------------------------
 
-    std::vector<std::uint8_t> ReadVfs(const std::string& path)
+    std::vector<std::uint8_t> ReadVfs(
+      const std::string& path
+    )
     {
       std::vector<std::uint8_t> out;
       try {
-        // the engine's reader wants the path the virtual file system resolves (a folder file, or a place inside an archive)
+        // the engine's reader wants the path the virtual file system resolves (a folder file, or a place inside an
+        // archive)
         moho::FWaitHandleSet* const set = moho::FILE_GetWaitHandleSet();
         if (set == nullptr || set->mHandle == nullptr) {
           return out;
@@ -200,7 +230,10 @@ namespace moho
         const gpg::MemBuffer<char> buffer = moho::DISK_ReadFile(resolved.c_str());
         const std::size_t size = buffer.Size();
         if (size > 0 && buffer.mBegin != nullptr) {
-          out.assign(reinterpret_cast<const std::uint8_t*>(buffer.mBegin), reinterpret_cast<const std::uint8_t*>(buffer.mBegin) + size);
+          out.assign(
+            reinterpret_cast<const std::uint8_t*>(buffer.mBegin),
+            reinterpret_cast<const std::uint8_t*>(buffer.mBegin) + size
+          );
         }
       } catch (...) {
         out.clear();
@@ -208,9 +241,15 @@ namespace moho
       return out;
     }
 
-    // ---- SCM v5 ---------------------------------------------------------------------------------------------------------------------
+    // ---- SCM v5
+    // ---------------------------------------------------------------------------------------------------------------------
 
-    bool ParseScm(const std::uint8_t* bytes, const std::size_t size, Patch& out, std::string& why)
+    bool ParseScm(
+      const std::uint8_t* bytes,
+      const std::size_t size,
+      Patch& out,
+      std::string& why
+    )
     {
       if (size < 48 || std::memcmp(bytes, "MODL", 4) != 0) {
         why = "not an SCM file";
@@ -223,9 +262,11 @@ namespace moho
         why = "SCM version " + std::to_string(version) + " (the mesh terrain reads version 5)";
         return false;
       }
-      if (vertexCount == 0 || vertexCount > 65535 || indexCount % 3 != 0 ||
-          static_cast<std::uint64_t>(vertexOffset) + vertexCount * 68ull > size ||
-          static_cast<std::uint64_t>(indexOffset) + indexCount * 2ull > size) {
+      if (
+        vertexCount == 0 || vertexCount > 65535 || indexCount % 3 != 0 ||
+        static_cast<std::uint64_t>(vertexOffset) + vertexCount * 68ull > size ||
+        static_cast<std::uint64_t>(indexOffset) + indexCount * 2ull > size
+      ) {
         why = "unusable SCM header (vertex or index block outside the file, or more than 65,535 vertices)";
         return false;
       }
@@ -260,7 +301,8 @@ namespace moho
       return true;
     }
 
-    // ---- MeshMap --------------------------------------------------------------------------------------------------------------------
+    // ---- MeshMap
+    // --------------------------------------------------------------------------------------------------------------------
 
     void MeshMap::Clear()
     {
@@ -274,7 +316,9 @@ namespace moho
       gridBuilt_ = false;
     }
 
-    bool MeshMap::Load(const std::string& manifestVfsPath)
+    bool MeshMap::Load(
+      const std::string& manifestVfsPath
+    )
     {
       Clear();
       manifestPath = manifestVfsPath;
@@ -326,7 +370,11 @@ namespace moho
       return n;
     }
 
-    bool MeshMap::HeightRange(const float margin, float& low, float& high) const
+    bool MeshMap::HeightRange(
+      const float margin,
+      float& low,
+      float& high
+    ) const
     {
       const float x0 = settings.playable[0] - margin, z0 = settings.playable[1] - margin;
       const float x1 = settings.playable[2] + margin, z1 = settings.playable[3] + margin;
@@ -350,7 +398,11 @@ namespace moho
       return any;
     }
 
-    bool MeshMap::TriangleAt(const int patch, const int tri, float v[3][3]) const
+    bool MeshMap::TriangleAt(
+      const int patch,
+      const int tri,
+      float v[3][3]
+    ) const
     {
       if (patch < 0 || patch >= static_cast<int>(patches.size())) {
         return false;
@@ -368,7 +420,8 @@ namespace moho
       return true;
     }
 
-    // ---- lookup grid ----------------------------------------------------------------------------------------------------------------
+    // ---- lookup grid
+    // ----------------------------------------------------------------------------------------------------------------
 
     void MeshMap::BuildGrid()
     {
@@ -452,9 +505,15 @@ namespace moho
       gridBuilt_ = true;
     }
 
-    // ---- queries --------------------------------------------------------------------------------------------------------------------
+    // ---- queries
+    // --------------------------------------------------------------------------------------------------------------------
 
-    bool MeshMap::HeightAt(const float x, const float z, const float ceiling, float& y) const
+    bool MeshMap::HeightAt(
+      const float x,
+      const float z,
+      const float ceiling,
+      float& y
+    ) const
     {
       if (!gridBuilt_) {
         return false;
@@ -497,7 +556,14 @@ namespace moho
     namespace
     {
       // Moeller-Trumbore, both sides; t in units of the (unit) direction
-      bool RayTriangle(const float o[3], const float d[3], const float v[3][3], float& t, float& u, float& w)
+      bool RayTriangle(
+        const float o[3],
+        const float d[3],
+        const float v[3][3],
+        float& t,
+        float& u,
+        float& w
+      )
       {
         const float e1[3] = {v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]};
         const float e2[3] = {v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]};
@@ -522,7 +588,12 @@ namespace moho
       }
     } // namespace
 
-    bool MeshMap::Raycast(const float origin[3], const float dir[3], const float maxDistance, RayHit& hit) const
+    bool MeshMap::Raycast(
+      const float origin[3],
+      const float dir[3],
+      const float maxDistance,
+      RayHit& hit
+    ) const
     {
       if (!gridBuilt_) {
         return false;
@@ -588,7 +659,7 @@ namespace moho
                 x /= len;
               }
             }
-            if (n[1] < 0.0f) {      // face the sky: the editor places things on top
+            if (n[1] < 0.0f) { // face the sky: the editor places things on top
               for (float& x : n) {
                 x = -x;
               }

@@ -1,7 +1,8 @@
 // EDITOR: main loop frame pacing and CPU statistics, see EdPerf.h and EdPerfPolicy.h.
 //
-// Thread model: everything here runs on the main thread (the wx loop in WinApp.cpp, CD3DDevice::Paint, the UI Lua state). No D3D, no Lua and no engine state is touched from
-// any other thread; the one worker-free trick is a waitable timer the main thread sleeps on.
+// Thread model: everything here runs on the main thread (the wx loop in WinApp.cpp, CD3DDevice::Paint, the UI Lua
+// state). No D3D, no Lua and no engine state is touched from any other thread; the one worker-free trick is a waitable
+// timer the main thread sleeps on.
 
 #include "moho/editor/EdPerf.h"
 #include "moho/editor/EdPerfPolicy.h"
@@ -35,7 +36,8 @@ namespace moho::editor::perf
 {
   namespace
   {
-    // ---- console variables ---------------------------------------------------------------------------------------------------------------------
+    // ---- console variables
+    // ---------------------------------------------------------------------------------------------------------------------
 
     bool gThrottleOn = true;
     float gFpsLimit = 300.0f;
@@ -45,46 +47,103 @@ namespace moho::editor::perf
     float gIdleSeconds = 3.0f;
     bool gFollowRefresh = true;
 
-    TConVar<bool> gConThrottle("ed_fps_throttle", "Editor: 1 = the frame rate limiter of the main loop is on (ed_fps_limit, ed_fps_loading, ed_fps_background, ed_fps_idle)", &gThrottleOn);
-    TConVar<float> gConLimit("ed_fps_limit", "Editor: frames per second cap while the editor is in use, 0 = none (default 300)", &gFpsLimit);
-    TConVar<float> gConLoading("ed_fps_loading", "Editor: frames per second cap while a map loads, 0 = none (default 60)", &gFpsLoading);
-    TConVar<float> gConBackground("ed_fps_background", "Editor: frames per second cap while another program has the focus, 0 = none (default 60)", &gFpsBackground);
-    TConVar<float> gConIdle("ed_fps_idle", "Editor: frames per second cap after ed_idle_seconds without keyboard or mouse input, 0 = none (default 60: a still scene needs no more, input lifts the cap at once)", &gFpsIdle);
+    TConVar<bool> gConThrottle(
+      "ed_fps_throttle",
+      "Editor: 1 = the frame rate limiter of the main loop is on (ed_fps_limit, ed_fps_loading, ed_fps_background, "
+      "ed_fps_idle)",
+      &gThrottleOn
+    );
+    TConVar<float> gConLimit(
+      "ed_fps_limit",
+      "Editor: frames per second cap while the editor is in use, 0 = none (default 300)",
+      &gFpsLimit
+    );
+    TConVar<float> gConLoading(
+      "ed_fps_loading",
+      "Editor: frames per second cap while a map loads, 0 = none (default 60)",
+      &gFpsLoading
+    );
+    TConVar<float> gConBackground(
+      "ed_fps_background",
+      "Editor: frames per second cap while another program has the focus, 0 = none (default 60)",
+      &gFpsBackground
+    );
+    TConVar<float> gConIdle(
+      "ed_fps_idle",
+      "Editor: frames per second cap after ed_idle_seconds without keyboard or mouse input, 0 = none (default 60: a "
+      "still scene needs no more, input lifts the cap at once)",
+      &gFpsIdle
+    );
     bool gParallelNormalMap = true;
-    TConVar<bool> gConParNormalMap("ed_par_normalmap", "Editor: 1 = big normal map updates (map load, whole map edits) use the worker pool (default 1)", &gParallelNormalMap);
+    TConVar<bool> gConParNormalMap(
+      "ed_par_normalmap",
+      "Editor: 1 = big normal map updates (map load, whole map edits) use the worker pool (default 1)",
+      &gParallelNormalMap
+    );
     float gUiGcKb = 8192.0f;
     float gSimGcKb = 8192.0f;
     float gGcMaxSeconds = 60.0f;
-    TConVar<float> gConUiGc("ed_ui_gc_kb", "Editor: the UI Lua state's forced full collection (every 5 s) runs only after this many KiB of new heap, 0 = always (default 8192)", &gUiGcKb);
-    TConVar<float> gConSimGc("ed_sim_gc_kb", "Editor: the sim Lua state's forced full collection (every 7 s) runs only after this many KiB of new heap, 0 = always (default 8192)", &gSimGcKb);
-    TConVar<float> gConGcMax("ed_gc_max_seconds", "Editor: longest time between two forced Lua collections while the heap does not grow (default 60)", &gGcMaxSeconds);
+    TConVar<float> gConUiGc(
+      "ed_ui_gc_kb",
+      "Editor: the UI Lua state's forced full collection (every 5 s) runs only after this many KiB of new heap, 0 = "
+      "always (default 8192)",
+      &gUiGcKb
+    );
+    TConVar<float> gConSimGc(
+      "ed_sim_gc_kb",
+      "Editor: the sim Lua state's forced full collection (every 7 s) runs only after this many KiB of new heap, 0 = "
+      "always (default 8192)",
+      &gSimGcKb
+    );
+    TConVar<float> gConGcMax(
+      "ed_gc_max_seconds",
+      "Editor: longest time between two forced Lua collections while the heap does not grow (default 60)",
+      &gGcMaxSeconds
+    );
     GcGate gUiGate;
     GcGate gSimGate;
-    TConVar<bool> gConFollowRefresh("ed_fps_refresh", "Editor: 1 = the active frame rate cap never exceeds the refresh rate of the monitor the window is on (plus 5 percent), so a driver that does not block in Present (hybrid laptops, vsync off) cannot draw frames nobody sees (default 1)", &gFollowRefresh);
-    TConVar<float> gConIdleSeconds("ed_idle_seconds", "Editor: seconds without input before ed_fps_idle applies (default 3)", &gIdleSeconds);
+    TConVar<bool> gConFollowRefresh(
+      "ed_fps_refresh",
+      "Editor: 1 = the active frame rate cap never exceeds the refresh rate of the monitor the window is on (plus 5 "
+      "percent), so a driver that does not block in Present (hybrid laptops, vsync off) cannot draw frames nobody sees "
+      "(default 1)",
+      &gFollowRefresh
+    );
+    TConVar<float> gConIdleSeconds(
+      "ed_idle_seconds",
+      "Editor: seconds without input before ed_fps_idle applies (default 3)",
+      &gIdleSeconds
+    );
 
-    // ---- clock ----------------------------------------------------------------------------------------------------------------------------------
+    // ---- clock
+    // ----------------------------------------------------------------------------------------------------------------------------------
 
-    std::int64_t Elapsed(const std::int64_t startNs) noexcept
+    std::int64_t Elapsed(
+      const std::int64_t startNs
+    ) noexcept
     {
       return NowNs() - startNs;
     }
 
-    // ---- what the system says (sampled a few times a second, not every frame) -------------------------------------------------------------------
+    // ---- what the system says (sampled a few times a second, not every frame)
+    // -------------------------------------------------------------------
 
     struct Sampled
     {
       std::int64_t at = 0;
       bool foreground = true;
       double idleSeconds = 0.0;
-      float refreshHz = 0.0f;        // refresh rate of the monitor the main window is on, 0 = unknown
+      float refreshHz = 0.0f; // refresh rate of the monitor the main window is on, 0 = unknown
       std::int64_t refreshAt = 0;
     } gSampled;
 
     constexpr std::int64_t kSampleIntervalNs = 200 * 1000 * 1000;
 
-    /** Refresh rate in Hz of the monitor `window` is on; 0 when Windows does not say (or reports the "hardware default" 0 / 1). */
-    float MonitorRefreshHz(void* const window) noexcept
+    /** Refresh rate in Hz of the monitor `window` is on; 0 when Windows does not say (or reports the "hardware default"
+     * 0 / 1). */
+    float MonitorRefreshHz(
+      void* const window
+    ) noexcept
     {
       if (window == nullptr) {
         return 0.0f;
@@ -97,13 +156,17 @@ namespace moho::editor::perf
       }
       DEVMODEW mode{};
       mode.dmSize = sizeof(mode);
-      if (::EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) == FALSE || mode.dmDisplayFrequency <= 1) {
+      if (
+        ::EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) == FALSE || mode.dmDisplayFrequency <= 1
+      ) {
         return 0.0f;
       }
       return static_cast<float>(mode.dmDisplayFrequency);
     }
 
-    void RefreshSampled(const std::int64_t now) noexcept
+    void RefreshSampled(
+      const std::int64_t now
+    ) noexcept
     {
       if (gSampled.at != 0 && now - gSampled.at < kSampleIntervalNs) {
         return;
@@ -120,29 +183,37 @@ namespace moho::editor::perf
 
       LASTINPUTINFO info{};
       info.cbSize = sizeof(info);
-      gSampled.idleSeconds = ::GetLastInputInfo(&info) != FALSE ? static_cast<double>(::GetTickCount() - info.dwTime) / 1000.0 : 0.0;
+      gSampled.idleSeconds =
+        ::GetLastInputInfo(&info) != FALSE ? static_cast<double>(::GetTickCount() - info.dwTime) / 1000.0 : 0.0;
     }
 
-    // ---- the wait --------------------------------------------------------------------------------------------------------------------------------
+    // ---- the wait
+    // --------------------------------------------------------------------------------------------------------------------------------
 
     /**
-     * Sleeps without a core: a high resolution waitable timer for all but the last fraction of a millisecond, a short spin for the rest (a plain Sleep wakes up to 15 ms late,
-     * which at 300 frames per second would be a visible stutter). Without high resolution timers (before Windows 10 1803) the timer resolution is raised to 1 ms instead.
+     * Sleeps without a core: a high resolution waitable timer for all but the last fraction of a millisecond, a short
+     * spin for the rest (a plain Sleep wakes up to 15 ms late, which at 300 frames per second would be a visible
+     * stutter). Without high resolution timers (before Windows 10 1803) the timer resolution is raised to 1 ms instead.
      */
     class Waiter
     {
     public:
-      /** Waits until `untilNs`. With `interruptible` any new window message ends the wait early and true is returned. */
-      bool Wait(const std::int64_t untilNs, const bool interruptible)
+      /** Waits until `untilNs`. With `interruptible` any new window message ends the wait early and true is returned.
+       */
+      bool Wait(
+        const std::int64_t untilNs,
+        const bool interruptible
+      )
       {
         Init();
         const std::int64_t lead = highRes_ ? 600 * 1000 : 1500 * 1000;
         const std::int64_t coarse = untilNs - lead - NowNs();
         if (timer_ != nullptr && coarse > 200 * 1000) {
           LARGE_INTEGER due;
-          due.QuadPart = -(coarse / 100);   // relative, 100 ns units
+          due.QuadPart = -(coarse / 100); // relative, 100 ns units
           if (::SetWaitableTimer(timer_, &due, 0, nullptr, nullptr, FALSE) != FALSE) {
-            const DWORD result = interruptible ? ::MsgWaitForMultipleObjectsEx(1, &timer_, INFINITE, QS_ALLINPUT, 0) : ::WaitForSingleObject(timer_, INFINITE);
+            const DWORD result = interruptible ? ::MsgWaitForMultipleObjectsEx(1, &timer_, INFINITE, QS_ALLINPUT, 0)
+                                               : ::WaitForSingleObject(timer_, INFINITE);
             if (result != WAIT_OBJECT_0) {
               (void)::CancelWaitableTimer(timer_);
               return interruptible && result == WAIT_OBJECT_0 + 1;
@@ -164,16 +235,24 @@ namespace moho::editor::perf
         inited_ = true;
         HMODULE const kernel = ::GetModuleHandleW(L"kernel32.dll");
         using CreateExFn = HANDLE(WINAPI*)(LPSECURITY_ATTRIBUTES, LPCWSTR, DWORD, DWORD);
-        const auto createEx = kernel != nullptr ? reinterpret_cast<CreateExFn>(reinterpret_cast<void*>(::GetProcAddress(kernel, "CreateWaitableTimerExW"))) : nullptr;
+        const auto createEx = kernel != nullptr
+          ? reinterpret_cast<CreateExFn>(reinterpret_cast<void*>(::GetProcAddress(kernel, "CreateWaitableTimerExW")))
+          : nullptr;
         if (createEx != nullptr) {
-          timer_ = createEx(nullptr, nullptr, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */, 0x1F0003 /* TIMER_ALL_ACCESS */);
+          timer_ = createEx(
+            nullptr, nullptr, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */, 0x1F0003 /* TIMER_ALL_ACCESS */
+          );
         }
         highRes_ = timer_ != nullptr;
         if (timer_ == nullptr) {
           timer_ = ::CreateWaitableTimerW(nullptr, FALSE, nullptr);
           if (HMODULE const winmm = ::LoadLibraryW(L"winmm.dll"); winmm != nullptr) {
             using BeginFn = UINT(WINAPI*)(UINT);
-            if (const auto begin = reinterpret_cast<BeginFn>(reinterpret_cast<void*>(::GetProcAddress(winmm, "timeBeginPeriod"))); begin != nullptr) {
+            if (
+              const auto begin =
+                reinterpret_cast<BeginFn>(reinterpret_cast<void*>(::GetProcAddress(winmm, "timeBeginPeriod")));
+              begin != nullptr
+            ) {
               (void)begin(1);
             }
           }
@@ -186,12 +265,14 @@ namespace moho::editor::perf
     } gWaiter;
 
     Pacer gPacer;
-    int gInterrupts = 0;   // wait interruptions since the last frame: bounded so a stuck message can never keep the frame from running
+    int gInterrupts =
+      0; // wait interruptions since the last frame: bounded so a stuck message can never keep the frame from running
     constexpr int kMaxInterrupts = 3;
     float gLastCap = 0.0f;
     const char* gLastState = "active";
 
-    // ---- statistics ------------------------------------------------------------------------------------------------------------------------------
+    // ---- statistics
+    // ------------------------------------------------------------------------------------------------------------------------------
 
     struct Window
     {
@@ -210,7 +291,8 @@ namespace moho::editor::perf
     struct Published
     {
       std::int64_t atNs = 0;
-      double fps = 0, frameMs = 0, maxFrameMs = 0, mainMs = 0, dispatchMs = 0, waitMs = 0, idleMs = 0, presentMs = 0, renderMs = 0;
+      double fps = 0, frameMs = 0, maxFrameMs = 0, mainMs = 0, dispatchMs = 0, waitMs = 0, idleMs = 0, presentMs = 0,
+             renderMs = 0;
       long frames = 0;
     } gLast;
     double gRunningMaxMs = 0;
@@ -218,7 +300,9 @@ namespace moho::editor::perf
     std::int64_t gMainStartNs = 0;
     long gTotalFrames = 0;
 
-    void Publish(const std::int64_t now)
+    void Publish(
+      const std::int64_t now
+    )
     {
       const double seconds = static_cast<double>(now - gAcc.startNs) / 1e9;
       if (gAcc.frames > 0 && seconds > 0.0) {
@@ -234,7 +318,8 @@ namespace moho::editor::perf
         gLast.renderMs = gAcc.renderNs / n * ms;
         gLast.frameMs = gAcc.intervals > 0 ? gAcc.intervalNs / static_cast<double>(gAcc.intervals) * ms : 0.0;
         gLast.maxFrameMs = gAcc.maxIntervalNs * ms;
-        // everything between two frames that is not the frame's own logic, a wait or the OS wait: message handling, the paint with its Present and the render pass
+        // everything between two frames that is not the frame's own logic, a wait or the OS wait: message handling, the
+        // paint with its Present and the render pass
         gLast.dispatchMs = std::max(0.0, gLast.frameMs - gLast.mainMs - gLast.waitMs - gLast.idleMs);
         gRunningMaxMs = std::max(gRunningMaxMs, gLast.maxFrameMs);
       }
@@ -245,25 +330,36 @@ namespace moho::editor::perf
 
   std::int64_t NowNs() noexcept
   {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
   }
 
-  bool UiGcDue(const int heapKb, const float dtSeconds) noexcept
+  bool UiGcDue(
+    const int heapKb,
+    const float dtSeconds
+  ) noexcept
   {
     return gUiGate.Due(heapKb, dtSeconds, static_cast<long>(gUiGcKb), gGcMaxSeconds);
   }
 
-  void UiGcDone(const int heapKb) noexcept
+  void UiGcDone(
+    const int heapKb
+  ) noexcept
   {
     gUiGate.Done(heapKb);
   }
 
-  bool SimGcDue(const int heapKb, const float dtSeconds) noexcept
+  bool SimGcDue(
+    const int heapKb,
+    const float dtSeconds
+  ) noexcept
   {
     return gSimGate.Due(heapKb, dtSeconds, static_cast<long>(gSimGcKb), gGcMaxSeconds);
   }
 
-  void SimGcDone(const int heapKb) noexcept
+  void SimGcDone(
+    const int heapKb
+  ) noexcept
   {
     gSimGate.Done(heapKb);
   }
@@ -273,7 +369,9 @@ namespace moho::editor::perf
     return gParallelNormalMap;
   }
 
-  bool ThrottleBeforeFrame(void* const mainWindow)
+  bool ThrottleBeforeFrame(
+    void* const mainWindow
+  )
   {
     if (!gThrottleOn) {
       gPacer.Reset();
@@ -283,7 +381,8 @@ namespace moho::editor::perf
 
     const std::int64_t now = NowNs();
     RefreshSampled(now);
-    if (gSampled.refreshAt == 0 || now - gSampled.refreshAt > 5 * 1000 * 1000 * 1000LL) {   // the window can be dragged to another monitor
+    if (gSampled.refreshAt == 0 || now - gSampled.refreshAt > 5 * 1000 * 1000 * 1000LL) { // the window can be dragged
+                                                                                          // to another monitor
       gSampled.refreshAt = now;
       gSampled.refreshHz = MonitorRefreshHz(mainWindow);
     }
@@ -315,7 +414,7 @@ namespace moho::editor::perf
       gAcc.waitNs += static_cast<double>(Elapsed(now));
       if (arrived) {
         ++gInterrupts;
-        return true;   // input first; the loop calls again and the remaining time is recomputed
+        return true; // input first; the loop calls again and the remaining time is recomputed
       }
     }
     gInterrupts = 0;
@@ -325,9 +424,11 @@ namespace moho::editor::perf
 
   namespace
   {
-    // ---- frozen window watchdog ------------------------------------------------------------------------------------------------------------------
-    // A thread that finds the main loop silent for 12 s writes the crash report once (all thread stacks, the Lua state, the recent log): a freeze that has to be killed
-    // leaves the evidence where it stood (binaf_crash_<time>.txt; Help > Save diagnostics bundles it). Nothing is stopped; a hang that ends reports nothing more.
+    // ---- frozen window watchdog
+    // ------------------------------------------------------------------------------------------------------------------
+    // A thread that finds the main loop silent for 12 s writes the crash report once (all thread stacks, the Lua state,
+    // the recent log): a freeze that has to be killed leaves the evidence where it stood (binaf_crash_<time>.txt; Help
+    // > Save diagnostics bundles it). Nothing is stopped; a hang that ends reports nothing more.
     std::atomic<std::int64_t> gBeatNs{0};
 
     void FreezeWatchdogMain()
@@ -344,7 +445,10 @@ namespace moho::editor::perf
           reported = false;
         } else if (!reported) {
           reported = true;
-          gpg::Warnf("EDITOR: the main loop has been silent for %.0f s; writing the crash report with every thread's stack", silentSeconds);
+          gpg::Warnf(
+            "EDITOR: the main loop has been silent for %.0f s; writing the crash report with every thread's stack",
+            silentSeconds
+          );
           gpg::diag::CrashReportContext context;
           context.reason = "the main loop has not run for 12 seconds (frozen window)";
           (void)gpg::diag::WriteCrashReport(context);
@@ -360,8 +464,7 @@ namespace moho::editor::perf
     static const bool watchdogStarted = [] {
       try {
         std::thread(FreezeWatchdogMain).detach();
-      } catch (...) {
-      }
+      } catch (...) {}
       return true;
     }();
     (void)watchdogStarted;
@@ -389,52 +492,76 @@ namespace moho::editor::perf
     }
   }
 
-  void NoteIdleWait(const std::int64_t startNs) noexcept
+  void NoteIdleWait(
+    const std::int64_t startNs
+  ) noexcept
   {
     gAcc.idleNs += static_cast<double>(Elapsed(startNs));
   }
 
-  void NotePresent(const std::int64_t startNs) noexcept
+  void NotePresent(
+    const std::int64_t startNs
+  ) noexcept
   {
     gAcc.presentNs += static_cast<double>(Elapsed(startNs));
   }
 
-  void NoteRender(const std::int64_t startNs) noexcept
+  void NoteRender(
+    const std::int64_t startNs
+  ) noexcept
   {
     gAcc.renderNs += static_cast<double>(Elapsed(startNs));
   }
 
-  // ---- Lua -------------------------------------------------------------------------------------------------------------------------------------
+  // ---- Lua
+  // -------------------------------------------------------------------------------------------------------------------------------------
 
   namespace
   {
-    void SetNumber(lua_State* const L, const char* const key, const double value)
+    void SetNumber(
+      lua_State* const L,
+      const char* const key,
+      const double value
+    )
     {
       lua_pushstring(L, key);
       lua_pushnumber(L, value);
       lua_settable(L, -3);
     }
 
-    void SetString(lua_State* const L, const char* const key, const char* const value)
+    void SetString(
+      lua_State* const L,
+      const char* const key,
+      const char* const value
+    )
     {
       lua_pushstring(L, key);
       lua_pushstring(L, value);
       lua_settable(L, -3);
     }
 
-    void SetBool(lua_State* const L, const char* const key, const bool value)
+    void SetBool(
+      lua_State* const L,
+      const char* const key,
+      const bool value
+    )
     {
       lua_pushstring(L, key);
       lua_pushboolean(L, value ? 1 : 0);
       lua_settable(L, -3);
     }
 
-    // ed_perf_loop([reset]) -> { fps, frameMs, maxFrameMs, mainMs, dispatchMs, waitMs, idleMs, presentMs, renderMs, cap, state, vsync, frames }
-    //   Averages per frame over the last full second (zeros while the loop did not run for two seconds: a minimized window). mainMs = the frame's logic (sim sync, UI Lua,
-    //   camera, the invalidate); dispatchMs = message handling + paint (Present + render submit, below); waitMs = what the limiter slept; idleMs = OS wait after the frame;
-    //   presentMs = time inside Present (the vsync wait); renderMs = CPU time recording the frame. maxFrameMs = the longest frame start to frame start since the last reset.
-    //   cap = frames per second cap now (0 = none), state = active | loading | background | minimized.
-    int __cdecl cfunc_EdPerfLoop(lua_State* const L)
+    // ed_perf_loop([reset]) -> { fps, frameMs, maxFrameMs, mainMs, dispatchMs, waitMs, idleMs, presentMs, renderMs,
+    // cap, state, vsync, frames }
+    //   Averages per frame over the last full second (zeros while the loop did not run for two seconds: a minimized
+    //   window). mainMs = the frame's logic (sim sync, UI Lua, camera, the invalidate); dispatchMs = message handling +
+    //   paint (Present + render submit, below); waitMs = what the limiter slept; idleMs = OS wait after the frame;
+    //   presentMs = time inside Present (the vsync wait); renderMs = CPU time recording the frame. maxFrameMs = the
+    //   longest frame start to frame start since the last reset. cap = frames per second cap now (0 = none), state =
+    //   active | loading | background | minimized.
+    int __cdecl cfunc_EdPerfLoop(
+      lua_State* const L
+    )
     {
       if (lua_toboolean(L, 1) != 0) {
         gRunningMaxMs = 0;
@@ -470,15 +597,19 @@ namespace moho::editor::perf
       std::string name;
     };
 
-    std::map<DWORD, ULONGLONG> gPrevTimes;   // thread id -> user + kernel time (100 ns) at the last ed_perf_threads
+    std::map<DWORD, ULONGLONG> gPrevTimes; // thread id -> user + kernel time (100 ns) at the last ed_perf_threads
     std::int64_t gPrevThreadsAtNs = 0;
 
-    std::string ThreadName(HANDLE const thread)
+    std::string ThreadName(
+      HANDLE const thread
+    )
     {
       using GetDescFn = HRESULT(WINAPI*)(HANDLE, PWSTR*);
       static const GetDescFn getDesc = [] {
         HMODULE const kernel = ::GetModuleHandleW(L"kernel32.dll");
-        return kernel != nullptr ? reinterpret_cast<GetDescFn>(reinterpret_cast<void*>(::GetProcAddress(kernel, "GetThreadDescription"))) : nullptr;
+        return kernel != nullptr
+          ? reinterpret_cast<GetDescFn>(reinterpret_cast<void*>(::GetProcAddress(kernel, "GetThreadDescription")))
+          : nullptr;
       }();
       if (getDesc == nullptr) {
         return std::string();
@@ -499,12 +630,16 @@ namespace moho::editor::perf
     }
 
     // ed_perf_threads() -> { { id, name, cpu, totalMs, main }, ... } sorted by cpu (at most 32).
-    //   cpu = percent of one core the thread used since the previous call (the first call has no interval and reports 0), totalMs = CPU time since the thread started.
-    //   Names come from SetThreadDescription (the engine names its threads: Sim, Issue, Map loader ...); the editor's field workers have none.
-    int __cdecl cfunc_EdPerfThreads(lua_State* const L)
+    //   cpu = percent of one core the thread used since the previous call (the first call has no interval and reports
+    //   0), totalMs = CPU time since the thread started. Names come from SetThreadDescription (the engine names its
+    //   threads: Sim, Issue, Map loader ...); the editor's field workers have none.
+    int __cdecl cfunc_EdPerfThreads(
+      lua_State* const L
+    )
     {
       const std::int64_t now = NowNs();
-      const double wallTicks = gPrevThreadsAtNs != 0 ? static_cast<double>(now - gPrevThreadsAtNs) / 100.0 : 0.0;   // 100 ns units
+      const double wallTicks =
+        gPrevThreadsAtNs != 0 ? static_cast<double>(now - gPrevThreadsAtNs) / 100.0 : 0.0; // 100 ns units
       std::vector<ThreadRow> rows;
       std::map<DWORD, ULONGLONG> times;
 
@@ -533,7 +668,9 @@ namespace moho::editor::perf
             row.id = entry.th32ThreadID;
             row.totalMs = static_cast<double>(total) / 10000.0;
             const auto prev = gPrevTimes.find(row.id);
-            row.cpu = (prev != gPrevTimes.end() && wallTicks > 0.0) ? static_cast<double>(total - prev->second) / wallTicks * 100.0 : 0.0;
+            row.cpu = (prev != gPrevTimes.end() && wallTicks > 0.0)
+              ? static_cast<double>(total - prev->second) / wallTicks * 100.0
+              : 0.0;
             row.name = ThreadName(thread);
             times[row.id] = total;
             rows.push_back(std::move(row));
@@ -545,7 +682,9 @@ namespace moho::editor::perf
       gPrevTimes.swap(times);
       gPrevThreadsAtNs = now;
 
-      std::sort(rows.begin(), rows.end(), [](const ThreadRow& a, const ThreadRow& b) { return a.cpu > b.cpu || (a.cpu == b.cpu && a.totalMs > b.totalMs); });
+      std::sort(rows.begin(), rows.end(), [](const ThreadRow& a, const ThreadRow& b) {
+        return a.cpu > b.cpu || (a.cpu == b.cpu && a.totalMs > b.totalMs);
+      });
       const DWORD mainId = static_cast<DWORD>(THREAD_GetMainThreadId());
       lua_newtable(L);
       int index = 0;
@@ -565,10 +704,14 @@ namespace moho::editor::perf
       return 1;
     }
 
-    // ed_engine_info() -> { built = "Oct 26 2026 11:21:00", renderInfo = <the ren_Info text block>, refreshHz, cap, followRefresh }
-    //   Which exe this is (the packaged Lua can be newer than the exe: compare with buildinfo.lua), what the renderer runs on (adapter, driver; on a hybrid laptop the
-    //   proof which GPU draws), and the frame rate bound the limiter derived from the monitor.
-    int __cdecl cfunc_EdEngineInfo(lua_State* const L)
+    // ed_engine_info() -> { built = "Oct 26 2026 11:21:00", renderInfo = <the ren_Info text block>, refreshHz, cap,
+    // followRefresh }
+    //   Which exe this is (the packaged Lua can be newer than the exe: compare with buildinfo.lua), what the renderer
+    //   runs on (adapter, driver; on a hybrid laptop the proof which GPU draws), and the frame rate bound the limiter
+    //   derived from the monitor.
+    int __cdecl cfunc_EdEngineInfo(
+      lua_State* const L
+    )
     {
       lua_newtable(L);
       SetString(L, "built", __DATE__ " " __TIME__);
@@ -593,12 +736,32 @@ namespace moho::editor::perf
       EdPerfLuaBootstrap()
       {
         auto& set = UserLuaInitSet();
-        (void)new CScrLuaBinder(set, "ed_perf_loop", &cfunc_EdPerfLoop, nullptr, "<global>",
-                                "ed_perf_loop([reset]) -> { fps, frameMs, maxFrameMs, mainMs, dispatchMs, waitMs, idleMs, presentMs, renderMs, cap, state, vsync, frames }");
-        (void)new CScrLuaBinder(set, "ed_engine_info", &cfunc_EdEngineInfo, nullptr, "<global>",
-                                "ed_engine_info() -> { built, renderInfo, refreshHz, cap, followRefresh }");
-        (void)new CScrLuaBinder(set, "ed_perf_threads", &cfunc_EdPerfThreads, nullptr, "<global>",
-                                "ed_perf_threads() -> { { id, name, cpu, totalMs, main }, ... } sorted by cpu (percent of one core since the last call)");
+        (void)new CScrLuaBinder(
+          set,
+          "ed_perf_loop",
+          &cfunc_EdPerfLoop,
+          nullptr,
+          "<global>",
+          "ed_perf_loop([reset]) -> { fps, frameMs, maxFrameMs, mainMs, dispatchMs, waitMs, idleMs, presentMs, "
+          "renderMs, cap, state, vsync, frames }"
+        );
+        (void)new CScrLuaBinder(
+          set,
+          "ed_engine_info",
+          &cfunc_EdEngineInfo,
+          nullptr,
+          "<global>",
+          "ed_engine_info() -> { built, renderInfo, refreshHz, cap, followRefresh }"
+        );
+        (void)new CScrLuaBinder(
+          set,
+          "ed_perf_threads",
+          &cfunc_EdPerfThreads,
+          nullptr,
+          "<global>",
+          "ed_perf_threads() -> { { id, name, cpu, totalMs, main }, ... } sorted by cpu (percent of one core since the "
+          "last call)"
+        );
       }
     };
 

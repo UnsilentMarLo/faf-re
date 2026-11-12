@@ -1,10 +1,14 @@
-// EDITOR: natives for the look of the editor's main window (SC Map Studio branding). The names start with ed_app_ because ed_window_* is the pop-out window API (EdPopout.cpp).
+// EDITOR: natives for the look of the editor's main window (SC Map Studio branding). The names start with ed_app_
+// because ed_window_* is the pop-out window API (EdPopout.cpp).
 //
-//   ed_app_set_title(text) -> true | nil, message     the title bar text of the main window (the engine creates it as "Forged Alliance")
-//   ed_app_set_icon(path)  -> true | nil, message     the window icon (title bar, taskbar, Alt+Tab) from an .ico file on disk (PNG or bitmap entries);
-//                                                        also set as the class icon so the pop-out windows of the editor share it
+//   ed_app_set_title(text) -> true | nil, message     the title bar text of the main window (the engine creates it as
+//   "Forged Alliance") ed_app_set_icon(path)  -> true | nil, message     the window icon (title bar, taskbar, Alt+Tab)
+//   from an .ico file on disk (PNG or bitmap entries);
+//                                                        also set as the class icon so the pop-out windows of the
+//                                                        editor share it
 //
-// The main window is found once: the visible top-level window of this process that has a caption and no owner, preferring the one that still carries the engine's own title.
+// The main window is found once: the visible top-level window of this process that has a caption and no owner,
+// preferring the one that still carries the engine's own title.
 
 #include <cstdio>
 #include <string>
@@ -21,7 +25,9 @@ namespace
 {
   HWND gMain = nullptr;
 
-  std::wstring Wide(const char* const utf8)
+  std::wstring Wide(
+    const char* const utf8
+  )
   {
     if (utf8 == nullptr || *utf8 == '\0') {
       return std::wstring();
@@ -42,7 +48,10 @@ namespace
     bool bestIsEngineTitle = false;
   };
 
-  BOOL CALLBACK EnumProc(HWND h, LPARAM param)
+  BOOL CALLBACK EnumProc(
+    HWND h,
+    LPARAM param
+  )
   {
     auto* const st = reinterpret_cast<FindState*>(param);
     DWORD pid = 0;
@@ -75,14 +84,19 @@ namespace
     return gMain;
   }
 
-  int Fail(lua_State* const L, const char* const message)
+  int Fail(
+    lua_State* const L,
+    const char* const message
+  )
   {
     lua_pushnil(L);
     lua_pushstring(L, message);
     return 2;
   }
 
-  int __cdecl cfunc_EdWindowSetTitle(lua_State* const L)
+  int __cdecl cfunc_EdWindowSetTitle(
+    lua_State* const L
+  )
   {
     const char* const text = lua_tostring(L, 1);
     if (text == nullptr) {
@@ -100,7 +114,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdWindowSetIcon(lua_State* const L)
+  int __cdecl cfunc_EdWindowSetIcon(
+    lua_State* const L
+  )
   {
     const char* const path = lua_tostring(L, 1);
     if (path == nullptr) {
@@ -114,7 +130,8 @@ namespace
     const int bigX = ::GetSystemMetrics(SM_CXICON), bigY = ::GetSystemMetrics(SM_CYICON);
     const int smallX = ::GetSystemMetrics(SM_CXSMICON), smallY = ::GetSystemMetrics(SM_CYSMICON);
     HICON const big = static_cast<HICON>(::LoadImageW(nullptr, wide.c_str(), IMAGE_ICON, bigX, bigY, LR_LOADFROMFILE));
-    HICON const small = static_cast<HICON>(::LoadImageW(nullptr, wide.c_str(), IMAGE_ICON, smallX, smallY, LR_LOADFROMFILE));
+    HICON const small =
+      static_cast<HICON>(::LoadImageW(nullptr, wide.c_str(), IMAGE_ICON, smallX, smallY, LR_LOADFROMFILE));
     if (big == nullptr && small == nullptr) {
       return Fail(L, "cannot load the icon file");
     }
@@ -144,8 +161,22 @@ namespace
     EdWindowLuaBootstrap()
     {
       auto& set = UserLuaInitSet();
-      (void)new moho::CScrLuaBinder(set, "ed_app_set_title", &cfunc_EdWindowSetTitle, nullptr, "<global>", "ed_app_set_title(text) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_app_set_icon", &cfunc_EdWindowSetIcon, nullptr, "<global>", "ed_app_set_icon(path) -> true | nil, message");
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_app_set_title",
+        &cfunc_EdWindowSetTitle,
+        nullptr,
+        "<global>",
+        "ed_app_set_title(text) -> true | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_app_set_icon",
+        &cfunc_EdWindowSetIcon,
+        nullptr,
+        "<global>",
+        "ed_app_set_icon(path) -> true | nil, message"
+      );
     }
   };
 

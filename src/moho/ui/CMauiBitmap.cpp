@@ -40,7 +40,7 @@ namespace
   {
     textureBatches.push_back(texture);
   }
-}
+} // namespace
 
 gpg::RType* moho::CMauiBitmap::sType = nullptr;
 
@@ -1339,8 +1339,7 @@ namespace
     }
     return remainingSlots;
   }
-}
-
+} // namespace
 
 /**
  * Address: 0x0077F950 (FUN_0077F950, Moho::CMauiBitmap::CMauiBitmap)
@@ -1466,8 +1465,9 @@ void moho::CMauiBitmap::DoRender(
     return;
   }
 
-  // EDITOR: a bitmap with alpha 0, or one that lies completely outside the window (a control parked off screen: Maui does not clip), puts no pixel on the screen: it is not built,
-  // not queued and its texture is not put into the atlas (moho/editor/EdUiCull.h; ui_SkipTransparent / ui_CullOffscreen 0 draw every bitmap as before).
+  // EDITOR: a bitmap with alpha 0, or one that lies completely outside the window (a control parked off screen: Maui
+  // does not clip), puts no pixel on the screen: it is not built, not queued and its texture is not put into the atlas
+  // (moho/editor/EdUiCull.h; ui_SkipTransparent / ui_CullOffscreen 0 draw every bitmap as before).
   moho::editor::renderstats::Frame& uiStats = moho::editor::renderstats::gCur;
   if (moho::ui_SkipTransparent && moho::editor::uicull::ColorTransparent(mVertexAlpha)) {
     ++uiStats.uiBitmapsTransparent;
@@ -1482,7 +1482,9 @@ void moho::CMauiBitmap::DoRender(
   if (moho::ui_CullOffscreen) {
     float viewW = 0.0f;
     float viewH = 0.0f;
-    if (UI_GetRenderViewSize(viewW, viewH) && moho::editor::uicull::QuadOutside(left, top, right, bottom, viewW, viewH)) {
+    if (
+      UI_GetRenderViewSize(viewW, viewH) && moho::editor::uicull::QuadOutside(left, top, right, bottom, viewW, viewH)
+    ) {
       ++uiStats.uiBitmapsCulled;
       return;
     }
@@ -1837,7 +1839,6 @@ void moho::CMauiBitmap::Dump()
 {
   CMauiControl::Dump();
   gpg::Logf("CMauiBitmap");
-
 
   const int textureCount = static_cast<int>(mTextureBatches.size());
 

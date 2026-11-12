@@ -1,36 +1,50 @@
-// EDITOR: the FAF vault client natives (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP4): upstream's EdFafApi / EdVault / EdHttp (faf_editor_logic) bound to Lua.
+// EDITOR: the FAF vault client natives (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP4): upstream's
+// EdFafApi / EdVault / EdHttp (faf_editor_logic) bound to Lua.
 //
-// The library does the work (the FAF login by Hydra's device flow, the map API's filters and answers, the map archive download and install); this unit only turns
-// tables into structs and back. Every request runs on a worker thread of the library and is POLLED from Lua, so the UI thread never waits for the network:
+// The library does the work (the FAF login by Hydra's device flow, the map API's filters and answers, the map archive
+// download and install); this unit only turns tables into structs and back. Every request runs on a worker thread of
+// the library and is POLLED from Lua, so the UI thread never waits for the network:
 //
-//   ed_vault_start{ tokenFile, pictureCache [, resume] } -> true     once, when the vault is first shown (nothing touches the network before); with a token file that holds a
-//                                                                     sign-in the session logs in with it (`resume`, default true). The file is encrypted for this Windows user (DPAPI).
-//   ed_vault_status() -> { state = 'loggedout' | 'working' | 'waiting' | 'loggedin', user, message, userCode, verifyUrl, secondsLeft, searching, openPage }
-//                                                                     `openPage` is true ONCE after StartLogin: the caller opens `verifyUrl` (ed_open_url).
+//   ed_vault_start{ tokenFile, pictureCache [, resume] } -> true     once, when the vault is first shown (nothing
+//   touches the network before); with a token file that holds a
+//                                                                     sign-in the session logs in with it (`resume`,
+//                                                                     default true). The file is encrypted for this
+//                                                                     Windows user (DPAPI).
+//   ed_vault_status() -> { state = 'loggedout' | 'working' | 'waiting' | 'loggedin', user, message, userCode,
+//   verifyUrl, secondsLeft, searching, openPage }
+//                                                                     `openPage` is true ONCE after StartLogin: the
+//                                                                     caller opens `verifyUrl` (ed_open_url).
 //   ed_vault_login() / ed_vault_cancel_login() / ed_vault_logout()    logout also empties the token file
-//   ed_vault_search(query, page) -> true | nil, why                   the search needs a sign-in (the map API answers 401 without one); `query` below, `page` from 1
-//   ed_vault_poll() -> nil | { maps = { {name, folder, author, description, thumbnail, version, players, width, height, gamesPlayed, ranked}, ... }, pages }
-//   ed_vault_picture(url) -> path | false | nil                       a map's picture as a file of the preview cache (nil while it loads, false when it can't be had)
-//   ed_vault_download(nameOrLink, mapsFolder) -> { folder, url } | nil, why      downloads the archive and installs it into mapsFolder/<folder>/
-//   ed_vault_download_status() -> { state = 'idle' | 'working' | 'done' | 'failed', message, received, total, map, folder }     (`folder` = the disk folder of a finished one)
+//   ed_vault_search(query, page) -> true | nil, why                   the search needs a sign-in (the map API answers
+//   401 without one); `query` below, `page` from 1 ed_vault_poll() -> nil | { maps = { {name, folder, author,
+//   description, thumbnail, version, players, width, height, gamesPlayed, ranked}, ... }, pages } ed_vault_picture(url)
+//   -> path | false | nil                       a map's picture as a file of the preview cache (nil while it loads,
+//   false when it can't be had) ed_vault_download(nameOrLink, mapsFolder) -> { folder, url } | nil, why      downloads
+//   the archive and installs it into mapsFolder/<folder>/ ed_vault_download_status() -> { state = 'idle' | 'working' |
+//   'done' | 'failed', message, received, total, map, folder }     (`folder` = the disk folder of a finished one)
 //   ed_vault_download_reset()                                         back to idle once the result was taken
-//   ed_vault_maps_folder() -> path        where downloads go: <vault>\maps of the FAF client's vault (`custom_vault_path` of fa_path.lua, which the init file mounts the maps of),
-//                                         else <Documents>\My Games\Gas Powered Games\Supreme Commander Forged Alliance\maps
+//   ed_vault_maps_folder() -> path        where downloads go: <vault>\maps of the FAF client's vault
+//   (`custom_vault_path` of fa_path.lua, which the init file mounts the maps of),
+//                                         else <Documents>\My Games\Gas Powered Games\Supreme Commander Forged
+//                                         Alliance\maps
 //   ed_vault_scenario(folder) -> stem | nil    the `<stem>` of the `<stem>_scenario.lua` in a map folder on disk
 //   ed_open_url(url) -> true | nil, why                               http(s) links only, in the default browser
 //
-// Query tables (the FAF client's map filters): { text, author, uploadedFrom, uploadedTo ('YYYY-MM-DD'), widths = {k, ...}, heights = {k, ...} (k = 0..6 into the sizes of
-// ed_vault_meta), minPlayers, maxPlayers, minScore, maxScore, rankedOnly, sortProperty, descending }; a missing field is "any".
+// Query tables (the FAF client's map filters): { text, author, uploadedFrom, uploadedTo ('YYYY-MM-DD'), widths = {k,
+// ...}, heights = {k, ...} (k = 0..6 into the sizes of ed_vault_meta), minPlayers, maxPlayers, minScore, maxScore,
+// rankedOnly, sortProperty, descending }; a missing field is "any".
 //
 // Pure helpers (no network, no state; what the selftest and the panel's "show query" use):
 //   ed_vault_meta() -> { sizes = { {name, pixels}, ... }, sorts = { {property, label}, ... } }
-//   ed_vault_filter(query) -> RSQL text as the FAF client writes it      ed_vault_url(query, page) -> the map API's link
-//   ed_vault_query_text(query) -> line       ed_vault_query_parse(line) -> query | nil          (saved queries)
-//   ed_vault_parse_search(json) -> { maps, pages } | nil, why         ed_vault_parse_name(text) -> { folder, url } | nil, why
-//   ed_vault_seal_test(file, text) -> bool    a DPAPI file as the session keeps its sign-in (test runs seal a made-up token and watch the session pick it up)
+//   ed_vault_filter(query) -> RSQL text as the FAF client writes it      ed_vault_url(query, page) -> the map API's
+//   link ed_vault_query_text(query) -> line       ed_vault_query_parse(line) -> query | nil          (saved queries)
+//   ed_vault_parse_search(json) -> { maps, pages } | nil, why         ed_vault_parse_name(text) -> { folder, url } |
+//   nil, why ed_vault_seal_test(file, text) -> bool    a DPAPI file as the session keeps its sign-in (test runs seal a
+//   made-up token and watch the session pick it up)
 //
-// What never happens: a token in a log line, a result table or an error message. The session's own log lines (SetFafLog) carry states and the FAF name only; the natives
-// return `userCode` and `verifyUrl` (the device-flow page, which has the one-time user code in it) while a sign-in waits, and never the access or refresh token.
+// What never happens: a token in a log line, a result table or an error message. The session's own log lines
+// (SetFafLog) carry states and the FAF name only; the natives return `userCode` and `verifyUrl` (the device-flow page,
+// which has the one-time user code in it) while a sign-in waits, and never the access or refresh token.
 
 #include <dpapi.h>
 #include <objbase.h>
@@ -59,7 +73,8 @@ namespace
   namespace fe = faf::editor;
   namespace fs = std::filesystem;
 
-  /** The vault's state: one session and one download for the editor. Never destroyed: a request that is still on the wire at exit must not delay it. */
+  /** The vault's state: one session and one download for the editor. Never destroyed: a request that is still on the
+   * wire at exit must not delay it. */
   struct Vault
   {
     fe::EdFafSession session;
@@ -75,25 +90,36 @@ namespace
     return *vault;
   }
 
-  void LogLine(const char* const line)
+  void LogLine(
+    const char* const line
+  )
   {
     gpg::Logf("%s", line);
   }
 
-  [[nodiscard]] fs::path PathOf(const std::string& text)
+  [[nodiscard]] fs::path PathOf(
+    const std::string& text
+  )
   {
     return fs::path(std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
   }
 
-  [[nodiscard]] std::string PathText(const fs::path& path)
+  [[nodiscard]] std::string PathText(
+    const fs::path& path
+  )
   {
     const std::u8string text = path.generic_u8string();
     return std::string(reinterpret_cast<const char*>(text.data()), text.size());
   }
 
-  // ---- queries --------------------------------------------------------------------------------------------------------------------------------------
+  // ---- queries
+  // --------------------------------------------------------------------------------------------------------------------------------------
 
-  [[nodiscard]] unsigned BitsOf(lua_State* const L, const int index, const char* const key)
+  [[nodiscard]] unsigned BitsOf(
+    lua_State* const L,
+    const int index,
+    const char* const key
+  )
   {
     unsigned bits = 0;
     for (const double k : up::FieldNumberList(L, index, key)) {
@@ -104,7 +130,11 @@ namespace
     return bits;
   }
 
-  void SetBitsList(lua_State* const L, const char* const key, const unsigned bits)
+  void SetBitsList(
+    lua_State* const L,
+    const char* const key,
+    const unsigned bits
+  )
   {
     std::vector<double> list;
     for (unsigned k = 0; k < 7; ++k) {
@@ -115,7 +145,10 @@ namespace
     up::SetNumberList(L, key, list);
   }
 
-  [[nodiscard]] fe::VaultQuery ReadQuery(lua_State* const L, const int index)
+  [[nodiscard]] fe::VaultQuery ReadQuery(
+    lua_State* const L,
+    const int index
+  )
   {
     fe::VaultQuery q;
     q.text = up::FieldString(L, index, "text");
@@ -137,7 +170,10 @@ namespace
     return q;
   }
 
-  void PushQuery(lua_State* const L, const fe::VaultQuery& q)
+  void PushQuery(
+    lua_State* const L,
+    const fe::VaultQuery& q
+  )
   {
     lua_newtable(L);
     up::SetString(L, "text", q.text);
@@ -155,7 +191,11 @@ namespace
     up::SetBool(L, "descending", q.descending);
   }
 
-  void PushMaps(lua_State* const L, const std::vector<fe::VaultMap>& maps, const int pages)
+  void PushMaps(
+    lua_State* const L,
+    const std::vector<fe::VaultMap>& maps,
+    const int pages
+  )
   {
     lua_newtable(L);
     lua_pushstring(L, "maps");
@@ -180,9 +220,12 @@ namespace
     up::SetNumber(L, "pages", pages);
   }
 
-  // ---- natives: pure helpers ------------------------------------------------------------------------------------------------------------------------
+  // ---- natives: pure helpers
+  // ------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_VaultMeta(lua_State* const L)
+  int __cdecl cfunc_VaultMeta(
+    lua_State* const L
+  )
   {
     lua_newtable(L);
     lua_pushstring(L, "sizes");
@@ -207,28 +250,36 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_VaultFilter(lua_State* const L)
+  int __cdecl cfunc_VaultFilter(
+    lua_State* const L
+  )
   {
     const std::string text = fe::VaultQueryFilter(ReadQuery(L, 1));
     lua_pushlstring(L, text.data(), text.size());
     return 1;
   }
 
-  int __cdecl cfunc_VaultUrl(lua_State* const L)
+  int __cdecl cfunc_VaultUrl(
+    lua_State* const L
+  )
   {
     const std::string text = fe::VaultSearchUrl(ReadQuery(L, 1), static_cast<int>(luaL_optnumber(L, 2, 1)));
     lua_pushlstring(L, text.data(), text.size());
     return 1;
   }
 
-  int __cdecl cfunc_VaultQueryText(lua_State* const L)
+  int __cdecl cfunc_VaultQueryText(
+    lua_State* const L
+  )
   {
     const std::string text = fe::VaultQueryText(ReadQuery(L, 1));
     lua_pushlstring(L, text.data(), text.size());
     return 1;
   }
 
-  int __cdecl cfunc_VaultQueryParse(lua_State* const L)
+  int __cdecl cfunc_VaultQueryParse(
+    lua_State* const L
+  )
   {
     fe::VaultQuery q;
     if (!fe::VaultQueryFromText(up::ArgString(L, 1, "ed_vault_query_parse"), q)) {
@@ -238,7 +289,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_VaultParseSearch(lua_State* const L)
+  int __cdecl cfunc_VaultParseSearch(
+    lua_State* const L
+  )
   {
     std::vector<fe::VaultMap> maps;
     int pages = 0;
@@ -250,7 +303,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_VaultParseName(lua_State* const L)
+  int __cdecl cfunc_VaultParseName(
+    lua_State* const L
+  )
   {
     fe::VaultMapName name;
     std::string error;
@@ -263,7 +318,8 @@ namespace
     return 1;
   }
 
-  /** The vault the FAF client set: `custom_vault_path` in fa_path.lua (the file the init file reads, in the folder above the init file's). Empty without one. */
+  /** The vault the FAF client set: `custom_vault_path` in fa_path.lua (the file the init file reads, in the folder
+   * above the init file's). Empty without one. */
   [[nodiscard]] fs::path ClientVaultFolder()
   {
     const fs::path script = moho::DISK_GetDataPathScriptFile();
@@ -294,7 +350,9 @@ namespace
     return {};
   }
 
-  int __cdecl cfunc_VaultMapsFolder(lua_State* const L)
+  int __cdecl cfunc_VaultMapsFolder(
+    lua_State* const L
+  )
   {
     fs::path vault = ClientVaultFolder();
     std::error_code ec;
@@ -314,14 +372,18 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_VaultScenario(lua_State* const L)
+  int __cdecl cfunc_VaultScenario(
+    lua_State* const L
+  )
   {
     const fs::path folder = PathOf(up::ArgString(L, 1, "ed_vault_scenario"));
     std::error_code ec;
     for (const fs::directory_entry& entry : fs::directory_iterator(folder, ec)) {
       std::string name = entry.path().filename().string();
       std::string lower = name;
-      std::transform(lower.begin(), lower.end(), lower.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      std::transform(lower.begin(), lower.end(), lower.begin(), [](const unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+      });
       constexpr char kTail[] = "_scenario.lua";
       constexpr std::size_t kTailSize = sizeof(kTail) - 1;
       if (lower.size() > kTailSize && lower.compare(lower.size() - kTailSize, kTailSize, kTail) == 0) {
@@ -334,7 +396,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_VaultSealTest(lua_State* const L)
+  int __cdecl cfunc_VaultSealTest(
+    lua_State* const L
+  )
   {
     const fs::path file = PathOf(up::ArgString(L, 1, "ed_vault_seal_test"));
     std::string text = up::ArgString(L, 2, "ed_vault_seal_test");
@@ -353,9 +417,12 @@ namespace
     return 1;
   }
 
-  // ---- natives: the session ---------------------------------------------------------------------------------------------------------------------------
+  // ---- natives: the session
+  // ---------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_VaultStart(lua_State* const L)
+  int __cdecl cfunc_VaultStart(
+    lua_State* const L
+  )
   {
     Vault& v = State();
     const fs::path tokenFile = PathOf(up::FieldString(L, 1, "tokenFile"));
@@ -381,7 +448,9 @@ namespace
     return 1;
   }
 
-  [[nodiscard]] const char* StateName(const fe::EdFafSession::State state)
+  [[nodiscard]] const char* StateName(
+    const fe::EdFafSession::State state
+  )
   {
     switch (state) {
     case fe::EdFafSession::State::Working:
@@ -396,7 +465,9 @@ namespace
     }
   }
 
-  int __cdecl cfunc_VaultStatus(lua_State* const L)
+  int __cdecl cfunc_VaultStatus(
+    lua_State* const L
+  )
   {
     Vault& v = State();
     const fe::EdFafSession::State state = v.session.GetState();
@@ -414,25 +485,33 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_VaultLogin(lua_State*)
+  int __cdecl cfunc_VaultLogin(
+    lua_State*
+  )
   {
     State().session.StartLogin();
     return 0;
   }
 
-  int __cdecl cfunc_VaultCancelLogin(lua_State*)
+  int __cdecl cfunc_VaultCancelLogin(
+    lua_State*
+  )
   {
     State().session.CancelLogin();
     return 0;
   }
 
-  int __cdecl cfunc_VaultLogout(lua_State*)
+  int __cdecl cfunc_VaultLogout(
+    lua_State*
+  )
   {
     State().session.Logout();
     return 0;
   }
 
-  int __cdecl cfunc_VaultSearch(lua_State* const L)
+  int __cdecl cfunc_VaultSearch(
+    lua_State* const L
+  )
   {
     Vault& v = State();
     if (v.session.GetState() != fe::EdFafSession::State::LoggedIn) {
@@ -446,7 +525,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_VaultPoll(lua_State* const L)
+  int __cdecl cfunc_VaultPoll(
+    lua_State* const L
+  )
   {
     std::vector<fe::VaultMap> maps;
     int pages = 0;
@@ -458,8 +539,11 @@ namespace
     return 1;
   }
 
-  /** A picture's file in the preview cache: <cache>/<small|large>/<last part of the link> (what EdFafSession::Picture names it). */
-  [[nodiscard]] fs::path PictureFile(const std::string& url)
+  /** A picture's file in the preview cache: <cache>/<small|large>/<last part of the link> (what EdFafSession::Picture
+   * names it). */
+  [[nodiscard]] fs::path PictureFile(
+    const std::string& url
+  )
   {
     const Vault& v = State();
     if (v.pictureCache.empty() || url.empty()) {
@@ -473,7 +557,9 @@ namespace
     return v.pictureCache / size / PathOf(file);
   }
 
-  int __cdecl cfunc_VaultPicture(lua_State* const L)
+  int __cdecl cfunc_VaultPicture(
+    lua_State* const L
+  )
   {
     const std::string url = up::ArgString(L, 1, "ed_vault_picture");
     const fs::path file = PictureFile(url);
@@ -487,7 +573,8 @@ namespace
       lua_pushlstring(L, text.data(), text.size());
       return 1;
     }
-    // Not on disk: the session reads the FAF client's cache or downloads it (on its worker thread) and answers with the bytes once it has them.
+    // Not on disk: the session reads the FAF client's cache or downloads it (on its worker thread) and answers with the
+    // bytes once it has them.
     const std::string bytes = State().session.Picture(url);
     if (bytes.empty()) {
       lua_pushnil(L);
@@ -510,9 +597,12 @@ namespace
     return 1;
   }
 
-  // ---- natives: the download ---------------------------------------------------------------------------------------------------------------------------
+  // ---- natives: the download
+  // ---------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_VaultDownload(lua_State* const L)
+  int __cdecl cfunc_VaultDownload(
+    lua_State* const L
+  )
   {
     fe::VaultMapName map;
     std::string error;
@@ -533,7 +623,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_VaultDownloadStatus(lua_State* const L)
+  int __cdecl cfunc_VaultDownloadStatus(
+    lua_State* const L
+  )
   {
     const fe::EdVaultDownload& d = State().download;
     const char* name = "idle";
@@ -563,15 +655,20 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_VaultDownloadReset(lua_State*)
+  int __cdecl cfunc_VaultDownloadReset(
+    lua_State*
+  )
   {
     State().download.Reset();
     return 0;
   }
 
-  // ---- natives: links ----------------------------------------------------------------------------------------------------------------------------------
+  // ---- natives: links
+  // ----------------------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_OpenUrl(lua_State* const L)
+  int __cdecl cfunc_OpenUrl(
+    lua_State* const L
+  )
   {
     const std::string url = up::ArgString(L, 1, "ed_open_url");
     // Only web links: the sign-in page and a map's page. A file path or another scheme would run a program.
@@ -587,13 +684,16 @@ namespace
     }
     // ShellExecute needs COM set up on the thread that calls it.
     const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    const auto result = reinterpret_cast<std::intptr_t>(::ShellExecuteW(nullptr, L"open", link.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+    const auto result =
+      reinterpret_cast<std::intptr_t>(::ShellExecuteW(nullptr, L"open", link.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
     if (SUCCEEDED(com)) {
       ::CoUninitialize();
     }
     if (result <= 32) {
       char why[96];
-      (void)std::snprintf(why, sizeof(why), "the browser could not be started (ShellExecute %lld)", static_cast<long long>(result));
+      (void)std::snprintf(
+        why, sizeof(why), "the browser could not be started (ShellExecute %lld)", static_cast<long long>(result)
+      );
       gpg::Logf("editor: couldn't open a link in the browser (ShellExecute %lld)", static_cast<long long>(result));
       return up::Fail(L, why);
     }
@@ -603,15 +703,21 @@ namespace
 
   const up::Natives gEdUpVaultNatives{{
     {"ed_vault_start", &cfunc_VaultStart, "ed_vault_start{tokenFile, pictureCache, resume} -> true"},
-    {"ed_vault_status", &cfunc_VaultStatus, "ed_vault_status() -> { state, user, message, userCode, verifyUrl, secondsLeft, searching, openPage }"},
+    {"ed_vault_status",
+     &cfunc_VaultStatus,
+     "ed_vault_status() -> { state, user, message, userCode, verifyUrl, secondsLeft, searching, openPage }"},
     {"ed_vault_login", &cfunc_VaultLogin, "ed_vault_login()"},
     {"ed_vault_cancel_login", &cfunc_VaultCancelLogin, "ed_vault_cancel_login()"},
     {"ed_vault_logout", &cfunc_VaultLogout, "ed_vault_logout()"},
     {"ed_vault_search", &cfunc_VaultSearch, "ed_vault_search(query, page) -> true | nil, why"},
     {"ed_vault_poll", &cfunc_VaultPoll, "ed_vault_poll() -> nil | { maps, pages }"},
     {"ed_vault_picture", &cfunc_VaultPicture, "ed_vault_picture(url) -> path | false | nil"},
-    {"ed_vault_download", &cfunc_VaultDownload, "ed_vault_download(nameOrLink, mapsFolder) -> { folder, url } | nil, why"},
-    {"ed_vault_download_status", &cfunc_VaultDownloadStatus, "ed_vault_download_status() -> { state, message, received, total, map, folder }"},
+    {"ed_vault_download",
+     &cfunc_VaultDownload,
+     "ed_vault_download(nameOrLink, mapsFolder) -> { folder, url } | nil, why"},
+    {"ed_vault_download_status",
+     &cfunc_VaultDownloadStatus,
+     "ed_vault_download_status() -> { state, message, received, total, map, folder }"},
     {"ed_vault_download_reset", &cfunc_VaultDownloadReset, "ed_vault_download_reset()"},
     {"ed_vault_maps_folder", &cfunc_VaultMapsFolder, "ed_vault_maps_folder() -> path | nil, why"},
     {"ed_vault_scenario", &cfunc_VaultScenario, "ed_vault_scenario(folder) -> stem | nil"},

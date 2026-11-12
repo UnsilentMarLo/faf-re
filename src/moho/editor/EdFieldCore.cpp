@@ -16,28 +16,39 @@
 
 namespace moho::editor::field
 {
-  // ---- params ----------------------------------------------------------------------------------------------------------------------------------
+  // ---- params
+  // ----------------------------------------------------------------------------------------------------------------------------------
 
-  double Params::N(const char* const key, const double fallback) const
+  double Params::N(
+    const char* const key,
+    const double fallback
+  ) const
   {
     const auto it = num.find(key);
-    // Lua numbers are float32 in the editor: round every number the same way here so a parameter means the same in a Lua call and in the native test
+    // Lua numbers are float32 in the editor: round every number the same way here so a parameter means the same in a
+    // Lua call and in the native test
     return it != num.end() ? static_cast<double>(static_cast<float>(it->second)) : fallback;
   }
 
-  std::string Params::S(const char* const key, const char* const fallback) const
+  std::string Params::S(
+    const char* const key,
+    const char* const fallback
+  ) const
   {
     const auto it = str.find(key);
     return it != str.end() ? it->second : std::string(fallback);
   }
 
-  const std::vector<double>* Params::A(const char* const key) const
+  const std::vector<double>* Params::A(
+    const char* const key
+  ) const
   {
     const auto it = arr.find(key);
     return it != arr.end() ? &it->second : nullptr;
   }
 
-  // ---- thread pool -----------------------------------------------------------------------------------------------------------------------------
+  // ---- thread pool
+  // -----------------------------------------------------------------------------------------------------------------------------
 
   namespace
   {
@@ -52,7 +63,10 @@ namespace moho::editor::field
     class Pool
     {
     public:
-      Pool() { Resize(DefaultThreads()); }
+      Pool()
+      {
+        Resize(DefaultThreads());
+      }
 
       static int DefaultThreads()
       {
@@ -60,20 +74,30 @@ namespace moho::editor::field
         return static_cast<int>(std::max(1u, std::min(hc == 0 ? 4u : hc, 16u)));
       }
 
-      int Threads() const { return threads_; }
+      int Threads() const
+      {
+        return threads_;
+      }
 
-      void Resize(int n)
+      void Resize(
+        int n
+      )
       {
         n = std::max(1, std::min(n, 64));
         Stop();
         threads_ = n;
         stop_ = false;
         for (int i = 1; i < n; ++i) {
-          workers_.emplace_back([this] { WorkerLoop(); });
+          workers_.emplace_back([this] {
+            WorkerLoop();
+          });
         }
       }
 
-      void For(const int count, const std::function<void(int)>& fn)
+      void For(
+        const int count,
+        const std::function<void(int)>& fn
+      )
       {
         if (count <= 0) {
           return;
@@ -95,12 +119,16 @@ namespace moho::editor::field
         cvWork_.notify_all();
         Run(*job);
         std::unique_lock<std::mutex> lock(m_);
-        cvDone_.wait(lock, [&] { return job->done.load() >= count; });
+        cvDone_.wait(lock, [&] {
+          return job->done.load() >= count;
+        });
         job_.reset();
       }
 
     private:
-      void Run(Job& job)
+      void Run(
+        Job& job
+      )
       {
         for (;;) {
           const int i = job.next.fetch_add(1);
@@ -122,7 +150,9 @@ namespace moho::editor::field
           std::shared_ptr<Job> job;
           {
             std::unique_lock<std::mutex> lock(m_);
-            cvWork_.wait(lock, [&] { return stop_ || gen_ != seen; });
+            cvWork_.wait(lock, [&] {
+              return stop_ || gen_ != seen;
+            });
             if (stop_) {
               return;
             }
@@ -160,14 +190,28 @@ namespace moho::editor::field
 
     Pool& ThePool()
     {
-      static Pool* const pool = new Pool();   // never destroyed: the process ends with its workers asleep
+      static Pool* const pool = new Pool(); // never destroyed: the process ends with its workers asleep
       return *pool;
     }
   } // namespace
 
-  void SetThreads(const int n) { ThePool().Resize(n); }
-  int Threads() { return ThePool().Threads(); }
-  void ParallelFor(const int count, const std::function<void(int)>& fn) { ThePool().For(count, fn); }
+  void SetThreads(
+    const int n
+  )
+  {
+    ThePool().Resize(n);
+  }
+  int Threads()
+  {
+    return ThePool().Threads();
+  }
+  void ParallelFor(
+    const int count,
+    const std::function<void(int)>& fn
+  )
+  {
+    ThePool().For(count, fn);
+  }
 
   namespace
   {
@@ -176,7 +220,10 @@ namespace moho::editor::field
 
     /** f(z0, z1) for fixed chunks of rows. */
     template <class F>
-    void Rows(const int h, F&& f)
+    void Rows(
+      const int h,
+      F&& f
+    )
     {
       const int chunks = (h + kRowChunk - 1) / kRowChunk;
       ParallelFor(chunks, [&](const int c) {
@@ -187,7 +234,10 @@ namespace moho::editor::field
 
     /** g(x, z) for every sample of out. */
     template <class F>
-    void Cells(Grid& out, F&& f)
+    void Cells(
+      Grid& out,
+      F&& f
+    )
     {
       const int w = out.w;
       Rows(out.h, [&](const int z0, const int z1) {
@@ -200,10 +250,26 @@ namespace moho::editor::field
       });
     }
 
-    inline float Clamp01(const float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
-    inline float Lerp(const float a, const float b, const float t) { return a + (b - a) * t; }
+    inline float Clamp01(
+      const float v
+    )
+    {
+      return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+    }
+    inline float Lerp(
+      const float a,
+      const float b,
+      const float t
+    )
+    {
+      return a + (b - a) * t;
+    }
 
-    inline float SmoothStep(const float e0, const float e1, const float v)
+    inline float SmoothStep(
+      const float e0,
+      const float e1,
+      const float v
+    )
     {
       if (e0 == e1) {
         return v < e0 ? 0.0f : 1.0f;
@@ -212,15 +278,23 @@ namespace moho::editor::field
       return t * t * (3.0f - 2.0f * t);
     }
 
-    // ---- input access --------------------------------------------------------------------------------------------------------------------------
+    // ---- input access
+    // --------------------------------------------------------------------------------------------------------------------------
 
-    const Grid* Get(const OpArgs& a, const char* const key)
+    const Grid* Get(
+      const OpArgs& a,
+      const char* const key
+    )
     {
       const auto it = a.in.find(key);
       return it != a.in.end() ? it->second.get() : nullptr;
     }
 
-    const Grid* Need(const OpArgs& a, const char* const key, std::string& err)
+    const Grid* Need(
+      const OpArgs& a,
+      const char* const key,
+      std::string& err
+    )
     {
       const Grid* g = Get(a, key);
       if (g == nullptr) {
@@ -230,14 +304,21 @@ namespace moho::editor::field
     }
 
     /** The output takes its shape from `like`, else `a`, else width / height / cell / ox / oz. */
-    bool MakeOut(const OpArgs& a, Grid& out, std::string& err)
+    bool MakeOut(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* ref = Get(a, "like");
       if (ref == nullptr) {
         ref = Get(a, "a");
       }
-      // the ops index their inputs with the output's size: two inputs of different shapes would read or write out of range
-      if (const Grid* const inA = Get(a, "a"); inA != nullptr && ref != nullptr && (inA->w != ref->w || inA->h != ref->h)) {
+      // the ops index their inputs with the output's size: two inputs of different shapes would read or write out of
+      // range
+      if (
+        const Grid* const inA = Get(a, "a"); inA != nullptr && ref != nullptr && (inA->w != ref->w || inA->h != ref->h)
+      ) {
         err = "'like' and 'a' differ in size";
         return false;
       }
@@ -251,34 +332,72 @@ namespace moho::editor::field
         err = "give 'like' or 'a', or width and height (at most 128M samples)";
         return false;
       }
-      out = Grid(w, h, static_cast<float>(a.p.N("cell", 1.0)), static_cast<float>(a.p.N("ox", 0.0)), static_cast<float>(a.p.N("oz", 0.0)));
+      out = Grid(
+        w,
+        h,
+        static_cast<float>(a.p.N("cell", 1.0)),
+        static_cast<float>(a.p.N("ox", 0.0)),
+        static_cast<float>(a.p.N("oz", 0.0))
+      );
       return true;
     }
 
-    inline double WorldX(const Grid& g, const int x) { return static_cast<double>(g.ox) + static_cast<double>(x) * static_cast<double>(g.cell); }
-    inline double WorldZ(const Grid& g, const int z) { return static_cast<double>(g.oz) + static_cast<double>(z) * static_cast<double>(g.cell); }
+    inline double WorldX(
+      const Grid& g,
+      const int x
+    )
+    {
+      return static_cast<double>(g.ox) + static_cast<double>(x) * static_cast<double>(g.cell);
+    }
+    inline double WorldZ(
+      const Grid& g,
+      const int z
+    )
+    {
+      return static_cast<double>(g.oz) + static_cast<double>(z) * static_cast<double>(g.cell);
+    }
 
-    // ---- edge modes and sampling ---------------------------------------------------------------------------------------------------------------
+    // ---- edge modes and sampling
+    // ---------------------------------------------------------------------------------------------------------------
 
-    enum Edge { kClamp = 0, kWrap = 1, kMirror = 2, kFill = 3 };
+    enum Edge
+    {
+      kClamp = 0,
+      kWrap = 1,
+      kMirror = 2,
+      kFill = 3
+    };
 
-    Edge ParseEdge(const OpArgs& a, const Edge fallback)
+    Edge ParseEdge(
+      const OpArgs& a,
+      const Edge fallback
+    )
     {
       const std::string s = a.p.S("edge", "");
-      if (s == "clamp") return kClamp;
-      if (s == "wrap") return kWrap;
-      if (s == "mirror") return kMirror;
-      if (s == "fill") return kFill;
+      if (s == "clamp")
+        return kClamp;
+      if (s == "wrap")
+        return kWrap;
+      if (s == "mirror")
+        return kMirror;
+      if (s == "fill")
+        return kFill;
       return fallback;
     }
 
-    inline int Wrap(int i, const int n)
+    inline int Wrap(
+      int i,
+      const int n
+    )
     {
       i %= n;
       return i < 0 ? i + n : i;
     }
 
-    inline int Mirror(int i, const int n)
+    inline int Mirror(
+      int i,
+      const int n
+    )
     {
       if (n == 1) {
         return 0;
@@ -288,7 +407,13 @@ namespace moho::editor::field
       return i < n ? i : period - i;
     }
 
-    inline float Fetch(const Grid& g, int ix, int iz, const Edge e, const float fill)
+    inline float Fetch(
+      const Grid& g,
+      int ix,
+      int iz,
+      const Edge e,
+      const float fill
+    )
     {
       if (e == kFill) {
         if (ix < 0 || iz < 0 || ix >= g.w || iz >= g.h) {
@@ -308,7 +433,13 @@ namespace moho::editor::field
     }
 
     /** Bilinear sample at fractional sample coordinates. */
-    inline float Bilinear(const Grid& g, const double gx, const double gz, const Edge e, const float fill)
+    inline float Bilinear(
+      const Grid& g,
+      const double gx,
+      const double gz,
+      const Edge e,
+      const float fill
+    )
     {
       const double fx = std::floor(gx);
       const double fz = std::floor(gz);
@@ -325,9 +456,12 @@ namespace moho::editor::field
       return top + (bottom - top) * tz;
     }
 
-    // ---- noise ---------------------------------------------------------------------------------------------------------------------------------
+    // ---- noise
+    // ---------------------------------------------------------------------------------------------------------------------------------
 
-    inline std::uint32_t Hash32(std::uint32_t x)
+    inline std::uint32_t Hash32(
+      std::uint32_t x
+    )
     {
       x ^= x >> 16;
       x *= 0x7feb352dU;
@@ -337,33 +471,74 @@ namespace moho::editor::field
       return x;
     }
 
-    inline std::uint32_t Hash2(const int ix, const int iz, const std::uint32_t seed)
+    inline std::uint32_t Hash2(
+      const int ix,
+      const int iz,
+      const std::uint32_t seed
+    )
     {
-      return Hash32(static_cast<std::uint32_t>(ix) * 0x9E3779B1U ^ Hash32(static_cast<std::uint32_t>(iz) + seed * 0x85EBCA6BU + 0x165667B1U));
+      return Hash32(
+        static_cast<std::uint32_t>(ix) * 0x9E3779B1U ^
+        Hash32(static_cast<std::uint32_t>(iz) + seed * 0x85EBCA6BU + 0x165667B1U)
+      );
     }
 
-    inline float Unit(const std::uint32_t h) { return static_cast<float>(h >> 8) * (1.0f / 16777216.0f); }   // [0, 1)
+    inline float Unit(
+      const std::uint32_t h
+    )
+    {
+      return static_cast<float>(h >> 8) * (1.0f / 16777216.0f);
+    } // [0, 1)
 
-    const float kGrad[8][2] = {{1.0f, 0.0f},         {-1.0f, 0.0f},          {0.0f, 1.0f},           {0.0f, -1.0f},
-                               {0.70710678f, 0.70710678f}, {-0.70710678f, 0.70710678f}, {0.70710678f, -0.70710678f}, {-0.70710678f, -0.70710678f}};
+    const float kGrad[8][2] = {
+      {1.0f, 0.0f},
+      {-1.0f, 0.0f},
+      {0.0f, 1.0f},
+      {0.0f, -1.0f},
+      {0.70710678f, 0.70710678f},
+      {-0.70710678f, 0.70710678f},
+      {0.70710678f, -0.70710678f},
+      {-0.70710678f, -0.70710678f}
+    };
 
-    inline float GradDot(const std::uint32_t h, const float x, const float z)
+    inline float GradDot(
+      const std::uint32_t h,
+      const float x,
+      const float z
+    )
     {
       const float* g = kGrad[h & 7u];
       return g[0] * x + g[1] * z;
     }
 
-    /** The same with a chosen gradient set: the classic eight (mask 7) or the 64 evenly spread directions of `rotate` noise (mask 63). */
-    inline float GradDotT(const float (*G)[2], const std::uint32_t mask, const std::uint32_t h, const float x, const float z)
+    /** The same with a chosen gradient set: the classic eight (mask 7) or the 64 evenly spread directions of `rotate`
+     * noise (mask 63). */
+    inline float GradDotT(
+      const float (*G)[2],
+      const std::uint32_t mask,
+      const std::uint32_t h,
+      const float x,
+      const float z
+    )
     {
       const float* g = G[h & mask];
       return g[0] * x + g[1] * z;
     }
 
-    inline float Fade(const float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+    inline float Fade(
+      const float t
+    )
+    {
+      return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+    }
 
     /** Gradient noise, about -1..1. `fine`: 64 gradient directions instead of eight (no preferred axis). */
-    float Perlin(const double x, const double z, const std::uint32_t seed, const bool fine = false)
+    float Perlin(
+      const double x,
+      const double z,
+      const std::uint32_t seed,
+      const bool fine = false
+    )
     {
       const float (*G)[2] = fine ? Gradients64() : kGrad;
       const std::uint32_t gm = fine ? 63u : 7u;
@@ -384,10 +559,15 @@ namespace moho::editor::field
       return (a + (b - a) * v) * 1.41421356f;
     }
 
-    constexpr float kSimplexScale = 99.2f;   // calibrated so the extremes of the 8 direction gradient set reach about +-1
+    constexpr float kSimplexScale = 99.2f; // calibrated so the extremes of the 8 direction gradient set reach about +-1
 
     /** 2D simplex noise, about -1..1. `fine`: 64 gradient directions instead of eight. */
-    float Simplex(const double x, const double z, const std::uint32_t seed, const bool fine = false)
+    float Simplex(
+      const double x,
+      const double z,
+      const std::uint32_t seed,
+      const bool fine = false
+    )
     {
       const float (*G)[2] = fine ? Gradients64() : kGrad;
       const std::uint32_t gm = fine ? 63u : 7u;
@@ -434,12 +614,16 @@ namespace moho::editor::field
       int octaves = 5;
       float persistence = 0.5f;
       float lacunarity = 2.0f;
-      int basis = 0;                 // 0 perlin, 1 simplex
+      int basis = 0; // 0 perlin, 1 simplex
       double shiftX = 0.0, shiftZ = 0.0;
-      bool rotate = false;           // every octave in its own frame (a turn and a shift) and 64 gradient directions: no lattice seams, no preferred axis
+      bool rotate = false; // every octave in its own frame (a turn and a shift) and 64 gradient directions: no lattice
+                           // seams, no preferred axis
     };
 
-    NoiseParams ReadNoise(const OpArgs& a, const char* const defaultBasis)
+    NoiseParams ReadNoise(
+      const OpArgs& a,
+      const char* const defaultBasis
+    )
     {
       NoiseParams n;
       n.seed = static_cast<std::uint32_t>(static_cast<std::int64_t>(a.p.N("seed", 1)));
@@ -455,7 +639,12 @@ namespace moho::editor::field
     }
 
     /** kind 0 fbm (rolling), 1 ridged, 2 billow. Result 0..1. */
-    float Fbm(const int kind, const NoiseParams& n, const double wx, const double wz)
+    float Fbm(
+      const int kind,
+      const NoiseParams& n,
+      const double wx,
+      const double wz
+    )
     {
       float sum = 0.0f;
       float norm = 0.0f;
@@ -490,23 +679,63 @@ namespace moho::editor::field
       return Clamp01(sum / norm);
     }
 
-    bool OpNoise(const OpArgs& a, Grid& out, std::string& err, const int kind, const char* const defaultBasis)
+    bool OpNoise(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err,
+      const int kind,
+      const char* const defaultBasis
+    )
     {
       if (!MakeOut(a, out, err)) {
         return false;
       }
       const NoiseParams n = ReadNoise(a, defaultBasis);
       const Grid& g = out;
-      Cells(out, [&](const int x, const int z) { return Fbm(kind, n, WorldX(g, x), WorldZ(g, z)); });
+      Cells(out, [&](const int x, const int z) {
+        return Fbm(kind, n, WorldX(g, x), WorldZ(g, z));
+      });
       return true;
     }
 
-    bool OpPerlin(const OpArgs& a, Grid& o, std::string& e) { return OpNoise(a, o, e, 0, "perlin"); }
-    bool OpSimplex(const OpArgs& a, Grid& o, std::string& e) { return OpNoise(a, o, e, 0, "simplex"); }
-    bool OpRidged(const OpArgs& a, Grid& o, std::string& e) { return OpNoise(a, o, e, 1, "perlin"); }
-    bool OpBillow(const OpArgs& a, Grid& o, std::string& e) { return OpNoise(a, o, e, 2, "perlin"); }
+    bool OpPerlin(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return OpNoise(a, o, e, 0, "perlin");
+    }
+    bool OpSimplex(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return OpNoise(a, o, e, 0, "simplex");
+    }
+    bool OpRidged(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return OpNoise(a, o, e, 1, "perlin");
+    }
+    bool OpBillow(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return OpNoise(a, o, e, 2, "perlin");
+    }
 
-    bool OpConst(const OpArgs& a, Grid& out, std::string& err)
+    bool OpConst(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       if (!MakeOut(a, out, err)) {
         return false;
@@ -515,7 +744,11 @@ namespace moho::editor::field
       return true;
     }
 
-    bool OpWhite(const OpArgs& a, Grid& out, std::string& err)
+    bool OpWhite(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       if (!MakeOut(a, out, err)) {
         return false;
@@ -523,13 +756,19 @@ namespace moho::editor::field
       const std::uint32_t seed = static_cast<std::uint32_t>(static_cast<std::int64_t>(a.p.N("seed", 1)));
       const Grid& g = out;
       Cells(out, [&](const int x, const int z) {
-        return Unit(Hash2(static_cast<int>(std::floor(WorldX(g, x))), static_cast<int>(std::floor(WorldZ(g, z))), seed));
+        return Unit(
+          Hash2(static_cast<int>(std::floor(WorldX(g, x))), static_cast<int>(std::floor(WorldZ(g, z))), seed)
+        );
       });
       return true;
     }
 
     /** Voronoi / cellular: mode f1, f2, edge, id, crack. */
-    bool OpVoronoi(const OpArgs& a, Grid& out, std::string& err)
+    bool OpVoronoi(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       if (!MakeOut(a, out, err)) {
         return false;
@@ -571,17 +810,25 @@ namespace moho::editor::field
         }
         const float f1 = std::sqrt(d1);
         const float f2 = std::sqrt(d2);
-        if (mode == "f2") return Clamp01(f2);
-        if (mode == "edge") return Clamp01(f2 - f1);
-        if (mode == "id") return Unit(Hash32(id ^ 0xA511E9B3U));
-        if (mode == "crack") return 1.0f - SmoothStep(0.0f, width, f2 - f1);
+        if (mode == "f2")
+          return Clamp01(f2);
+        if (mode == "edge")
+          return Clamp01(f2 - f1);
+        if (mode == "id")
+          return Unit(Hash32(id ^ 0xA511E9B3U));
+        if (mode == "crack")
+          return 1.0f - SmoothStep(0.0f, width, f2 - f1);
         return Clamp01(f1);
       });
       return true;
     }
 
     /** Linear gradient: angle in degrees (0 = towards +x), lo at the start, hi at the end, spanning the field. */
-    bool OpGradient(const OpArgs& a, Grid& out, std::string& err)
+    bool OpGradient(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       if (!MakeOut(a, out, err)) {
         return false;
@@ -602,8 +849,13 @@ namespace moho::editor::field
       return true;
     }
 
-    /** Radial distance from a centre (default the middle) in units of `radius` (default half the smaller extent), 0 at the centre, clamped to 0..1 unless clamp = 0. */
-    bool OpRadial(const OpArgs& a, Grid& out, std::string& err)
+    /** Radial distance from a centre (default the middle) in units of `radius` (default half the smaller extent), 0 at
+     * the centre, clamped to 0..1 unless clamp = 0. */
+    bool OpRadial(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       if (!MakeOut(a, out, err)) {
         return false;
@@ -611,7 +863,8 @@ namespace moho::editor::field
       const Grid& g = out;
       const double cxw = a.p.Has("cx") ? a.p.N("cx", 0) : WorldX(g, 0) + 0.5 * (g.w - 1) * g.cell;
       const double czw = a.p.Has("cz") ? a.p.N("cz", 0) : WorldZ(g, 0) + 0.5 * (g.h - 1) * g.cell;
-      const double radius = std::max(1e-6, a.p.Has("radius") ? a.p.N("radius", 1) : 0.5 * std::min(g.w - 1, g.h - 1) * g.cell);
+      const double radius =
+        std::max(1e-6, a.p.Has("radius") ? a.p.N("radius", 1) : 0.5 * std::min(g.w - 1, g.h - 1) * g.cell);
       const bool clamp = a.p.N("clamp", 1) != 0;
       Cells(out, [&](const int x, const int z) {
         const double ex = WorldX(g, x) - cxw;
@@ -622,66 +875,120 @@ namespace moho::editor::field
       return true;
     }
 
-    // ---- point filters ---------------------------------------------------------------------------------------------------------------------------
+    // ---- point filters
+    // ---------------------------------------------------------------------------------------------------------------------------
 
     template <class F>
-    bool Point(const OpArgs& a, Grid& out, std::string& err, F&& f)
+    bool Point(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err,
+      F&& f
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
         return false;
       }
-      Cells(out, [&](const int x, const int z) { return f(src->At(x, z)); });
+      Cells(out, [&](const int x, const int z) {
+        return f(src->At(x, z));
+      });
       return true;
     }
 
-    bool OpClamp(const OpArgs& a, Grid& o, std::string& e)
+    bool OpClamp(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float lo = static_cast<float>(a.p.N("lo", 0.0));
       const float hi = static_cast<float>(a.p.N("hi", 1.0));
-      return Point(a, o, e, [&](const float v) { return v < lo ? lo : (v > hi ? hi : v); });
+      return Point(a, o, e, [&](const float v) {
+        return v < lo ? lo : (v > hi ? hi : v);
+      });
     }
 
-    bool OpInvert(const OpArgs& a, Grid& o, std::string& e)
+    bool OpInvert(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float lo = static_cast<float>(a.p.N("lo", 0.0));
       const float hi = static_cast<float>(a.p.N("hi", 1.0));
-      return Point(a, o, e, [&](const float v) { return lo + hi - v; });
+      return Point(a, o, e, [&](const float v) {
+        return lo + hi - v;
+      });
     }
 
-    bool OpAbs(const OpArgs& a, Grid& o, std::string& e)
+    bool OpAbs(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
-      return Point(a, o, e, [&](const float v) { return std::fabs(v); });
+      return Point(a, o, e, [&](const float v) {
+        return std::fabs(v);
+      });
     }
 
-    bool OpGamma(const OpArgs& a, Grid& o, std::string& e)
+    bool OpGamma(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float g = std::max(1e-3f, static_cast<float>(a.p.N("gamma", 1.0)));
-      return Point(a, o, e, [&](const float v) { return v <= 0.0f ? 0.0f : std::pow(v, g); });
+      return Point(a, o, e, [&](const float v) {
+        return v <= 0.0f ? 0.0f : std::pow(v, g);
+      });
     }
 
     /** v * mul + add */
-    bool OpAffine(const OpArgs& a, Grid& o, std::string& e)
+    bool OpAffine(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float m = static_cast<float>(a.p.N("mul", 1.0));
       const float b = static_cast<float>(a.p.N("add", 0.0));
-      return Point(a, o, e, [&](const float v) { return v * m + b; });
+      return Point(a, o, e, [&](const float v) {
+        return v * m + b;
+      });
     }
 
-    bool OpSmoothstep(const OpArgs& a, Grid& o, std::string& e)
+    bool OpSmoothstep(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float e0 = static_cast<float>(a.p.N("edge0", 0.0));
       const float e1 = static_cast<float>(a.p.N("edge1", 1.0));
-      return Point(a, o, e, [&](const float v) { return SmoothStep(e0, e1, v); });
+      return Point(a, o, e, [&](const float v) {
+        return SmoothStep(e0, e1, v);
+      });
     }
 
-    bool OpThreshold(const OpArgs& a, Grid& o, std::string& e)
+    bool OpThreshold(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float t = static_cast<float>(a.p.N("value", 0.5));
-      return Point(a, o, e, [&](const float v) { return v > t ? 1.0f : 0.0f; });
+      return Point(a, o, e, [&](const float v) {
+        return v > t ? 1.0f : 0.0f;
+      });
     }
 
-    bool OpNormalize(const OpArgs& a, Grid& o, std::string& e)
+    bool OpNormalize(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const Grid* src = Need(a, "a", e);
       if (src == nullptr) {
@@ -691,24 +998,37 @@ namespace moho::editor::field
       const float lo = static_cast<float>(a.p.N("lo", 0.0));
       const float hi = static_cast<float>(a.p.N("hi", 1.0));
       const float span = s.max - s.min;
-      return Point(a, o, e, [&](const float v) { return span > 0.0f ? lo + (hi - lo) * ((v - s.min) / span) : lo; });
+      return Point(a, o, e, [&](const float v) {
+        return span > 0.0f ? lo + (hi - lo) * ((v - s.min) / span) : lo;
+      });
     }
 
     /** Rounds to a multiple of `step` (default 1/128: the height word grid). */
-    bool OpQuantize(const OpArgs& a, Grid& o, std::string& e)
+    bool OpQuantize(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float step = std::max(1e-6f, static_cast<float>(a.p.N("step", 1.0 / 128.0)));
-      return Point(a, o, e, [&](const float v) { return std::floor(v / step + 0.5f) * step; });
+      return Point(a, o, e, [&](const float v) {
+        return std::floor(v / step + 0.5f) * step;
+      });
     }
 
-    // ---- curves ----------------------------------------------------------------------------------------------------------------------------------
+    // ---- curves
+    // ----------------------------------------------------------------------------------------------------------------------------------
 
     struct Curve
     {
-      std::vector<float> x, y, m;   // points sorted by x, tangents for the smooth mode
+      std::vector<float> x, y, m; // points sorted by x, tangents for the smooth mode
       bool smooth = false;
 
-      bool Build(const std::vector<double>& flat, const bool smoothMode, std::string& err)
+      bool Build(
+        const std::vector<double>& flat,
+        const bool smoothMode,
+        std::string& err
+      )
       {
         const std::size_t n = flat.size() / 2;
         if (n < 2) {
@@ -719,7 +1039,9 @@ namespace moho::editor::field
         for (std::size_t i = 0; i < n; ++i) {
           pts.emplace_back(static_cast<float>(flat[2 * i]), static_cast<float>(flat[2 * i + 1]));
         }
-        std::stable_sort(pts.begin(), pts.end(), [](const auto& l, const auto& r) { return l.first < r.first; });
+        std::stable_sort(pts.begin(), pts.end(), [](const auto& l, const auto& r) {
+          return l.first < r.first;
+        });
         for (const auto& p : pts) {
           x.push_back(p.first);
           y.push_back(p.second);
@@ -757,29 +1079,39 @@ namespace moho::editor::field
         return true;
       }
 
-      float Eval(const float v) const
+      float Eval(
+        const float v
+      ) const
       {
         const std::size_t n = x.size();
-        if (v <= x[0]) return y[0];
-        if (v >= x[n - 1]) return y[n - 1];
+        if (v <= x[0])
+          return y[0];
+        if (v >= x[n - 1])
+          return y[n - 1];
         std::size_t i = 0;
         while (i + 2 < n && v > x[i + 1]) {
           ++i;
         }
         const float dx = x[i + 1] - x[i];
-        if (dx <= 0.0f) return y[i + 1];
+        if (dx <= 0.0f)
+          return y[i + 1];
         const float t = (v - x[i]) / dx;
         if (!smooth) {
           return y[i] + (y[i + 1] - y[i]) * t;
         }
         const float t2 = t * t;
         const float t3 = t2 * t;
-        return (2.0f * t3 - 3.0f * t2 + 1.0f) * y[i] + (t3 - 2.0f * t2 + t) * dx * m[i] + (-2.0f * t3 + 3.0f * t2) * y[i + 1] + (t3 - t2) * dx * m[i + 1];
+        return (2.0f * t3 - 3.0f * t2 + 1.0f) * y[i] + (t3 - 2.0f * t2 + t) * dx * m[i] +
+          (-2.0f * t3 + 3.0f * t2) * y[i + 1] + (t3 - t2) * dx * m[i + 1];
       }
     };
 
     /** points = {x1, y1, x2, y2, ...}; smooth = 1 for a monotone cubic through them, else straight segments. */
-    bool OpRemap(const OpArgs& a, Grid& o, std::string& e)
+    bool OpRemap(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const std::vector<double>* pts = a.p.A("points");
       if (pts == nullptr) {
@@ -790,10 +1122,16 @@ namespace moho::editor::field
       if (!c.Build(*pts, a.p.N("smooth", 1) != 0, e)) {
         return false;
       }
-      return Point(a, o, e, [&](const float v) { return c.Eval(v); });
+      return Point(a, o, e, [&](const float v) {
+        return c.Eval(v);
+      });
     }
 
-    bool OpLevels(const OpArgs& a, Grid& o, std::string& e)
+    bool OpLevels(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float inLo = static_cast<float>(a.p.N("in_lo", 0.0));
       const float inHi = static_cast<float>(a.p.N("in_hi", 1.0));
@@ -811,7 +1149,11 @@ namespace moho::editor::field
     }
 
     /** `steps` plateaus over 0..1 (or over lo..hi); sharpness 0 = smooth ramps, 1 = hard steps. */
-    bool OpTerrace(const OpArgs& a, Grid& o, std::string& e)
+    bool OpTerrace(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float n = std::max(1.0f, static_cast<float>(a.p.N("steps", 6)));
       const float lo = static_cast<float>(a.p.N("lo", 0.0));
@@ -820,18 +1162,26 @@ namespace moho::editor::field
       const float width = 1.0f - sharp;
       const float span = hi - lo;
       return Point(a, o, e, [&](const float v) {
-        if (span == 0.0f) return v;
+        if (span == 0.0f)
+          return v;
         const float t = (v - lo) / span * n;
         const float i = std::floor(t);
         const float f = t - i;
-        const float shape = width <= 1e-6f ? (f < 0.5f ? 0.0f : 1.0f) : SmoothStep(0.5f - 0.5f * width, 0.5f + 0.5f * width, f);
+        const float shape =
+          width <= 1e-6f ? (f < 0.5f ? 0.0f : 1.0f) : SmoothStep(0.5f - 0.5f * width, 0.5f + 0.5f * width, f);
         return lo + (i + shape) / n * span;
       });
     }
 
-    // ---- blur ------------------------------------------------------------------------------------------------------------------------------------
+    // ---- blur
+    // ------------------------------------------------------------------------------------------------------------------------------------
 
-    void ConvolveH(const Grid& src, Grid& dst, const std::vector<float>& k, const int r)
+    void ConvolveH(
+      const Grid& src,
+      Grid& dst,
+      const std::vector<float>& k,
+      const int r
+    )
     {
       const int w = src.w;
       Rows(src.h, [&](const int z0, const int z1) {
@@ -855,7 +1205,12 @@ namespace moho::editor::field
       });
     }
 
-    void ConvolveV(const Grid& src, Grid& dst, const std::vector<float>& k, const int r)
+    void ConvolveV(
+      const Grid& src,
+      Grid& dst,
+      const std::vector<float>& k,
+      const int r
+    )
     {
       const int w = src.w;
       const int h = src.h;
@@ -868,7 +1223,8 @@ namespace moho::editor::field
           }
           for (int i = 1; i <= r; ++i) {
             const float* up = src.v.data() + static_cast<std::size_t>(std::max(0, z - i)) * static_cast<std::size_t>(w);
-            const float* dn = src.v.data() + static_cast<std::size_t>(std::min(h - 1, z + i)) * static_cast<std::size_t>(w);
+            const float* dn =
+              src.v.data() + static_cast<std::size_t>(std::min(h - 1, z + i)) * static_cast<std::size_t>(w);
             const float ki = k[i];
             for (int x = 0; x < w; ++x) {
               acc[static_cast<std::size_t>(x)] += ki * (up[x] + dn[x]);
@@ -883,7 +1239,11 @@ namespace moho::editor::field
     }
 
     /** One-sided kernel k[0..r] of a symmetric normalised kernel; gauss (sigma in samples) or box. */
-    std::vector<float> MakeKernel(const bool gauss, const double sigmaOrRadius, int& r)
+    std::vector<float> MakeKernel(
+      const bool gauss,
+      const double sigmaOrRadius,
+      int& r
+    )
     {
       std::vector<float> k;
       if (gauss) {
@@ -891,7 +1251,8 @@ namespace moho::editor::field
         std::vector<double> d(static_cast<std::size_t>(r) + 1);
         double sum = 0.0;
         for (int i = 0; i <= r; ++i) {
-          d[static_cast<std::size_t>(i)] = std::exp(-0.5 * static_cast<double>(i) * static_cast<double>(i) / (sigmaOrRadius * sigmaOrRadius));
+          d[static_cast<std::size_t>(i)] =
+            std::exp(-0.5 * static_cast<double>(i) * static_cast<double>(i) / (sigmaOrRadius * sigmaOrRadius));
           sum += (i == 0 ? 1.0 : 2.0) * d[static_cast<std::size_t>(i)];
         }
         for (double v : d) {
@@ -904,13 +1265,18 @@ namespace moho::editor::field
       return k;
     }
 
-    bool OpBlurImpl(const OpArgs& a, Grid& out, std::string& err, const bool gauss)
+    bool OpBlurImpl(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err,
+      const bool gauss
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
         return false;
       }
-      const double radius = a.p.N("radius", 4.0) / static_cast<double>(src->cell);   // world units -> samples
+      const double radius = a.p.N("radius", 4.0) / static_cast<double>(src->cell); // world units -> samples
       if (radius <= 1e-6) {
         out.v = src->v;
         return true;
@@ -921,20 +1287,41 @@ namespace moho::editor::field
       ConvolveH(*src, tmp, k, r);
       ConvolveV(tmp, out, k, r);
       if (const Grid* mask = Get(a, "mask"); mask != nullptr && mask->SameShape(*src)) {
-        Cells(out, [&](const int x, const int z) { return Lerp(src->At(x, z), out.At(x, z), Clamp01(mask->At(x, z))); });
+        Cells(out, [&](const int x, const int z) {
+          return Lerp(src->At(x, z), out.At(x, z), Clamp01(mask->At(x, z)));
+        });
       }
       return true;
     }
 
     /** radius = sigma in world units. */
-    bool OpBlur(const OpArgs& a, Grid& o, std::string& e) { return OpBlurImpl(a, o, e, true); }
+    bool OpBlur(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return OpBlurImpl(a, o, e, true);
+    }
     /** radius = half width in world units. */
-    bool OpBox(const OpArgs& a, Grid& o, std::string& e) { return OpBlurImpl(a, o, e, false); }
+    bool OpBox(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return OpBlurImpl(a, o, e, false);
+    }
 
-    // ---- geometry --------------------------------------------------------------------------------------------------------------------------------
+    // ---- geometry
+    // --------------------------------------------------------------------------------------------------------------------------------
 
     /** Displaces lookups of `a` by the fields dx / dz (0..1, 0.5 = no move) times `strength` world units. */
-    bool OpWarp(const OpArgs& a, Grid& out, std::string& err)
+    bool OpWarp(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       const Grid* dx = Need(a, "dx", err);
@@ -946,7 +1333,7 @@ namespace moho::editor::field
         err = "warp: dx and dz must have the shape of a";
         return false;
       }
-      const double strength = a.p.N("strength", 20.0) / static_cast<double>(src->cell);   // samples
+      const double strength = a.p.N("strength", 20.0) / static_cast<double>(src->cell); // samples
       const bool centred = a.p.N("centred", 1) != 0;
       const Edge e = ParseEdge(a, kClamp);
       Cells(out, [&](const int x, const int z) {
@@ -960,7 +1347,11 @@ namespace moho::editor::field
     }
 
     /** Moves the content by (move_x, move_z) world units; default wraps around. */
-    bool OpOffset(const OpArgs& a, Grid& out, std::string& err)
+    bool OpOffset(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
@@ -981,7 +1372,11 @@ namespace moho::editor::field
     }
 
     /** Rotates by `angle` degrees (counter-clockwise seen with +z down) about (cx, cz) (default the middle). */
-    bool OpRotate(const OpArgs& a, Grid& out, std::string& err)
+    bool OpRotate(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
@@ -1003,7 +1398,11 @@ namespace moho::editor::field
     }
 
     /** Zooms by `factor` (2 = twice as big) about (cx, cz) (default the middle). */
-    bool OpScale(const OpArgs& a, Grid& out, std::string& err)
+    bool OpScale(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
@@ -1015,16 +1414,23 @@ namespace moho::editor::field
       const Edge e = ParseEdge(a, kClamp);
       const float fill = static_cast<float>(a.p.N("fill", 0.0));
       Cells(out, [&](const int x, const int z) {
-        return Bilinear(*src, cxs + (static_cast<double>(x) - cxs) / f, czs + (static_cast<double>(z) - czs) / f, e, fill);
+        return Bilinear(
+          *src, cxs + (static_cast<double>(x) - cxs) / f, czs + (static_cast<double>(z) - czs) / f, e, fill
+        );
       });
       return true;
     }
 
     /**
-     * Symmetry copies (exact sample copies): mode x (left | right), z, xz (four quadrants), rot2 (180 degrees), rot4 (90 degrees, square), diag, adiag (square).
-     * side 0 keeps the first half / quadrant as the master, side 1 the other.
+     * Symmetry copies (exact sample copies): mode x (left | right), z, xz (four quadrants), rot2 (180 degrees), rot4
+     * (90 degrees, square), diag, adiag (square). side 0 keeps the first half / quadrant as the master, side 1 the
+     * other.
      */
-    bool OpMirror(const OpArgs& a, Grid& out, std::string& err)
+    bool OpMirror(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
@@ -1038,7 +1444,10 @@ namespace moho::editor::field
         err = "mirror " + mode + " needs a square field";
         return false;
       }
-      if (mode != "x" && mode != "z" && mode != "xz" && mode != "rot2" && mode != "rot4" && mode != "diag" && mode != "adiag") {
+      if (
+        mode != "x" && mode != "z" && mode != "xz" && mode != "rot2" && mode != "rot4" && mode != "diag" &&
+        mode != "adiag"
+      ) {
         err = "mirror: unknown mode '" + mode + "'";
         return false;
       }
@@ -1047,11 +1456,13 @@ namespace moho::editor::field
         int sz = z;
         if (mode == "x" || mode == "xz") {
           const int mx = w - 1 - x;
-          if (side == 0 ? x > mx : x < mx) sx = mx;
+          if (side == 0 ? x > mx : x < mx)
+            sx = mx;
         }
         if (mode == "z" || mode == "xz") {
           const int mz = h - 1 - z;
-          if (side == 0 ? z > mz : z < mz) sz = mz;
+          if (side == 0 ? z > mz : z < mz)
+            sz = mz;
         }
         if (mode == "rot2") {
           const int mx = w - 1 - x;
@@ -1063,14 +1474,17 @@ namespace moho::editor::field
           }
         }
         if (mode == "rot4") {
-          // doubled integer coordinates about the centre: U = 2x - (n-1), V = 2z - (n-1); domains D0 = {U>0, V>=0} and its three quarter turns
+          // doubled integer coordinates about the centre: U = 2x - (n-1), V = 2z - (n-1); domains D0 = {U>0, V>=0} and
+          // its three quarter turns
           const int n1 = w - 1;
           int U = 2 * x - n1;
           int V = 2 * z - n1;
           int turns = 0;
-          const auto inD0 = [](const int u, const int v) { return u > 0 && v >= 0; };
+          const auto inD0 = [](const int u, const int v) {
+            return u > 0 && v >= 0;
+          };
           while (turns < 4 && !inD0(U, V)) {
-            const int nu = V;           // quarter turn back: (u, v) -> (v, -u)
+            const int nu = V; // quarter turn back: (u, v) -> (v, -u)
             const int nv = -U;
             U = nu;
             V = nv;
@@ -1107,7 +1521,11 @@ namespace moho::editor::field
     }
 
     /** Sub rectangle x0..x1 / z0..z1 (sample indices, inclusive). */
-    bool OpCrop(const OpArgs& a, Grid& out, std::string& err)
+    bool OpCrop(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr) {
@@ -1125,13 +1543,21 @@ namespace moho::editor::field
         err = "crop: empty rectangle";
         return false;
       }
-      out = Grid(x1 - x0 + 1, z1 - z0 + 1, src->cell, static_cast<float>(WorldX(*src, x0)), static_cast<float>(WorldZ(*src, z0)));
-      Cells(out, [&](const int x, const int z) { return src->At(x + x0, z + z0); });
+      out = Grid(
+        x1 - x0 + 1, z1 - z0 + 1, src->cell, static_cast<float>(WorldX(*src, x0)), static_cast<float>(WorldZ(*src, z0))
+      );
+      Cells(out, [&](const int x, const int z) {
+        return src->At(x + x0, z + z0);
+      });
       return true;
     }
 
     /** New sample count over the same world extent (first and last samples map onto first and last), bilinear. */
-    bool OpResize(const OpArgs& a, Grid& out, std::string& err)
+    bool OpResize(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr) {
@@ -1143,18 +1569,31 @@ namespace moho::editor::field
         err = "resize: bad size";
         return false;
       }
-      const float cell = src->w > 1 ? src->cell * static_cast<float>(src->w - 1) / static_cast<float>(w - 1) : src->cell;
+      const float cell =
+        src->w > 1 ? src->cell * static_cast<float>(src->w - 1) / static_cast<float>(w - 1) : src->cell;
       out = Grid(w, h, cell, src->ox, src->oz);
       Cells(out, [&](const int x, const int z) {
-        return Bilinear(*src, static_cast<double>(x) * (src->w - 1) / (w - 1), static_cast<double>(z) * (src->h - 1) / (h - 1), kClamp, 0.0f);
+        return Bilinear(
+          *src,
+          static_cast<double>(x) * (src->w - 1) / (w - 1),
+          static_cast<double>(z) * (src->h - 1) / (h - 1),
+          kClamp,
+          0.0f
+        );
       });
       return true;
     }
 
-    // ---- combiners -------------------------------------------------------------------------------------------------------------------------------
+    // ---- combiners
+    // -------------------------------------------------------------------------------------------------------------------------------
 
     template <class F>
-    bool Binary(const OpArgs& a, Grid& out, std::string& err, F&& f)
+    bool Binary(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err,
+      F&& f
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
@@ -1166,18 +1605,69 @@ namespace moho::editor::field
         return false;
       }
       const float value = static_cast<float>(a.p.N("value", 0.0));
-      Cells(out, [&](const int x, const int z) { return f(src->At(x, z), b != nullptr ? b->At(x, z) : value); });
+      Cells(out, [&](const int x, const int z) {
+        return f(src->At(x, z), b != nullptr ? b->At(x, z) : value);
+      });
       return true;
     }
 
-    bool OpMin(const OpArgs& a, Grid& o, std::string& e) { return Binary(a, o, e, [](const float p, const float q) { return p < q ? p : q; }); }
-    bool OpMax(const OpArgs& a, Grid& o, std::string& e) { return Binary(a, o, e, [](const float p, const float q) { return p > q ? p : q; }); }
-    bool OpAdd(const OpArgs& a, Grid& o, std::string& e) { return Binary(a, o, e, [](const float p, const float q) { return p + q; }); }
-    bool OpSub(const OpArgs& a, Grid& o, std::string& e) { return Binary(a, o, e, [](const float p, const float q) { return p - q; }); }
-    bool OpMul(const OpArgs& a, Grid& o, std::string& e) { return Binary(a, o, e, [](const float p, const float q) { return p * q; }); }
+    bool OpMin(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return Binary(a, o, e, [](const float p, const float q) {
+        return p < q ? p : q;
+      });
+    }
+    bool OpMax(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return Binary(a, o, e, [](const float p, const float q) {
+        return p > q ? p : q;
+      });
+    }
+    bool OpAdd(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return Binary(a, o, e, [](const float p, const float q) {
+        return p + q;
+      });
+    }
+    bool OpSub(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return Binary(a, o, e, [](const float p, const float q) {
+        return p - q;
+      });
+    }
+    bool OpMul(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return Binary(a, o, e, [](const float p, const float q) {
+        return p * q;
+      });
+    }
 
     /** lerp(a, f(a, b), opacity * mask): mode normal, add, sub, mul, screen, overlay, min, max, diff. */
-    bool OpBlend(const OpArgs& a, Grid& out, std::string& err)
+    bool OpBlend(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       const Grid* b = Need(a, "b", err);
@@ -1199,29 +1689,44 @@ namespace moho::editor::field
         const float p = src->At(x, z);
         const float q = b->At(x, z);
         float r;
-        if (mode == "add") r = p + q;
-        else if (mode == "sub") r = p - q;
-        else if (mode == "mul") r = p * q;
-        else if (mode == "screen") r = 1.0f - (1.0f - p) * (1.0f - q);
-        else if (mode == "overlay") r = p < 0.5f ? 2.0f * p * q : 1.0f - 2.0f * (1.0f - p) * (1.0f - q);
-        else if (mode == "min") r = p < q ? p : q;
-        else if (mode == "max") r = p > q ? p : q;
-        else if (mode == "diff") r = std::fabs(p - q);
-        else r = q;
+        if (mode == "add")
+          r = p + q;
+        else if (mode == "sub")
+          r = p - q;
+        else if (mode == "mul")
+          r = p * q;
+        else if (mode == "screen")
+          r = 1.0f - (1.0f - p) * (1.0f - q);
+        else if (mode == "overlay")
+          r = p < 0.5f ? 2.0f * p * q : 1.0f - 2.0f * (1.0f - p) * (1.0f - q);
+        else if (mode == "min")
+          r = p < q ? p : q;
+        else if (mode == "max")
+          r = p > q ? p : q;
+        else if (mode == "diff")
+          r = std::fabs(p - q);
+        else
+          r = q;
         const float t = opacity * (mask != nullptr ? mask->At(x, z) : 1.0f);
         return Lerp(p, r, t);
       });
       return true;
     }
 
-    // ---- analysis --------------------------------------------------------------------------------------------------------------------------------
+    // ---- analysis
+    // --------------------------------------------------------------------------------------------------------------------------------
 
     /**
-     * mode degrees (angle of the central-difference gradient), gradient (its rise per run), rating (the engine's rule for a mobile footprint of `window`
-     * samples: the steepest neighbouring difference inside the window, per world unit; 0.75 blocks every land unit) and variation (highest minus lowest
-     * sample over the window + 1 skirt: the rule for structures, MaxGroundVariation). `radius` widens the stencil of degrees / gradient (samples).
+     * mode degrees (angle of the central-difference gradient), gradient (its rise per run), rating (the engine's rule
+     * for a mobile footprint of `window` samples: the steepest neighbouring difference inside the window, per world
+     * unit; 0.75 blocks every land unit) and variation (highest minus lowest sample over the window + 1 skirt: the rule
+     * for structures, MaxGroundVariation). `radius` widens the stencil of degrees / gradient (samples).
      */
-    bool OpSlope(const OpArgs& a, Grid& out, std::string& err)
+    bool OpSlope(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
@@ -1282,23 +1787,34 @@ namespace moho::editor::field
     }
 
     /** 1 inside lo..hi, falling to 0 over `soft` height units outside. */
-    bool OpHeightBand(const OpArgs& a, Grid& o, std::string& e)
+    bool OpHeightBand(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float lo = static_cast<float>(a.p.N("lo", 0.0));
       const float hi = static_cast<float>(a.p.N("hi", 1.0));
       const float soft = std::max(0.0f, static_cast<float>(a.p.N("soft", 0.0)));
       return Point(a, o, e, [&](const float v) {
-        if (v >= lo && v <= hi) return 1.0f;
-        if (soft <= 0.0f) return 0.0f;
+        if (v >= lo && v <= hi)
+          return 1.0f;
+        if (soft <= 0.0f)
+          return 0.0f;
         return v < lo ? SmoothStep(lo - soft, lo, v) : SmoothStep(hi + soft, hi, v);
       });
     }
 
     /**
-     * Second derivative of the surface over `radius` samples: convex ground (hill tops, ridges) above 0.5, concave (gullies, basins) below, flat 0.5.
-     * `gain` scales it; raw = 1 returns the signed value (negative laplacian per unit squared) instead.
+     * Second derivative of the surface over `radius` samples: convex ground (hill tops, ridges) above 0.5, concave
+     * (gullies, basins) below, flat 0.5. `gain` scales it; raw = 1 returns the signed value (negative laplacian per
+     * unit squared) instead.
      */
-    bool OpCurvature(const OpArgs& a, Grid& out, std::string& err)
+    bool OpCurvature(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
@@ -1312,43 +1828,67 @@ namespace moho::editor::field
       const int h = src->h;
       Cells(out, [&](const int x, const int z) {
         const float c = src->At(x, z);
-        const float lap = (src->At(std::max(0, x - n), z) + src->At(std::min(w - 1, x + n), z) + src->At(x, std::max(0, z - n)) +
-                           src->At(x, std::min(h - 1, z + n)) - 4.0f * c) / d2;
+        const float lap = (src->At(std::max(0, x - n), z) + src->At(std::min(w - 1, x + n), z) +
+                           src->At(x, std::max(0, z - n)) + src->At(x, std::min(h - 1, z + n)) - 4.0f * c) /
+          d2;
         return raw ? -lap : Clamp01(0.5f - gain * lap);
       });
       return true;
     }
 
-    bool OpWaterBelow(const OpArgs& a, Grid& o, std::string& e)
+    bool OpWaterBelow(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float level = static_cast<float>(a.p.N("level", 0.0));
       const float soft = std::max(0.0f, static_cast<float>(a.p.N("soft", 0.0)));
-      return Point(a, o, e, [&](const float v) { return soft > 0.0f ? SmoothStep(level + soft, level, v) : (v <= level ? 1.0f : 0.0f); });
+      return Point(a, o, e, [&](const float v) {
+        return soft > 0.0f ? SmoothStep(level + soft, level, v) : (v <= level ? 1.0f : 0.0f);
+      });
     }
 
-    bool OpWaterAbove(const OpArgs& a, Grid& o, std::string& e)
+    bool OpWaterAbove(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float level = static_cast<float>(a.p.N("level", 0.0));
       const float soft = std::max(0.0f, static_cast<float>(a.p.N("soft", 0.0)));
-      return Point(a, o, e, [&](const float v) { return soft > 0.0f ? SmoothStep(level - soft, level, v) : (v > level ? 1.0f : 0.0f); });
+      return Point(a, o, e, [&](const float v) {
+        return soft > 0.0f ? SmoothStep(level - soft, level, v) : (v > level ? 1.0f : 0.0f);
+      });
     }
 
     /** Depth of water over the ground (level minus height, 0 on land). */
-    bool OpWaterDepth(const OpArgs& a, Grid& o, std::string& e)
+    bool OpWaterDepth(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float level = static_cast<float>(a.p.N("level", 0.0));
-      return Point(a, o, e, [&](const float v) { return v < level ? level - v : 0.0f; });
+      return Point(a, o, e, [&](const float v) {
+        return v < level ? level - v : 0.0f;
+      });
     }
 
     /** 1 within `width` height units of the water level (a beach band), soft edges over `soft`. */
-    bool OpShore(const OpArgs& a, Grid& o, std::string& e)
+    bool OpShore(
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
     {
       const float level = static_cast<float>(a.p.N("level", 0.0));
       const float width = std::max(0.0f, static_cast<float>(a.p.N("width", 1.0)));
       const float soft = std::max(0.0f, static_cast<float>(a.p.N("soft", 0.5)));
       return Point(a, o, e, [&](const float v) {
         const float d = std::fabs(v - level);
-        if (d <= width) return 1.0f;
+        if (d <= width)
+          return 1.0f;
         return soft > 0.0f ? SmoothStep(width + soft, width, d) : 0.0f;
       });
     }
@@ -1356,17 +1896,25 @@ namespace moho::editor::field
     // exact Euclidean distance transform (Felzenszwalb and Huttenlocher), squared distances in samples
     constexpr double kFar = 1e20;
 
-    void Edt1D(const double* f, const int n, double* d, int* v, double* z)
+    void Edt1D(
+      const double* f,
+      const int n,
+      double* d,
+      int* v,
+      double* z
+    )
     {
       int k = 0;
       v[0] = 0;
       z[0] = -1e30;
       z[1] = 1e30;
       for (int q = 1; q < n; ++q) {
-        double s = ((f[q] + static_cast<double>(q) * q) - (f[v[k]] + static_cast<double>(v[k]) * v[k])) / (2.0 * q - 2.0 * v[k]);
+        double s =
+          ((f[q] + static_cast<double>(q) * q) - (f[v[k]] + static_cast<double>(v[k]) * v[k])) / (2.0 * q - 2.0 * v[k]);
         while (s <= z[k]) {
           --k;
-          s = ((f[q] + static_cast<double>(q) * q) - (f[v[k]] + static_cast<double>(v[k]) * v[k])) / (2.0 * q - 2.0 * v[k]);
+          s = ((f[q] + static_cast<double>(q) * q) - (f[v[k]] + static_cast<double>(v[k]) * v[k])) /
+            (2.0 * q - 2.0 * v[k]);
         }
         ++k;
         v[k] = q;
@@ -1382,8 +1930,14 @@ namespace moho::editor::field
       }
     }
 
-    /** Squared distance (samples) of every sample to the nearest sample where feature(x, z) holds; kFar when there is none. */
-    void Edt2D(const int w, const int h, const std::vector<unsigned char>& feature, std::vector<double>& dist)
+    /** Squared distance (samples) of every sample to the nearest sample where feature(x, z) holds; kFar when there is
+     * none. */
+    void Edt2D(
+      const int w,
+      const int h,
+      const std::vector<unsigned char>& feature,
+      std::vector<double>& dist
+    )
     {
       std::vector<double> tmp(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
       dist.assign(tmp.size(), 0.0);
@@ -1397,11 +1951,14 @@ namespace moho::editor::field
         std::vector<double> z(static_cast<std::size_t>(h) + 1);
         for (int x = xa; x < xb; ++x) {
           for (int j = 0; j < h; ++j) {
-            f[static_cast<std::size_t>(j)] = feature[static_cast<std::size_t>(j) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] ? 0.0 : kFar;
+            f[static_cast<std::size_t>(j)] =
+              feature[static_cast<std::size_t>(j) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] ? 0.0
+                                                                                                               : kFar;
           }
           Edt1D(f.data(), h, d.data(), v.data(), z.data());
           for (int j = 0; j < h; ++j) {
-            tmp[static_cast<std::size_t>(j) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] = d[static_cast<std::size_t>(j)];
+            tmp[static_cast<std::size_t>(j) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] =
+              d[static_cast<std::size_t>(j)];
           }
         }
       });
@@ -1410,19 +1967,27 @@ namespace moho::editor::field
         std::vector<int> v(static_cast<std::size_t>(w));
         std::vector<double> zz(static_cast<std::size_t>(w) + 1);
         for (int j = z0; j < z1; ++j) {
-          Edt1D(tmp.data() + static_cast<std::size_t>(j) * static_cast<std::size_t>(w), w, d.data(), v.data(), zz.data());
+          Edt1D(
+            tmp.data() + static_cast<std::size_t>(j) * static_cast<std::size_t>(w), w, d.data(), v.data(), zz.data()
+          );
           for (int i = 0; i < w; ++i) {
-            dist[static_cast<std::size_t>(j) * static_cast<std::size_t>(w) + static_cast<std::size_t>(i)] = d[static_cast<std::size_t>(i)];
+            dist[static_cast<std::size_t>(j) * static_cast<std::size_t>(w) + static_cast<std::size_t>(i)] =
+              d[static_cast<std::size_t>(i)];
           }
         }
       });
     }
 
     /**
-     * Distance in world units to the nearest sample above `threshold` (outside, default), from every sample inside to the nearest below it (inside), or
-     * both (signed: positive outside). range > 0 divides and clamps to 0..1; `max` caps the distance.
+     * Distance in world units to the nearest sample above `threshold` (outside, default), from every sample inside to
+     * the nearest below it (inside), or both (signed: positive outside). range > 0 divides and clamps to 0..1; `max`
+     * caps the distance.
      */
-    bool OpDistance(const OpArgs& a, Grid& out, std::string& err)
+    bool OpDistance(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
@@ -1452,25 +2017,37 @@ namespace moho::editor::field
       const int w = src->w;
       Cells(out, [&](const int x, const int z) {
         const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
-        const auto dist = [&](const std::vector<double>& d) { return d[i] >= kFar * 0.5 ? cap : std::min(cap, std::sqrt(d[i]) * cell); };
+        const auto dist = [&](const std::vector<double>& d) {
+          return d[i] >= kFar * 0.5 ? cap : std::min(cap, std::sqrt(d[i]) * cell);
+        };
         double r;
-        if (mode == "inside") r = dist(dIn);
-        else if (mode == "signed") r = dist(dOut) - dist(dIn);
-        else r = dist(dOut);
-        if (range > 0.0) r = std::min(1.0, std::fabs(r) / range) * (r < 0.0 ? -1.0 : 1.0);
+        if (mode == "inside")
+          r = dist(dIn);
+        else if (mode == "signed")
+          r = dist(dOut) - dist(dIn);
+        else
+          r = dist(dOut);
+        if (range > 0.0)
+          r = std::min(1.0, std::fabs(r) / range) * (r < 0.0 ? -1.0 : 1.0);
         return static_cast<float>(r);
       });
       return true;
     }
 
-    // ---- thermal erosion -------------------------------------------------------------------------------------------------------------------------
+    // ---- thermal erosion
+    // -------------------------------------------------------------------------------------------------------------------------
 
     /**
-     * Material slides downhill wherever the drop to a neighbour (8 neighbours) exceeds talus * distance (talus = rise per run; 0.75 is the engine's land
-     * limit). Per iteration every cell gives its steepest excess times rate / 2 to its lower neighbours in proportion to their excess; everything is
-     * computed from the state at the start of the iteration, so it is order independent and conserves the total height. `mask` scales the rate per cell.
+     * Material slides downhill wherever the drop to a neighbour (8 neighbours) exceeds talus * distance (talus = rise
+     * per run; 0.75 is the engine's land limit). Per iteration every cell gives its steepest excess times rate / 2 to
+     * its lower neighbours in proportion to their excess; everything is computed from the state at the start of the
+     * iteration, so it is order independent and conserves the total height. `mask` scales the rate per cell.
      */
-    bool OpThermal(const OpArgs& a, Grid& out, std::string& err)
+    bool OpThermal(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
@@ -1493,20 +2070,22 @@ namespace moho::editor::field
       static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
       Grid cur = *src;
       Grid next = *src;
-      std::vector<float> share(src->Count(), 0.0f);    // s: fraction of each neighbour's excess that leaves the cell
-      std::vector<float> moved(src->Count(), 0.0f);    // total leaving the cell
+      std::vector<float> share(src->Count(), 0.0f); // s: fraction of each neighbour's excess that leaves the cell
+      std::vector<float> moved(src->Count(), 0.0f); // total leaving the cell
       for (int it = 0; it < iterations; ++it) {
         Rows(h, [&](const int z0, const int z1) {
           for (int z = z0; z < z1; ++z) {
             for (int x = 0; x < w; ++x) {
-              const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
+              const std::size_t i =
+                static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
               const float c = cur.v[i];
               float maxEx = 0.0f;
               float sumEx = 0.0f;
               for (int k = 0; k < 8; ++k) {
                 const int nx = x + dxs[k];
                 const int nz = z + dzs[k];
-                if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
+                if (nx < 0 || nz < 0 || nx >= w || nz >= h)
+                  continue;
                 const float ex = (c - cur.At(nx, nz)) - (k < 4 ? tAxis : tDiag);
                 if (ex > 0.0f) {
                   sumEx += ex;
@@ -1516,7 +2095,8 @@ namespace moho::editor::field
               float s = 0.0f;
               if (sumEx > 0.0f) {
                 float r = rate;
-                if (mask != nullptr) r *= Clamp01(mask->v[i]);
+                if (mask != nullptr)
+                  r *= Clamp01(mask->v[i]);
                 s = r * 0.5f * maxEx / sumEx;
               }
               share[i] = s;
@@ -1527,16 +2107,20 @@ namespace moho::editor::field
         Rows(h, [&](const int z0, const int z1) {
           for (int z = z0; z < z1; ++z) {
             for (int x = 0; x < w; ++x) {
-              const std::size_t i = static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
+              const std::size_t i =
+                static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x);
               const float c = cur.v[i];
               float gain = 0.0f;
               for (int k = 0; k < 8; ++k) {
                 const int nx = x + dxs[k];
                 const int nz = z + dzs[k];
-                if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
-                const std::size_t j = static_cast<std::size_t>(nz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(nx);
+                if (nx < 0 || nz < 0 || nx >= w || nz >= h)
+                  continue;
+                const std::size_t j =
+                  static_cast<std::size_t>(nz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(nx);
                 const float ex = (cur.v[j] - c) - (k < 4 ? tAxis : tDiag);
-                if (ex > 0.0f) gain += share[j] * ex;
+                if (ex > 0.0f)
+                  gain += share[j] * ex;
               }
               next.v[i] = c - moved[i] + gain;
             }
@@ -1548,14 +2132,20 @@ namespace moho::editor::field
       return true;
     }
 
-    // ---- aspect and flow (stage T2) --------------------------------------------------------------------------------------------------------------
+    // ---- aspect and flow (stage T2)
+    // --------------------------------------------------------------------------------------------------------------
 
     /**
-     * Which way the ground faces. mode facing (default): 1 where the ground descends toward `azimuth` (degrees; the direction (cos, sin) in x / z like
-     * `gradient`), 0 where it faces away, 0.5 on level ground (the weight fades in over a rise per run of `flat`, default 0.05); degrees: the downhill
-     * direction as an angle 0..360 in the same convention (0 where level). `radius` widens the stencil like slope.
+     * Which way the ground faces. mode facing (default): 1 where the ground descends toward `azimuth` (degrees; the
+     * direction (cos, sin) in x / z like `gradient`), 0 where it faces away, 0.5 on level ground (the weight fades in
+     * over a rise per run of `flat`, default 0.05); degrees: the downhill direction as an angle 0..360 in the same
+     * convention (0 where level). `radius` widens the stencil like slope.
      */
-    bool OpAspect(const OpArgs& a, Grid& out, std::string& err)
+    bool OpAspect(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
@@ -1584,12 +2174,15 @@ namespace moho::editor::field
         const float gz = z1 > z0 ? (src->At(x, z1) - src->At(x, z0)) / (static_cast<float>(z1 - z0) * cell) : 0.0f;
         const float g = std::sqrt(gx * gx + gz * gz);
         if (degrees) {
-          if (g <= 1e-9f) return 0.0f;
+          if (g <= 1e-9f)
+            return 0.0f;
           float d = std::atan2(-gz, -gx) * (180.0f / kPi);
-          if (d < 0.0f) d += 360.0f;
+          if (d < 0.0f)
+            d += 360.0f;
           return d;
         }
-        if (g <= 1e-9f) return 0.5f;
+        if (g <= 1e-9f)
+          return 0.5f;
         const float c = (-gx * dx - gz * dz) / g;
         return 0.5f + 0.5f * c * std::min(1.0f, g / flat);
       });
@@ -1597,12 +2190,17 @@ namespace moho::editor::field
     }
 
     /**
-     * Flow accumulation (D8): every cell passes what it collected (its own area plus everything upstream) to its steepest lower neighbour (8 neighbours,
-     * ties in neighbour order); cells without a lower neighbour keep it (no pit filling). Cells are visited from the highest down (equal heights by
-     * index), so the result is deterministic and does not depend on the thread count. mode cells (the count of cells draining through), area (world
-     * units squared) or log (default: clamp01(ln area / ln range), `range` = the catchment area that reads as 1, default 1e6).
+     * Flow accumulation (D8): every cell passes what it collected (its own area plus everything upstream) to its
+     * steepest lower neighbour (8 neighbours, ties in neighbour order); cells without a lower neighbour keep it (no pit
+     * filling). Cells are visited from the highest down (equal heights by index), so the result is deterministic and
+     * does not depend on the thread count. mode cells (the count of cells draining through), area (world units squared)
+     * or log (default: clamp01(ln area / ln range), `range` = the catchment area that reads as 1, default 1e6).
      */
-    bool OpFlow(const OpArgs& a, Grid& out, std::string& err)
+    bool OpFlow(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       if (src == nullptr || !MakeOut(a, out, err)) {
@@ -1618,7 +2216,7 @@ namespace moho::editor::field
       const std::size_t count = src->Count();
       std::vector<std::uint32_t> order;
       const std::vector<float>& hv = src->v;
-      t7::SortDescending(hv, order);      // the same order as sorting by (height desc, index asc), in O(n)
+      t7::SortDescending(hv, order); // the same order as sorting by (height desc, index asc), in O(n)
       std::vector<float> acc(count, 1.0f);
       static const int dxs[8] = {-1, 1, 0, 0, -1, 1, -1, 1};
       static const int dzs[8] = {0, 0, -1, 1, -1, -1, 1, 1};
@@ -1631,8 +2229,10 @@ namespace moho::editor::field
         for (int d = 0; d < 8; ++d) {
           const int nx = x + dxs[d];
           const int nz = z + dzs[d];
-          if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
-          const std::size_t j = static_cast<std::size_t>(nz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(nx);
+          if (nx < 0 || nz < 0 || nx >= w || nz >= h)
+            continue;
+          const std::size_t j =
+            static_cast<std::size_t>(nz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(nx);
           const float drop = (hv[i] - hv[j]) / (d < 4 ? 1.0f : 1.41421356f);
           if (drop > best) {
             best = drop;
@@ -1648,30 +2248,45 @@ namespace moho::editor::field
       const double invLog = 1.0 / std::log(range);
       Cells(out, [&](const int x, const int z) {
         const float c = acc[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)];
-        if (mode == "cells") return c;
+        if (mode == "cells")
+          return c;
         const float area = c * cell2;
-        if (mode == "area") return area;
+        if (mode == "area")
+          return area;
         return Clamp01(static_cast<float>(std::log(static_cast<double>(area)) * invLog));
       });
       return true;
     }
 
-    /** Reads `a` at the world positions of the samples of `like` (bilinear, clamped at the borders): puts a field of another resolution onto this grid (a paint mask onto the height grid). */
-    bool OpResample(const OpArgs& a, Grid& out, std::string& err)
+    /** Reads `a` at the world positions of the samples of `like` (bilinear, clamped at the borders): puts a field of
+     * another resolution onto this grid (a paint mask onto the height grid). */
+    bool OpResample(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       const Grid* like = Need(a, "like", err);
       if (src == nullptr || like == nullptr) {
         return false;
       }
-      out = Grid(like->w, like->h, like->cell, like->ox, like->oz);      // not MakeOut: `a` and `like` differ in size by design
+      out =
+        Grid(like->w, like->h, like->cell, like->ox, like->oz); // not MakeOut: `a` and `like` differ in size by design
       const Grid& g = out;
-      Cells(out, [&](const int x, const int z) { return SampleWorld(*src, WorldX(g, x), WorldZ(g, z)); });
+      Cells(out, [&](const int x, const int z) {
+        return SampleWorld(*src, WorldX(g, x), WorldZ(g, z));
+      });
       return true;
     }
 
-    /** Catmull-Rom (C1) value at fractional sample coordinates: a height put on a finer grid keeps smooth slopes (bilinear would make flat facets, and the normals of a 4x grid blocks). */
-    inline float Bicubic(const Grid& g, const double gx, const double gz)
+    /** Catmull-Rom (C1) value at fractional sample coordinates: a height put on a finer grid keeps smooth slopes
+     * (bilinear would make flat facets, and the normals of a 4x grid blocks). */
+    inline float Bicubic(
+      const Grid& g,
+      const double gx,
+      const double gz
+    )
     {
       const double fx = std::floor(gx);
       const double fz = std::floor(gz);
@@ -1702,8 +2317,13 @@ namespace moho::editor::field
       return sum;
     }
 
-    /** Reads `a` at the world positions of the samples of `like`, smoothly (Catmull-Rom; `linear` = 1 for masks that must not overshoot): puts a field on a finer grid. */
-    bool OpUpsample(const OpArgs& a, Grid& out, std::string& err)
+    /** Reads `a` at the world positions of the samples of `like`, smoothly (Catmull-Rom; `linear` = 1 for masks that
+     * must not overshoot): puts a field on a finer grid. */
+    bool OpUpsample(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       const Grid* like = Get(a, "like");
@@ -1714,12 +2334,17 @@ namespace moho::editor::field
         out = Grid(like->w, like->h, like->cell, like->ox, like->oz);
       } else {
         const int k = static_cast<int>(a.p.N("factor", 2));
-        if (k < 1 || k > 16 || static_cast<long long>(src->w - 1) * k + 1 > 32768 || static_cast<long long>(src->h - 1) * k + 1 > 32768 ||
-            (static_cast<long long>(src->w - 1) * k + 1) * ((static_cast<long long>(src->h - 1)) * k + 1) > (1LL << 27)) {
+        if (
+          k < 1 || k > 16 || static_cast<long long>(src->w - 1) * k + 1 > 32768 ||
+          static_cast<long long>(src->h - 1) * k + 1 > 32768 ||
+          (static_cast<long long>(src->w - 1) * k + 1) * ((static_cast<long long>(src->h - 1)) * k + 1) > (1LL << 27)
+        ) {
           err = "upsample: bad factor or too large (at most 128M samples)";
           return false;
         }
-        out = Grid((src->w - 1) * k + 1, (src->h - 1) * k + 1, src->cell / static_cast<float>(k), src->ox, src->oz);      // the same world extent, first and last samples kept
+        out = Grid(
+          (src->w - 1) * k + 1, (src->h - 1) * k + 1, src->cell / static_cast<float>(k), src->ox, src->oz
+        ); // the same world extent, first and last samples kept
       }
       const bool linear = a.p.N("linear", 0.0) > 0.5;
       const Grid& g = out;
@@ -1732,8 +2357,13 @@ namespace moho::editor::field
       return true;
     }
 
-    /** Brings a finer field onto the grid of `like` with a tent (triangle) filter as wide as the sample ratio: every coarse sample is the weighted mean of the fine samples around it (no aliasing, unlike resample). */
-    bool OpDownsample(const OpArgs& a, Grid& out, std::string& err)
+    /** Brings a finer field onto the grid of `like` with a tent (triangle) filter as wide as the sample ratio: every
+     * coarse sample is the weighted mean of the fine samples around it (no aliasing, unlike resample). */
+    bool OpDownsample(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* src = Need(a, "a", err);
       const Grid* like = Need(a, "like", err);
@@ -1744,7 +2374,9 @@ namespace moho::editor::field
       const double ratio = static_cast<double>(like->cell) / static_cast<double>(src->cell);
       if (ratio <= 1.0001) {
         const Grid& g = out;
-        Cells(out, [&](const int x, const int z) { return SampleWorld(*src, WorldX(g, x), WorldZ(g, z)); });
+        Cells(out, [&](const int x, const int z) {
+          return SampleWorld(*src, WorldX(g, x), WorldZ(g, z));
+        });
         return true;
       }
       const int radius = std::max(1, static_cast<int>(std::ceil(ratio - 0.0001)));
@@ -1791,13 +2423,18 @@ namespace moho::editor::field
       return true;
     }
 
-    // ---- height from gradients (Poisson solve by FFT) -----------------------------------------------------------------------------------------------
+    // ---- height from gradients (Poisson solve by FFT)
+    // -----------------------------------------------------------------------------------------------
 
-    /** A discrete Fourier transform of any length n: radix-2 when n is a power of two, else Bluestein (chirp-z through a power-of-two convolution). Immutable after construction, so threads share it. */
+    /** A discrete Fourier transform of any length n: radix-2 when n is a power of two, else Bluestein (chirp-z through
+     * a power-of-two convolution). Immutable after construction, so threads share it. */
     class FftPlan
     {
     public:
-      explicit FftPlan(const int n) : n_(n)
+      explicit FftPlan(
+        const int n
+      )
+        : n_(n)
       {
         pow2_ = (n & (n - 1)) == 0;
         m_ = n;
@@ -1815,21 +2452,26 @@ namespace moho::editor::field
         if (!pow2_) {
           chirp_.resize(static_cast<std::size_t>(n));
           for (int k = 0; k < n; ++k) {
-            const long long kk = (static_cast<long long>(k) * k) % (2LL * n);          // exact: k * k reaches 2^34 for n = 2^17
-            const double ang = -3.14159265358979323846 * static_cast<double>(kk) / n;          // exp(-i pi k^2 / n): X[k] = chirp[k] * sum (x[j] chirp[j]) conj(chirp[k - j])
+            const long long kk = (static_cast<long long>(k) * k) % (2LL * n); // exact: k * k reaches 2^34 for n = 2^17
+            const double ang = -3.14159265358979323846 * static_cast<double>(kk) /
+              n; // exp(-i pi k^2 / n): X[k] = chirp[k] * sum (x[j] chirp[j]) conj(chirp[k - j])
             chirp_[static_cast<std::size_t>(k)] = std::complex<double>(std::cos(ang), std::sin(ang));
           }
           kernel_.assign(static_cast<std::size_t>(m_), std::complex<double>(0.0, 0.0));
           kernel_[0] = std::conj(chirp_[0]);
           for (int k = 1; k < n; ++k) {
-            kernel_[static_cast<std::size_t>(k)] = kernel_[static_cast<std::size_t>(m_ - k)] = std::conj(chirp_[static_cast<std::size_t>(k)]);
+            kernel_[static_cast<std::size_t>(k)] = kernel_[static_cast<std::size_t>(m_ - k)] =
+              std::conj(chirp_[static_cast<std::size_t>(k)]);
           }
           Radix2(kernel_, false);
         }
       }
 
       /** In place, a.size() == n. inverse = true gives the unnormalised inverse (the caller divides by n). */
-      void Run(std::vector<std::complex<double>>& a, const bool inverse) const
+      void Run(
+        std::vector<std::complex<double>>& a,
+        const bool inverse
+      ) const
       {
         if (pow2_) {
           Radix2(a, inverse);
@@ -1862,7 +2504,10 @@ namespace moho::editor::field
       }
 
     private:
-      void Radix2(std::vector<std::complex<double>>& a, const bool inverse) const
+      void Radix2(
+        std::vector<std::complex<double>>& a,
+        const bool inverse
+      ) const
       {
         const int n = static_cast<int>(a.size());
         for (int i = 1, j = 0; i < n; ++i) {
@@ -1891,8 +2536,12 @@ namespace moho::editor::field
           }
         }
       }
-      /** exp(-2 pi i idx / n) for the plan's own power-of-two size m_ (the table), computed directly for the other sizes Radix2 meets (never: n == m_ always). */
-      [[nodiscard]] std::complex<double> twiddle(const std::size_t idx, const int n) const
+      /** exp(-2 pi i idx / n) for the plan's own power-of-two size m_ (the table), computed directly for the other
+       * sizes Radix2 meets (never: n == m_ always). */
+      [[nodiscard]] std::complex<double> twiddle(
+        const std::size_t idx,
+        const int n
+      ) const
       {
         if (n == m_) {
           return tw_[idx];
@@ -1910,7 +2559,12 @@ namespace moho::editor::field
     };
 
     /** The 2D transform of a w x h array (row-major), rows then columns, on the worker threads. */
-    void Fft2D(std::vector<std::complex<double>>& d, const int w, const int h, const bool inverse)
+    void Fft2D(
+      std::vector<std::complex<double>>& d,
+      const int w,
+      const int h,
+      const bool inverse
+    )
     {
       const FftPlan px(w);
       const FftPlan pz(h);
@@ -1927,23 +2581,31 @@ namespace moho::editor::field
         std::vector<std::complex<double>> t(static_cast<std::size_t>(h));
         for (int x = x0; x < x1; ++x) {
           for (int z = 0; z < h; ++z) {
-            t[static_cast<std::size_t>(z)] = d[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)];
+            t[static_cast<std::size_t>(z)] =
+              d[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)];
           }
           pz.Run(t, inverse);
           for (int z = 0; z < h; ++z) {
-            d[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] = t[static_cast<std::size_t>(z)];
+            d[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] =
+              t[static_cast<std::size_t>(z)];
           }
         }
       });
     }
 
     /**
-     * The height whose slopes are `dx` and `dz` (d height / d x and / d z, dimensionless; the result is in world units: slope * cell), the least squares fit: the Poisson equation
-     * laplace(h) = div(slopes) solved with the discrete Laplacian's own eigenvalues, so the result reproduces any integrable field exactly. periodic = 1: the field tiles (a texture: no
-     * seam); 0 (default): the field is mirrored about its edges first (the solution then has zero slope across the border, as a map's edge). The mean is 0. Costs a transform of
-     * (2 w) x (2 h) when mirrored: at most 2^25 samples there.
+     * The height whose slopes are `dx` and `dz` (d height / d x and / d z, dimensionless; the result is in world units:
+     * slope * cell), the least squares fit: the Poisson equation laplace(h) = div(slopes) solved with the discrete
+     * Laplacian's own eigenvalues, so the result reproduces any integrable field exactly. periodic = 1: the field tiles
+     * (a texture: no seam); 0 (default): the field is mirrored about its edges first (the solution then has zero slope
+     * across the border, as a map's edge). The mean is 0. Costs a transform of (2 w) x (2 h) when mirrored: at most
+     * 2^25 samples there.
      */
-    bool OpHeightFromGradient(const OpArgs& a, Grid& out, std::string& err)
+    bool OpHeightFromGradient(
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       const Grid* gx = Need(a, "dx", err);
       const Grid* gz = Need(a, "dz", err);
@@ -1964,8 +2626,11 @@ namespace moho::editor::field
         return false;
       }
       const double cell = static_cast<double>(gx->cell);
-      const auto idx = [&](const int x, const int z) { return static_cast<std::size_t>(z) * static_cast<std::size_t>(ew) + static_cast<std::size_t>(x); };
-      // slopes on the edges between samples: pEdge(x, z) lies between sample x - 1 and x (the mean of the two slopes, times the cell), qEdge(x, z) between z - 1 and z
+      const auto idx = [&](const int x, const int z) {
+        return static_cast<std::size_t>(z) * static_cast<std::size_t>(ew) + static_cast<std::size_t>(x);
+      };
+      // slopes on the edges between samples: pEdge(x, z) lies between sample x - 1 and x (the mean of the two slopes,
+      // times the cell), qEdge(x, z) between z - 1 and z
       std::vector<double> pEdge(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0.0);
       std::vector<double> qEdge(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0.0);
       for (int z = 0; z < h; ++z) {
@@ -1981,9 +2646,12 @@ namespace moho::editor::field
           }
         }
       }
-      // the extended arrays (periodic: the field itself). Mirrored, about the edge between sample w - 1 and w: the x edge slopes change sign (the edge w itself has none), the z
-      // direction repeats them; the z edge slopes are the other way round.
-      const auto at = [&](const std::vector<double>& e, const int x, const int z) { return e[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)]; };
+      // the extended arrays (periodic: the field itself). Mirrored, about the edge between sample w - 1 and w: the x
+      // edge slopes change sign (the edge w itself has none), the z direction repeats them; the z edge slopes are the
+      // other way round.
+      const auto at = [&](const std::vector<double>& e, const int x, const int z) {
+        return e[static_cast<std::size_t>(z) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)];
+      };
       const auto pe = [&](int x, int z) {
         if (periodic) {
           return at(pEdge, x, z);
@@ -2004,7 +2672,9 @@ namespace moho::editor::field
         }
         return s * at(qEdge, x < w ? x : 2 * w - 1 - x, z < h ? z : 2 * h - z);
       };
-      std::vector<std::complex<double>> div(static_cast<std::size_t>(ew) * static_cast<std::size_t>(eh), std::complex<double>(0.0, 0.0));
+      std::vector<std::complex<double>> div(
+        static_cast<std::size_t>(ew) * static_cast<std::size_t>(eh), std::complex<double>(0.0, 0.0)
+      );
       for (int z = 0; z < eh; ++z) {
         const int z1 = z + 1 == eh ? 0 : z + 1;
         for (int x = 0; x < ew; ++x) {
@@ -2025,7 +2695,8 @@ namespace moho::editor::field
       for (int l = 0; l < eh; ++l) {
         for (int k = 0; k < ew; ++k) {
           const double lam = lx[static_cast<std::size_t>(k)] + lz[static_cast<std::size_t>(l)];
-          div[idx(k, l)] = lam < -1.0e-12 ? div[idx(k, l)] / lam : std::complex<double>(0.0, 0.0);   // the mean is free: 0
+          div[idx(k, l)] =
+            lam < -1.0e-12 ? div[idx(k, l)] / lam : std::complex<double>(0.0, 0.0); // the mean is free: 0
         }
       }
       Fft2D(div, ew, eh, true);
@@ -2046,23 +2717,64 @@ namespace moho::editor::field
       return true;
     }
 
-    // ---- registry --------------------------------------------------------------------------------------------------------------------------------
+    // ---- registry
+    // --------------------------------------------------------------------------------------------------------------------------------
 
     using OpFn = bool (*)(const OpArgs&, Grid&, std::string&);
 
     const std::map<std::string, OpFn>& Registry()
     {
       static const std::map<std::string, OpFn> reg = {
-        {"const", OpConst},         {"white", OpWhite},           {"perlin", OpPerlin},       {"simplex", OpSimplex},       {"ridged", OpRidged},
-        {"billow", OpBillow},       {"voronoi", OpVoronoi},       {"gradient", OpGradient},   {"radial", OpRadial},         {"blur", OpBlur},
-        {"box", OpBox},             {"clamp", OpClamp},           {"invert", OpInvert},       {"abs", OpAbs},               {"gamma", OpGamma},
-        {"affine", OpAffine},       {"smoothstep", OpSmoothstep}, {"threshold", OpThreshold}, {"normalize", OpNormalize},   {"quantize", OpQuantize},
-        {"remap", OpRemap},         {"levels", OpLevels},         {"terrace", OpTerrace},     {"warp", OpWarp},             {"offset", OpOffset},
-        {"rotate", OpRotate},       {"scale", OpScale},           {"mirror", OpMirror},       {"crop", OpCrop},             {"resize", OpResize},
-        {"min", OpMin},             {"max", OpMax},               {"add", OpAdd},             {"sub", OpSub},               {"mul", OpMul},
-        {"blend", OpBlend},         {"slope", OpSlope},           {"height_band", OpHeightBand}, {"curvature", OpCurvature},  {"water_below", OpWaterBelow},
-        {"water_above", OpWaterAbove}, {"water_depth", OpWaterDepth}, {"shore", OpShore},     {"distance", OpDistance},     {"thermal", OpThermal},
-        {"aspect", OpAspect},       {"flow", OpFlow},           {"resample", OpResample},          {"upsample", OpUpsample},     {"downsample", OpDownsample},
+        {"const", OpConst},
+        {"white", OpWhite},
+        {"perlin", OpPerlin},
+        {"simplex", OpSimplex},
+        {"ridged", OpRidged},
+        {"billow", OpBillow},
+        {"voronoi", OpVoronoi},
+        {"gradient", OpGradient},
+        {"radial", OpRadial},
+        {"blur", OpBlur},
+        {"box", OpBox},
+        {"clamp", OpClamp},
+        {"invert", OpInvert},
+        {"abs", OpAbs},
+        {"gamma", OpGamma},
+        {"affine", OpAffine},
+        {"smoothstep", OpSmoothstep},
+        {"threshold", OpThreshold},
+        {"normalize", OpNormalize},
+        {"quantize", OpQuantize},
+        {"remap", OpRemap},
+        {"levels", OpLevels},
+        {"terrace", OpTerrace},
+        {"warp", OpWarp},
+        {"offset", OpOffset},
+        {"rotate", OpRotate},
+        {"scale", OpScale},
+        {"mirror", OpMirror},
+        {"crop", OpCrop},
+        {"resize", OpResize},
+        {"min", OpMin},
+        {"max", OpMax},
+        {"add", OpAdd},
+        {"sub", OpSub},
+        {"mul", OpMul},
+        {"blend", OpBlend},
+        {"slope", OpSlope},
+        {"height_band", OpHeightBand},
+        {"curvature", OpCurvature},
+        {"water_below", OpWaterBelow},
+        {"water_above", OpWaterAbove},
+        {"water_depth", OpWaterDepth},
+        {"shore", OpShore},
+        {"distance", OpDistance},
+        {"thermal", OpThermal},
+        {"aspect", OpAspect},
+        {"flow", OpFlow},
+        {"resample", OpResample},
+        {"upsample", OpUpsample},
+        {"downsample", OpDownsample},
         {"height_from_gradient", OpHeightFromGradient},
       };
       return reg;
@@ -2078,7 +2790,13 @@ namespace moho::editor::field
     }
   } // namespace
 
-  void RegisterOp(const char* const name, const ExternalOpFn fn) { ExternalOps()[name] = fn; }
+  void RegisterOp(
+    const char* const name,
+    const ExternalOpFn fn
+  )
+  {
+    ExternalOps()[name] = fn;
+  }
 
   namespace
   {
@@ -2091,9 +2809,17 @@ namespace moho::editor::field
     }
   } // namespace
 
-  void SetOpInterceptor(const OpInterceptor fn) { gInterceptor.store(fn); }
+  void SetOpInterceptor(
+    const OpInterceptor fn
+  )
+  {
+    gInterceptor.store(fn);
+  }
 
-  void NoteOpGpu(const std::string& name, const double ms)
+  void NoteOpGpu(
+    const std::string& name,
+    const double ms
+  )
   {
     const std::lock_guard<std::mutex> lock(gStatsMutex);
     OpStat& s = StatTable()[name];
@@ -2101,13 +2827,17 @@ namespace moho::editor::field
     s.gpuMs += ms;
   }
 
-  void NoteOpFallback(const std::string& name)
+  void NoteOpFallback(
+    const std::string& name
+  )
   {
     const std::lock_guard<std::mutex> lock(gStatsMutex);
     ++StatTable()[name].fallbacks;
   }
 
-  std::map<std::string, OpStat> OpStats(const bool reset)
+  std::map<std::string, OpStat> OpStats(
+    const bool reset
+  )
   {
     const std::lock_guard<std::mutex> lock(gStatsMutex);
     std::map<std::string, OpStat> copy = StatTable();
@@ -2117,9 +2847,17 @@ namespace moho::editor::field
     return copy;
   }
 
-  bool RunOp(const std::string& name, const OpArgs& args, Grid& out, std::string& err)
+  bool RunOp(
+    const std::string& name,
+    const OpArgs& args,
+    Grid& out,
+    std::string& err
+  )
   {
-    if (const OpInterceptor intercept = gInterceptor.load(); intercept != nullptr && (Registry().count(name) != 0 || ExternalOps().count(name) != 0) && intercept(name, args, out)) {
+    if (
+      const OpInterceptor intercept = gInterceptor.load(); intercept != nullptr &&
+      (Registry().count(name) != 0 || ExternalOps().count(name) != 0) && intercept(name, args, out)
+    ) {
       return true;
     }
     const auto t0 = std::chrono::steady_clock::now();
@@ -2134,7 +2872,12 @@ namespace moho::editor::field
     return ok;
   }
 
-  bool RunOpCpu(const std::string& name, const OpArgs& args, Grid& out, std::string& err)
+  bool RunOpCpu(
+    const std::string& name,
+    const OpArgs& args,
+    Grid& out,
+    std::string& err
+  )
   {
     const auto it = Registry().find(name);
     const auto ext = ExternalOps().find(name);
@@ -2166,9 +2909,12 @@ namespace moho::editor::field
     return names;
   }
 
-  // ---- analysis helpers ------------------------------------------------------------------------------------------------------------------------
+  // ---- analysis helpers
+  // ------------------------------------------------------------------------------------------------------------------------
 
-  Stats Measure(const Grid& g)
+  Stats Measure(
+    const Grid& g
+  )
   {
     Stats s;
     if (g.Count() == 0) {
@@ -2205,7 +2951,8 @@ namespace moho::editor::field
     double sq = 0.0;
     bool any = false;
     for (const Part& p : parts) {
-      if (!p.any) continue;
+      if (!p.any)
+        continue;
       if (!any) {
         s.min = p.lo;
         s.max = p.hi;
@@ -2223,7 +2970,9 @@ namespace moho::editor::field
     return s;
   }
 
-  std::uint64_t Checksum(const Grid& g)
+  std::uint64_t Checksum(
+    const Grid& g
+  )
   {
     std::uint64_t h = 1469598103934665603ULL;
     const auto mix = [&](const std::uint32_t word) {
@@ -2243,12 +2992,27 @@ namespace moho::editor::field
     return h;
   }
 
-  float SampleWorld(const Grid& g, const double wx, const double wz)
+  float SampleWorld(
+    const Grid& g,
+    const double wx,
+    const double wz
+  )
   {
-    return Bilinear(g, (wx - static_cast<double>(g.ox)) / static_cast<double>(g.cell), (wz - static_cast<double>(g.oz)) / static_cast<double>(g.cell), kClamp, 0.0f);
+    return Bilinear(
+      g,
+      (wx - static_cast<double>(g.ox)) / static_cast<double>(g.cell),
+      (wz - static_cast<double>(g.oz)) / static_cast<double>(g.cell),
+      kClamp,
+      0.0f
+    );
   }
 
-  void Downsample(const Grid& g, const int pw, const int ph, std::vector<float>& out)
+  void Downsample(
+    const Grid& g,
+    const int pw,
+    const int ph,
+    std::vector<float>& out
+  )
   {
     out.assign(static_cast<std::size_t>(pw) * static_cast<std::size_t>(ph), 0.0f);
     if (g.Count() == 0 || pw < 1 || ph < 1) {
@@ -2267,7 +3031,8 @@ namespace moho::editor::field
             sum += g.At(x, z);
           }
         }
-        out[static_cast<std::size_t>(j) * static_cast<std::size_t>(pw) + static_cast<std::size_t>(i)] = n > 0 ? static_cast<float>(sum / n) : 0.0f;
+        out[static_cast<std::size_t>(j) * static_cast<std::size_t>(pw) + static_cast<std::size_t>(i)] =
+          n > 0 ? static_cast<float>(sum / n) : 0.0f;
       }
     }
   }

@@ -1,17 +1,19 @@
-// Editor native that reads the look of another map straight from its .scmap file on disk (no map is opened): lighting, water, strata, sky. It is what "import from a map" in the environment
-// panels uses, and what the shipped preset / theme libraries are made from (editor/tools/gen_env_library.py reads the same blocks with the Python reader).
+// Editor native that reads the look of another map straight from its .scmap file on disk (no map is opened): lighting,
+// water, strata, sky. It is what "import from a map" in the environment panels uses, and what the shipped preset /
+// theme libraries are made from (editor/tools/gen_env_library.py reads the same blocks with the Python reader).
 //
 //   ed_scmap_env(path) -> table | nil, message       path of a .scmap file on disk (version 2, minor 53 - 60)
 //
 // The table uses the names of ed_world_get / ed_env_get (EdWorld.cpp, EdEnv.cpp) so that it can be applied as it is:
 //   minor, width, height, water_on
-//   light     light_mult, sun_x/y/z, ambient_r/g/b, sun_r/g/b, fill_r/g/b, spec_r/g/b/a, bloom, fog_r/g/b, fog_start, fog_end
-//   water     water_elev, water_deep, water_abyss, w_color_r/g/b, w_lerp_0/1, w_refraction, w_fresnel_bias, w_fresnel_power, w_unit_refl, w_sky_refl, w_shininess, w_strength, w_sundir_x/y/z,
+//   light     light_mult, sun_x/y/z, ambient_r/g/b, sun_r/g/b, fill_r/g/b, spec_r/g/b/a, bloom, fog_r/g/b, fog_start,
+//   fog_end water     water_elev, water_deep, water_abyss, w_color_r/g/b, w_lerp_0/1, w_refraction, w_fresnel_bias,
+//   w_fresnel_power, w_unit_refl, w_sky_refl, w_shininess, w_strength, w_sundir_x/y/z,
 //             w_suncol_r/g/b, w_sun_refl, w_glow, w_repeat_0..3, w_move1..4_x / _z
 //   wtex      water_cubemap, water_ramp, water_wave1..4
-//   strata    list of 10 { albedo, size } (Base, strata 1..8, Upper) and normals: list of 9 { path, size } (Base, strata 1..8)
-//   sky       (minor 60 only) the ed_env_get names; skytex (paths), billboards (flat list of 10 numbers each)
-//   lookups   flat list key, path ...;  skycube, background
+//   strata    list of 10 { albedo, size } (Base, strata 1..8, Upper) and normals: list of 9 { path, size } (Base,
+//   strata 1..8) sky       (minor 60 only) the ed_env_get names; skytex (paths), billboards (flat list of 10 numbers
+//   each) lookups   flat list key, path ...;  skycube, background
 
 #include <algorithm>
 #include <cstdint>
@@ -43,9 +45,18 @@ namespace
       return v;
     }
 
-    float F() { return Take<float>(); }
-    std::int32_t I() { return Take<std::int32_t>(); }
-    std::uint8_t B() { return Take<std::uint8_t>(); }
+    float F()
+    {
+      return Take<float>();
+    }
+    std::int32_t I()
+    {
+      return Take<std::int32_t>();
+    }
+    std::uint8_t B()
+    {
+      return Take<std::uint8_t>();
+    }
 
     std::string S()
     {
@@ -68,7 +79,9 @@ namespace
       return s;
     }
 
-    void Skip(const long long n)
+    void Skip(
+      const long long n
+    )
     {
       if (n < 0) {
         ok = false;
@@ -90,14 +103,20 @@ namespace
   {
     lua_State* L;
 
-    void Num(const std::string& key, const double v)
+    void Num(
+      const std::string& key,
+      const double v
+    )
     {
       lua_pushstring(L, key.c_str());
       lua_pushnumber(L, static_cast<lua_Number>(v));
       lua_settable(L, -3);
     }
 
-    void Str(const std::string& key, const std::string& v)
+    void Str(
+      const std::string& key,
+      const std::string& v
+    )
     {
       lua_pushstring(L, key.c_str());
       lua_pushstring(L, v.c_str());
@@ -105,19 +124,32 @@ namespace
     }
   };
 
-  std::string N(const char* const a, const int i, const char* const b)
+  std::string N(
+    const char* const a,
+    const int i,
+    const char* const b
+  )
   {
     return std::string(a) + std::to_string(i) + b;
   }
 
-  void Triple(Out& o, const char* const a, const char* const b, const char* const c, Reader& r)
+  void Triple(
+    Out& o,
+    const char* const a,
+    const char* const b,
+    const char* const c,
+    Reader& r
+  )
   {
     o.Num(a, r.F());
     o.Num(b, r.F());
     o.Num(c, r.F());
   }
 
-  void Push(lua_State* const L, const std::vector<std::string>& list)
+  void Push(
+    lua_State* const L,
+    const std::vector<std::string>& list
+  )
   {
     lua_newtable(L);
     for (std::size_t i = 0; i < list.size(); ++i) {
@@ -127,7 +159,9 @@ namespace
     }
   }
 
-  int __cdecl cfunc_ScmapEnv(lua_State* const L)
+  int __cdecl cfunc_ScmapEnv(
+    lua_State* const L
+  )
   {
     const char* const path = luaL_checkstring(L, 1);
     FILE* const file = std::fopen(path, "rb");
@@ -150,12 +184,12 @@ namespace
     if (!r.ok || sig != 0x1A70614D || major != 2) {
       return fail("not a version 2 .scmap");
     }
-    r.Skip(4 + 4 + 4 + 4 + 4 + 2);      // magic, 2, width, height, 0, 0 (i32 i32 f32 f32 i32 i16 after the two checked ones)
-    r.Blob();                            // preview
+    r.Skip(4 + 4 + 4 + 4 + 4 + 2); // magic, 2, width, height, 0, 0 (i32 i32 f32 f32 i32 i16 after the two checked ones)
+    r.Blob();                      // preview
     const std::int32_t minor = r.I();
     const std::int32_t width = r.I();
     const std::int32_t height = r.I();
-    r.Skip(4);                           // height scale
+    r.Skip(4); // height scale
     if (!r.ok || minor < 53 || minor > 60) {
       return fail("unsupported .scmap version");
     }
@@ -163,7 +197,7 @@ namespace
     if (minor >= 56) {
       r.Skip(1);
     }
-    r.S();                               // shader
+    r.S(); // shader
     const std::string background = r.S();
     const std::string skycube = r.S();
     std::vector<std::string> lookups;
@@ -301,7 +335,7 @@ namespace
         n.second = r.F();
       }
     } else {
-      r.S();                           // tileset
+      r.S(); // tileset
       const std::int32_t count = r.I();
       static const int slots[6] = {0, 1, 2, 3, 4, 9};
       for (int i = 0; i < count && i < 6 && r.ok; ++i) {
@@ -340,10 +374,10 @@ namespace
 
     // the sky block lies behind decals, normal map, masks, water maps and the terrain-type grid
     if (minor >= 60) {
-      r.Skip(8);                       // two unknown ints
+      r.Skip(8); // two unknown ints
       const std::int32_t decals = r.I();
       for (std::int32_t i = 0; i < decals && r.ok && decals < 10000000; ++i) {
-        r.Skip(8);                     // id, type
+        r.Skip(8); // id, type
         const std::int32_t nTex = r.I();
         for (std::int32_t k = 0; k < nTex && r.ok && nTex < 64; ++k) {
           const std::int32_t len = r.I();
@@ -358,14 +392,14 @@ namespace
         const std::int32_t cnt = r.I();
         r.Skip(static_cast<long long>(cnt) * 4);
       }
-      r.Skip(8);                       // second width / height
+      r.Skip(8); // second width / height
       const std::int32_t normalMaps = r.I();
       for (std::int32_t i = 0; i < normalMaps && r.ok && normalMaps < 64; ++i) {
         r.Blob();
       }
-      r.Blob();                        // strata masks 1-4
-      r.Blob();                        // strata masks 5-8
-      r.Skip(4);                       // water map count
+      r.Blob();  // strata masks 1-4
+      r.Blob();  // strata masks 5-8
+      r.Skip(4); // water map count
       r.Blob();
       const long long half = static_cast<long long>(width / 2) * (height / 2);
       r.Skip(3 * half);
@@ -427,9 +461,9 @@ namespace
         }
         lua_settable(L, -3);
         if (r.ok) {
-          lua_settable(L, -3);        // sky
+          lua_settable(L, -3); // sky
         } else {
-          lua_settop(L, -3);          // drop the key and the half read table
+          lua_settop(L, -3); // drop the key and the half read table
         }
       }
     }
@@ -450,7 +484,14 @@ namespace
   {
     EdScmapEnvLuaBootstrap()
     {
-      (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_scmap_env", &cfunc_ScmapEnv, nullptr, "<global>", "ed_scmap_env(path) -> table of lighting / water / strata / sky | nil, message");
+      (void)new moho::CScrLuaBinder(
+        UserLuaInitSet(),
+        "ed_scmap_env",
+        &cfunc_ScmapEnv,
+        nullptr,
+        "<global>",
+        "ed_scmap_env(path) -> table of lighting / water / strata / sky | nil, message"
+      );
     }
   };
 

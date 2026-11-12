@@ -7,15 +7,15 @@
 
 static int gFailures = 0;
 static int gChecks = 0;
-#define CHECK(cond, ...)                               \
-  do {                                                 \
-    ++gChecks;                                         \
-    if (!(cond)) {                                     \
-      ++gFailures;                                     \
-      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-      std::printf(__VA_ARGS__);                        \
-      std::printf("\n");                               \
-    }                                                  \
+#define CHECK(cond, ...)                                                                                               \
+  do {                                                                                                                 \
+    ++gChecks;                                                                                                         \
+    if (!(cond)) {                                                                                                     \
+      ++gFailures;                                                                                                     \
+      std::printf("FAIL %s:%d: ", __FILE__, __LINE__);                                                                 \
+      std::printf(__VA_ARGS__);                                                                                        \
+      std::printf("\n");                                                                                               \
+    }                                                                                                                  \
   } while (0)
 
 namespace uc = moho::editor::uiclip;
@@ -28,12 +28,19 @@ struct V
   float mV = 0.0f;
 };
 
-static V Lerp(const V& a, const V& b, const float t)
+static V Lerp(
+  const V& a,
+  const V& b,
+  const float t
+)
 {
   return {a.mX + (b.mX - a.mX) * t, a.mY + (b.mY - a.mY) * t, a.mU + (b.mU - a.mU) * t, a.mV + (b.mV - a.mV) * t};
 }
 
-static bool Near(const float a, const float b)
+static bool Near(
+  const float a,
+  const float b
+)
 {
   return std::fabs(a - b) < 1e-4f;
 }
@@ -44,17 +51,33 @@ int main()
 
   // rectangles
   CHECK(!uc::Empty(clip), "clip is not empty");
-  CHECK(uc::Empty({5.0f, 5.0f, 5.0f, 9.0f}) && uc::Empty({5.0f, 9.0f, 8.0f, 9.0f}) && uc::Empty({8.0f, 8.0f, 2.0f, 9.0f}), "no area is empty");
+  CHECK(
+    uc::Empty({5.0f, 5.0f, 5.0f, 9.0f}) && uc::Empty({5.0f, 9.0f, 8.0f, 9.0f}) && uc::Empty({8.0f, 8.0f, 2.0f, 9.0f}),
+    "no area is empty"
+  );
   const uc::Rect cut = uc::Intersect(clip, {50.0f, 0.0f, 200.0f, 40.0f});
-  CHECK(Near(cut.left, 50.0f) && Near(cut.top, 20.0f) && Near(cut.right, 110.0f) && Near(cut.bottom, 40.0f), "intersect");
-  CHECK(uc::Empty(uc::Intersect(clip, {200.0f, 0.0f, 300.0f, 40.0f})), "disjoint rectangles have an empty intersection");
-  CHECK(uc::Contains(clip, 10.0f, 20.0f) && !uc::Contains(clip, 110.0f, 20.0f) && !uc::Contains(clip, 9.9f, 30.0f), "contains: left / top edge in, right edge out");
+  CHECK(
+    Near(cut.left, 50.0f) && Near(cut.top, 20.0f) && Near(cut.right, 110.0f) && Near(cut.bottom, 40.0f), "intersect"
+  );
+  CHECK(
+    uc::Empty(uc::Intersect(clip, {200.0f, 0.0f, 300.0f, 40.0f})), "disjoint rectangles have an empty intersection"
+  );
+  CHECK(
+    uc::Contains(clip, 10.0f, 20.0f) && !uc::Contains(clip, 110.0f, 20.0f) && !uc::Contains(clip, 9.9f, 30.0f),
+    "contains: left / top edge in, right edge out"
+  );
   CHECK(uc::Inside(clip, 10.0f, 20.0f, 110.0f, 70.0f) && !uc::Inside(clip, 9.0f, 20.0f, 110.0f, 70.0f), "inside");
-  CHECK(uc::Outside(clip, 110.0f, 0.0f, 150.0f, 100.0f) && uc::Outside(clip, 0.0f, 0.0f, 10.0f, 100.0f) && !uc::Outside(clip, 0.0f, 0.0f, 10.5f, 100.0f), "outside: touching is outside");
+  CHECK(
+    uc::Outside(clip, 110.0f, 0.0f, 150.0f, 100.0f) && uc::Outside(clip, 0.0f, 0.0f, 10.0f, 100.0f) &&
+      !uc::Outside(clip, 0.0f, 0.0f, 10.5f, 100.0f),
+    "outside: touching is outside"
+  );
 
   // a textured quad cut on the right and at the bottom: positions and texture coordinates stay in step
   {
-    const V quad[4] = {{50.0f, 40.0f, 0.0f, 0.0f}, {150.0f, 40.0f, 1.0f, 0.0f}, {150.0f, 100.0f, 1.0f, 1.0f}, {50.0f, 100.0f, 0.0f, 1.0f}};
+    const V quad[4] = {
+      {50.0f, 40.0f, 0.0f, 0.0f}, {150.0f, 40.0f, 1.0f, 0.0f}, {150.0f, 100.0f, 1.0f, 1.0f}, {50.0f, 100.0f, 0.0f, 1.0f}
+    };
     V out[8];
     const int n = uc::ClipPolygon(quad, 4, clip, out, Lerp);
     CHECK(n == 4, "a quad cut by two edges stays a quad (%d)", n);
@@ -67,13 +90,22 @@ int main()
       maxU = std::fmax(maxU, out[i].mU);
       maxV = std::fmax(maxV, out[i].mV);
     }
-    CHECK(Near(minX, 50.0f) && Near(maxX, 110.0f) && Near(minY, 40.0f) && Near(maxY, 70.0f), "the clipped box is the intersection (%g %g %g %g)", minX, maxX, minY, maxY);
+    CHECK(
+      Near(minX, 50.0f) && Near(maxX, 110.0f) && Near(minY, 40.0f) && Near(maxY, 70.0f),
+      "the clipped box is the intersection (%g %g %g %g)",
+      minX,
+      maxX,
+      minY,
+      maxY
+    );
     CHECK(Near(maxU, 0.6f) && Near(maxV, 0.5f), "the texture coordinates follow the cut (%g %g)", maxU, maxV);
   }
 
   // a quad that covers the clip rectangle completely gives the clip rectangle
   {
-    const V quad[4] = {{0.0f, 0.0f, 0.0f, 0.0f}, {200.0f, 0.0f, 1.0f, 0.0f}, {200.0f, 200.0f, 1.0f, 1.0f}, {0.0f, 200.0f, 0.0f, 1.0f}};
+    const V quad[4] = {
+      {0.0f, 0.0f, 0.0f, 0.0f}, {200.0f, 0.0f, 1.0f, 0.0f}, {200.0f, 200.0f, 1.0f, 1.0f}, {0.0f, 200.0f, 0.0f, 1.0f}
+    };
     V out[8];
     const int n = uc::ClipPolygon(quad, 4, clip, out, Lerp);
     CHECK(n == 4, "a covering quad becomes the clip rectangle (%d)", n);
@@ -104,7 +136,10 @@ int main()
     CHECK(n >= 5 && n <= 8, "a diamond cut on all sides has more corners (%d)", n);
     bool allInside = true;
     for (int i = 0; i < n; ++i) {
-      if (out[i].mX < clip.left - 1e-3f || out[i].mX > clip.right + 1e-3f || out[i].mY < clip.top - 1e-3f || out[i].mY > clip.bottom + 1e-3f) {
+      if (
+        out[i].mX < clip.left - 1e-3f || out[i].mX > clip.right + 1e-3f || out[i].mY < clip.top - 1e-3f ||
+        out[i].mY > clip.bottom + 1e-3f
+      ) {
         allInside = false;
       }
     }

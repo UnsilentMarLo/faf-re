@@ -30,9 +30,18 @@ namespace moho::editor
     int x1 = -1;
     int z1 = -1;
 
-    [[nodiscard]] bool Empty() const noexcept { return x1 < x0 || z1 < z0; }
-    [[nodiscard]] int Width() const noexcept { return Empty() ? 0 : x1 - x0 + 1; }
-    [[nodiscard]] int Height() const noexcept { return Empty() ? 0 : z1 - z0 + 1; }
+    [[nodiscard]] bool Empty() const noexcept
+    {
+      return x1 < x0 || z1 < z0;
+    }
+    [[nodiscard]] int Width() const noexcept
+    {
+      return Empty() ? 0 : x1 - x0 + 1;
+    }
+    [[nodiscard]] int Height() const noexcept
+    {
+      return Empty() ? 0 : z1 - z0 + 1;
+    }
     [[nodiscard]] std::size_t Count() const noexcept
     {
       return static_cast<std::size_t>(Width()) * static_cast<std::size_t>(Height());
@@ -55,24 +64,36 @@ namespace moho::editor
     virtual bool Undo(MapDocument& doc) = 0;
 
     /** Applies the edit again after an undo; false when the document did not match what the command recorded. */
-    virtual bool Redo(MapDocument& doc)
+    virtual bool Redo(
+      MapDocument& doc
+    )
     {
       Do(doc);
       return true;
     }
 
     /** The brush stroke this command belongs to (0 = none: never merged into). */
-    [[nodiscard]] virtual std::uint64_t StrokeId() const noexcept { return 0; }
+    [[nodiscard]] virtual std::uint64_t StrokeId() const noexcept
+    {
+      return 0;
+    }
 
     /** Absorbs `next`, which was just executed on top of this command (a later dab of the same brush stroke). */
-    virtual bool TryMerge(Command& next)
+    virtual bool TryMerge(
+      Command& next
+    )
     {
       (void)next;
       return false;
     }
 
     /** Called when no more commands will be merged into this one: pack the payload, record checksums. */
-    virtual void Seal(MapDocument& doc) { (void)doc; }
+    virtual void Seal(
+      MapDocument& doc
+    )
+    {
+      (void)doc;
+    }
 
     [[nodiscard]] virtual std::string Label() const = 0;
     /** The samples this command changed (for re-snapping units, dirtying path caches ...). */
@@ -82,9 +103,9 @@ namespace moho::editor
 
   struct HistoryResult
   {
-    bool ok = false;        // a command was undone / redone
-    bool verified = true;   // checksums before and after matched what the command recorded
-    CellRect bounds;        // what changed
+    bool ok = false;      // a command was undone / redone
+    bool verified = true; // checksums before and after matched what the command recorded
+    CellRect bounds;      // what changed
     std::string label;
   };
 
@@ -105,9 +126,18 @@ namespace moho::editor
     /** Starts a document from `heights` (width * height words); clears the history; the document is clean. */
     void Reset(int width, int height, std::vector<std::uint16_t> heights, HeightSink sink);
 
-    [[nodiscard]] bool Valid() const noexcept { return mWidth > 0 && mHeight > 0; }
-    [[nodiscard]] int Width() const noexcept { return mWidth; }
-    [[nodiscard]] int Height() const noexcept { return mHeight; }
+    [[nodiscard]] bool Valid() const noexcept
+    {
+      return mWidth > 0 && mHeight > 0;
+    }
+    [[nodiscard]] int Width() const noexcept
+    {
+      return mWidth;
+    }
+    [[nodiscard]] int Height() const noexcept
+    {
+      return mHeight;
+    }
     [[nodiscard]] std::uint16_t HeightAt(int x, int z) const;
     [[nodiscard]] CellRect Clamp(CellRect rect) const noexcept;
     void ReadRect(const CellRect& rect, std::vector<std::uint16_t>& out) const;
@@ -137,14 +167,23 @@ namespace moho::editor
     /** Edits until EndStroke form one undo step labelled `label`. Nested calls are ignored. */
     void BeginStroke(const std::string& label);
     void EndStroke();
-    [[nodiscard]] bool StrokeOpen() const noexcept { return mStroke != 0; }
+    [[nodiscard]] bool StrokeOpen() const noexcept
+    {
+      return mStroke != 0;
+    }
 
     // ---- history ---------------------------------------------------------------------------------------------
 
     HistoryResult Undo();
     HistoryResult Redo();
-    [[nodiscard]] std::size_t UndoDepth() const noexcept { return mPos; }
-    [[nodiscard]] std::size_t RedoDepth() const noexcept { return mStack.size() - mPos; }
+    [[nodiscard]] std::size_t UndoDepth() const noexcept
+    {
+      return mPos;
+    }
+    [[nodiscard]] std::size_t RedoDepth() const noexcept
+    {
+      return mStack.size() - mPos;
+    }
     [[nodiscard]] std::string UndoLabel() const;
     [[nodiscard]] std::string RedoLabel() const;
     [[nodiscard]] std::size_t HistoryBytes() const;
@@ -153,12 +192,24 @@ namespace moho::editor
     // ---- dirty tracking --------------------------------------------------------------------------------------
 
     /** True when the document differs from the last MarkClean (or the start). */
-    [[nodiscard]] bool Dirty() const noexcept { return mCleanPos != static_cast<long>(mPos); }
-    void MarkClean() noexcept { mCleanPos = static_cast<long>(mPos); }
+    [[nodiscard]] bool Dirty() const noexcept
+    {
+      return mCleanPos != static_cast<long>(mPos);
+    }
+    void MarkClean() noexcept
+    {
+      mCleanPos = static_cast<long>(mPos);
+    }
     /** Increases with every change of the document (edit, undo, redo, external write). */
-    [[nodiscard]] std::uint64_t Revision() const noexcept { return mRevision; }
+    [[nodiscard]] std::uint64_t Revision() const noexcept
+    {
+      return mRevision;
+    }
 
-    [[nodiscard]] std::uint64_t StrokeId() const noexcept { return mStroke; }
+    [[nodiscard]] std::uint64_t StrokeId() const noexcept
+    {
+      return mStroke;
+    }
 
   private:
     void Push(std::unique_ptr<Command> command);
@@ -170,8 +221,8 @@ namespace moho::editor
     HeightSink mSink;
 
     std::vector<std::unique_ptr<Command>> mStack;
-    std::size_t mPos = 0;   // commands applied; mStack[mPos..] is the redo branch
-    long mCleanPos = 0;     // value of mPos at the last MarkClean; -1 when that state can no longer be reached
+    std::size_t mPos = 0; // commands applied; mStack[mPos..] is the redo branch
+    long mCleanPos = 0;   // value of mPos at the last MarkClean; -1 when that state can no longer be reached
     std::uint64_t mRevision = 0;
     std::uint64_t mStroke = 0;
     std::uint64_t mNextStroke = 1;

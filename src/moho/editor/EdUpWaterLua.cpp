@@ -1,26 +1,38 @@
-// EDITOR: the "up" natives of water (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP6): water bodies (lakes at their own levels, `ScenarioInfo.WaterBodies`,
-// docs/WATER_BODIES.md) and shore wave generators (the wave section of the `.scmap`, FAForeverMapEditor's `.scmwaves`), over upstream's logic (src/editor/doc/EdWaterBodies,
-// src/editor/tools/EdWaves). Bodies are plain Lua tables with the scenario's own field names; the fill is the engine's (`CWaterBodies::Build`, the same function
-// `STIMap::InstallWaterBodies` calls), so the preview is what the game fills. `.scmwtr` is WP2's (ed_scmwtr_*).
+// EDITOR: the "up" natives of water (docs/projects/editor/EDITOR_PORT_ANALYSIS.md, work package WP6): water bodies
+// (lakes at their own levels, `ScenarioInfo.WaterBodies`, docs/WATER_BODIES.md) and shore wave generators (the wave
+// section of the `.scmap`, FAForeverMapEditor's `.scmwaves`), over upstream's logic (src/editor/doc/EdWaterBodies,
+// src/editor/tools/EdWaves). Bodies are plain Lua tables with the scenario's own field names; the fill is the engine's
+// (`CWaterBodies::Build`, the same function `STIMap::InstallWaterBodies` calls), so the preview is what the game fills.
+// `.scmwtr` is WP2's (ed_scmwtr_*).
 //
-// Water bodies (a body: { Elevation, FillTo, Deep, Abyss, Dry, Seed = { x, z }, Outline = { { x, z }, ... }, Bounds = { x0, z0, x1, z1 } }; a field left out stays out):
+// Water bodies (a body: { Elevation, FillTo, Deep, Abyss, Dry, Seed = { x, z }, Outline = { { x, z }, ... }, Bounds = {
+// x0, z0, x1, z1 } }; a field left out stays out):
 //   ed_waterbodies_fill(bodies[, { install = bool, cells = bool }])
-//        -> { bodies = { [i] = { cells, x0, z0, x1, z1, elevation, deep, abyss, skipped, message } }, other = { lines }, count, installed, generation, cells, width, height }
-//        Fills `bodies` over the open map's heights as the game does (the defaults of the sea's shading included). `install` puts the result on the map (as the game's session
-//        does) and rebuilds the water map, the shore and the water surfaces; the open map then draws the bodies. `cells` also returns one byte per cell (0 sea, n body n).
+//        -> { bodies = { [i] = { cells, x0, z0, x1, z1, elevation, deep, abyss, skipped, message } }, other = { lines
+//        }, count, installed, generation, cells, width, height } Fills `bodies` over the open map's heights as the game
+//        does (the defaults of the sea's shading included). `install` puts the result on the map (as the game's session
+//        does) and rebuilds the water map, the shore and the water surfaces; the open map then draws the bodies.
+//        `cells` also returns one byte per cell (0 sea, n body n).
 //   ed_waterbodies_clear()            takes the bodies off the map (the sea only again)
-//   ed_waterbodies_info()             -> { count, generation, installed = bool, bodies = { { elevation, deep, abyss, cells, x0, z0, x1, z1 } } }
-//   ed_waterbodies_crosscheck(bodies) -> { same, vertices, cells, bodies, previewCount, engineCount, log }   the same bodies through `STIMap::InstallWaterBodies` (the game's own
-//        reader of the scenario, the sim fix forced on for the call) and through the fill above, compared vertex by vertex and cell by cell; the map is left as it was
-//   ed_waterbodies_simfix(on)         the console variable sim_FixWaterBodies (the game needs it for a map's bodies; a Play of the editor sets it)
-//   ed_water_texel(x, z)              -> { packed, shore, depth, foam, flatness, width, height, texelsPerCell }   the texel of the water map the renderers use (GetWaterMap: the finer one of
-//        ed_water_hires when it is on) at world x, z: `shore` is the flag the water alpha test reads (ground above the water there), `depth` the colour byte. For the shore checks.
-// Wave generators (a wave: { texture, ramp, position = {x,y,z}, angle, velocity = {x,y,z}, lifetime = {a,b}, period = {a,b}, scale = {a,b}, frameCount, frameRate = {a,b}, stripCount }):
+//   ed_waterbodies_info()             -> { count, generation, installed = bool, bodies = { { elevation, deep, abyss,
+//   cells, x0, z0, x1, z1 } } } ed_waterbodies_crosscheck(bodies) -> { same, vertices, cells, bodies, previewCount,
+//   engineCount, log }   the same bodies through `STIMap::InstallWaterBodies` (the game's own
+//        reader of the scenario, the sim fix forced on for the call) and through the fill above, compared vertex by
+//        vertex and cell by cell; the map is left as it was
+//   ed_waterbodies_simfix(on)         the console variable sim_FixWaterBodies (the game needs it for a map's bodies; a
+//   Play of the editor sets it) ed_water_texel(x, z)              -> { packed, shore, depth, foam, flatness, width,
+//   height, texelsPerCell }   the texel of the water map the renderers use (GetWaterMap: the finer one of
+//        ed_water_hires when it is on) at world x, z: `shore` is the flag the water alpha test reads (ground above the
+//        water there), `depth` the colour byte. For the shore checks.
+// Wave generators (a wave: { texture, ramp, position = {x,y,z}, angle, velocity = {x,y,z}, lifetime = {a,b}, period =
+// {a,b}, scale = {a,b}, frameCount, frameRate = {a,b}, stripCount }):
 //   ed_waves_get()                    -> { wave, ... }  the open map's generators (through the wave system's own Save)
-//   ed_waves_set(waves)               -> n  puts these generators on the map in place of its own (the wave system's own Load)
-//   ed_waves_read(text) / ed_waves_write(waves) -> waves | text    FAForeverMapEditor's `.scmwaves`
-//   ed_waves_patterns([luaText])      -> { { name, texture, ramp, speed, speedVariance, lifetime, period, scale, scaleVariance, frameCount, frameRate, stripCount } }
-//   ed_waves_generate({ pattern, depth, centre, range, density, spacing, seed }) -> { waves, shorePoints, picked, seed }   generators along the shore of the sea (not added to the map)
+//   ed_waves_set(waves)               -> n  puts these generators on the map in place of its own (the wave system's own
+//   Load) ed_waves_read(text) / ed_waves_write(waves) -> waves | text    FAForeverMapEditor's `.scmwaves`
+//   ed_waves_patterns([luaText])      -> { { name, texture, ramp, speed, speedVariance, lifetime, period, scale,
+//   scaleVariance, frameCount, frameRate, stripCount } } ed_waves_generate({ pattern, depth, centre, range, density,
+//   spacing, seed }) -> { waves, shorePoints, picked, seed }   generators along the shore of the sea (not added to the
+//   map)
 
 #include <algorithm>
 #include <cmath>
@@ -80,15 +92,23 @@ namespace
     return terrain != nullptr ? terrain->mMap : nullptr;
   }
 
-  // ---- Lua <-> structs ------------------------------------------------------------------------------------------------------------------------------
+  // ---- Lua <-> structs
+  // ------------------------------------------------------------------------------------------------------------------------------
 
-  void Pop(lua_State* const L)
+  void Pop(
+    lua_State* const L
+  )
   {
     lua_settop(L, -2);
   }
 
   /** `{ a, b, ... }` with exactly `count` numbers at 1..count (absolute index `table`). */
-  [[nodiscard]] bool NumbersAt(lua_State* const L, const int table, const int count, double* const out)
+  [[nodiscard]] bool NumbersAt(
+    lua_State* const L,
+    const int table,
+    const int count,
+    double* const out
+  )
   {
     if (lua_type(L, table) != LUA_TTABLE) {
       return false;
@@ -110,8 +130,12 @@ namespace
     return !extra;
   }
 
-  /** One body of a Lua list: a field the engine can't use is treated as the engine treats it (a number field of another type is not there; a field of the wrong shape skips the body). */
-  [[nodiscard]] WaterBody BodyAt(lua_State* const L, const int body)
+  /** One body of a Lua list: a field the engine can't use is treated as the engine treats it (a number field of another
+   * type is not there; a field of the wrong shape skips the body). */
+  [[nodiscard]] WaterBody BodyAt(
+    lua_State* const L,
+    const int body
+  )
   {
     WaterBody out;
     out.hasElevation = false;
@@ -193,7 +217,10 @@ namespace
     return out;
   }
 
-  [[nodiscard]] std::vector<WaterBody> BodiesAt(lua_State* const L, const int list)
+  [[nodiscard]] std::vector<WaterBody> BodiesAt(
+    lua_State* const L,
+    const int list
+  )
   {
     std::vector<WaterBody> bodies;
     if (lua_type(L, list) != LUA_TTABLE) {
@@ -211,7 +238,11 @@ namespace
     return bodies;
   }
 
-  void PushArray(lua_State* const L, const float* const values, const int count)
+  void PushArray(
+    lua_State* const L,
+    const float* const values,
+    const int count
+  )
   {
     lua_newtable(L);
     for (int i = 0; i < count; ++i) {
@@ -220,14 +251,25 @@ namespace
     }
   }
 
-  void SetArray(lua_State* const L, const char* const key, const float* const values, const int count)
+  void SetArray(
+    lua_State* const L,
+    const char* const key,
+    const float* const values,
+    const int count
+  )
   {
     lua_pushstring(L, key);
     PushArray(L, values, count);
     lua_settable(L, -3);
   }
 
-  [[nodiscard]] bool ReadArray(lua_State* const L, const int table, const char* const key, float* const out, const int count)
+  [[nodiscard]] bool ReadArray(
+    lua_State* const L,
+    const int table,
+    const char* const key,
+    float* const out,
+    const int count
+  )
   {
     if (up::PushField(L, table, key) != LUA_TTABLE) {
       Pop(L);
@@ -245,9 +287,11 @@ namespace
     return true;
   }
 
-  // ---- water bodies ---------------------------------------------------------------------------------------------------------------------------------
+  // ---- water bodies
+  // ---------------------------------------------------------------------------------------------------------------------------------
 
-  /** What the fill of the open map was made for: the bodies as the editor holds them and the heights' revision. The editor's refill (ed_waterbodies_info) uses it. */
+  /** What the fill of the open map was made for: the bodies as the editor holds them and the heights' revision. The
+   * editor's refill (ed_waterbodies_info) uses it. */
   struct Installed
   {
     bool on = false;
@@ -261,7 +305,9 @@ namespace
   }
 
   /** The number at the start of a "water body N ..." line, 0 when it has none. */
-  [[nodiscard]] std::size_t LineBody(const std::string& line)
+  [[nodiscard]] std::size_t LineBody(
+    const std::string& line
+  )
   {
     constexpr char kPrefix[] = "water body ";
     if (line.rfind(kPrefix, 0) != 0) {
@@ -285,8 +331,12 @@ namespace
     std::vector<std::string> other;
   };
 
-  /** The fill of the game over the map's heights: `STIMap::InstallWaterBodies`'s defaults and skips (WaterBodyDescs), then `CWaterBodies::Build`. */
-  [[nodiscard]] FillResult Fill(const moho::STIMap& map, const std::vector<WaterBody>& bodies)
+  /** The fill of the game over the map's heights: `STIMap::InstallWaterBodies`'s defaults and skips (WaterBodyDescs),
+   * then `CWaterBodies::Build`. */
+  [[nodiscard]] FillResult Fill(
+    const moho::STIMap& map,
+    const std::vector<WaterBody>& bodies
+  )
   {
     FillResult result;
     result.perBody.resize(bodies.size());
@@ -294,26 +344,31 @@ namespace
     if (bodies.empty() || field == nullptr) {
       return result;
     }
-    const bool seaShading = map.mWaterEnabled != 0u && map.mWaterElevation > map.mWaterElevationDeep && map.mWaterElevation > map.mWaterElevationAbyss;
+    const bool seaShading = map.mWaterEnabled != 0u && map.mWaterElevation > map.mWaterElevationDeep &&
+      map.mWaterElevation > map.mWaterElevationAbyss;
     const float deepBelow = seaShading ? map.mWaterElevation - map.mWaterElevationDeep : 2.5f;
     const float abyssBelow = seaShading ? map.mWaterElevation - map.mWaterElevationAbyss : 15.0f;
     std::vector<std::string> log;
     std::vector<std::size_t> bodyOf;
-    const std::vector<moho::SWaterBodyDesc> descs = faf::editor::WaterBodyDescs(bodies, deepBelow, abyssBelow, log, &bodyOf);
+    const std::vector<moho::SWaterBodyDesc> descs =
+      faf::editor::WaterBodyDescs(bodies, deepBelow, abyssBelow, log, &bodyOf);
     for (const std::string& line : log) {
       const std::size_t body = LineBody(line);
       if (body >= 1 && body <= bodies.size()) {
         BodyReport& report = result.perBody[body - 1];
         report.message += (report.message.empty() ? "" : "; ") + line.substr(line.find(' ', 11) + 1);
-        report.skipped = report.skipped || line.find("skipped") != std::string::npos || line.find("not previewed") != std::string::npos;
+        report.skipped = report.skipped || line.find("skipped") != std::string::npos ||
+          line.find("not previewed") != std::string::npos;
       } else {
         result.other.push_back(line);
       }
     }
-    // Bodies the description step skipped have no report slot in `descs`: `skipped` is set above; the rest are the filler's.
+    // Bodies the description step skipped have no report slot in `descs`: `skipped` is set above; the rest are the
+    // filler's.
     std::vector<std::string> fillLog;
     if (!descs.empty()) {
-      result.filled = moho::CWaterBodies::Build(field->data, field->width, field->height, kHeightWordScale, descs, &fillLog);
+      result.filled =
+        moho::CWaterBodies::Build(field->data, field->width, field->height, kHeightWordScale, descs, &fillLog);
     }
     std::vector<bool> fillSkipped(descs.size(), false);
     for (const std::string& line : fillLog) {
@@ -343,8 +398,11 @@ namespace
     return result;
   }
 
-  /** The open map's water map, shore and surfaces follow its bodies (as the game's session does after it installs them, and as a level change does in the editor). */
-  void RefreshWaterDrawing(moho::IWldTerrainRes* const terrain)
+  /** The open map's water map, shore and surfaces follow its bodies (as the game's session does after it installs them,
+   * and as a level change does in the editor). */
+  void RefreshWaterDrawing(
+    moho::IWldTerrainRes* const terrain
+  )
   {
     if (terrain->IsInEditMode()) {
       terrain->UpdateWaterMap();
@@ -359,7 +417,10 @@ namespace
     }
   }
 
-  void PushBodyStats(lua_State* const L, const moho::SWaterBody& body)
+  void PushBodyStats(
+    lua_State* const L,
+    const moho::SWaterBody& body
+  )
   {
     up::SetNumber(L, "elevation", static_cast<double>(body.elevation));
     up::SetNumber(L, "deep", static_cast<double>(body.deep));
@@ -371,14 +432,18 @@ namespace
     up::SetNumber(L, "z1", body.z1);
   }
 
-  void PushCells(lua_State* const L, const moho::CWaterBodies& bodies)
+  void PushCells(
+    lua_State* const L,
+    const moho::CWaterBodies& bodies
+  )
   {
     const std::int32_t width = bodies.CellWidth();
     const std::int32_t height = bodies.CellHeight();
     std::string cells(static_cast<std::size_t>(width) * static_cast<std::size_t>(height), '\0');
     for (std::int32_t z = 0; z < height; ++z) {
       for (std::int32_t x = 0; x < width; ++x) {
-        cells[static_cast<std::size_t>(z) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x)] = static_cast<char>(bodies.BodyOfCell(x, z));
+        cells[static_cast<std::size_t>(z) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x)] =
+          static_cast<char>(bodies.BodyOfCell(x, z));
       }
     }
     lua_pushstring(L, "cells");
@@ -388,7 +453,9 @@ namespace
     up::SetNumber(L, "height", height);
   }
 
-  int __cdecl cfunc_WaterBodiesFill(lua_State* const L)
+  int __cdecl cfunc_WaterBodiesFill(
+    lua_State* const L
+  )
   {
     moho::IWldTerrainRes* const terrain = ActiveTerrain();
     moho::STIMap* const map = terrain != nullptr ? terrain->mMap : nullptr;
@@ -433,7 +500,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_WaterBodiesClear(lua_State* const L)
+  int __cdecl cfunc_WaterBodiesClear(
+    lua_State* const L
+  )
   {
     moho::IWldTerrainRes* const terrain = ActiveTerrain();
     moho::STIMap* const map = terrain != nullptr ? terrain->mMap : nullptr;
@@ -450,7 +519,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_WaterBodiesInfo(lua_State* const L)
+  int __cdecl cfunc_WaterBodiesInfo(
+    lua_State* const L
+  )
   {
     const moho::STIMap* const map = ActiveSti();
     lua_newtable(L);
@@ -472,17 +543,27 @@ namespace
     return 1;
   }
 
-  /** The sim fix `WaterBodies` forced on for a scope: `STIMap::InstallWaterBodies` asks `FAF_IsSimFixActive`, which holds for a whole session. */
+  /** The sim fix `WaterBodies` forced on for a scope: `STIMap::InstallWaterBodies` asks `FAF_IsSimFixActive`, which
+   * holds for a whole session. */
   struct SimFixOn
   {
     std::uint32_t saved;
-    SimFixOn() : saved(moho::gFafSessionSimFixes) { moho::gFafSessionSimFixes |= 1u << static_cast<std::uint32_t>(moho::EFafSimFix::WaterBodies); }
-    ~SimFixOn() { moho::gFafSessionSimFixes = saved; }
+    SimFixOn()
+      : saved(moho::gFafSessionSimFixes)
+    {
+      moho::gFafSessionSimFixes |= 1u << static_cast<std::uint32_t>(moho::EFafSimFix::WaterBodies);
+    }
+    ~SimFixOn()
+    {
+      moho::gFafSessionSimFixes = saved;
+    }
     SimFixOn(const SimFixOn&) = delete;
     SimFixOn& operator=(const SimFixOn&) = delete;
   };
 
-  int __cdecl cfunc_WaterBodiesCrossCheck(lua_State* const L)
+  int __cdecl cfunc_WaterBodiesCrossCheck(
+    lua_State* const L
+  )
   {
     moho::STIMap* const map = ActiveSti();
     if (map == nullptr || map->mHeightField.get() == nullptr) {
@@ -531,8 +612,11 @@ namespace
       for (std::size_t n = 1; n <= std::min(previewCount, engineCount); ++n) {
         const moho::SWaterBody& pa = a->Body(static_cast<std::uint8_t>(n));
         const moho::SWaterBody& pb = b->Body(static_cast<std::uint8_t>(n));
-        if (std::memcmp(&pa, &pb, sizeof(pa)) != 0 && !(pa.elevation == pb.elevation && pa.deep == pb.deep && pa.abyss == pb.abyss && pa.cellCount == pb.cellCount &&
-                                                       pa.x0 == pb.x0 && pa.z0 == pb.z0 && pa.x1 == pb.x1 && pa.z1 == pb.z1)) {
+        if (
+          std::memcmp(&pa, &pb, sizeof(pa)) != 0 &&
+          !(pa.elevation == pb.elevation && pa.deep == pb.deep && pa.abyss == pb.abyss &&
+            pa.cellCount == pb.cellCount && pa.x0 == pb.x0 && pa.z0 == pb.z0 && pa.x1 == pb.x1 && pa.z1 == pb.z1)
+        ) {
           ++bodyDiffs;
         }
       }
@@ -556,14 +640,18 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_WaterBodiesSimFix(lua_State* const L)
+  int __cdecl cfunc_WaterBodiesSimFix(
+    lua_State* const L
+  )
   {
     const bool on = lua_toboolean(L, 1) != 0;
     moho::CON_Execute(on ? "sim_FixWaterBodies 1" : "sim_FixWaterBodies -1");
     return 0;
   }
 
-  int __cdecl cfunc_WaterTexel(lua_State* const L)
+  int __cdecl cfunc_WaterTexel(
+    lua_State* const L
+  )
   {
     moho::IWldTerrainRes* const terrain = ActiveTerrain();
     const moho::CHeightField* const field = terrain != nullptr ? terrain->GetHeightField() : nullptr;
@@ -571,7 +659,8 @@ namespace
       return up::Fail(L, "no map is open");
     }
     const boost::shared_ptr<moho::ID3DTextureSheet> sheet = terrain->GetWaterMap();
-    const boost::shared_ptr<moho::CD3DDynamicTextureSheet> dynamic = boost::static_pointer_cast<moho::CD3DDynamicTextureSheet>(sheet);
+    const boost::shared_ptr<moho::CD3DDynamicTextureSheet> dynamic =
+      boost::static_pointer_cast<moho::CD3DDynamicTextureSheet>(sheet);
     if (dynamic.get() == nullptr) {
       return up::Fail(L, "the map has no water map");
     }
@@ -588,7 +677,9 @@ namespace
     if (!dynamic->Lock(&pitchBytes, &bits)) {
       return up::Fail(L, "the water map can't be read");
     }
-    const std::uint32_t packed = reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(bits) + static_cast<std::size_t>(tz) * pitchBytes)[tx];
+    const std::uint32_t packed = reinterpret_cast<const std::uint32_t*>(
+      static_cast<const std::uint8_t*>(bits) + static_cast<std::size_t>(tz) * pitchBytes
+    )[tx];
     (void)dynamic->Unlock();
     lua_newtable(L);
     up::SetNumber(L, "packed", static_cast<double>(packed));
@@ -602,9 +693,13 @@ namespace
     return 1;
   }
 
-  // ---- wave generators ------------------------------------------------------------------------------------------------------------------------------
+  // ---- wave generators
+  // ------------------------------------------------------------------------------------------------------------------------------
 
-  void PushWave(lua_State* const L, const WaveRecord& wave)
+  void PushWave(
+    lua_State* const L,
+    const WaveRecord& wave
+  )
   {
     lua_newtable(L);
     up::SetString(L, "texture", wave.texture);
@@ -620,7 +715,10 @@ namespace
     up::SetNumber(L, "stripCount", static_cast<double>(wave.stripCount));
   }
 
-  void PushWaves(lua_State* const L, const std::vector<WaveRecord>& waves)
+  void PushWaves(
+    lua_State* const L,
+    const std::vector<WaveRecord>& waves
+  )
   {
     lua_newtable(L);
     for (std::size_t i = 0; i < waves.size(); ++i) {
@@ -629,7 +727,10 @@ namespace
     }
   }
 
-  [[nodiscard]] WaveRecord WaveAt(lua_State* const L, const int wave)
+  [[nodiscard]] WaveRecord WaveAt(
+    lua_State* const L,
+    const int wave
+  )
   {
     WaveRecord out;
     out.texture = up::FieldString(L, wave, "texture", out.texture);
@@ -646,7 +747,10 @@ namespace
     return out;
   }
 
-  [[nodiscard]] std::vector<WaveRecord> WavesAt(lua_State* const L, const int list)
+  [[nodiscard]] std::vector<WaveRecord> WavesAt(
+    lua_State* const L,
+    const int list
+  )
   {
     std::vector<WaveRecord> waves;
     if (lua_type(L, list) != LUA_TTABLE) {
@@ -670,8 +774,12 @@ namespace
     return terrain != nullptr ? terrain->GetWaveSystem() : nullptr;
   }
 
-  /** The open map's generators, through the wave system's own Save (WaveSystem::Save 0x00889AD0) and upstream's reader of that section. */
-  [[nodiscard]] bool WavesNow(std::vector<WaveRecord>& waves, std::string& error)
+  /** The open map's generators, through the wave system's own Save (WaveSystem::Save 0x00889AD0) and upstream's reader
+   * of that section. */
+  [[nodiscard]] bool WavesNow(
+    std::vector<WaveRecord>& waves,
+    std::string& error
+  )
   {
     moho::WaveSystem* const system = ActiveWaves();
     if (system == nullptr) {
@@ -684,7 +792,8 @@ namespace
       system->Save(writer);
     }
     pipe.VirtFlush();
-    // Drained in chunks: GetLength (0x009566C0) counts the first block only from where a read left it, so before any read it comes up short on a stream of several blocks.
+    // Drained in chunks: GetLength (0x009566C0) counts the first block only from where a read left it, so before any
+    // read it comes up short on a stream of several blocks.
     std::string bytes;
     char chunk[65536];
     for (;;) {
@@ -701,8 +810,12 @@ namespace
     return true;
   }
 
-  /** Puts these generators on the open map in place of its own (WaveSystem::Load 0x008899E0, the map's current format 60: every float of a generator is read). */
-  [[nodiscard]] bool WavesInto(const std::vector<WaveRecord>& waves, std::string& error)
+  /** Puts these generators on the open map in place of its own (WaveSystem::Load 0x008899E0, the map's current format
+   * 60: every float of a generator is read). */
+  [[nodiscard]] bool WavesInto(
+    const std::vector<WaveRecord>& waves,
+    std::string& error
+  )
   {
     moho::WaveSystem* const system = ActiveWaves();
     moho::IWldTerrainRes* const terrain = ActiveTerrain();
@@ -720,7 +833,9 @@ namespace
     return true;
   }
 
-  int __cdecl cfunc_WavesGet(lua_State* const L)
+  int __cdecl cfunc_WavesGet(
+    lua_State* const L
+  )
   {
     std::vector<WaveRecord> waves;
     std::string error;
@@ -731,7 +846,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_WavesSet(lua_State* const L)
+  int __cdecl cfunc_WavesSet(
+    lua_State* const L
+  )
   {
     const std::vector<WaveRecord> waves = WavesAt(L, 1);
     std::string error;
@@ -742,7 +859,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_WavesRead(lua_State* const L)
+  int __cdecl cfunc_WavesRead(
+    lua_State* const L
+  )
   {
     const std::string text = up::ArgString(L, 1, "ed_waves_read");
     std::vector<WaveRecord> waves;
@@ -754,14 +873,19 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_WavesWrite(lua_State* const L)
+  int __cdecl cfunc_WavesWrite(
+    lua_State* const L
+  )
   {
     const std::string text = faf::editor::WavesToScmwaves(WavesAt(L, 1));
     lua_pushlstring(L, text.data(), text.size());
     return 1;
   }
 
-  void PushPattern(lua_State* const L, const WavePattern& pattern)
+  void PushPattern(
+    lua_State* const L,
+    const WavePattern& pattern
+  )
   {
     lua_newtable(L);
     up::SetString(L, "name", pattern.name);
@@ -778,7 +902,10 @@ namespace
     up::SetNumber(L, "stripCount", static_cast<double>(pattern.stripCount));
   }
 
-  [[nodiscard]] WavePattern PatternAt(lua_State* const L, const int pattern)
+  [[nodiscard]] WavePattern PatternAt(
+    lua_State* const L,
+    const int pattern
+  )
   {
     WavePattern out;
     out.name = up::FieldString(L, pattern, "name", out.name);
@@ -796,7 +923,9 @@ namespace
     return out;
   }
 
-  int __cdecl cfunc_WavesPatterns(lua_State* const L)
+  int __cdecl cfunc_WavesPatterns(
+    lua_State* const L
+  )
   {
     std::vector<WavePattern> patterns;
     if (lua_type(L, 1) == LUA_TSTRING) {
@@ -815,7 +944,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_WavesGenerate(lua_State* const L)
+  int __cdecl cfunc_WavesGenerate(
+    lua_State* const L
+  )
   {
     const moho::STIMap* const map = ActiveSti();
     const moho::CHeightField* const field = map != nullptr ? map->mHeightField.get() : nullptr;
@@ -848,8 +979,9 @@ namespace
     for (std::size_t i = 0; i < count; ++i) {
       heights[i] = static_cast<float>(field->data[i]) * kHeightWordScale;
     }
-    std::vector<faf::editor::ShorePoint> points =
-      faf::editor::FindShorePoints(heights, field->width - 1, field->height - 1, map->mWaterElevation, depth, centre, range);
+    std::vector<faf::editor::ShorePoint> points = faf::editor::FindShorePoints(
+      heights, field->width - 1, field->height - 1, map->mWaterElevation, depth, centre, range
+    );
     const std::size_t found = points.size();
     points = faf::editor::PickShorePoints(std::move(points), density, spacing, seed);
     std::vector<WaveRecord> waves;
@@ -872,24 +1004,43 @@ namespace
   {
     EdUpWaterBootstrap()
     {
-      moho::editor::OnSessionEnd([] { TheInstalled() = Installed{}; });
+      moho::editor::OnSessionEnd([] {
+        TheInstalled() = Installed{};
+      });
     }
   };
 
   const EdUpWaterBootstrap gBootstrap{};
 
   const up::Natives gEdUpWaterNatives{{
-    {"ed_waterbodies_fill", &cfunc_WaterBodiesFill, "ed_waterbodies_fill(bodies[, { install, cells }]) -> { bodies, other, count, installed, generation[, cells, width, height] } | nil, message"},
+    {"ed_waterbodies_fill",
+     &cfunc_WaterBodiesFill,
+     "ed_waterbodies_fill(bodies[, { install, cells }]) -> { bodies, other, count, installed, generation[, cells, "
+     "width, height] } | nil, message"},
     {"ed_waterbodies_clear", &cfunc_WaterBodiesClear, "ed_waterbodies_clear() -> had bodies"},
-    {"ed_waterbodies_info", &cfunc_WaterBodiesInfo, "ed_waterbodies_info() -> { installed, count, generation, revision, bodies }"},
-    {"ed_waterbodies_crosscheck", &cfunc_WaterBodiesCrossCheck, "ed_waterbodies_crosscheck(bodies) -> { same, vertices, cells, bodies, previewCount, engineCount, log } | nil, message"},
-    {"ed_waterbodies_simfix", &cfunc_WaterBodiesSimFix, "ed_waterbodies_simfix(on): the console variable sim_FixWaterBodies"},
-    {"ed_water_texel", &cfunc_WaterTexel, "ed_water_texel(x, z) -> { packed, shore, depth, foam, flatness, width, height, texelsPerCell } | nil, message"},
+    {"ed_waterbodies_info",
+     &cfunc_WaterBodiesInfo,
+     "ed_waterbodies_info() -> { installed, count, generation, revision, bodies }"},
+    {"ed_waterbodies_crosscheck",
+     &cfunc_WaterBodiesCrossCheck,
+     "ed_waterbodies_crosscheck(bodies) -> { same, vertices, cells, bodies, previewCount, engineCount, log } | nil, "
+     "message"},
+    {"ed_waterbodies_simfix",
+     &cfunc_WaterBodiesSimFix,
+     "ed_waterbodies_simfix(on): the console variable sim_FixWaterBodies"},
+    {"ed_water_texel",
+     &cfunc_WaterTexel,
+     "ed_water_texel(x, z) -> { packed, shore, depth, foam, flatness, width, height, texelsPerCell } | nil, message"},
     {"ed_waves_get", &cfunc_WavesGet, "ed_waves_get() -> { wave, ... } | nil, message"},
     {"ed_waves_set", &cfunc_WavesSet, "ed_waves_set(waves) -> n | nil, message"},
     {"ed_waves_read", &cfunc_WavesRead, "ed_waves_read(scmwavesText) -> waves | nil, message"},
     {"ed_waves_write", &cfunc_WavesWrite, "ed_waves_write(waves) -> scmwavesText"},
-    {"ed_waves_patterns", &cfunc_WavesPatterns, "ed_waves_patterns([wavepatternsLua]) -> { pattern, ... } | nil, message"},
-    {"ed_waves_generate", &cfunc_WavesGenerate, "ed_waves_generate({ pattern, depth, centre, range, density, spacing, seed }) -> { waves, shorePoints, picked, seed } | nil, message"},
+    {"ed_waves_patterns",
+     &cfunc_WavesPatterns,
+     "ed_waves_patterns([wavepatternsLua]) -> { pattern, ... } | nil, message"},
+    {"ed_waves_generate",
+     &cfunc_WavesGenerate,
+     "ed_waves_generate({ pattern, depth, centre, range, density, spacing, seed }) -> { waves, shorePoints, picked, "
+     "seed } | nil, message"},
   }};
 } // namespace

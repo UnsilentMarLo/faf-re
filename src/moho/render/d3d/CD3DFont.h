@@ -23,9 +23,9 @@ namespace moho
   public:
     struct SKerningPair
     {
-      wchar_t mLeft;   // +0x00
-      wchar_t mRight;  // +0x02
-      float mAmount;   // +0x04
+      wchar_t mLeft;  // +0x00
+      wchar_t mRight; // +0x02
+      float mAmount;  // +0x04
     };
 
     using SCharInfo = CD3DFontCharInfo;
@@ -46,13 +46,14 @@ namespace moho
     [[nodiscard]] static boost::SharedPtrRaw<CD3DFont> Create(std::int32_t pointSize, gpg::StrArg faceName);
 
     /**
-     * Editor addition: like `Create` with a fractional size. Only `ed:` faces keep the fraction (UI scale factors such as
-     * 11 px x 1.25); every other face is created at the truncated integer size exactly as before.
+     * Editor addition: like `Create` with a fractional size. Only `ed:` faces keep the fraction (UI scale factors such
+     * as 11 px x 1.25); every other face is created at the truncated integer size exactly as before.
      */
     [[nodiscard]] static boost::SharedPtrRaw<CD3DFont> CreateF(float pointSize, gpg::StrArg faceName);
 
     /** Editor addition: shared body of `Create` / `CreateF` (cache key plus the real pixel size). */
-    [[nodiscard]] static boost::SharedPtrRaw<CD3DFont> CreateScaled(std::int32_t cacheKey, float pixelSize, gpg::StrArg faceName);
+    [[nodiscard]] static boost::SharedPtrRaw<CD3DFont>
+    CreateScaled(std::int32_t cacheKey, float pixelSize, gpg::StrArg faceName);
 
     /**
      * Address: 0x00425500 (FUN_00425500, ??0CD3DFont@Moho@@AAE@PAX@Z)
@@ -97,7 +98,8 @@ namespace moho
     const SCharInfo& GetCharInfo(wchar_t chText);
 
     /**
-     * Address: 0x00426470 (FUN_00426470, ?Render@CD3DFont@Moho@@QAE?AV?$Vector3@M@Wm3@@VStrArg@gpg@@PAVCD3DPrimBatcher@2@ABV34@22IMM@Z)
+     * Address: 0x00426470 (FUN_00426470,
+     * ?Render@CD3DFont@Moho@@QAE?AV?$Vector3@M@Wm3@@VStrArg@gpg@@PAVCD3DPrimBatcher@2@ABV34@22IMM@Z)
      *
      * gpg::StrArg, Moho::CD3DPrimBatcher*, Wm3::Vector3<float> const&,
      * Wm3::Vector3<float> const&, Wm3::Vector3<float> const&, unsigned int,
@@ -119,7 +121,8 @@ namespace moho
     );
 
     /**
-     * Address: 0x00426580 (FUN_00426580, ?Render2D@CD3DFont@Moho@@QAEXVStrArg@gpg@@PAVCD3DPrimBatcher@2@ABV?$Vector2@M@Wm3@@IMM@Z)
+     * Address: 0x00426580 (FUN_00426580,
+     * ?Render2D@CD3DFont@Moho@@QAEXVStrArg@gpg@@PAVCD3DPrimBatcher@2@ABV?$Vector2@M@Wm3@@IMM@Z)
      *
      * gpg::StrArg, Moho::CD3DPrimBatcher*, Wm3::Vector2<float> const&,
      * unsigned int, float, float
@@ -162,17 +165,17 @@ namespace moho
     void PollModFont();
 
   public:
-    HFONT mFont;              // +0x08
-    bool mIsTruetype;         // +0x0C
+    HFONT mFont;      // +0x08
+    bool mIsTruetype; // +0x0C
     std::uint8_t mPad0D[0x03];
-    float mHeight;            // +0x10
-    float mAscent;            // +0x14
-    float mDescent;           // +0x18
-    float mInternalLeading;   // +0x1C
-    float mExternalLeading;   // +0x20
-    float mAveCharWidth;      // +0x24
-    float mOverhang;          // +0x28
-    SCharInfoPages mCharInfo; // +0x2C
+    float mHeight;                   // +0x10
+    float mAscent;                   // +0x14
+    float mDescent;                  // +0x18
+    float mInternalLeading;          // +0x1C
+    float mExternalLeading;          // +0x20
+    float mAveCharWidth;             // +0x24
+    float mOverhang;                 // +0x28
+    SCharInfoPages mCharInfo;        // +0x2C
     KerningPairVector mKerningPairs; // +0x3C
     HDC mDeviceContext;              // +0x4C
     HBITMAP mBitmap;                 // +0x50
@@ -181,7 +184,10 @@ namespace moho
   };
 
   static_assert(sizeof(CD3DFont::SKerningPair) == 0x08, "moho::CD3DFont::SKerningPair size must be 0x08");
-  static_assert(offsetof(CD3DFont::SKerningPair, mLeft) == 0x00, "moho::CD3DFont::SKerningPair::mLeft offset must be 0x00");
+  static_assert(
+    offsetof(CD3DFont::SKerningPair, mLeft) == 0x00,
+    "moho::CD3DFont::SKerningPair::mLeft offset must be 0x00"
+  );
   static_assert(
     offsetof(CD3DFont::SKerningPair, mRight) == 0x02,
     "moho::CD3DFont::SKerningPair::mRight offset must be 0x02"
@@ -191,29 +197,14 @@ namespace moho
     "moho::CD3DFont::SKerningPair::mAmount offset must be 0x04"
   );
 
-  static_assert(
-    offsetof(CD3DFont, mFont) == 0x08,
-    "moho::CD3DFont::mFont offset must be 0x08"
-  );
-  static_assert(
-    offsetof(CD3DFont, mIsTruetype) == 0x0C,
-    "moho::CD3DFont::mIsTruetype offset must be 0x0C"
-  );
+  static_assert(offsetof(CD3DFont, mFont) == 0x08, "moho::CD3DFont::mFont offset must be 0x08");
+  static_assert(offsetof(CD3DFont, mIsTruetype) == 0x0C, "moho::CD3DFont::mIsTruetype offset must be 0x0C");
   static_assert(offsetof(CD3DFont, mHeight) == 0x10, "moho::CD3DFont::mHeight offset must be 0x10");
   static_assert(offsetof(CD3DFont, mAscent) == 0x14, "moho::CD3DFont::mAscent offset must be 0x14");
-  static_assert(
-    offsetof(CD3DFont, mExternalLeading) == 0x20,
-    "moho::CD3DFont::mExternalLeading offset must be 0x20"
-  );
+  static_assert(offsetof(CD3DFont, mExternalLeading) == 0x20, "moho::CD3DFont::mExternalLeading offset must be 0x20");
   static_assert(offsetof(CD3DFont, mCharInfo) == 0x2C, "moho::CD3DFont::mCharInfo offset must be 0x2C");
-  static_assert(
-    offsetof(CD3DFont, mKerningPairs) == 0x3C,
-    "moho::CD3DFont::mKerningPairs offset must be 0x3C"
-  );
-  static_assert(
-    offsetof(CD3DFont, mDeviceContext) == 0x4C,
-    "moho::CD3DFont::mDeviceContext offset must be 0x4C"
-  );
+  static_assert(offsetof(CD3DFont, mKerningPairs) == 0x3C, "moho::CD3DFont::mKerningPairs offset must be 0x3C");
+  static_assert(offsetof(CD3DFont, mDeviceContext) == 0x4C, "moho::CD3DFont::mDeviceContext offset must be 0x4C");
   static_assert(offsetof(CD3DFont, mBitmap) == 0x50, "moho::CD3DFont::mBitmap offset must be 0x50");
   static_assert(sizeof(CD3DFont) == 0x54, "moho::CD3DFont size must be 0x54");
   /**

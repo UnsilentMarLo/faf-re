@@ -1,18 +1,25 @@
-// EDITOR: Lua natives of the layer converter's texture work (faf_studio editor/runtime/lua/editor/texconv.lua; maths in EdTexConv.h, tests in tests/EdTexConvTest.cpp). Whole textures are
-// processed here, because a 1024 x 1024 picture is four million numbers as a Lua table.
+// EDITOR: Lua natives of the layer converter's texture work (faf_studio editor/runtime/lua/editor/texconv.lua; maths in
+// EdTexConv.h, tests in tests/EdTexConvTest.cpp). Whole textures are processed here, because a 1024 x 1024 picture is
+// four million numbers as a Lua table.
 //
 //   ed_tex_convert(src, dst, spec)   -> bytes, width, height, lossless | nil, message
-//        Reads the DDS `src` (a disk path or a VFS path: entries inside the game's archives work), builds a new picture from its channels and writes it as a DXT5 DDS to `dst`.
-//        spec (all optional): size (a square) or width + height (default: the source's size; the source is resampled), mips (levels, default the whole chain),
-//        r / g / b / a = a channel table { from, value, scale, bias, invert, center, lo, hi }:
-//          from  'keep' (default: the channel as it is), 'r' 'g' 'b' 'a', 'lum', 'const' (value), 'atlas' (atlas = { src, tile, ch }: channel ch of tile 1..8 of a roughness / height atlas)
-//          v = source value; invert: 1 - v; center: (v - mean) * scale + 0.5 + bias; otherwise v * scale + bias; then clamped to lo .. hi (defaults 0 .. 1; scale 1, bias 0)
-//        When the source is DXT5 at the result's size and only the alpha changes (keep / r-less: 'a' or 'const', no centring), the alpha blocks of every mip level are rewritten and the colour is
-//        copied bit for bit (lossless = true).
+//        Reads the DDS `src` (a disk path or a VFS path: entries inside the game's archives work), builds a new picture
+//        from its channels and writes it as a DXT5 DDS to `dst`. spec (all optional): size (a square) or width + height
+//        (default: the source's size; the source is resampled), mips (levels, default the whole chain), r / g / b / a =
+//        a channel table { from, value, scale, bias, invert, center, lo, hi }:
+//          from  'keep' (default: the channel as it is), 'r' 'g' 'b' 'a', 'lum', 'const' (value), 'atlas' (atlas = {
+//          src, tile, ch }: channel ch of tile 1..8 of a roughness / height atlas) v = source value; invert: 1 - v;
+//          center: (v - mean) * scale + 0.5 + bias; otherwise v * scale + bias; then clamped to lo .. hi (defaults 0 ..
+//          1; scale 1, bias 0)
+//        When the source is DXT5 at the result's size and only the alpha changes (keep / r-less: 'a' or 'const', no
+//        centring), the alpha blocks of every mip level are rewritten and the colour is copied bit for bit (lossless =
+//        true).
 //   ed_tex_atlas(dst, spec)          -> bytes, report | nil, message
-//        Builds the roughness / height atlas of the PBR terrain shaders (EdTexConv.h: 2 x 2 tiles, eight layers, R G / B A) and writes it as a DXT5 DDS with mip maps.
-//        spec: size (multiple of 8, default 1024), rough / height (the value of a tile with no picture: 0.65 / 0.5), mips, tiles = { [1] = { src, rough = chan, height = chan }, ... [8] }
-//        (tile 1 = base layer, 2..8 = layers 1..7; the channels read channels of that tile's own texture). report[k] = 'ok' | 'no texture' | 'cannot read: ...' per tile 1..8.
+//        Builds the roughness / height atlas of the PBR terrain shaders (EdTexConv.h: 2 x 2 tiles, eight layers, R G /
+//        B A) and writes it as a DXT5 DDS with mip maps. spec: size (multiple of 8, default 1024), rough / height (the
+//        value of a tile with no picture: 0.65 / 0.5), mips, tiles = { [1] = { src, rough = chan, height = chan }, ...
+//        [8] } (tile 1 = base layer, 2..8 = layers 1..7; the channels read channels of that tile's own texture).
+//        report[k] = 'ok' | 'no texture' | 'cannot read: ...' per tile 1..8.
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -34,24 +41,37 @@ namespace
   namespace tc = moho::editor::texconv;
   namespace dds = moho::editor::dds;
 
-  int Fail(lua_State* const L, const std::string& message)
+  int Fail(
+    lua_State* const L,
+    const std::string& message
+  )
   {
     lua_pushnil(L);
     lua_pushstring(L, message.c_str());
     return 2;
   }
 
-  // ---- reading tables (Lua 5.0: absolute indices) ---------------------------------------------------------------------------------------
+  // ---- reading tables (Lua 5.0: absolute indices)
+  // ---------------------------------------------------------------------------------------
 
   /** Pushes t[key] and returns its Lua type (the caller pops with lua_settop(L, -2)). */
-  int Push(lua_State* const L, const int table, const char* const key)
+  int Push(
+    lua_State* const L,
+    const int table,
+    const char* const key
+  )
   {
     lua_pushstring(L, key);
     lua_gettable(L, table);
     return lua_type(L, -1);
   }
 
-  double Num(lua_State* const L, const int table, const char* const key, const double fallback)
+  double Num(
+    lua_State* const L,
+    const int table,
+    const char* const key,
+    const double fallback
+  )
   {
     double v = fallback;
     if (Push(L, table, key) == LUA_TNUMBER) {
@@ -61,7 +81,11 @@ namespace
     return v;
   }
 
-  std::string Str(lua_State* const L, const int table, const char* const key)
+  std::string Str(
+    lua_State* const L,
+    const int table,
+    const char* const key
+  )
   {
     std::string v;
     if (Push(L, table, key) == LUA_TSTRING) {
@@ -71,7 +95,11 @@ namespace
     return v;
   }
 
-  bool Flag(lua_State* const L, const int table, const char* const key)
+  bool Flag(
+    lua_State* const L,
+    const int table,
+    const char* const key
+  )
   {
     const int type = Push(L, table, key);
     const bool on = type == LUA_TBOOLEAN && lua_toboolean(L, -1) != 0;
@@ -79,7 +107,8 @@ namespace
     return on;
   }
 
-  // ---- channels ---------------------------------------------------------------------------------------------------------------------------
+  // ---- channels
+  // ---------------------------------------------------------------------------------------------------------------------------
 
   struct AtlasRef
   {
@@ -88,8 +117,14 @@ namespace
     int channel = 0;
   };
 
-  /** Reads a channel table at stack index `table` (0 = none: keep). `atlas` gets the atlas reference of from = 'atlas' (c.from stays Keep until the caller has the plane). */
-  tc::Chan ReadChan(lua_State* const L, const int table, bool& wantsAtlas, AtlasRef& atlas)
+  /** Reads a channel table at stack index `table` (0 = none: keep). `atlas` gets the atlas reference of from = 'atlas'
+   * (c.from stays Keep until the caller has the plane). */
+  tc::Chan ReadChan(
+    lua_State* const L,
+    const int table,
+    bool& wantsAtlas,
+    AtlasRef& atlas
+  )
   {
     tc::Chan c;
     wantsAtlas = false;
@@ -97,12 +132,18 @@ namespace
       return c;
     }
     const std::string from = Str(L, table, "from");
-    if (from == "r") c.from = tc::From::R;
-    else if (from == "g") c.from = tc::From::G;
-    else if (from == "b") c.from = tc::From::B;
-    else if (from == "a") c.from = tc::From::A;
-    else if (from == "lum") c.from = tc::From::Lum;
-    else if (from == "const") c.from = tc::From::Const;
+    if (from == "r")
+      c.from = tc::From::R;
+    else if (from == "g")
+      c.from = tc::From::G;
+    else if (from == "b")
+      c.from = tc::From::B;
+    else if (from == "a")
+      c.from = tc::From::A;
+    else if (from == "lum")
+      c.from = tc::From::Lum;
+    else if (from == "const")
+      c.from = tc::From::Const;
     else if (from == "atlas") {
       wantsAtlas = true;
       if (Push(L, table, "atlas") == LUA_TTABLE) {
@@ -124,14 +165,25 @@ namespace
     return c;
   }
 
-  // ---- files ------------------------------------------------------------------------------------------------------------------------------
+  // ---- files
+  // ------------------------------------------------------------------------------------------------------------------------------
 
-  /** Decodes level `minSide`-picked of an already parsed DDS (`minSide` > 0 picks the smallest mip level whose shorter side is at least that: a big texture reduced to a small tile does not need
-   *  its base level). */
-  bool DecodeData(const std::string& data, const dds::Header& header, const int minSide, dds::Image& out, const std::string& path, std::string& why)
+  /** Decodes level `minSide`-picked of an already parsed DDS (`minSide` > 0 picks the smallest mip level whose shorter
+   * side is at least that: a big texture reduced to a small tile does not need its base level). */
+  bool DecodeData(
+    const std::string& data,
+    const dds::Header& header,
+    const int minSide,
+    dds::Image& out,
+    const std::string& path,
+    std::string& why
+  )
   {
     const int level = minSide > 0 ? dds::PickLevel(header, minSide) : 0;
-    if (!dds::DecodeLevel(data, header, level, out.px, out.w, out.h) && (level == 0 || !dds::DecodeLevel(data, header, 0, out.px, out.w, out.h))) {
+    if (
+      !dds::DecodeLevel(data, header, level, out.px, out.w, out.h) &&
+      (level == 0 || !dds::DecodeLevel(data, header, 0, out.px, out.w, out.h))
+    ) {
       why = "the DDS is damaged: " + path;
       return false;
     }
@@ -139,7 +191,12 @@ namespace
   }
 
   /** Reads and decodes a DDS file. */
-  bool LoadDds(const std::string& path, const int minSide, dds::Image& out, std::string& why)
+  bool LoadDds(
+    const std::string& path,
+    const int minSide,
+    dds::Image& out,
+    std::string& why
+  )
   {
     std::string data;
     dds::Header header;
@@ -154,7 +211,9 @@ namespace
     return DecodeData(data, header, minSide, out, path, why);
   }
 
-  void CreateParents(const std::string& path)
+  void CreateParents(
+    const std::string& path
+  )
   {
     for (std::size_t i = 0; i < path.size(); ++i) {
       if ((path[i] == '/' || path[i] == '\\') && i > 2) {
@@ -163,7 +222,11 @@ namespace
     }
   }
 
-  bool WriteBytes(const std::string& path, const std::string& bytes, std::string& why)
+  bool WriteBytes(
+    const std::string& path,
+    const std::string& bytes,
+    std::string& why
+  )
   {
     CreateParents(path);
     HANDLE f = CreateFileA(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -181,9 +244,12 @@ namespace
     return true;
   }
 
-  // ---- ed_tex_convert ---------------------------------------------------------------------------------------------------------------------
+  // ---- ed_tex_convert
+  // ---------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_TexConvert(lua_State* const L)
+  int __cdecl cfunc_TexConvert(
+    lua_State* const L
+  )
   {
     const char* const srcPath = lua_tostring(L, 1);
     const char* const dstPath = lua_tostring(L, 2);
@@ -233,8 +299,12 @@ namespace
 
     // alpha only: the colour blocks stay as they are
     std::uint8_t lut[256];
-    const bool colourKept = chans[0].from == tc::From::Keep && chans[1].from == tc::From::Keep && chans[2].from == tc::From::Keep;
-    if (header.format == dds::Format::Dxt5 && width == header.w && height == header.h && colourKept && !wantsAtlas[3] && tc::AlphaTable(chans[3], lut) && levels >= dds::Levels(header)) {
+    const bool colourKept =
+      chans[0].from == tc::From::Keep && chans[1].from == tc::From::Keep && chans[2].from == tc::From::Keep;
+    if (
+      header.format == dds::Format::Dxt5 && width == header.w && height == header.h && colourKept && !wantsAtlas[3] &&
+      tc::AlphaTable(chans[3], lut) && levels >= dds::Levels(header)
+    ) {
       std::string out = data;
       if (dds::Dxt5MapAlpha(out, lut)) {
         if (!WriteBytes(dstPath, out, why)) {
@@ -262,7 +332,9 @@ namespace
       if (!LoadDds(atlasRef[c].path, 0, atlas, why)) {
         return Fail(L, why);
       }
-      external.push_back(tc::AtlasTilePlane(atlas, std::max(1, std::min(8, atlasRef[c].tile)) - 1, atlasRef[c].channel, width, height));
+      external.push_back(
+        tc::AtlasTilePlane(atlas, std::max(1, std::min(8, atlasRef[c].tile)) - 1, atlasRef[c].channel, width, height)
+      );
       chans[c].from = tc::From::Ext;
       chans[c].ext = &external.back();
     }
@@ -278,9 +350,12 @@ namespace
     return 4;
   }
 
-  // ---- ed_tex_atlas -----------------------------------------------------------------------------------------------------------------------
+  // ---- ed_tex_atlas
+  // -----------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_TexAtlas(lua_State* const L)
+  int __cdecl cfunc_TexAtlas(
+    lua_State* const L
+  )
   {
     const char* const dstPath = lua_tostring(L, 1);
     if (dstPath == nullptr || lua_type(L, 2) != LUA_TTABLE) {
@@ -308,9 +383,11 @@ namespace
           AtlasRef unusedRef;
           tc::Chan chanRough;
           tc::Chan chanHeight;
-          if (Push(L, tile, "rough") == LUA_TTABLE) chanRough = ReadChan(L, lua_gettop(L), unusedAtlas, unusedRef);
+          if (Push(L, tile, "rough") == LUA_TTABLE)
+            chanRough = ReadChan(L, lua_gettop(L), unusedAtlas, unusedRef);
           lua_settop(L, -2);
-          if (Push(L, tile, "height") == LUA_TTABLE) chanHeight = ReadChan(L, lua_gettop(L), unusedAtlas, unusedRef);
+          if (Push(L, tile, "height") == LUA_TTABLE)
+            chanHeight = ReadChan(L, lua_gettop(L), unusedAtlas, unusedRef);
           lua_settop(L, -2);
           dds::Image image;
           std::string why;
@@ -320,12 +397,19 @@ namespace
           } else if (!path.empty()) {
             report[k] = "cannot read: " + why;
           }
-          // a channel that reads the texture needs it; a constant does not (and a tile whose texture is missing keeps the defaults for the rest)
+          // a channel that reads the texture needs it; a constant does not (and a tile whose texture is missing keeps
+          // the defaults for the rest)
           tc::Plane p;
-          if ((loaded || chanRough.from == tc::From::Const) && tc::MakePlane(chanRough, image.px, image.w, image.h, D, D, p)) {
+          if (
+            (loaded || chanRough.from == tc::From::Const) &&
+            tc::MakePlane(chanRough, image.px, image.w, image.h, D, D, p)
+          ) {
             rough[k] = p;
           }
-          if ((loaded || chanHeight.from == tc::From::Const) && tc::MakePlane(chanHeight, image.px, image.w, image.h, D, D, p)) {
+          if (
+            (loaded || chanHeight.from == tc::From::Const) &&
+            tc::MakePlane(chanHeight, image.px, image.w, image.h, D, D, p)
+          ) {
             height[k] = p;
           }
         }
@@ -364,8 +448,22 @@ namespace
     EdTexConvLuaBootstrap()
     {
       auto& set = UserLuaInitSet();
-      (void)new moho::CScrLuaBinder(set, "ed_tex_convert", &cfunc_TexConvert, nullptr, "<global>", "ed_tex_convert(src, dst, spec) -> bytes, width, height, lossless | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_tex_atlas", &cfunc_TexAtlas, nullptr, "<global>", "ed_tex_atlas(dst, spec) -> bytes, report | nil, message");
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_tex_convert",
+        &cfunc_TexConvert,
+        nullptr,
+        "<global>",
+        "ed_tex_convert(src, dst, spec) -> bytes, width, height, lossless | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_tex_atlas",
+        &cfunc_TexAtlas,
+        nullptr,
+        "<global>",
+        "ed_tex_atlas(dst, spec) -> bytes, report | nil, message"
+      );
     }
   };
 

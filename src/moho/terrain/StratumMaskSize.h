@@ -2,20 +2,27 @@
 
 #include <algorithm>
 
-// FAF addition: how big the dynamic sheet of a stratum mask is (docs/RENDERER_BACKENDS.md, "Stratum mask resolution"), one axis.
+// FAF addition: how big the dynamic sheet of a stratum mask is (docs/RENDERER_BACKENDS.md, "Stratum mask resolution"),
+// one axis.
 //
-// `saved` is the size the map file stores the mask at, `half` half the map's size in cells (what the shipped code resampled every mask to) and
-// `cells` the map's size in cells. The mask keeps what it was saved with, but
+// `saved` is the size the map file stores the mask at, `half` half the map's size in cells (what the shipped code
+// resampled every mask to) and `cells` the map's size in cells. The mask keeps what it was saved with, but
 //   - never less than `half` (a coarser mask is raised to it, as before), and
-//   - never more than two texels per world unit (`2 * cells`), but always up to 2048 whatever the map's size, and never more than `ceiling`.
-//     So 2048 is allowed on any map, 4096 only on a map of 2048 cells or more (40 km), and 8192 only on a 4096 map (81 km): the extra
-//     resolution is memory (an 8192 mask is 256 MB, two of them 512 MB) that a smaller map cannot use.
+//   - never more than two texels per world unit (`2 * cells`), but always up to 2048 whatever the map's size, and never
+//   more than `ceiling`.
+//     So 2048 is allowed on any map, 4096 only on a map of 2048 cells or more (40 km), and 8192 only on a 4096 map (81
+//     km): the extra resolution is memory (an 8192 mask is 256 MB, two of them 512 MB) that a smaller map cannot use.
 namespace moho
 {
   constexpr int kStratumMaskCeiling = 8192;
   constexpr int kStratumMaskAnyMap = 2048;
 
-  constexpr int StratumMaskExtent(const int saved, const int half, const int cells, const int ceiling = kStratumMaskCeiling) noexcept
+  constexpr int StratumMaskExtent(
+    const int saved,
+    const int half,
+    const int cells,
+    const int ceiling = kStratumMaskCeiling
+  ) noexcept
   {
     const int cap = std::min(std::max(kStratumMaskAnyMap, 2 * cells), ceiling);
     return std::max(half, std::min(saved, cap));
@@ -34,4 +41,4 @@ namespace moho
   static_assert(StratumMaskExtent(256, 256, 512) == 256, "a mask saved at half the map's size stays");
   static_assert(StratumMaskExtent(16384, 8192, 16384) == 8192, "the ceiling holds on a huge map");
   static_assert(StratumMaskExtent(300, 256, 512) == 300, "an odd size between half and the cap is kept");
-}
+} // namespace moho

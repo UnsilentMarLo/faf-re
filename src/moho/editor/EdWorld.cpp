@@ -1,18 +1,19 @@
-// Editor natives for the map's lighting, fog and water settings (the numbers the .scmap carries besides heights and strata):
+// Editor natives for the map's lighting, fog and water settings (the numbers the .scmap carries besides heights and
+// strata):
 //
 //   ed_world_get()          -> table name -> number
-//   ed_world_set(t[, refresh]) -> true | nil   applies the numbers that are present in `t`; `refresh` also rebuilds the water map
+//   ed_world_set(t[, refresh]) -> true | nil   applies the numbers that are present in `t`; `refresh` also rebuilds the
+//   water map
 //                                              (needed after the water elevations or the water switch changed)
 //
 // Names (every value is a float, vectors are split into _x _y _z / _r _g _b lanes):
-//   light_mult, sun_x/y/z (direction), ambient_r/g/b, sun_r/g/b (colour), fill_r/g/b (shadow fill), spec_r/g/b/a, bloom,
-//   fog_r/g/b (colour), fog_start, fog_end,
-//   water_on (0 / 1), water_elev, water_deep, water_abyss,
+//   light_mult, sun_x/y/z (direction), ambient_r/g/b, sun_r/g/b (colour), fill_r/g/b (shadow fill), spec_r/g/b/a,
+//   bloom, fog_r/g/b (colour), fog_start, fog_end, water_on (0 / 1), water_elev, water_deep, water_abyss,
 //   w_color_r/g/b, w_lerp_0/1, w_refraction, w_fresnel_bias, w_fresnel_power, w_unit_refl, w_sky_refl,
 //   w_repeat_0..3, w_shininess, w_strength, w_sundir_x/y/z, w_suncol_r/g/b, w_sun_refl, w_glow
 //
-// The engine setters are plain stores; the renderers read the values every frame, so a change shows at once. The writer (CWldTerrainRes::Save)
-// writes the same fields, so what is set here is what the saved map carries.
+// The engine setters are plain stores; the renderers read the values every frame, so a change shows at once. The writer
+// (CWldTerrainRes::Save) writes the same fields, so what is set here is what the saved map carries.
 
 #include <cstdint>
 #include <string>
@@ -47,7 +48,12 @@ namespace
     float* ptr;
   };
 
-  void Lanes(std::vector<Field>& out, const char* const* names, float* base, const int count)
+  void Lanes(
+    std::vector<Field>& out,
+    const char* const* names,
+    float* base,
+    const int count
+  )
   {
     for (int i = 0; i < count; ++i) {
       out.push_back({names[i], base + i});
@@ -55,7 +61,9 @@ namespace
   }
 
   // Every float the panels edit, by name.
-  std::vector<Field> Fields(moho::CWldTerrainRes& t)
+  std::vector<Field> Fields(
+    moho::CWldTerrainRes& t
+  )
   {
     std::vector<Field> f;
     f.push_back({"light_mult", &t.mLightingMultiplier});
@@ -70,8 +78,8 @@ namespace
     Lanes(f, fill, reinterpret_cast<float*>(&t.mShadowFillColor), 3);
     Lanes(f, spec, reinterpret_cast<float*>(&t.mSpecularColor), 4);
     f.push_back({"bloom", &t.mBloom});
-    // The header names these lanes after a distance / clamp / curve model, but the values of a stock map are 0.8 0.8 0.8 1000 2000: the .scmap's
-    // fog colour (r, g, b), fog start and fog end.
+    // The header names these lanes after a distance / clamp / curve model, but the values of a stock map are 0.8 0.8
+    // 0.8 1000 2000: the .scmap's fog colour (r, g, b), fog start and fog end.
     f.push_back({"fog_r", &t.mFogStartDistance});
     f.push_back({"fog_g", &t.mFogCutoffDistance});
     f.push_back({"fog_b", &t.mFogMinClamp});
@@ -105,14 +113,20 @@ namespace
     return f;
   }
 
-  void Put(lua_State* const L, const char* const key, const double value)
+  void Put(
+    lua_State* const L,
+    const char* const key,
+    const double value
+  )
   {
     lua_pushstring(L, key);
     lua_pushnumber(L, static_cast<lua_Number>(value));
     lua_settable(L, -3);
   }
 
-  int __cdecl cfunc_EdWorldGet(lua_State* const L)
+  int __cdecl cfunc_EdWorldGet(
+    lua_State* const L
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     if (t == nullptr || t->mMap == nullptr) {
@@ -127,7 +141,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdWorldSet(lua_State* const L)
+  int __cdecl cfunc_EdWorldSet(
+    lua_State* const L
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -153,8 +169,9 @@ namespace
       t->UpdateWaterMap();
       moho::EdRefreshWaterSurfaces(t);
     }
-    // The renderer re-reads the numbers only when it rebuilds its render context, which it does when the camera moved, the terrain is in edit
-    // mode or the decal manager has pending changes (HighFidelityTerrain::UpdateRenderContext): with a still camera a change would not show.
+    // The renderer re-reads the numbers only when it rebuilds its render context, which it does when the camera moved,
+    // the terrain is in edit mode or the decal manager has pending changes (HighFidelityTerrain::UpdateRenderContext):
+    // with a still camera a change would not show.
     if (moho::IDecalManager* const decals = t->GetDecalManager(); decals != nullptr) {
       decals->MarkPendingChanges();
     }
@@ -176,8 +193,17 @@ namespace
     EdWorldLuaBootstrap()
     {
       auto& set = UserLuaInitSet();
-      (void)new moho::CScrLuaBinder(set, "ed_world_get", &cfunc_EdWorldGet, nullptr, "<global>", "ed_world_get() -> table of lighting / fog / water numbers");
-      (void)new moho::CScrLuaBinder(set, "ed_world_set", &cfunc_EdWorldSet, nullptr, "<global>", "ed_world_set(table[, refreshWater]) -> true");
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_world_get",
+        &cfunc_EdWorldGet,
+        nullptr,
+        "<global>",
+        "ed_world_get() -> table of lighting / fog / water numbers"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_world_set", &cfunc_EdWorldSet, nullptr, "<global>", "ed_world_set(table[, refreshWater]) -> true"
+      );
     }
   };
 

@@ -1,20 +1,31 @@
 // EDITOR: natives of the unit icon generator (docs/projects/MOD_UNIT_EDITOR_DESIGN.md, stage S5).
 //
 //   ed_icon_request(x, y, z, heading, pitch, zoom, fovDeg, size) -> true | nil, message
-//                                  asks the next frame for an offscreen render of the world around (x, y, z): the viewport camera is not touched. The pass renders
-//                                  the scene twice (cleared to black and to white, terrain / sky / water / effects / UI off) and keeps both pictures
+//                                  asks the next frame for an offscreen render of the world around (x, y, z): the
+//                                  viewport camera is not touched. The pass renders the scene twice (cleared to black
+//                                  and to white, terrain / sky / water / effects / UI off) and keeps both pictures
 //   ed_icon_status()               -> "idle" | "pending" | "done" | "error", message
-//   ed_icon_result(outSize[, cx, cy, side]) -> pixels, w, h | nil, message     the two pictures matted into one RGBA picture (alpha from the black / white difference),
-//                                  the square (cx, cy, side in render pixels; default all) reduced to outSize x outSize by averaging; `pixels` is a flat table r, g, b, a, r, g, b, a ... of 0..255 (not premultiplied)
-//   ed_icon_bounds(threshold[, keepFraction[, fx, fy, minProj]]) -> minx, miny, maxx, maxy, count, size   box of the pixels with matted alpha above threshold (render pixels); separate areas smaller than
-//                                  keepFraction (default 0.1) of the largest one are ignored here and in ed_icon_result (its 5th argument); with a screen direction (fx, fy) only the pixels in front of
-//                                  the middle of the body along it count (minProj: -1 all .. 0 the front half .. 1 nothing); ed_icon_result reduces with a Lanczos 3 filter
-//   ed_dds_write(path, w, h, pixels, mips) -> bytes | nil, message    DXT5 DDS (the layout of the shipped unit icons: no mip maps unless mips > 1)
-//   ed_dds_read(path)              -> pixels, w, h, mips, fourcc, bytes | nil, message    DXT1 / DXT3 / DXT5 / 32 bit DDS, mip 0; `path` is a disk path or a VFS
+//   ed_icon_result(outSize[, cx, cy, side]) -> pixels, w, h | nil, message     the two pictures matted into one RGBA
+//   picture (alpha from the black / white difference),
+//                                  the square (cx, cy, side in render pixels; default all) reduced to outSize x outSize
+//                                  by averaging; `pixels` is a flat table r, g, b, a, r, g, b, a ... of 0..255 (not
+//                                  premultiplied)
+//   ed_icon_bounds(threshold[, keepFraction[, fx, fy, minProj]]) -> minx, miny, maxx, maxy, count, size   box of the
+//   pixels with matted alpha above threshold (render pixels); separate areas smaller than
+//                                  keepFraction (default 0.1) of the largest one are ignored here and in ed_icon_result
+//                                  (its 5th argument); with a screen direction (fx, fy) only the pixels in front of the
+//                                  middle of the body along it count (minProj: -1 all .. 0 the front half .. 1
+//                                  nothing); ed_icon_result reduces with a Lanczos 3 filter
+//   ed_dds_write(path, w, h, pixels, mips) -> bytes | nil, message    DXT5 DDS (the layout of the shipped unit icons:
+//   no mip maps unless mips > 1) ed_dds_read(path)              -> pixels, w, h, mips, fourcc, bytes | nil, message
+//   DXT1 / DXT3 / DXT5 / 32 bit DDS, mip 0; `path` is a disk path or a VFS
 //                                  path resolved by ed_vfs_to_disk (entries inside .scd archives work)
-//   ed_dds_thumb(src, dst, size[, mips]) -> srcW, srcH, srcBytes, usedW | nil, message    src reduced to size x size (area average) and written as DXT5 DDS (the asset browser's thumbnail cache);
-//                                  with mips > 0 the reduction starts from the smallest mip level that is still twice `size` wide (usedW = the width decoded; = srcW when the file has no mips)
-//   ed_file_delete(path)           -> true | nil, message    deletes one .dds / .png file (the thumbnail cache's pruning)
+//   ed_dds_thumb(src, dst, size[, mips]) -> srcW, srcH, srcBytes, usedW | nil, message    src reduced to size x size
+//   (area average) and written as DXT5 DDS (the asset browser's thumbnail cache);
+//                                  with mips > 0 the reduction starts from the smallest mip level that is still twice
+//                                  `size` wide (usedW = the width decoded; = srcW when the file has no mips)
+//   ed_file_delete(path)           -> true | nil, message    deletes one .dds / .png file (the thumbnail cache's
+//   pruning)
 
 #include <algorithm>
 #include <cctype>
@@ -38,13 +49,19 @@ namespace moho::edicon
 {
   bool gActive = false;
   std::uint32_t gClearArgb = 0;
-}
+} // namespace moho::edicon
 
 namespace
 {
   using moho::edicon::Request;
 
-  enum class State { Idle, Pending, Done, Error };
+  enum class State
+  {
+    Idle,
+    Pending,
+    Done,
+    Error
+  };
 
   std::mutex gLock;
   State gState = State::Idle;
@@ -53,27 +70,38 @@ namespace
 
   using Rgba = moho::editor::dds::Px;
 
-  int Fail(lua_State* const L, const char* const message)
+  int Fail(
+    lua_State* const L,
+    const char* const message
+  )
   {
     lua_pushnil(L);
     lua_pushstring(L, message);
     return 2;
   }
 
-  float NumArg(lua_State* const L, const int index, const float fallback)
+  float NumArg(
+    lua_State* const L,
+    const int index,
+    const float fallback
+  )
   {
     return lua_type(L, index) == LUA_TNUMBER ? static_cast<float>(lua_tonumber(L, index)) : fallback;
   }
 
-  // ---- BMP reader (what SaveTexture writes) ---------------------------------------------------------------------------------------------
+  // ---- BMP reader (what SaveTexture writes)
+  // ---------------------------------------------------------------------------------------------
 
   struct Bitmap
   {
     int w = 0, h = 0;
-    std::vector<std::uint8_t> bgra;       // top-down, 4 bytes per pixel
+    std::vector<std::uint8_t> bgra; // top-down, 4 bytes per pixel
   };
 
-  bool ReadBmp(const std::string& path, Bitmap& out)
+  bool ReadBmp(
+    const std::string& path,
+    Bitmap& out
+  )
   {
     std::string data;
     if (!moho::edicon::ReadAllBytes(path, data) || data.size() < 54 || data[0] != 'B' || data[1] != 'M') {
@@ -103,7 +131,8 @@ namespace
     out.bgra.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4, 255);
     for (int y = 0; y < h; ++y) {
       const int srcRow = topDown ? y : (h - 1 - y);
-      const std::uint8_t* const src = reinterpret_cast<const std::uint8_t*>(data.data()) + offset + stride * static_cast<std::size_t>(srcRow);
+      const std::uint8_t* const src =
+        reinterpret_cast<const std::uint8_t*>(data.data()) + offset + stride * static_cast<std::size_t>(srcRow);
       std::uint8_t* const dst = out.bgra.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(w) * 4;
       for (int x = 0; x < w; ++x) {
         dst[x * 4 + 0] = src[x * (bpp / 8) + 0];
@@ -114,20 +143,31 @@ namespace
     return true;
   }
 
-  // The matted alpha of the size x size render (white - black difference), and the pixels that belong to the main body: connected areas (8 neighbours, alpha above `threshold`) smaller than
-  // `keepFraction` of the largest one are dropped (a stray spark or a drone in the corner of the picture must not move the frame of the icon).
-  bool MatteOf(const Bitmap& onBlack, const Bitmap& onWhite, const int size, const float threshold, const float keepFraction, std::vector<float>& alpha, std::vector<std::uint8_t>& keep)
+  // The matted alpha of the size x size render (white - black difference), and the pixels that belong to the main body:
+  // connected areas (8 neighbours, alpha above `threshold`) smaller than `keepFraction` of the largest one are dropped
+  // (a stray spark or a drone in the corner of the picture must not move the frame of the icon).
+  bool MatteOf(
+    const Bitmap& onBlack,
+    const Bitmap& onWhite,
+    const int size,
+    const float threshold,
+    const float keepFraction,
+    std::vector<float>& alpha,
+    std::vector<std::uint8_t>& keep
+  )
   {
     alpha.assign(static_cast<std::size_t>(size) * static_cast<std::size_t>(size), 0.0f);
     keep.assign(alpha.size(), 1);
     for (int y = 0; y < size; ++y) {
       for (int x = 0; x < size; ++x) {
-        const std::size_t sb = (static_cast<std::size_t>(y) * static_cast<std::size_t>(onBlack.w) + static_cast<std::size_t>(x)) * 4;
+        const std::size_t sb =
+          (static_cast<std::size_t>(y) * static_cast<std::size_t>(onBlack.w) + static_cast<std::size_t>(x)) * 4;
         float diff = 0.0f;
         for (int c = 0; c < 3; ++c) {
           diff += static_cast<float>(onWhite.bgra[sb + c]) - static_cast<float>(onBlack.bgra[sb + c]);
         }
-        alpha[static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x)] = std::max(0.0f, std::min(1.0f, 1.0f - diff / (3.0f * 255.0f)));
+        alpha[static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x)] =
+          std::max(0.0f, std::min(1.0f, 1.0f - diff / (3.0f * 255.0f)));
       }
     }
     if (keepFraction <= 0.0f) {
@@ -139,7 +179,8 @@ namespace
     int largest = 0;
     for (int y0 = 0; y0 < size; ++y0) {
       for (int x0 = 0; x0 < size; ++x0) {
-        const std::size_t i0 = static_cast<std::size_t>(y0) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x0);
+        const std::size_t i0 =
+          static_cast<std::size_t>(y0) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x0);
         if (alpha[i0] <= threshold || label[i0] != 0) {
           continue;
         }
@@ -161,7 +202,8 @@ namespace
               if (nx < 0 || ny < 0 || nx >= size || ny >= size) {
                 continue;
               }
-              const std::size_t ni = static_cast<std::size_t>(ny) * static_cast<std::size_t>(size) + static_cast<std::size_t>(nx);
+              const std::size_t ni =
+                static_cast<std::size_t>(ny) * static_cast<std::size_t>(size) + static_cast<std::size_t>(nx);
               if (alpha[ni] > threshold && label[ni] == 0) {
                 label[ni] = id;
                 stack.push_back(static_cast<int>(ni));
@@ -181,14 +223,26 @@ namespace
     return true;
   }
 
-  // ---- DXT ----------------------------------------------------------------------------------------------------------------------------------
+  // ---- DXT
+  // ----------------------------------------------------------------------------------------------------------------------------------
 
-  std::uint16_t Pack565(const int r, const int g, const int b)
+  std::uint16_t Pack565(
+    const int r,
+    const int g,
+    const int b
+  )
   {
-    return static_cast<std::uint16_t>(((r * 31 + 127) / 255 << 11) | ((g * 63 + 127) / 255 << 5) | ((b * 31 + 127) / 255));
+    return static_cast<std::uint16_t>(
+      ((r * 31 + 127) / 255 << 11) | ((g * 63 + 127) / 255 << 5) | ((b * 31 + 127) / 255)
+    );
   }
 
-  void Unpack565(const std::uint16_t c, int& r, int& g, int& b)
+  void Unpack565(
+    const std::uint16_t c,
+    int& r,
+    int& g,
+    int& b
+  )
   {
     r = ((c >> 11) & 31) * 255 / 31;
     g = ((c >> 5) & 63) * 255 / 63;
@@ -196,7 +250,10 @@ namespace
   }
 
   // One DXT5 block (16 bytes) from 16 pixels (row major, 4 x 4).
-  void EncodeBlockDxt5(const Rgba* const px, std::uint8_t* const out)
+  void EncodeBlockDxt5(
+    const Rgba* const px,
+    std::uint8_t* const out
+  )
   {
     // alpha: the extremes, 8 value mode (a0 > a1)
     int amin = 255;
@@ -233,7 +290,8 @@ namespace
       out[2 + i] = static_cast<std::uint8_t>((abits >> (8 * i)) & 0xFF);
     }
 
-    // colour: endpoints along the principal axis of the pixels that carry alpha (nearly transparent pixels do not pull the fit)
+    // colour: endpoints along the principal axis of the pixels that carry alpha (nearly transparent pixels do not pull
+    // the fit)
     float mean[3] = {0, 0, 0};
     float weight = 0;
     for (int i = 0; i < 16; ++i) {
@@ -277,9 +335,15 @@ namespace
       tmin = std::min(tmin, t);
       tmax = std::max(tmax, t);
     }
-    const auto clamp255 = [](const float v) { return static_cast<int>(std::max(0.0f, std::min(255.0f, v + 0.5f))); };
-    std::uint16_t c0 = Pack565(clamp255(mean[0] + axis[0] * tmax), clamp255(mean[1] + axis[1] * tmax), clamp255(mean[2] + axis[2] * tmax));
-    std::uint16_t c1 = Pack565(clamp255(mean[0] + axis[0] * tmin), clamp255(mean[1] + axis[1] * tmin), clamp255(mean[2] + axis[2] * tmin));
+    const auto clamp255 = [](const float v) {
+      return static_cast<int>(std::max(0.0f, std::min(255.0f, v + 0.5f)));
+    };
+    std::uint16_t c0 = Pack565(
+      clamp255(mean[0] + axis[0] * tmax), clamp255(mean[1] + axis[1] * tmax), clamp255(mean[2] + axis[2] * tmax)
+    );
+    std::uint16_t c1 = Pack565(
+      clamp255(mean[0] + axis[0] * tmin), clamp255(mean[1] + axis[1] * tmin), clamp255(mean[2] + axis[2] * tmin)
+    );
     if (c0 < c1) {
       std::swap(c0, c1);
     }
@@ -319,7 +383,10 @@ namespace
     std::vector<Rgba> px;
   };
 
-  std::string EncodeDds(const Image& base, const int mips)
+  std::string EncodeDds(
+    const Image& base,
+    const int mips
+  )
   {
     std::vector<Image> levels;
     levels.push_back(base);
@@ -337,7 +404,8 @@ namespace
             for (int dx = 0; dx < 2; ++dx) {
               const int sx = std::min(s.w - 1, x * 2 + dx);
               const int sy = std::min(s.h - 1, y * 2 + dy);
-              const Rgba& p = s.px[static_cast<std::size_t>(sy) * static_cast<std::size_t>(s.w) + static_cast<std::size_t>(sx)];
+              const Rgba& p =
+                s.px[static_cast<std::size_t>(sy) * static_cast<std::size_t>(s.w) + static_cast<std::size_t>(sx)];
               sum[0] += p.r;
               sum[1] += p.g;
               sum[2] += p.b;
@@ -345,8 +413,12 @@ namespace
               ++n;
             }
           }
-          d.px[static_cast<std::size_t>(y) * static_cast<std::size_t>(d.w) + static_cast<std::size_t>(x)] =
-            Rgba{static_cast<std::uint8_t>(sum[0] / n), static_cast<std::uint8_t>(sum[1] / n), static_cast<std::uint8_t>(sum[2] / n), static_cast<std::uint8_t>(sum[3] / n)};
+          d.px[static_cast<std::size_t>(y) * static_cast<std::size_t>(d.w) + static_cast<std::size_t>(x)] = Rgba{
+            static_cast<std::uint8_t>(sum[0] / n),
+            static_cast<std::uint8_t>(sum[1] / n),
+            static_cast<std::uint8_t>(sum[2] / n),
+            static_cast<std::uint8_t>(sum[3] / n)
+          };
         }
       }
       levels.push_back(std::move(d));
@@ -355,17 +427,20 @@ namespace
 
     std::string out;
     out.resize(128, '\0');
-    const auto put = [&](const std::size_t at, const std::uint32_t v) { std::memcpy(&out[at], &v, 4); };
+    const auto put = [&](const std::size_t at, const std::uint32_t v) {
+      std::memcpy(&out[at], &v, 4);
+    };
     std::memcpy(&out[0], "DDS ", 4);
     put(4, 124);
-    // DDSD_CAPS | HEIGHT | WIDTH | PIXELFORMAT | LINEARSIZE, plus MIPMAPCOUNT when there are mips: the flags of the shipped icons
+    // DDSD_CAPS | HEIGHT | WIDTH | PIXELFORMAT | LINEARSIZE, plus MIPMAPCOUNT when there are mips: the flags of the
+    // shipped icons
     put(8, 0x00081007u | (count > 1 ? 0x00020000u : 0u));
     put(12, static_cast<std::uint32_t>(base.h));
     put(16, static_cast<std::uint32_t>(base.w));
     put(20, static_cast<std::uint32_t>(std::max(1, (base.w + 3) / 4) * std::max(1, (base.h + 3) / 4) * 16));
     put(28, count > 1 ? static_cast<std::uint32_t>(count) : 0u);
-    put(76, 32);                          // DDS_PIXELFORMAT.dwSize
-    put(80, 0x4);                         // DDPF_FOURCC
+    put(76, 32);  // DDS_PIXELFORMAT.dwSize
+    put(80, 0x4); // DDPF_FOURCC
     std::memcpy(&out[84], "DXT5", 4);
     put(108, count > 1 ? 0x00401008u : 0x00001000u);
 
@@ -378,7 +453,8 @@ namespace
           for (int i = 0; i < 16; ++i) {
             const int x = std::min(level.w - 1, bx * 4 + (i & 3));
             const int y = std::min(level.h - 1, by * 4 + (i >> 2));
-            block[i] = level.px[static_cast<std::size_t>(y) * static_cast<std::size_t>(level.w) + static_cast<std::size_t>(x)];
+            block[i] =
+              level.px[static_cast<std::size_t>(y) * static_cast<std::size_t>(level.w) + static_cast<std::size_t>(x)];
           }
           std::uint8_t encoded[16];
           EncodeBlockDxt5(block, encoded);
@@ -389,7 +465,12 @@ namespace
     return out;
   }
 
-  bool DecodeDds(const std::string& data, Image& out, int& mips, std::string& fourcc)
+  bool DecodeDds(
+    const std::string& data,
+    Image& out,
+    int& mips,
+    std::string& fourcc
+  )
   {
     moho::editor::dds::Header header;
     const bool ok = moho::editor::dds::ParseHeader(data, header);
@@ -398,7 +479,10 @@ namespace
     return ok && moho::editor::dds::DecodeLevel(data, header, 0, out.px, out.w, out.h);
   }
 
-  void PushPixels(lua_State* const L, const Image& img)
+  void PushPixels(
+    lua_State* const L,
+    const Image& img
+  )
   {
     lua_newtable(L);
     std::size_t n = 1;
@@ -411,7 +495,9 @@ namespace
     }
   }
 
-  void CreateParents(const std::string& path)
+  void CreateParents(
+    const std::string& path
+  )
   {
     for (std::size_t i = 0; i < path.size(); ++i) {
       if ((path[i] == '/' || path[i] == '\\') && i > 2) {
@@ -420,9 +506,12 @@ namespace
     }
   }
 
-  // ---- Lua natives ---------------------------------------------------------------------------------------------------------------------
+  // ---- Lua natives
+  // ---------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_EdIconRequest(lua_State* const L)
+  int __cdecl cfunc_EdIconRequest(
+    lua_State* const L
+  )
   {
     Request r;
     r.x = NumArg(L, 1, 0.0f);
@@ -448,7 +537,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdIconStatus(lua_State* const L)
+  int __cdecl cfunc_EdIconStatus(
+    lua_State* const L
+  )
   {
     std::lock_guard<std::mutex> guard(gLock);
     const char* const names[] = {"idle", "pending", "done", "error"};
@@ -457,7 +548,9 @@ namespace
     return 2;
   }
 
-  int __cdecl cfunc_EdIconResult(lua_State* const L)
+  int __cdecl cfunc_EdIconResult(
+    lua_State* const L
+  )
   {
     const int outSize = static_cast<int>(NumArg(L, 1, 64.0f));
     {
@@ -468,7 +561,10 @@ namespace
     }
     Bitmap onBlack;
     Bitmap onWhite;
-    if (!ReadBmp(moho::edicon::TempPath(0), onBlack) || !ReadBmp(moho::edicon::TempPath(1), onWhite) || onBlack.w != onWhite.w || onBlack.h != onWhite.h) {
+    if (
+      !ReadBmp(moho::edicon::TempPath(0), onBlack) || !ReadBmp(moho::edicon::TempPath(1), onWhite) ||
+      onBlack.w != onWhite.w || onBlack.h != onWhite.h
+    ) {
       return Fail(L, "cannot read the captures");
     }
     int size = 0;
@@ -476,7 +572,8 @@ namespace
       std::lock_guard<std::mutex> guard(gLock);
       size = std::min(gRequest.size, std::min(onBlack.w, onBlack.h));
     }
-    // the square of the render that becomes the icon: centre (cx, cy) and side in render pixels (default: the whole render)
+    // the square of the render that becomes the icon: centre (cx, cy) and side in render pixels (default: the whole
+    // render)
     const float cx = NumArg(L, 2, size * 0.5f);
     const float cy = NumArg(L, 3, size * 0.5f);
     const float side = NumArg(L, 4, static_cast<float>(size));
@@ -487,13 +584,14 @@ namespace
     std::vector<float> matte;
     std::vector<std::uint8_t> keep;
     MatteOf(onBlack, onWhite, size, 0.05f, keepFraction, matte, keep);
-    // matting: on black c * a, on white c * a + (1 - a) * 255, so a = 1 - (white - black) / 255 and the black picture is the premultiplied colour.
-    // Reduction: separable Lanczos 3 on the premultiplied picture (sharper than a box average, and every output pixel is normalised by its own weights, so no moire from a
-    // non-integer ratio); render pixels outside the picture or outside the main body count as transparent.
+    // matting: on black c * a, on white c * a + (1 - a) * 255, so a = 1 - (white - black) / 255 and the black picture
+    // is the premultiplied colour. Reduction: separable Lanczos 3 on the premultiplied picture (sharper than a box
+    // average, and every output pixel is normalised by its own weights, so no moire from a non-integer ratio); render
+    // pixels outside the picture or outside the main body count as transparent.
     const float left = cx - side * 0.5f;
     const float top = cy - side * 0.5f;
     const float step = side / static_cast<float>(outSize);
-    const float scale = std::max(1.0f, step);                // filter width in source pixels per tap unit
+    const float scale = std::max(1.0f, step); // filter width in source pixels per tap unit
     const int support = static_cast<int>(std::ceil(3.0f * scale));
     const auto lanczos = [](const float x) {
       const float ax = std::fabs(x);
@@ -506,16 +604,20 @@ namespace
       const float px = 3.14159265f * ax;
       return 3.0f * std::sin(px) * std::sin(px / 3.0f) / (px * px);
     };
-    const auto sample = [&](const int sx, const int sy, float* const out) {       // premultiplied r, g, b, a (0..255 / 0..1) of one render pixel
+    const auto sample = [&](
+                          const int sx, const int sy, float* const out
+                        ) { // premultiplied r, g, b, a (0..255 / 0..1) of one render pixel
       out[0] = out[1] = out[2] = out[3] = 0.0f;
       if (sx < 0 || sy < 0 || sx >= size || sy >= size) {
         return;
       }
-      const std::size_t mi = static_cast<std::size_t>(sy) * static_cast<std::size_t>(size) + static_cast<std::size_t>(sx);
+      const std::size_t mi =
+        static_cast<std::size_t>(sy) * static_cast<std::size_t>(size) + static_cast<std::size_t>(sx);
       if (keep[mi] == 0) {
         return;
       }
-      const std::size_t sb = (static_cast<std::size_t>(sy) * static_cast<std::size_t>(onBlack.w) + static_cast<std::size_t>(sx)) * 4;
+      const std::size_t sb =
+        (static_cast<std::size_t>(sy) * static_cast<std::size_t>(onBlack.w) + static_cast<std::size_t>(sx)) * 4;
       out[0] = onBlack.bgra[sb + 2];
       out[1] = onBlack.bgra[sb + 1];
       out[2] = onBlack.bgra[sb + 0];
@@ -557,7 +659,8 @@ namespace
             acc[c] += w * px[c];
           }
         }
-        float* const dst = &horiz[(static_cast<std::size_t>(r) * static_cast<std::size_t>(outSize) + static_cast<std::size_t>(ox)) * 4];
+        float* const dst =
+          &horiz[(static_cast<std::size_t>(r) * static_cast<std::size_t>(outSize) + static_cast<std::size_t>(ox)) * 4];
         for (int c = 0; c < 4; ++c) {
           dst[c] = acc[c] / wsum;
         }
@@ -589,17 +692,21 @@ namespace
             continue;
           }
           const float w = weights[static_cast<std::size_t>(sy - first)];
-          const float* const src = &horiz[(static_cast<std::size_t>(r) * static_cast<std::size_t>(outSize) + static_cast<std::size_t>(ox)) * 4];
+          const float* const src =
+            &horiz
+              [(static_cast<std::size_t>(r) * static_cast<std::size_t>(outSize) + static_cast<std::size_t>(ox)) * 4];
           for (int c = 0; c < 4; ++c) {
             acc[c] += w * src[c];
           }
         }
         const float a = std::max(0.0f, std::min(255.0f, acc[3] / wsum));
-        Rgba& p = img.px[static_cast<std::size_t>(oy) * static_cast<std::size_t>(outSize) + static_cast<std::size_t>(ox)];
+        Rgba& p =
+          img.px[static_cast<std::size_t>(oy) * static_cast<std::size_t>(outSize) + static_cast<std::size_t>(ox)];
         p.a = static_cast<std::uint8_t>(a + 0.5f);
         if (a > 1.0f) {
           for (int c = 0; c < 3; ++c) {
-            const float v = (acc[c] / wsum) * 255.0f / a;       // un-premultiply (the colours are premultiplied 0..255, the alpha 0..255)
+            const float v =
+              (acc[c] / wsum) * 255.0f / a; // un-premultiply (the colours are premultiplied 0..255, the alpha 0..255)
             (&p.r)[c] = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, v + 0.5f)));
           }
         }
@@ -611,8 +718,11 @@ namespace
     return 3;
   }
 
-  // ed_icon_bounds(threshold) -> minx, miny, maxx, maxy, count, size: the box of the pixels whose matted alpha exceeds threshold (0..1, default 0.05), in render pixels
-  int __cdecl cfunc_EdIconBounds(lua_State* const L)
+  // ed_icon_bounds(threshold) -> minx, miny, maxx, maxy, count, size: the box of the pixels whose matted alpha exceeds
+  // threshold (0..1, default 0.05), in render pixels
+  int __cdecl cfunc_EdIconBounds(
+    lua_State* const L
+  )
   {
     const float threshold = NumArg(L, 1, 0.05f);
     {
@@ -623,7 +733,10 @@ namespace
     }
     Bitmap onBlack;
     Bitmap onWhite;
-    if (!ReadBmp(moho::edicon::TempPath(0), onBlack) || !ReadBmp(moho::edicon::TempPath(1), onWhite) || onBlack.w != onWhite.w || onBlack.h != onWhite.h) {
+    if (
+      !ReadBmp(moho::edicon::TempPath(0), onBlack) || !ReadBmp(moho::edicon::TempPath(1), onWhite) ||
+      onBlack.w != onWhite.w || onBlack.h != onWhite.h
+    ) {
       return Fail(L, "cannot read the captures");
     }
     int size = 0;
@@ -635,7 +748,8 @@ namespace
     std::vector<float> matte;
     std::vector<std::uint8_t> keep;
     MatteOf(onBlack, onWhite, size, threshold, keepFraction, matte, keep);
-    // optional: only the front half. (fx, fy) is the direction on the screen the unit's front points to; pixels behind the middle of the body along it (middle + minProj * half extent) are left out
+    // optional: only the front half. (fx, fy) is the direction on the screen the unit's front points to; pixels behind
+    // the middle of the body along it (middle + minProj * half extent) are left out
     const float fdx = NumArg(L, 3, 0.0f);
     const float fdy = NumArg(L, 4, 0.0f);
     const float minProj = NumArg(L, 5, 0.0f);
@@ -646,7 +760,8 @@ namespace
       float pmax = -1e30f;
       for (int y = 0; y < size; ++y) {
         for (int x = 0; x < size; ++x) {
-          const std::size_t mi = static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x);
+          const std::size_t mi =
+            static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x);
           if (matte[mi] > threshold && keep[mi] != 0) {
             const float p = (static_cast<float>(x) * fdx + static_cast<float>(y) * fdy) / flen;
             pmin = std::min(pmin, p);
@@ -665,7 +780,8 @@ namespace
     long long count = 0;
     for (int y = 0; y < size; ++y) {
       for (int x = 0; x < size; ++x) {
-        const std::size_t mi = static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x);
+        const std::size_t mi =
+          static_cast<std::size_t>(y) * static_cast<std::size_t>(size) + static_cast<std::size_t>(x);
         if (matte[mi] > threshold && keep[mi] != 0) {
           if (flen > 1e-6f && (static_cast<float>(x) * fdx + static_cast<float>(y) * fdy) / flen < cut) {
             continue;
@@ -687,7 +803,9 @@ namespace
     return 6;
   }
 
-  int __cdecl cfunc_EdDdsWrite(lua_State* const L)
+  int __cdecl cfunc_EdDdsWrite(
+    lua_State* const L
+  )
   {
     const char* const path = lua_tostring(L, 1);
     const int w = static_cast<int>(NumArg(L, 2, 0.0f));
@@ -708,7 +826,12 @@ namespace
         v[c] = static_cast<int>(std::max(0.0, std::min(255.0, lua_tonumber(L, -1) + 0.5)));
         lua_settop(L, -2);
       }
-      img.px[i] = Rgba{static_cast<std::uint8_t>(v[0]), static_cast<std::uint8_t>(v[1]), static_cast<std::uint8_t>(v[2]), static_cast<std::uint8_t>(v[3])};
+      img.px[i] = Rgba{
+        static_cast<std::uint8_t>(v[0]),
+        static_cast<std::uint8_t>(v[1]),
+        static_cast<std::uint8_t>(v[2]),
+        static_cast<std::uint8_t>(v[3])
+      };
     }
     const std::string bytes = EncodeDds(img, mips);
     CreateParents(path);
@@ -726,7 +849,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdDdsRead(lua_State* const L)
+  int __cdecl cfunc_EdDdsRead(
+    lua_State* const L
+  )
   {
     const char* const path = lua_tostring(L, 1);
     if (path == nullptr) {
@@ -751,9 +876,12 @@ namespace
     return 6;
   }
 
-  // ed_dds_thumb(src, dst, size[, mips]): the DDS `src` (any format DecodeDds reads) reduced to size x size by area averaging and written as a DXT5 DDS: the asset browser's thumbnail cache.
-  // Returns srcWidth, srcHeight, srcBytes, decodedWidth | nil, message. Done natively because a 2048 x 2048 texture is 16 million numbers as a Lua table.
-  int __cdecl cfunc_EdDdsThumb(lua_State* const L)
+  // ed_dds_thumb(src, dst, size[, mips]): the DDS `src` (any format DecodeDds reads) reduced to size x size by area
+  // averaging and written as a DXT5 DDS: the asset browser's thumbnail cache. Returns srcWidth, srcHeight, srcBytes,
+  // decodedWidth | nil, message. Done natively because a 2048 x 2048 texture is 16 million numbers as a Lua table.
+  int __cdecl cfunc_EdDdsThumb(
+    lua_State* const L
+  )
   {
     const char* const src = lua_tostring(L, 1);
     const char* const dst = lua_tostring(L, 2);
@@ -765,8 +893,9 @@ namespace
     if (!moho::edicon::ReadAllBytes(src, data)) {
       return Fail(L, "cannot read the file");
     }
-    // the fourth argument (a number above 0) lets the reduction start from a mip level of the file: the smallest level that is still twice the thumbnail on its shorter side
-    // (a 2048 x 2048 texture is read as 256 x 256 for a 96 x 96 picture: 64 times fewer texels to decode and average). Without it the base level is reduced, as before.
+    // the fourth argument (a number above 0) lets the reduction start from a mip level of the file: the smallest level
+    // that is still twice the thumbnail on its shorter side (a 2048 x 2048 texture is read as 256 x 256 for a 96 x 96
+    // picture: 64 times fewer texels to decode and average). Without it the base level is reduced, as before.
     namespace dds = moho::editor::dds;
     dds::Header header;
     Image img;
@@ -777,7 +906,10 @@ namespace
     if (NumArg(L, 4, 0.0f) > 0.0f) {
       level = dds::PickLevel(header, size * 2);
     }
-    if (!dds::DecodeLevel(data, header, level, img.px, img.w, img.h) && (level == 0 || !dds::DecodeLevel(data, header, 0, img.px, img.w, img.h))) {
+    if (
+      !dds::DecodeLevel(data, header, level, img.px, img.w, img.h) &&
+      (level == 0 || !dds::DecodeLevel(data, header, 0, img.px, img.w, img.h))
+    ) {
       return Fail(L, "unsupported DDS");
     }
     if (img.w < 1 || img.h < 1) {
@@ -797,7 +929,8 @@ namespace
         std::uint32_t count = 0;
         for (int sy = y0; sy < y1 && sy < img.h; ++sy) {
           for (int sx = x0; sx < x1 && sx < img.w; ++sx) {
-            const Rgba& p = img.px[static_cast<std::size_t>(sy) * static_cast<std::size_t>(img.w) + static_cast<std::size_t>(sx)];
+            const Rgba& p =
+              img.px[static_cast<std::size_t>(sy) * static_cast<std::size_t>(img.w) + static_cast<std::size_t>(sx)];
             sum[0] += p.r;
             sum[1] += p.g;
             sum[2] += p.b;
@@ -834,8 +967,11 @@ namespace
     return 4;
   }
 
-  // ed_file_delete(path): removes one picture file (.dds / .png only: the thumbnail cache's pruning). Returns true | nil, message.
-  int __cdecl cfunc_EdFileDelete(lua_State* const L)
+  // ed_file_delete(path): removes one picture file (.dds / .png only: the thumbnail cache's pruning). Returns true |
+  // nil, message.
+  int __cdecl cfunc_EdFileDelete(
+    lua_State* const L
+  )
   {
     const char* const path = lua_tostring(L, 1);
     if (path == nullptr) {
@@ -870,14 +1006,60 @@ namespace
     EdIconLuaBootstrap()
     {
       auto& set = UserLuaInitSet();
-      (void)new moho::CScrLuaBinder(set, "ed_icon_request", &cfunc_EdIconRequest, nullptr, "<global>", "ed_icon_request(x, y, z, heading, pitch, zoom, fovDeg, size) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_icon_status", &cfunc_EdIconStatus, nullptr, "<global>", "ed_icon_status() -> state, message");
-      (void)new moho::CScrLuaBinder(set, "ed_icon_result", &cfunc_EdIconResult, nullptr, "<global>", "ed_icon_result(outSize) -> pixels, w, h | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_icon_bounds", &cfunc_EdIconBounds, nullptr, "<global>", "ed_icon_bounds(threshold) -> minx, miny, maxx, maxy, count, size | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_dds_write", &cfunc_EdDdsWrite, nullptr, "<global>", "ed_dds_write(path, w, h, pixels, mips) -> bytes | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_dds_read", &cfunc_EdDdsRead, nullptr, "<global>", "ed_dds_read(path) -> pixels, w, h, mips, fourcc, bytes | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_dds_thumb", &cfunc_EdDdsThumb, nullptr, "<global>", "ed_dds_thumb(src, dst, size) -> srcW, srcH, srcBytes | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_file_delete", &cfunc_EdFileDelete, nullptr, "<global>", "ed_file_delete(path) -> true | nil, message");
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_icon_request",
+        &cfunc_EdIconRequest,
+        nullptr,
+        "<global>",
+        "ed_icon_request(x, y, z, heading, pitch, zoom, fovDeg, size) -> true | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_icon_status", &cfunc_EdIconStatus, nullptr, "<global>", "ed_icon_status() -> state, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_icon_result",
+        &cfunc_EdIconResult,
+        nullptr,
+        "<global>",
+        "ed_icon_result(outSize) -> pixels, w, h | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_icon_bounds",
+        &cfunc_EdIconBounds,
+        nullptr,
+        "<global>",
+        "ed_icon_bounds(threshold) -> minx, miny, maxx, maxy, count, size | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_dds_write",
+        &cfunc_EdDdsWrite,
+        nullptr,
+        "<global>",
+        "ed_dds_write(path, w, h, pixels, mips) -> bytes | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_dds_read",
+        &cfunc_EdDdsRead,
+        nullptr,
+        "<global>",
+        "ed_dds_read(path) -> pixels, w, h, mips, fourcc, bytes | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_dds_thumb",
+        &cfunc_EdDdsThumb,
+        nullptr,
+        "<global>",
+        "ed_dds_thumb(src, dst, size) -> srcW, srcH, srcBytes | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_file_delete", &cfunc_EdFileDelete, nullptr, "<global>", "ed_file_delete(path) -> true | nil, message"
+      );
     }
   };
 
@@ -886,7 +1068,9 @@ namespace
 
 namespace moho::edicon
 {
-  bool TakeRequest(Request& out)
+  bool TakeRequest(
+    Request& out
+  )
   {
     std::lock_guard<std::mutex> guard(gLock);
     if (gState != State::Pending) {
@@ -896,14 +1080,19 @@ namespace moho::edicon
     return true;
   }
 
-  void Complete(const bool ok, const char* const message)
+  void Complete(
+    const bool ok,
+    const char* const message
+  )
   {
     std::lock_guard<std::mutex> guard(gLock);
     gState = ok ? State::Done : State::Error;
     gMessage = message != nullptr ? message : "";
   }
 
-  std::string TempPath(const int pass)
+  std::string TempPath(
+    const int pass
+  )
   {
     char dir[MAX_PATH] = {};
     const DWORD n = GetTempPathA(MAX_PATH, dir);

@@ -1,6 +1,8 @@
-// EDITOR GPU compute: GPU versions of the generator ops (noise: perlin simplex ridged billow fractal musgrave fbm_damped; cellular: voronoi cells cracks; craters dunes island). Generators have no
-// input field, so the only transfer is the download of the result: they are the best case for the GPU. Each op reads its options exactly like the CPU op (the same clamps; `fractal` through
-// EdFieldFractal.h) and answers Unsupported for what it does not handle, so the CPU op keeps working. docs/projects/editor/GPU_COMPUTE.md, "Generator and filter kernels".
+// EDITOR GPU compute: GPU versions of the generator ops (noise: perlin simplex ridged billow fractal musgrave
+// fbm_damped; cellular: voronoi cells cracks; craters dunes island). Generators have no input field, so the only
+// transfer is the download of the result: they are the best case for the GPU. Each op reads its options exactly like
+// the CPU op (the same clamps; `fractal` through EdFieldFractal.h) and answers Unsupported for what it does not handle,
+// so the CPU op keeps working. docs/projects/editor/GPU_COMPUTE.md, "Generator and filter kernels".
 #pragma fp_contract(off)
 
 #include "moho/editor/EdGpuGen.h"
@@ -27,7 +29,9 @@ namespace moho::editor::gpu
 
   namespace
   {
-    inline std::uint32_t Hash32(std::uint32_t x)
+    inline std::uint32_t Hash32(
+      std::uint32_t x
+    )
     {
       x ^= x >> 16;
       x *= 0x7feb352dU;
@@ -37,12 +41,21 @@ namespace moho::editor::gpu
       return x;
     }
 
-    // ---- perlin, simplex, ridged, billow --------------------------------------------------------------------------------------------------------
+    // ---- perlin, simplex, ridged, billow
+    // --------------------------------------------------------------------------------------------------------
 
-    OpResult OpNoiseGpu(Executor& ex, const OpArgs& a, const int kind, const char* const defaultBasis, Grid& out, std::string& err)
+    OpResult OpNoiseGpu(
+      Executor& ex,
+      const OpArgs& a,
+      const int kind,
+      const char* const defaultBasis,
+      Grid& out,
+      std::string& err
+    )
     {
       Shape s;
-      if (!ShapeOf(a, s) || !Fits(ex, s.Count(), 1)) return OpResult::Unsupported;
+      if (!ShapeOf(a, s) || !Fits(ex, s.Count(), 1))
+        return OpResult::Unsupported;
       const std::uint32_t seed = static_cast<std::uint32_t>(static_cast<std::int64_t>(a.p.N("seed", 1)));
       const double scale = std::max(1e-3, a.p.N("scale", 100.0));
       const int octaves = std::max(1, std::min(16, static_cast<int>(a.p.N("octaves", 5))));
@@ -68,15 +81,18 @@ namespace moho::editor::gpu
           foz = fr.oz;
         }
         const double wox = static_cast<double>(s.ox) + shiftX, woz = static_cast<double>(s.oz) + shiftZ;
-        const bool ok = basis == 1 ? PutSimplexMap(tab, o, wox, woz, s.cell, freq, c, sn, fox, foz) : PutOctaveMap(tab, o, wox, woz, s.cell, freq, c, sn, fox, foz);
-        if (!ok) return OpResult::Unsupported;
+        const bool ok = basis == 1 ? PutSimplexMap(tab, o, wox, woz, s.cell, freq, c, sn, fox, foz)
+                                   : PutOctaveMap(tab, o, wox, woz, s.cell, freq, c, sn, fox, foz);
+        if (!ok)
+          return OpResult::Unsupported;
         tab[static_cast<std::size_t>(o) * 16u + 8u] = amp;
         norm += amp;
         amp *= persistence;
         freq *= static_cast<double>(lacunarity);
       }
       std::unique_ptr<Resource> octBuf, seedBuf;
-      if (!UploadVec(ex, tab, octBuf, err) || !UploadVec(ex, seeds, seedBuf, err)) return OpResult::Failed;
+      if (!UploadVec(ex, tab, octBuf, err) || !UploadVec(ex, seeds, seedBuf, err))
+        return OpResult::Failed;
       hk::FbmParams p{};
       p.w = static_cast<std::uint32_t>(s.w);
       p.octaves = static_cast<std::uint32_t>(octaves);
@@ -89,24 +105,65 @@ namespace moho::editor::gpu
       return RunGenerator(ex, "gen_fbm", s, static_cast<double>(octaves) * (basis == 1 ? 0.7 : 1.0), p, b, out, err);
     }
 
-    OpResult OpPerlinGpu(Executor& ex, const OpArgs& a, Grid& o, std::string& e) { return OpNoiseGpu(ex, a, 0, "perlin", o, e); }
-    OpResult OpSimplexGpu(Executor& ex, const OpArgs& a, Grid& o, std::string& e) { return OpNoiseGpu(ex, a, 0, "simplex", o, e); }
-    OpResult OpRidgedGpu(Executor& ex, const OpArgs& a, Grid& o, std::string& e) { return OpNoiseGpu(ex, a, 1, "perlin", o, e); }
-    OpResult OpBillowGpu(Executor& ex, const OpArgs& a, Grid& o, std::string& e) { return OpNoiseGpu(ex, a, 2, "perlin", o, e); }
+    OpResult OpPerlinGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return OpNoiseGpu(ex, a, 0, "perlin", o, e);
+    }
+    OpResult OpSimplexGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return OpNoiseGpu(ex, a, 0, "simplex", o, e);
+    }
+    OpResult OpRidgedGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return OpNoiseGpu(ex, a, 1, "perlin", o, e);
+    }
+    OpResult OpBillowGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& o,
+      std::string& e
+    )
+    {
+      return OpNoiseGpu(ex, a, 2, "perlin", o, e);
+    }
 
-    // ---- fractal ------------------------------------------------------------------------------------------------------------------------------------
+    // ---- fractal
+    // ------------------------------------------------------------------------------------------------------------------------------------
 
-    OpResult OpFractalGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    OpResult OpFractalGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       Shape sh;
-      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1)) return OpResult::Unsupported;
+      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1))
+        return OpResult::Unsupported;
       fractal::Setup s;
       std::string why;
-      if (!fractal::Read(a, sh.cell, s, why)) return OpResult::Unsupported;   // a bad option: the CPU op reports it
+      if (!fractal::Read(a, sh.cell, s, why))
+        return OpResult::Unsupported; // a bad option: the CPU op reports it
       constexpr int kRecords = 19;
       std::vector<float> tab(static_cast<std::size_t>(kRecords) * 16u, 0.0f);
       std::vector<std::uint32_t> seeds(16u + 12u, 0u);
-      const double wox = static_cast<double>(sh.ox), woz = static_cast<double>(sh.oz), cell = static_cast<double>(sh.cell);
+      const double wox = static_cast<double>(sh.ox), woz = static_cast<double>(sh.oz),
+                   cell = static_cast<double>(sh.cell);
       for (int o = 0; o < s.octaves; ++o) {
         double c = 1.0, sn = 0.0, fox = 0.0, foz = 0.0;
         if (s.rotate) {
@@ -116,7 +173,8 @@ namespace moho::editor::gpu
           fox = fr.ox;
           foz = fr.oz;
         }
-        if (!PutOctaveMap(tab, o, wox, woz, cell, s.freq[o], c, sn, fox, foz)) return OpResult::Unsupported;
+        if (!PutOctaveMap(tab, o, wox, woz, cell, s.freq[o], c, sn, fox, foz))
+          return OpResult::Unsupported;
         float* r = tab.data() + static_cast<std::size_t>(o) * 16u;
         r[8] = s.amps[o];
         r[9] = static_cast<float>(s.move[o]);
@@ -137,15 +195,18 @@ namespace moho::editor::gpu
             fox = fr.ox;
             foz = fr.oz;
           }
-          if (!PutOctaveMap(tab, 16 + o, wox, woz, cell, freq, c, sn, fox, foz)) return OpResult::Unsupported;
+          if (!PutOctaveMap(tab, 16 + o, wox, woz, cell, freq, c, sn, fox, foz))
+            return OpResult::Unsupported;
           freq *= 2.0;
           for (std::uint32_t salt = 1; salt <= 4; ++salt) {
-            seeds[16u + (salt - 1u) * 3u + static_cast<std::uint32_t>(o)] = Hash32(s.seed * 977U + salt * 31U + static_cast<std::uint32_t>(o) * 6151U + 5U);
+            seeds[16u + (salt - 1u) * 3u + static_cast<std::uint32_t>(o)] =
+              Hash32(s.seed * 977U + salt * 31U + static_cast<std::uint32_t>(o) * 6151U + 5U);
           }
         }
       }
       std::unique_ptr<Resource> octBuf, seedBuf;
-      if (!UploadVec(ex, tab, octBuf, err) || !UploadVec(ex, seeds, seedBuf, err)) return OpResult::Failed;
+      if (!UploadVec(ex, tab, octBuf, err) || !UploadVec(ex, seeds, seedBuf, err))
+        return OpResult::Failed;
       hk::FractalParams p{};
       p.w = static_cast<std::uint32_t>(sh.w);
       p.octaves = static_cast<std::uint32_t>(s.octaves);
@@ -161,14 +222,26 @@ namespace moho::editor::gpu
       p.invCell = static_cast<float>(1.0 / cell);
       Bindings b;
       b.Srv(1, *octBuf).Srv(2, *seedBuf);
-      const double units = static_cast<double>(s.octaves) * (s.style == fractal::kErosive ? 1.2 : 1.0) + (s.warp > 0.0 ? 6.0 * s.warpLevels : 0.0);
+      const double units = static_cast<double>(s.octaves) * (s.style == fractal::kErosive ? 1.2 : 1.0) +
+        (s.warp > 0.0 ? 6.0 * s.warpLevels : 0.0);
       return RunGenerator(ex, "gen_fractal", sh, units, p, b, out, err);
     }
 
-    // ---- musgrave, fbm_damped ----------------------------------------------------------------------------------------------------------------------
+    // ---- musgrave, fbm_damped
+    // ----------------------------------------------------------------------------------------------------------------------
 
-    /** The octave table of a plain octave stack: octave o at frequency 1 / scale * lacunarity^o, in its own frame when `rotate` (field 8 is left to the caller). false: Unsupported. */
-    bool FillOctaves(std::vector<float>& tab, std::vector<std::uint32_t>& seeds, const int octaves, const std::uint32_t seed, const double scale, const double lacunarity, const bool rotate, const Shape& sh)
+    /** The octave table of a plain octave stack: octave o at frequency 1 / scale * lacunarity^o, in its own frame when
+     * `rotate` (field 8 is left to the caller). false: Unsupported. */
+    bool FillOctaves(
+      std::vector<float>& tab,
+      std::vector<std::uint32_t>& seeds,
+      const int octaves,
+      const std::uint32_t seed,
+      const double scale,
+      const double lacunarity,
+      const bool rotate,
+      const Shape& sh
+    )
     {
       tab.assign(static_cast<std::size_t>(octaves) * 16u, 0.0f);
       seeds.assign(static_cast<std::size_t>(octaves), 0u);
@@ -183,7 +256,19 @@ namespace moho::editor::gpu
           fox = fr.ox;
           foz = fr.oz;
         }
-        if (!PutOctaveMap(tab, o, static_cast<double>(sh.ox), static_cast<double>(sh.oz), static_cast<double>(sh.cell), freq, c, sn, fox, foz)) return false;
+        if (!PutOctaveMap(
+              tab,
+              o,
+              static_cast<double>(sh.ox),
+              static_cast<double>(sh.oz),
+              static_cast<double>(sh.cell),
+              freq,
+              c,
+              sn,
+              fox,
+              foz
+            ))
+          return false;
         tab[static_cast<std::size_t>(o) * 16u + 10u] = static_cast<float>(c);
         tab[static_cast<std::size_t>(o) * 16u + 11u] = static_cast<float>(sn);
         freq *= lacunarity;
@@ -191,10 +276,16 @@ namespace moho::editor::gpu
       return true;
     }
 
-    OpResult OpMusgraveGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    OpResult OpMusgraveGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       Shape sh;
-      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1)) return OpResult::Unsupported;
+      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1))
+        return OpResult::Unsupported;
       const std::uint32_t seed = static_cast<std::uint32_t>(static_cast<std::int64_t>(a.p.N("seed", 1)));
       const double scale = std::max(1e-3, a.p.N("scale", 100.0));
       const int octaves = std::max(1, std::min(16, static_cast<int>(a.p.N("octaves", 6))));
@@ -204,11 +295,13 @@ namespace moho::editor::gpu
       const float gain = static_cast<float>(a.p.N("gain", 2.0));
       const bool rotate = a.p.N("rotate", 0.0) >= 0.5;
       const std::string mode = a.p.S("mode", "ridged");
-      if (mode != "ridged" && mode != "hybrid" && mode != "hetero") return OpResult::Unsupported;
+      if (mode != "ridged" && mode != "hybrid" && mode != "hetero")
+        return OpResult::Unsupported;
       const int kind = mode == "ridged" ? 0 : (mode == "hybrid" ? 1 : 2);
       std::vector<float> tab;
       std::vector<std::uint32_t> seeds;
-      if (!FillOctaves(tab, seeds, octaves, seed, scale, static_cast<double>(lac), rotate, sh)) return OpResult::Unsupported;
+      if (!FillOctaves(tab, seeds, octaves, seed, scale, static_cast<double>(lac), rotate, sh))
+        return OpResult::Unsupported;
       float ampSum = 0.0f;
       for (int o = 0; o < octaves; ++o) {
         const float amp = std::pow(lac, -hExp * static_cast<float>(o));
@@ -216,7 +309,8 @@ namespace moho::editor::gpu
         ampSum += amp;
       }
       std::unique_ptr<Resource> octBuf, seedBuf;
-      if (!UploadVec(ex, tab, octBuf, err) || !UploadVec(ex, seeds, seedBuf, err)) return OpResult::Failed;
+      if (!UploadVec(ex, tab, octBuf, err) || !UploadVec(ex, seeds, seedBuf, err))
+        return OpResult::Failed;
       hk::MusgraveParams p{};
       p.w = static_cast<std::uint32_t>(sh.w);
       p.octaves = static_cast<std::uint32_t>(octaves);
@@ -230,10 +324,16 @@ namespace moho::editor::gpu
       return RunGenerator(ex, "gen_musgrave", sh, static_cast<double>(octaves), p, b, out, err);
     }
 
-    OpResult OpFbmDampedGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    OpResult OpFbmDampedGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       Shape sh;
-      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1)) return OpResult::Unsupported;
+      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1))
+        return OpResult::Unsupported;
       const std::uint32_t seed = static_cast<std::uint32_t>(static_cast<std::int64_t>(a.p.N("seed", 1)));
       const double scale = std::max(1e-3, a.p.N("scale", 150.0));
       const int octaves = std::max(1, std::min(16, static_cast<int>(a.p.N("octaves", 8))));
@@ -243,9 +343,11 @@ namespace moho::editor::gpu
       const bool rotate = a.p.N("rotate", 0.0) >= 0.5;
       std::vector<float> tab;
       std::vector<std::uint32_t> seeds;
-      if (!FillOctaves(tab, seeds, octaves, seed, scale, static_cast<double>(lac), rotate, sh)) return OpResult::Unsupported;
+      if (!FillOctaves(tab, seeds, octaves, seed, scale, static_cast<double>(lac), rotate, sh))
+        return OpResult::Unsupported;
       std::unique_ptr<Resource> octBuf, seedBuf;
-      if (!UploadVec(ex, tab, octBuf, err) || !UploadVec(ex, seeds, seedBuf, err)) return OpResult::Failed;
+      if (!UploadVec(ex, tab, octBuf, err) || !UploadVec(ex, seeds, seedBuf, err))
+        return OpResult::Failed;
       hk::FbmdParams p{};
       p.w = static_cast<std::uint32_t>(sh.w);
       p.octaves = static_cast<std::uint32_t>(octaves);
@@ -257,43 +359,78 @@ namespace moho::editor::gpu
       return RunGenerator(ex, "gen_fbmd", sh, static_cast<double>(octaves) * 1.1, p, b, out, err);
     }
 
-    // ---- voronoi, cells, cracks -------------------------------------------------------------------------------------------------------------------
+    // ---- voronoi, cells, cracks
+    // -------------------------------------------------------------------------------------------------------------------
 
-    /** Record `rec` of the table: the map of a lattice at `scale` world units per cell, shifted by (sx, sz) world units; field 8 = scale. */
-    bool PutCellMap(std::vector<float>& tab, const int rec, const Shape& sh, const double scale, const double sx, const double sz)
+    /** Record `rec` of the table: the map of a lattice at `scale` world units per cell, shifted by (sx, sz) world
+     * units; field 8 = scale. */
+    bool PutCellMap(
+      std::vector<float>& tab,
+      const int rec,
+      const Shape& sh,
+      const double scale,
+      const double sx,
+      const double sz
+    )
     {
       const double inv = 1.0 / scale;
       const double a = static_cast<double>(sh.cell) * inv;
-      if (!PutMap(tab, rec, (static_cast<double>(sh.ox) + sx) * inv, (static_cast<double>(sh.oz) + sz) * inv, a, 0.0, 0.0, a)) return false;
+      if (!PutMap(
+            tab, rec, (static_cast<double>(sh.ox) + sx) * inv, (static_cast<double>(sh.oz) + sz) * inv, a, 0.0, 0.0, a
+          ))
+        return false;
       tab[static_cast<std::size_t>(rec) * 16u + 8u] = static_cast<float>(scale);
       return true;
     }
 
-    /** The two warp noises of cells / cracks: records 3 and 4 (maps of Fbm01's octave 0 at `size` world units, the second shifted by (sx, sz)). */
-    bool PutCellWarp(std::vector<float>& tab, const Shape& sh, const double size, const double sx, const double sz)
+    /** The two warp noises of cells / cracks: records 3 and 4 (maps of Fbm01's octave 0 at `size` world units, the
+     * second shifted by (sx, sz)). */
+    bool PutCellWarp(
+      std::vector<float>& tab,
+      const Shape& sh,
+      const double size,
+      const double sx,
+      const double sz
+    )
     {
       return PutCellMap(tab, 3, sh, size, 0.0, 0.0) && PutCellMap(tab, 4, sh, size, sx, sz);
     }
 
-    OpResult RunCells(Executor& ex, const Shape& sh, hk::CellsParams p, const std::vector<float>& tab, const double units, Grid& out, std::string& err)
+    OpResult RunCells(
+      Executor& ex,
+      const Shape& sh,
+      hk::CellsParams p,
+      const std::vector<float>& tab,
+      const double units,
+      Grid& out,
+      std::string& err
+    )
     {
       std::unique_ptr<Resource> octBuf;
-      if (!UploadVec(ex, tab, octBuf, err)) return OpResult::Failed;
+      if (!UploadVec(ex, tab, octBuf, err))
+        return OpResult::Failed;
       p.w = static_cast<std::uint32_t>(sh.w);
       Bindings b;
       b.Srv(1, *octBuf);
       return RunGenerator(ex, "gen_cells", sh, units, p, b, out, err);
     }
 
-    OpResult OpVoronoiGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    OpResult OpVoronoiGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       Shape sh;
-      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1)) return OpResult::Unsupported;
+      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1))
+        return OpResult::Unsupported;
       const double scale = std::max(1e-3, a.p.N("scale", 100.0));
       const float jitter = std::max(0.0f, std::min(1.0f, static_cast<float>(a.p.N("jitter", 1.0))));
       const std::string mode = a.p.S("mode", "f1");
       std::vector<float> tab(5u * 16u, 0.0f);
-      if (!PutCellMap(tab, 0, sh, scale, 0.0, 0.0)) return OpResult::Unsupported;
+      if (!PutCellMap(tab, 0, sh, scale, 0.0, 0.0))
+        return OpResult::Unsupported;
       hk::CellsParams p{};
       p.op = 0;
       p.mode = mode == "f2" ? 1u : (mode == "edge" ? 2u : (mode == "id" ? 3u : (mode == "crack" ? 4u : 0u)));
@@ -303,31 +440,47 @@ namespace moho::editor::gpu
       return RunCells(ex, sh, p, tab, 9.0, out, err);
     }
 
-    OpResult OpCellsGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    OpResult OpCellsGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       Shape sh;
-      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1)) return OpResult::Unsupported;
+      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1))
+        return OpResult::Unsupported;
       hk::CellsParams p{};
       p.op = 1;
       p.seed = static_cast<std::uint32_t>(static_cast<std::int64_t>(a.p.N("seed", 1)));
       p.jitter = std::max(0.0f, std::min(1.0f, static_cast<float>(a.p.N("jitter", 1.0))));
       const std::string metric = a.p.S("metric", "euclid");
       std::uint32_t m = 0;
-      if (metric == "euclid") m = 0;
-      else if (metric == "manhattan") m = 1;
-      else if (metric == "chebyshev") m = 2;
-      else if (metric == "minkowski") m = 3;
-      else return OpResult::Unsupported;
+      if (metric == "euclid")
+        m = 0;
+      else if (metric == "manhattan")
+        m = 1;
+      else if (metric == "chebyshev")
+        m = 2;
+      else if (metric == "minkowski")
+        m = 3;
+      else
+        return OpResult::Unsupported;
       p.pexp = std::max(0.2f, static_cast<float>(a.p.N("p", 3.0)));
       p.ksoft = std::max(0.5f, static_cast<float>(a.p.N("smooth", 8.0)));
       const std::string mode = a.p.S("mode", "f1");
-      static const char* const modes[] = {"f1", "f2", "f3", "edge", "crack", "id", "smooth", "border", "plate", "facet"};
+      static const char* const modes[] = {
+        "f1", "f2", "f3", "edge", "crack", "id", "smooth", "border", "plate", "facet"
+      };
       int mi = -1;
       for (int i = 0; i < 10; ++i) {
-        if (mode == modes[i]) mi = i;
+        if (mode == modes[i])
+          mi = i;
       }
-      if (mi < 0) return OpResult::Unsupported;
-      if (mi == 7 || mi == 8) m = 0;
+      if (mi < 0)
+        return OpResult::Unsupported;
+      if (mi == 7 || mi == 8)
+        m = 0;
       p.metric = m;
       p.mode = static_cast<std::uint32_t>(mi);
       p.range = (mi == 2 || mi == 6 || m == 1 || m == 3) ? 2u : 1u;
@@ -338,9 +491,11 @@ namespace moho::editor::gpu
       const double warp = a.p.N("warp", 0.0);
       const double warpScale = std::max(1.0, a.p.N("warp_scale", scale * 2.0));
       std::vector<float> tab(5u * 16u, 0.0f);
-      if (!PutCellMap(tab, 0, sh, scale, 0.0, 0.0)) return OpResult::Unsupported;
+      if (!PutCellMap(tab, 0, sh, scale, 0.0, 0.0))
+        return OpResult::Unsupported;
       if (warp != 0.0) {
-        if (!PutCellWarp(tab, sh, warpScale, 123.4, -77.7)) return OpResult::Unsupported;
+        if (!PutCellWarp(tab, sh, warpScale, 123.4, -77.7))
+          return OpResult::Unsupported;
         p.warpOn = 1;
         p.warp = static_cast<float>(warp);
         p.seedA = p.seed + 7001U;
@@ -351,10 +506,16 @@ namespace moho::editor::gpu
       return RunCells(ex, sh, p, tab, cellsPerSample + (warp != 0.0 ? 6.0 : 0.0), out, err);
     }
 
-    OpResult OpCracksGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    OpResult OpCracksGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       Shape sh;
-      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1)) return OpResult::Unsupported;
+      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1))
+        return OpResult::Unsupported;
       hk::CellsParams p{};
       p.op = 2;
       p.seed = static_cast<std::uint32_t>(static_cast<std::int64_t>(a.p.N("seed", 1)));
@@ -371,7 +532,8 @@ namespace moho::editor::gpu
       double sc = scale;
       float weight = 1.0f;
       for (int lv = 0; lv < levels; ++lv) {
-        if (!PutCellMap(tab, lv, sh, sc, 0.0, 0.0)) return OpResult::Unsupported;
+        if (!PutCellMap(tab, lv, sh, sc, 0.0, 0.0))
+          return OpResult::Unsupported;
         tab[static_cast<std::size_t>(lv) * 16u + 9u] = static_cast<float>(width);
         tab[static_cast<std::size_t>(lv) * 16u + 10u] = weight;
         sc *= 0.45;
@@ -379,7 +541,8 @@ namespace moho::editor::gpu
         weight *= 0.65f;
       }
       if (warp != 0.0) {
-        if (!PutCellWarp(tab, sh, scale * 1.5, 55.5, 91.1)) return OpResult::Unsupported;
+        if (!PutCellWarp(tab, sh, scale * 1.5, 55.5, 91.1))
+          return OpResult::Unsupported;
         p.warpOn = 1;
         p.warp = static_cast<float>(warp);
         p.seedA = p.seed + 5101U;
@@ -389,12 +552,19 @@ namespace moho::editor::gpu
       return RunCells(ex, sh, p, tab, 4.0 * levels + (warp != 0.0 ? 6.0 : 0.0), out, err);
     }
 
-    // ---- craters, dunes, island --------------------------------------------------------------------------------------------------------------------
+    // ---- craters, dunes, island
+    // --------------------------------------------------------------------------------------------------------------------
 
-    OpResult OpCratersGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    OpResult OpCratersGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       Shape sh;
-      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1)) return OpResult::Unsupported;
+      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1))
+        return OpResult::Unsupported;
       const double scale = std::max(1.0, a.p.N("scale", 120.0));
       hk::CratersParams p{};
       p.seed = static_cast<std::uint32_t>(static_cast<std::int64_t>(a.p.N("seed", 1)));
@@ -406,19 +576,27 @@ namespace moho::editor::gpu
       p.shape = std::max(0.5f, static_cast<float>(a.p.N("shape", 1.5)));
       p.base = static_cast<float>(a.p.N("base", 0.5));
       std::vector<float> tab(16u, 0.0f);
-      if (!PutCellMap(tab, 0, sh, scale, 0.0, 0.0)) return OpResult::Unsupported;
+      if (!PutCellMap(tab, 0, sh, scale, 0.0, 0.0))
+        return OpResult::Unsupported;
       std::unique_ptr<Resource> octBuf;
-      if (!UploadVec(ex, tab, octBuf, err)) return OpResult::Failed;
+      if (!UploadVec(ex, tab, octBuf, err))
+        return OpResult::Failed;
       p.w = static_cast<std::uint32_t>(sh.w);
       Bindings b;
       b.Srv(1, *octBuf);
       return RunGenerator(ex, "gen_craters", sh, 4.0, p, b, out, err);
     }
 
-    OpResult OpDunesGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    OpResult OpDunesGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       Shape sh;
-      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1)) return OpResult::Unsupported;
+      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1))
+        return OpResult::Unsupported;
       const std::uint32_t seed = static_cast<std::uint32_t>(static_cast<std::int64_t>(a.p.N("seed", 1)));
       const double wl = std::max(1.0, a.p.N("wavelength", 60.0));
       const double ang = a.p.N("angle", 0.0) * 3.14159265358979323846 / 180.0;
@@ -443,25 +621,38 @@ namespace moho::editor::gpu
       p.meanderK = static_cast<float>(warp * 2.0 / wl);
       p.meanderKr = static_cast<float>(warp * 1.5 / wlr);
       std::vector<float> tab(32u, 0.0f);
-      if (!PutCellMap(tab, 0, sh, warpSize, 0.0, 0.0) || !PutCellMap(tab, 1, sh, warpSize * 1.7, 0.0, 0.0)) return OpResult::Unsupported;
+      if (!PutCellMap(tab, 0, sh, warpSize, 0.0, 0.0) || !PutCellMap(tab, 1, sh, warpSize * 1.7, 0.0, 0.0))
+        return OpResult::Unsupported;
       std::unique_ptr<Resource> octBuf;
-      if (!UploadVec(ex, tab, octBuf, err)) return OpResult::Failed;
+      if (!UploadVec(ex, tab, octBuf, err))
+        return OpResult::Failed;
       p.w = static_cast<std::uint32_t>(sh.w);
       Bindings b;
       b.Srv(1, *octBuf);
       return RunGenerator(ex, "gen_dunes", sh, 5.0, p, b, out, err);
     }
 
-    OpResult OpIslandGpu(Executor& ex, const OpArgs& a, Grid& out, std::string& err)
+    OpResult OpIslandGpu(
+      Executor& ex,
+      const OpArgs& a,
+      Grid& out,
+      std::string& err
+    )
     {
       Shape sh;
-      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1)) return OpResult::Unsupported;
+      if (!ShapeOf(a, sh) || !Fits(ex, sh.Count(), 1))
+        return OpResult::Unsupported;
       const std::string output = a.p.S("output", "height");
-      if (output != "height" && output != "mask" && output != "distance") return OpResult::Unsupported;
-      const double cell = static_cast<double>(sh.cell), wox = static_cast<double>(sh.ox), woz = static_cast<double>(sh.oz);
+      if (output != "height" && output != "mask" && output != "distance")
+        return OpResult::Unsupported;
+      const double cell = static_cast<double>(sh.cell), wox = static_cast<double>(sh.ox),
+                   woz = static_cast<double>(sh.oz);
       const double cxw = a.p.Has("cx") ? a.p.N("cx", 0) : wox + 0.5 * (sh.w - 1) * cell;
       const double czw = a.p.Has("cz") ? a.p.N("cz", 0) : woz + 0.5 * (sh.h - 1) * cell;
-      const double radius = std::max(1e-3, a.p.Has("radius") && a.p.N("radius", 0) > 0.0 ? a.p.N("radius", 1) : 0.5 * std::min(sh.w - 1, sh.h - 1) * cell);
+      const double radius = std::max(
+        1e-3,
+        a.p.Has("radius") && a.p.N("radius", 0) > 0.0 ? a.p.N("radius", 1) : 0.5 * std::min(sh.w - 1, sh.h - 1) * cell
+      );
       const double aspect = std::max(0.2, a.p.N("aspect", 1.0));
       const double ang = a.p.N("angle", 0.0) * 3.14159265358979323846 / 180.0;
       const double ca = std::cos(ang), sa = std::sin(ang);
@@ -481,9 +672,11 @@ namespace moho::editor::gpu
       p.edge = std::max(0.005f, static_cast<float>(a.p.N("edge", 0.08)));
       p.power = std::max(0.2f, static_cast<float>(a.p.N("power", 1.4)));
       std::vector<float> tab(16u, 0.0f);
-      if (!PutCellMap(tab, 0, sh, nscale, 0.0, 0.0)) return OpResult::Unsupported;
+      if (!PutCellMap(tab, 0, sh, nscale, 0.0, 0.0))
+        return OpResult::Unsupported;
       std::unique_ptr<Resource> octBuf;
-      if (!UploadVec(ex, tab, octBuf, err)) return OpResult::Failed;
+      if (!UploadVec(ex, tab, octBuf, err))
+        return OpResult::Failed;
       p.w = static_cast<std::uint32_t>(sh.w);
       Bindings b;
       b.Srv(1, *octBuf);

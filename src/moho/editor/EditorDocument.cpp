@@ -44,7 +44,9 @@ namespace moho::editor
     // its old answer (same margin as ed_sim_terrain_changed).
     constexpr int kPathMargin = 10;
 
-    [[nodiscard]] gpg::Rect2i ToRect2i(const CellRect& r)
+    [[nodiscard]] gpg::Rect2i ToRect2i(
+      const CellRect& r
+    )
     {
       gpg::Rect2i out{};
       out.x0 = r.x0;
@@ -64,28 +66,39 @@ namespace moho::editor
     }
 
     // The projection: view field, shading, mesh refresh now; sim field later through the queue.
-    void ProjectHeights(const CellRect& rect, const std::uint16_t* const words)
+    void ProjectHeights(
+      const CellRect& rect,
+      const std::uint16_t* const words
+    )
     {
-      moho::edoverlay::NotifyHeights(rect.x0, rect.z0, rect.x1, rect.z1);   // the slope view re-rates what looks at these samples
+      moho::edoverlay::NotifyHeights(
+        rect.x0, rect.z0, rect.x1, rect.z1
+      ); // the slope view re-rates what looks at these samples
       if (IWldTerrainRes* const res = ActiveTerrain(); res != nullptr) {
         if (CHeightField* const view = res->GetHeightField(); view != nullptr) {
           const gpg::Rect2i r = ToRect2i(rect);
           view->SetElevationRectRaw(r, words, rect.Width());
-          // Everything derived from the heights is recomputed over the changed rectangle GROWN by kDerivedDataPad samples (EdDirtyRect.h): a normal map texel reads the
-          // samples i .. i + 1 (a changed sample also changes the texel to its left / top) and the engine reads the end of its rectangle as exclusive; the tier error
-          // cells share their corner samples with the cell beside them. A tight rectangle left a one texel line of old normals / old error on its border: a straight
-          // crease around every brushed rectangle. Clamped to the field: the field copies below are inclusive.
-          const DirtyRect grown = PadDirtyRect(DirtyRect{rect.x0, rect.z0, rect.x1, rect.z1}, kDerivedDataPad, view->Width(), view->Height(), 1);
+          // Everything derived from the heights is recomputed over the changed rectangle GROWN by kDerivedDataPad
+          // samples (EdDirtyRect.h): a normal map texel reads the samples i .. i + 1 (a changed sample also changes the
+          // texel to its left / top) and the engine reads the end of its rectangle as exclusive; the tier error cells
+          // share their corner samples with the cell beside them. A tight rectangle left a one texel line of old
+          // normals / old error on its border: a straight crease around every brushed rectangle. Clamped to the field:
+          // the field copies below are inclusive.
+          const DirtyRect grown = PadDirtyRect(
+            DirtyRect{rect.x0, rect.z0, rect.x1, rect.z1}, kDerivedDataPad, view->Width(), view->Height(), 1
+          );
           gpg::Rect2i dirty{};
           dirty.x0 = grown.x0;
           dirty.z0 = grown.z0;
           dirty.x1 = grown.x1;
           dirty.z1 = grown.z1;
           view->UpdateError(dirty);
-          // NotifyMapChange = (finalize once) + UpdateNormalMap + a queue entry that CWldTerrainRes::SyncTerrain later copies out of the SIM field over the view field. In
-          // the editor the sim field only receives the edit at its next beat (ApplyPendingHeightEdits), so a sync between the edit and that beat copied the OLD heights over the
-          // view (normals already new, mesh old, and a later dab's normals computed from the old heights: borders at the rectangles). The view is the editor's own projection
-          // and already holds the heights, so once the terrain is finalized only the normal map is refreshed and no copy is queued.
+          // NotifyMapChange = (finalize once) + UpdateNormalMap + a queue entry that CWldTerrainRes::SyncTerrain later
+          // copies out of the SIM field over the view field. In the editor the sim field only receives the edit at its
+          // next beat (ApplyPendingHeightEdits), so a sync between the edit and that beat copied the OLD heights over
+          // the view (normals already new, mesh old, and a later dab's normals computed from the old heights: borders
+          // at the rectangles). The view is the editor's own projection and already holds the heights, so once the
+          // terrain is finalized only the normal map is refreshed and no copy is queued.
           if (res->GetBool()) {
             res->UpdateNormalMap(dirty);
           } else {
@@ -112,7 +125,9 @@ namespace moho::editor
     return gDocument;
   }
 
-  bool AttachDocument(const bool force)
+  bool AttachDocument(
+    const bool force
+  )
   {
     IWldTerrainRes* const res = ActiveTerrain();
     CHeightField* const view = res != nullptr ? res->GetHeightField() : nullptr;
@@ -121,8 +136,10 @@ namespace moho::editor
     }
     const int width = view->Width();
     const int height = view->Height();
-    if (!force && gDocument.Valid() && gAttachedTerrain == res && gViewField == view && gDocument.Width() == width &&
-        gDocument.Height() == height) {
+    if (
+      !force && gDocument.Valid() && gAttachedTerrain == res && gViewField == view && gDocument.Width() == width &&
+      gDocument.Height() == height
+    ) {
       return true;
     }
     std::vector<std::uint16_t> words(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
@@ -144,7 +161,9 @@ namespace moho::editor
     return true;
   }
 
-  std::size_t ApplyPendingHeightEdits(Sim* const sim)
+  std::size_t ApplyPendingHeightEdits(
+    Sim* const sim
+  )
   {
     if (sim == nullptr || gQueueSize.load(std::memory_order_acquire) == 0) {
       return 0;
@@ -167,7 +186,13 @@ namespace moho::editor
       // outside a live sim the sim and the view may share one field: it was written by the sink already
       if (field != gViewField) {
         field->SetElevationRectRaw(r, edit.words.data(), edit.rect.Width());
-        const DirtyRect grown = PadDirtyRect(DirtyRect{edit.rect.x0, edit.rect.z0, edit.rect.x1, edit.rect.z1}, kDerivedDataPad, field->Width(), field->Height(), 1);
+        const DirtyRect grown = PadDirtyRect(
+          DirtyRect{edit.rect.x0, edit.rect.z0, edit.rect.x1, edit.rect.z1},
+          kDerivedDataPad,
+          field->Width(),
+          field->Height(),
+          1
+        );
         gpg::Rect2i errorRect{};
         errorRect.x0 = grown.x0;
         errorRect.z0 = grown.z0;
@@ -187,7 +212,10 @@ namespace moho::editor
     return work.size();
   }
 
-  std::uint64_t SimFieldChecksum(Sim* const sim, const CellRect& requested)
+  std::uint64_t SimFieldChecksum(
+    Sim* const sim,
+    const CellRect& requested
+  )
   {
     if (sim == nullptr || sim->mMapData == nullptr || sim->mMapData->mHeightField.get() == nullptr) {
       return 0;
@@ -212,7 +240,9 @@ namespace moho::editor
     return MapDocument::ChecksumWords(rect, words.data());
   }
 
-  std::string HexChecksum(const std::uint64_t value)
+  std::string HexChecksum(
+    const std::uint64_t value
+  )
   {
     char text[24];
     std::snprintf(text, sizeof(text), "%016llx", static_cast<unsigned long long>(value));
@@ -228,7 +258,9 @@ namespace moho::editor
     }
   } // namespace
 
-  void OnSessionEnd(void (*const handler)())
+  void OnSessionEnd(
+    void (*const handler)()
+  )
   {
     SessionEndHandlers().push_back(handler);
   }
@@ -252,8 +284,16 @@ namespace moho::editor
     /** Hooked into WLD_Teardown through the engine's teardown-callback vector (the lane SelectionListener uses). */
     struct EditorSessionListener final : ISessionListener
     {
-      void AttachToSessionListenerLane(CWldSession* /*session*/) override {}
-      void DetachFromSessionListenerLane(CWldSession* /*session*/) override { EndSession(); }
+      void AttachToSessionListenerLane(
+        CWldSession* /*session*/
+      ) override
+      {}
+      void DetachFromSessionListenerLane(
+        CWldSession* /*session*/
+      ) override
+      {
+        EndSession();
+      }
     };
 
     [[maybe_unused]] const bool kEditorSessionListenerInit = []() noexcept {
@@ -264,14 +304,21 @@ namespace moho::editor
   } // namespace
 } // namespace moho::editor
 
-// Height edits the editor committed since the last beat reach the sim's field at the start of its next beat, on the sim thread: the engine's per-beat hook
-// (moho/sim/SimEditorHook.h, null in the game; docs/projects/MAP_EDITOR_DESIGN.md, commit path). A single atomic read when nothing is queued.
+// Height edits the editor committed since the last beat reach the sim's field at the start of its next beat, on the sim
+// thread: the engine's per-beat hook (moho/sim/SimEditorHook.h, null in the game; docs/projects/MAP_EDITOR_DESIGN.md,
+// commit path). A single atomic read when nothing is queued.
 namespace moho::editor
 {
   void InstallSimBeatHook()
   {
-    moho::gSimBeforeBeat = [](moho::Sim& sim) { (void)ApplyPendingHeightEdits(&sim); };
-    moho::gSimGcDue = [](const int heapKb, const float seconds) { return perf::SimGcDue(heapKb, seconds); };
-    moho::gSimGcDone = [](const int heapKb) { perf::SimGcDone(heapKb); };
+    moho::gSimBeforeBeat = [](moho::Sim& sim) {
+      (void)ApplyPendingHeightEdits(&sim);
+    };
+    moho::gSimGcDue = [](const int heapKb, const float seconds) {
+      return perf::SimGcDue(heapKb, seconds);
+    };
+    moho::gSimGcDone = [](const int heapKb) {
+      perf::SimGcDone(heapKb);
+    };
   }
 } // namespace moho::editor

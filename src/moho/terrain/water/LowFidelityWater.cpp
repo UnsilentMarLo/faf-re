@@ -44,7 +44,9 @@ namespace moho
       float z;
     };
 
-    [[nodiscard]] WaterExtents2D GetWaterMapExtents(const IWldTerrainRes& terrainResource)
+    [[nodiscard]] WaterExtents2D GetWaterMapExtents(
+      const IWldTerrainRes& terrainResource
+    )
     {
       const CHeightField* const field = terrainResource.mMap->mHeightField.get();
       const float halfWidth = static_cast<float>((field->width - 1) >> 1);
@@ -52,14 +54,21 @@ namespace moho
       return {halfWidth * 2.0f, halfHeight * 2.0f};
     }
 
-    void SetShaderVarMem(ShaderVar& shaderVar, const std::uint32_t floatCount, const float* const values)
+    void SetShaderVarMem(
+      ShaderVar& shaderVar,
+      const std::uint32_t floatCount,
+      const float* const values
+    )
     {
       if (shaderVar.Exists()) {
         shaderVar.mEffectVariable->SetFloatArray(floatCount, values);
       }
     }
 
-    void BindTextureShaderVar(ShaderVar& shaderVar, const boost::shared_ptr<ID3DTextureSheet>& texture)
+    void BindTextureShaderVar(
+      ShaderVar& shaderVar,
+      const boost::shared_ptr<ID3DTextureSheet>& texture
+    )
     {
       shaderVar.GetTexture(boost::static_pointer_cast<CD3DDynamicTextureSheet>(texture));
     }
@@ -94,7 +103,9 @@ namespace moho
    * Rebuilds one low-fidelity water quad vertex/index-sheet pair from the
    * current terrain map dimensions and water elevation.
    */
-  bool LowFidelityWater::InitVerts(IWldTerrainRes* const terrainRes)
+  bool LowFidelityWater::InitVerts(
+    IWldTerrainRes* const terrainRes
+  )
   {
     CD3DDevice* const device = D3D_GetDevice();
     ID3DDeviceResources* const resources = device->GetResources();
@@ -176,7 +187,9 @@ namespace moho
    * What it does:
    * No-op water alpha-mask lane retained for low-fidelity slot parity.
    */
-  bool LowFidelityWater::RenderWaterLayerAlphaMask(const GeomCamera3* const /*camera*/)
+  bool LowFidelityWater::RenderWaterLayerAlphaMask(
+    const GeomCamera3* const /*camera*/
+  )
   {
     return true;
   }
@@ -201,9 +214,13 @@ namespace moho
     (void)refractionTexture;
     (void)reflectionTexture;
 
-    // EDITOR: a map with its water switched off keeps the surface at kDisabledWaterElevation (-10000), below every terrain pixel: the draw is rejected by the depth test
-    // everywhere (but under the terrain skirt seen from outside the map). ren_WaterSkipDisabled 0 draws it as before.
-    if (moho::ren_WaterSkipDisabled && mTerrainRes != nullptr && mTerrainRes->mMap != nullptr && mTerrainRes->mMap->mWaterEnabled == 0) {
+    // EDITOR: a map with its water switched off keeps the surface at kDisabledWaterElevation (-10000), below every
+    // terrain pixel: the draw is rejected by the depth test everywhere (but under the terrain skirt seen from outside
+    // the map). ren_WaterSkipDisabled 0 draws it as before.
+    if (
+      moho::ren_WaterSkipDisabled && mTerrainRes != nullptr && mTerrainRes->mMap != nullptr &&
+      mTerrainRes->mMap->mWaterEnabled == 0
+    ) {
       return true;
     }
 

@@ -1,11 +1,15 @@
 // Editor natives for image files and the Windows file dialogs (heightmap import / export, later textures and previews):
 //
-//   ed_image_write16(path, w, h, values)   -> true | nil, message    16-bit greyscale; `.raw` = raw little endian words, otherwise PNG / TIFF by extension
-//   ed_image_read16(path, tw, th)          -> values, w, h | nil, message   16-bit greyscale of any WIC format (PNG, TIFF, BMP, JPEG ...) or a square
-//                                             `.raw`; resampled (bilinear) to tw x th when those are given and differ from the file's size
-//   ed_file_dialog(save, title, filter, name) -> path | nil          the common dialog; `filter` is "Description|*.png;*.raw|Other|*.*"
+//   ed_image_write16(path, w, h, values)   -> true | nil, message    16-bit greyscale; `.raw` = raw little endian
+//   words, otherwise PNG / TIFF by extension ed_image_read16(path, tw, th)          -> values, w, h | nil, message
+//   16-bit greyscale of any WIC format (PNG, TIFF, BMP, JPEG ...) or a square
+//                                             `.raw`; resampled (bilinear) to tw x th when those are given and differ
+//                                             from the file's size
+//   ed_file_dialog(save, title, filter, name) -> path | nil          the common dialog; `filter` is
+//   "Description|*.png;*.raw|Other|*.*"
 //
-// `values` is a table of numbers 0..65535, row major. The natives run on the UI thread (the Lua UI thread) and initialise COM for WIC themselves.
+// `values` is a table of numbers 0..65535, row major. The natives run on the UI thread (the Lua UI thread) and
+// initialise COM for WIC themselves.
 
 #include <algorithm>
 #include <cmath>
@@ -28,7 +32,9 @@
 
 namespace
 {
-  std::wstring Widen(const char* const utf8)
+  std::wstring Widen(
+    const char* const utf8
+  )
   {
     if (utf8 == nullptr) {
       return std::wstring();
@@ -43,18 +49,23 @@ namespace
     return out;
   }
 
-  std::string Narrow(const std::wstring& wide)
+  std::string Narrow(
+    const std::wstring& wide
+  )
   {
     if (wide.empty()) {
       return std::string();
     }
-    const int n = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+    const int n =
+      WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
     std::string out(static_cast<std::size_t>(n), '\0');
     WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), out.data(), n, nullptr, nullptr);
     return out;
   }
 
-  std::wstring Extension(const std::wstring& path)
+  std::wstring Extension(
+    const std::wstring& path
+  )
   {
     const std::size_t dot = path.find_last_of(L'.');
     if (dot == std::wstring::npos) {
@@ -73,7 +84,7 @@ namespace
     ComScope()
     {
       const HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-      uninit = SUCCEEDED(hr);       // RPC_E_CHANGED_MODE: COM is already up in another mode, which is fine for WIC
+      uninit = SUCCEEDED(hr); // RPC_E_CHANGED_MODE: COM is already up in another mode, which is fine for WIC
     }
     ~ComScope()
     {
@@ -93,20 +104,32 @@ namespace
         p->Release();
       }
     }
-    T** operator&() { return &p; }
-    T* operator->() const { return p; }
+    T** operator&()
+    {
+      return &p;
+    }
+    T* operator->() const
+    {
+      return p;
+    }
   };
 
-  int Fail(lua_State* const L, const char* const message)
+  int Fail(
+    lua_State* const L,
+    const char* const message
+  )
   {
     lua_pushnil(L);
     lua_pushstring(L, message);
     return 2;
   }
 
-  // ---- ed_image_write16 ------------------------------------------------------------------------------------------------------------------
+  // ---- ed_image_write16
+  // ------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_EdImageWrite16(lua_State* const L)
+  int __cdecl cfunc_EdImageWrite16(
+    lua_State* const L
+  )
   {
     const char* const utf8 = lua_tostring(L, 1);
     const int w = static_cast<int>(luaL_checknumber(L, 2));
@@ -151,30 +174,46 @@ namespace
     Ptr<IWICBitmapEncoder> encoder;
     Ptr<IWICBitmapFrameEncode> frame;
     Ptr<IPropertyBag2> options;
-    if (FAILED(factory->CreateStream(&stream)) || FAILED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE)) ||
-        FAILED(factory->CreateEncoder(container, nullptr, &encoder)) || FAILED(encoder->Initialize(stream.p, WICBitmapEncoderNoCache)) ||
-        FAILED(encoder->CreateNewFrame(&frame, &options)) || FAILED(frame->Initialize(options.p)) ||
-        FAILED(frame->SetSize(static_cast<UINT>(w), static_cast<UINT>(h)))) {
+    if (
+      FAILED(factory->CreateStream(&stream)) || FAILED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE)) ||
+      FAILED(factory->CreateEncoder(container, nullptr, &encoder)) ||
+      FAILED(encoder->Initialize(stream.p, WICBitmapEncoderNoCache)) ||
+      FAILED(encoder->CreateNewFrame(&frame, &options)) || FAILED(frame->Initialize(options.p)) ||
+      FAILED(frame->SetSize(static_cast<UINT>(w), static_cast<UINT>(h)))
+    ) {
       return Fail(L, "cannot create the image");
     }
     WICPixelFormatGUID format = GUID_WICPixelFormat16bppGray;
     if (FAILED(frame->SetPixelFormat(&format)) || format != GUID_WICPixelFormat16bppGray) {
       return Fail(L, "the format has no 16-bit greyscale");
     }
-    if (FAILED(frame->WritePixels(static_cast<UINT>(h), static_cast<UINT>(w) * 2U, static_cast<UINT>(count * 2),
-                                  reinterpret_cast<BYTE*>(words.data()))) ||
-        FAILED(frame->Commit()) || FAILED(encoder->Commit())) {
+    if (
+      FAILED(frame->WritePixels(
+        static_cast<UINT>(h),
+        static_cast<UINT>(w) * 2U,
+        static_cast<UINT>(count * 2),
+        reinterpret_cast<BYTE*>(words.data())
+      )) ||
+      FAILED(frame->Commit()) || FAILED(encoder->Commit())
+    ) {
       return Fail(L, "cannot write the image");
     }
     lua_pushboolean(L, 1);
     return 1;
   }
 
-  // ---- ed_image_read16 -------------------------------------------------------------------------------------------------------------------
+  // ---- ed_image_read16
+  // -------------------------------------------------------------------------------------------------------------------
 
-  bool ReadRaw(const std::wstring& path, std::vector<std::uint16_t>& out, int& w, int& h)
+  bool ReadRaw(
+    const std::wstring& path,
+    std::vector<std::uint16_t>& out,
+    int& w,
+    int& h
+  )
   {
-    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE file =
+      CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
       return false;
     }
@@ -195,7 +234,12 @@ namespace
     return ok && read == words * 2;
   }
 
-  bool ReadWic(const std::wstring& path, std::vector<std::uint16_t>& out, int& w, int& h)
+  bool ReadWic(
+    const std::wstring& path,
+    std::vector<std::uint16_t>& out,
+    int& w,
+    int& h
+  )
   {
     Ptr<IWICImagingFactory> factory;
     if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)))) {
@@ -204,9 +248,15 @@ namespace
     Ptr<IWICBitmapDecoder> decoder;
     Ptr<IWICBitmapFrameDecode> frame;
     Ptr<IWICFormatConverter> converter;
-    if (FAILED(factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder)) ||
-        FAILED(decoder->GetFrame(0, &frame)) || FAILED(factory->CreateFormatConverter(&converter)) ||
-        FAILED(converter->Initialize(frame.p, GUID_WICPixelFormat16bppGray, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) {
+    if (
+      FAILED(factory->CreateDecoderFromFilename(
+        path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder
+      )) ||
+      FAILED(decoder->GetFrame(0, &frame)) || FAILED(factory->CreateFormatConverter(&converter)) ||
+      FAILED(converter->Initialize(
+        frame.p, GUID_WICPixelFormat16bppGray, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom
+      ))
+    ) {
       return false;
     }
     UINT uw = 0;
@@ -217,10 +267,14 @@ namespace
     w = static_cast<int>(uw);
     h = static_cast<int>(uh);
     out.resize(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
-    return SUCCEEDED(converter->CopyPixels(nullptr, uw * 2U, static_cast<UINT>(out.size() * 2), reinterpret_cast<BYTE*>(out.data())));
+    return SUCCEEDED(
+      converter->CopyPixels(nullptr, uw * 2U, static_cast<UINT>(out.size() * 2), reinterpret_cast<BYTE*>(out.data()))
+    );
   }
 
-  int __cdecl cfunc_EdImageRead16(lua_State* const L)
+  int __cdecl cfunc_EdImageRead16(
+    lua_State* const L
+  )
   {
     const char* const utf8 = lua_tostring(L, 1);
     const int tw = lua_type(L, 2) == LUA_TNUMBER ? static_cast<int>(lua_tonumber(L, 2)) : 0;
@@ -256,7 +310,9 @@ namespace
           const int x0 = std::min(w - 2, static_cast<int>(fx));
           const float tx = fx - static_cast<float>(x0);
           const auto at = [&](const int xx, const int zz) {
-            return static_cast<float>(src[static_cast<std::size_t>(zz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(xx)]);
+            return static_cast<float>(
+              src[static_cast<std::size_t>(zz) * static_cast<std::size_t>(w) + static_cast<std::size_t>(xx)]
+            );
           };
           const float top = at(x0, z0) * (1.0f - tx) + at(x0 + 1, z0) * tx;
           const float bottom = at(x0, z0 + 1) * (1.0f - tx) + at(x0 + 1, z0 + 1) * tx;
@@ -278,21 +334,37 @@ namespace
     return 3;
   }
 
-  // ---- files inside the game's archives ---------------------------------------------------------------------------------------------------
+  // ---- files inside the game's archives
+  // ---------------------------------------------------------------------------------------------------
 
-  // The virtual file system resolves a texture of the game data to a path like `...\gamedata\env.scd\env\evergreen\layers\x.dds`: a name inside a zip archive. This
-  // reads such a path (or a plain file) into memory: finds the archive part (.scd / .nx2 / .zip), looks the entry up in the zip central directory and inflates it.
-  bool ReadAll(const std::string& path, std::vector<std::uint8_t>& out)
+  // The virtual file system resolves a texture of the game data to a path like
+  // `...\gamedata\env.scd\env\evergreen\layers\x.dds`: a name inside a zip archive. This reads such a path (or a plain
+  // file) into memory: finds the archive part (.scd / .nx2 / .zip), looks the entry up in the zip central directory and
+  // inflates it.
+  bool ReadAll(
+    const std::string& path,
+    std::vector<std::uint8_t>& out
+  )
   {
     std::string p = path;
     for (char& c : p) {
-      if (c == '\\') c = '/';
+      if (c == '\\')
+        c = '/';
     }
     std::string lower = p;
-    for (char& c : lower) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    for (char& c : lower)
+      c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
 
     const auto readPlain = [&](const std::string& file) {
-      HANDLE h = CreateFileW(Widen(file.c_str()).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      HANDLE h = CreateFileW(
+        Widen(file.c_str()).c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+      );
       if (h == INVALID_HANDLE_VALUE) {
         return false;
       }
@@ -309,7 +381,7 @@ namespace
     for (const char* ext : {".scd/", ".nx2/", ".zip/"}) {
       const std::size_t at = lower.find(ext);
       if (at != std::string::npos && (split == std::string::npos || at < split)) {
-        split = at + 4;           // the archive path ends after the extension
+        split = at + 4; // the archive path ends after the extension
       }
     }
     if (split == std::string::npos) {
@@ -318,7 +390,15 @@ namespace
     const std::string archive = p.substr(0, split);
     std::string inner = lower.substr(split + 1);
 
-    HANDLE h = CreateFileW(Widen(archive.c_str()).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE h = CreateFileW(
+      Widen(archive.c_str()).c_str(),
+      GENERIC_READ,
+      FILE_SHARE_READ,
+      nullptr,
+      OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr
+    );
     if (h == INVALID_HANDLE_VALUE) {
       return false;
     }
@@ -375,7 +455,8 @@ namespace
             std::memcpy(&local, cd.data() + pos + 42, 4);
             std::string name(reinterpret_cast<const char*>(cd.data() + pos + 46), nameLen);
             for (char& c : name) {
-              if (c == '\\') c = '/';
+              if (c == '\\')
+                c = '/';
               c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
             }
             if (name == inner) {
@@ -416,10 +497,14 @@ namespace
     return done;
   }
 
-  // ---- ed_image_avg ----------------------------------------------------------------------------------------------------------------------
+  // ---- ed_image_avg
+  // ----------------------------------------------------------------------------------------------------------------------
 
-  // ed_image_avg(path) -> r, g, b   the average colour (0..255) of an image (alpha-weighted); nil when it cannot be read
-  int __cdecl cfunc_EdImageAvg(lua_State* const L)
+  // ed_image_avg(path) -> r, g, b   the average colour (0..255) of an image (alpha-weighted); nil when it cannot be
+  // read
+  int __cdecl cfunc_EdImageAvg(
+    lua_State* const L
+  )
   {
     const char* const utf8 = lua_tostring(L, 1);
     if (utf8 == nullptr) {
@@ -438,15 +523,23 @@ namespace
     Ptr<IWICBitmapDecoder> decoder;
     Ptr<IWICBitmapFrameDecode> frame;
     Ptr<IWICFormatConverter> converter;
-    if (FAILED(factory->CreateStream(&memory)) || FAILED(memory->InitializeFromMemory(bytes.data(), static_cast<DWORD>(bytes.size()))) ||
-        FAILED(factory->CreateDecoderFromStream(memory.p, nullptr, WICDecodeMetadataCacheOnDemand, &decoder)) ||
-        FAILED(decoder->GetFrame(0, &frame)) || FAILED(factory->CreateFormatConverter(&converter)) ||
-        FAILED(converter->Initialize(frame.p, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) {
+    if (
+      FAILED(factory->CreateStream(&memory)) ||
+      FAILED(memory->InitializeFromMemory(bytes.data(), static_cast<DWORD>(bytes.size()))) ||
+      FAILED(factory->CreateDecoderFromStream(memory.p, nullptr, WICDecodeMetadataCacheOnDemand, &decoder)) ||
+      FAILED(decoder->GetFrame(0, &frame)) || FAILED(factory->CreateFormatConverter(&converter)) ||
+      FAILED(converter->Initialize(
+        frame.p, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom
+      ))
+    ) {
       return Fail(L, "cannot decode the image");
     }
     UINT w = 0;
     UINT h = 0;
-    if (FAILED(converter->GetSize(&w, &h)) || w == 0 || h == 0 || static_cast<unsigned long long>(w) * h > 64ULL * 1024 * 1024) {
+    if (
+      FAILED(converter->GetSize(&w, &h)) || w == 0 || h == 0 ||
+      static_cast<unsigned long long>(w) * h > 64ULL * 1024 * 1024
+    ) {
       return Fail(L, "bad image size");
     }
     std::vector<std::uint8_t> px(static_cast<std::size_t>(w) * h * 4);
@@ -473,9 +566,13 @@ namespace
     return 3;
   }
 
-  // ---- ed_scmap_set_preview --------------------------------------------------------------------------------------------------------------
+  // ---- ed_scmap_set_preview
+  // --------------------------------------------------------------------------------------------------------------
 
-  void Put32(std::string& out, const std::uint32_t v)
+  void Put32(
+    std::string& out,
+    const std::uint32_t v
+  )
   {
     for (int i = 0; i < 4; ++i) {
       out.push_back(static_cast<char>((v >> (8 * i)) & 0xFFu));
@@ -483,9 +580,12 @@ namespace
   }
 
   // ed_scmap_set_preview(path, w, h, pixels) -> true | nil, message
-  // Replaces the preview image of an .scmap file (the blob after the 30 byte header: an i32 byte count and an uncompressed ARGB DDS) by w x h pixels,
-  // `pixels` being numbers 0xRRGGBB, row major. The rest of the file is copied unchanged.
-  int __cdecl cfunc_EdScmapSetPreview(lua_State* const L)
+  // Replaces the preview image of an .scmap file (the blob after the 30 byte header: an i32 byte count and an
+  // uncompressed ARGB DDS) by w x h pixels, `pixels` being numbers 0xRRGGBB, row major. The rest of the file is copied
+  // unchanged.
+  int __cdecl cfunc_EdScmapSetPreview(
+    lua_State* const L
+  )
   {
     const char* const utf8 = lua_tostring(L, 1);
     const int w = static_cast<int>(luaL_checknumber(L, 2));
@@ -497,7 +597,9 @@ namespace
     const std::wstring path = Widen(utf8);
     std::string file;
     {
-      HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      HANDLE f = CreateFileW(
+        path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr
+      );
       if (f == INVALID_HANDLE_VALUE) {
         return Fail(L, "cannot open the map file");
       }
@@ -548,9 +650,10 @@ namespace
     const std::size_t count = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
     for (std::size_t i = 0; i < count; ++i) {
       lua_rawgeti(L, 4, static_cast<int>(i + 1));
-      const std::uint32_t rgb = static_cast<std::uint32_t>(std::max(0.0, static_cast<double>(lua_tonumber(L, -1)))) & 0xFFFFFFu;
+      const std::uint32_t rgb =
+        static_cast<std::uint32_t>(std::max(0.0, static_cast<double>(lua_tonumber(L, -1)))) & 0xFFFFFFu;
       lua_settop(L, -2);
-      Put32(dds, 0xFF000000u | rgb);        // B, G, R, A in memory = 0xAARRGGBB little endian
+      Put32(dds, 0xFF000000u | rgb); // B, G, R, A in memory = 0xAARRGGBB little endian
     }
 
     std::string out;
@@ -573,9 +676,12 @@ namespace
     return 1;
   }
 
-  // ---- ed_file_dialog --------------------------------------------------------------------------------------------------------------------
+  // ---- ed_file_dialog
+  // --------------------------------------------------------------------------------------------------------------------
 
-  int __cdecl cfunc_EdFileDialog(lua_State* const L)
+  int __cdecl cfunc_EdFileDialog(
+    lua_State* const L
+  )
   {
     const bool save = lua_toboolean(L, 1) != 0;
     const char* const title = lua_tostring(L, 2);
@@ -606,7 +712,8 @@ namespace
     ofn.lpstrFile = buffer;
     ofn.nMaxFile = static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0]));
     ofn.lpstrTitle = caption.c_str();
-    ofn.Flags = OFN_EXPLORER | OFN_NOCHANGEDIR | (save ? (OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST) : (OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST));
+    ofn.Flags = OFN_EXPLORER | OFN_NOCHANGEDIR |
+      (save ? (OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST) : (OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST));
     const BOOL ok = save ? GetSaveFileNameW(&ofn) : GetOpenFileNameW(&ofn);
     if (!ok) {
       lua_pushnil(L);
@@ -631,21 +738,55 @@ namespace
     EdImageIOLuaBootstrap()
     {
       auto& set = UserLuaInitSet();
-      (void)new moho::CScrLuaBinder(set, "ed_image_write16", &cfunc_EdImageWrite16, nullptr, "<global>", "ed_image_write16(path, w, h, values) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_image_read16", &cfunc_EdImageRead16, nullptr, "<global>", "ed_image_read16(path[, tw, th]) -> values, w, h | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_image_avg", &cfunc_EdImageAvg, nullptr, "<global>", "ed_image_avg(path) -> r, g, b");
-      (void)new moho::CScrLuaBinder(set, "ed_scmap_set_preview", &cfunc_EdScmapSetPreview, nullptr, "<global>", "ed_scmap_set_preview(path, w, h, pixels) -> true | nil, message");
-      (void)new moho::CScrLuaBinder(set, "ed_file_dialog", &cfunc_EdFileDialog, nullptr, "<global>", "ed_file_dialog(save, title, filter, name) -> path | nil");
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_image_write16",
+        &cfunc_EdImageWrite16,
+        nullptr,
+        "<global>",
+        "ed_image_write16(path, w, h, values) -> true | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_image_read16",
+        &cfunc_EdImageRead16,
+        nullptr,
+        "<global>",
+        "ed_image_read16(path[, tw, th]) -> values, w, h | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set, "ed_image_avg", &cfunc_EdImageAvg, nullptr, "<global>", "ed_image_avg(path) -> r, g, b"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_scmap_set_preview",
+        &cfunc_EdScmapSetPreview,
+        nullptr,
+        "<global>",
+        "ed_scmap_set_preview(path, w, h, pixels) -> true | nil, message"
+      );
+      (void)new moho::CScrLuaBinder(
+        set,
+        "ed_file_dialog",
+        &cfunc_EdFileDialog,
+        nullptr,
+        "<global>",
+        "ed_file_dialog(save, title, filter, name) -> path | nil"
+      );
     }
   };
 
   const EdImageIOLuaBootstrap gEdImageIOLuaBootstrap{};
 } // namespace
 
-// EDITOR: file reader of EdImageIO (plain files and entries inside the game's archives) for the icon natives (EdIcon.cpp).
+// EDITOR: file reader of EdImageIO (plain files and entries inside the game's archives) for the icon natives
+// (EdIcon.cpp).
 namespace moho::edicon
 {
-  bool ReadAllBytes(const std::string& path, std::string& out)
+  bool ReadAllBytes(
+    const std::string& path,
+    std::string& out
+  )
   {
     std::vector<std::uint8_t> bytes;
     if (!ReadAll(path, bytes)) {
@@ -656,10 +797,16 @@ namespace moho::edicon
   }
 } // namespace moho::edicon
 
-// EDITOR: image reader for the field engine (EdField.cpp): 16-bit greyscale of any WIC format or a square raw file, no resampling.
+// EDITOR: image reader for the field engine (EdField.cpp): 16-bit greyscale of any WIC format or a square raw file, no
+// resampling.
 namespace moho::edfield
 {
-  bool ReadImage16(const std::string& utf8Path, std::vector<std::uint16_t>& out, int& w, int& h)
+  bool ReadImage16(
+    const std::string& utf8Path,
+    std::vector<std::uint16_t>& out,
+    int& w,
+    int& h
+  )
   {
     const std::wstring path = Widen(utf8Path.c_str());
     const std::wstring ext = Extension(path);

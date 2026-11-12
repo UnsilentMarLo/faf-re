@@ -12,7 +12,6 @@ namespace moho
   class CUIManager final : public IUIManager
   {
   public:
-
     /**
      * Address: 0x0084C9C0 (FUN_0084C9C0)
      *
@@ -66,8 +65,8 @@ namespace moho
     /**
      * Editor addition: registers an extra root-frame window (a pop-out panel window, moho/editor/EdPopout.cpp). Same as
      * `AddFrame` except that the window is not counted as a display head (`mNumDisplayHeads`, what `GetNumRootFrames`
-     * reports, so FAF's multi-head Lua stays off) and, when a Lua state is already set, its root frame is created at once.
-     * Returns the frame index (stable: pop-out slots are nulled on removal, never erased).
+     * reports, so FAF's multi-head Lua stays off) and, when a Lua state is already set, its root frame is created at
+     * once. Returns the frame index (stable: pop-out slots are nulled on removal, never erased).
      */
     int AddPopoutFrame(wxWindow* window);
 
@@ -163,18 +162,18 @@ namespace moho
     void DebugMouseOverControl(CD3DPrimBatcher* primBatcher) override;
 
   public:
-    std::uint32_t mUnknown04 = 0;           // +0x04
+    std::uint32_t mUnknown04 = 0;                                // +0x04
     gpg::fastvector_n<boost::shared_ptr<CMauiFrame>, 2> mFrames; // +0x08
-    WeakPtr<CMauiCursor> mCursor;           // +0x28
-    LuaPlus::LuaState* mLuaState = nullptr; // +0x30
-    std::uint32_t mUnknown34 = 0;           // +0x34
-    gpg::fastvector_n<wxWindow*, 2> mInputWindows; // +0x38
-    gpg::fastvector_n<wxWindow*, 2> mHostWindows; // +0x50
-    float mUIControlsAlpha = 1.0f;          // +0x68
-    float mUnknown6C = 0.0f;                // +0x6C
-    float mGCTime = 0.0f;                   // +0x70
-    std::uint32_t mUnknown74 = 0;           // +0x74
-    std::uint32_t mNumDisplayHeads = 0;     // editor addition: windows registered by AddFrame (pop-outs excluded)
+    WeakPtr<CMauiCursor> mCursor;                                // +0x28
+    LuaPlus::LuaState* mLuaState = nullptr;                      // +0x30
+    std::uint32_t mUnknown34 = 0;                                // +0x34
+    gpg::fastvector_n<wxWindow*, 2> mInputWindows;               // +0x38
+    gpg::fastvector_n<wxWindow*, 2> mHostWindows;                // +0x50
+    float mUIControlsAlpha = 1.0f;                               // +0x68
+    float mUnknown6C = 0.0f;                                     // +0x6C
+    float mGCTime = 0.0f;                                        // +0x70
+    std::uint32_t mUnknown74 = 0;                                // +0x74
+    std::uint32_t mNumDisplayHeads = 0; // editor addition: windows registered by AddFrame (pop-outs excluded)
   };
 
   static_assert(sizeof(CUIManager::mFrames) == 0x20, "moho::CUIManager::mFrames size must be 0x20");

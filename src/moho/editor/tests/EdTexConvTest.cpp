@@ -14,20 +14,24 @@ namespace dds = moho::editor::dds;
 
 static int gFailures = 0;
 static int gChecks = 0;
-#define CHECK(cond, ...)                               \
-  do {                                                 \
-    ++gChecks;                                         \
-    if (!(cond)) {                                     \
-      ++gFailures;                                     \
-      std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-      std::printf(__VA_ARGS__);                        \
-      std::printf("\n");                               \
-    }                                                  \
+#define CHECK(cond, ...)                                                                                               \
+  do {                                                                                                                 \
+    ++gChecks;                                                                                                         \
+    if (!(cond)) {                                                                                                     \
+      ++gFailures;                                                                                                     \
+      std::printf("FAIL %s:%d: ", __FILE__, __LINE__);                                                                 \
+      std::printf(__VA_ARGS__);                                                                                        \
+      std::printf("\n");                                                                                               \
+    }                                                                                                                  \
   } while (0)
 
 namespace
 {
-  dds::Image Noise(const int w, const int h, unsigned seed)
+  dds::Image Noise(
+    const int w,
+    const int h,
+    unsigned seed
+  )
   {
     dds::Image img;
     img.w = w;
@@ -44,7 +48,10 @@ namespace
   }
 
   // a smooth picture: DXT5 reproduces it closely, so the tests can compare to a tolerance
-  dds::Image Smooth(const int w, const int h)
+  dds::Image Smooth(
+    const int w,
+    const int h
+  )
   {
     dds::Image img;
     img.w = w;
@@ -62,7 +69,12 @@ namespace
     return img;
   }
 
-  std::vector<dds::Px> Decode(const std::string& bytes, int level, int& w, int& h)
+  std::vector<dds::Px> Decode(
+    const std::string& bytes,
+    int level,
+    int& w,
+    int& h
+  )
   {
     dds::Header hd;
     std::vector<dds::Px> px;
@@ -72,8 +84,14 @@ namespace
     return px;
   }
 
-  int Chan(const dds::Px& p, const int c) { return c == 0 ? p.r : c == 1 ? p.g : c == 2 ? p.b : p.a; }
-}
+  int Chan(
+    const dds::Px& p,
+    const int c
+  )
+  {
+    return c == 0 ? p.r : c == 1 ? p.g : c == 2 ? p.b : p.a;
+  }
+} // namespace
 
 int main()
 {
@@ -83,7 +101,8 @@ int main()
     for (const auto& [w, h] : {std::pair{4, 4}, {3, 5}, {16, 16}, {7, 9}, {1, 1}}) {
       const tc::Plane r = tc::Resample(c, w, h);
       bool same = r.w == w && r.h == h;
-      for (const float v : r.v) same = same && std::fabs(v - 0.37f) < 1e-5f;
+      for (const float v : r.v)
+        same = same && std::fabs(v - 0.37f) < 1e-5f;
       CHECK(same, "a constant plane stays constant at %d x %d", w, h);
     }
     tc::Plane g;
@@ -91,43 +110,60 @@ int main()
     g.h = 2;
     g.v = {0, 1, 2, 3, 4, 5, 6, 7};
     const tc::Plane d = tc::Resample(g, 2, 1);
-    CHECK(d.v.size() == 2 && std::fabs(d.v[0] - 2.5f) < 1e-5f && std::fabs(d.v[1] - 4.5f) < 1e-5f, "2 x 2 area average: %f %f", d.v[0], d.v[1]);
+    CHECK(
+      d.v.size() == 2 && std::fabs(d.v[0] - 2.5f) < 1e-5f && std::fabs(d.v[1] - 4.5f) < 1e-5f,
+      "2 x 2 area average: %f %f",
+      d.v[0],
+      d.v[1]
+    );
     // a non integer ratio keeps the mean
     tc::Plane n;
     n.w = 10;
     n.h = 10;
-    for (int i = 0; i < 100; ++i) n.v.push_back(static_cast<float>((i * 37) % 11) / 10.0f);
+    for (int i = 0; i < 100; ++i)
+      n.v.push_back(static_cast<float>((i * 37) % 11) / 10.0f);
     double m0 = 0, m1 = 0;
-    for (const float v : n.v) m0 += v;
+    for (const float v : n.v)
+      m0 += v;
     const tc::Plane r = tc::Resample(n, 4, 4);
-    for (const float v : r.v) m1 += v;
+    for (const float v : r.v)
+      m1 += v;
     CHECK(std::fabs(m0 / 100.0 - m1 / 16.0) < 1e-4, "area average keeps the mean: %f vs %f", m0 / 100.0, m1 / 16.0);
     const tc::Plane up = tc::Resample(g, 8, 4);
-    CHECK(up.w == 8 && up.h == 4 && std::fabs(up.v[0]) < 1e-5f && std::fabs(up.v[7] - 3.0f) < 1e-5f && std::fabs(up.v[3 * 8] - 4.0f) < 1e-5f && std::fabs(up.v[31] - 7.0f) < 1e-5f,
-          "upsampling holds the edge texels: %f %f %f %f", up.v[0], up.v[7], up.v[24], up.v[31]);
+    CHECK(
+      up.w == 8 && up.h == 4 && std::fabs(up.v[0]) < 1e-5f && std::fabs(up.v[7] - 3.0f) < 1e-5f &&
+        std::fabs(up.v[3 * 8] - 4.0f) < 1e-5f && std::fabs(up.v[31] - 7.0f) < 1e-5f,
+      "upsampling holds the edge texels: %f %f %f %f",
+      up.v[0],
+      up.v[7],
+      up.v[24],
+      up.v[31]
+    );
   }
 
   // ---- channel repack is exact (no resampling, no compression) ----
   {
     const dds::Image src = Noise(16, 8, 5);
     tc::Chan ch[4];
-    ch[0].from = tc::From::A;                 // r <- a
-    ch[1].from = tc::From::R;                 // g <- r
-    ch[2].from = tc::From::Const;             // b = 128
+    ch[0].from = tc::From::A;     // r <- a
+    ch[1].from = tc::From::R;     // g <- r
+    ch[2].from = tc::From::Const; // b = 128
     ch[2].value = 128.0f / 255.0f;
-    ch[3].from = tc::From::B;                 // a <- 1 - b
+    ch[3].from = tc::From::B; // a <- 1 - b
     ch[3].invert = true;
     const dds::Image out = tc::Convert(src, 16, 8, ch);
     bool ok = out.w == 16 && out.h == 8;
     for (std::size_t i = 0; i < out.px.size() && ok; ++i) {
-      ok = out.px[i].r == src.px[i].a && out.px[i].g == src.px[i].r && out.px[i].b == 128 && out.px[i].a == 255 - src.px[i].b;
+      ok = out.px[i].r == src.px[i].a && out.px[i].g == src.px[i].r && out.px[i].b == 128 &&
+        out.px[i].a == 255 - src.px[i].b;
     }
     CHECK(ok, "swizzle, constant and inverted channels are exact");
     tc::Chan keep[4];
     const dds::Image same = tc::Convert(src, 16, 8, keep);
     bool eq = true;
     for (std::size_t i = 0; i < same.px.size(); ++i) {
-      eq = eq && same.px[i].r == src.px[i].r && same.px[i].g == src.px[i].g && same.px[i].b == src.px[i].b && same.px[i].a == src.px[i].a;
+      eq = eq && same.px[i].r == src.px[i].r && same.px[i].g == src.px[i].g && same.px[i].b == src.px[i].b &&
+        same.px[i].a == src.px[i].a;
     }
     CHECK(eq, "Keep everywhere is the identity");
     // scale / bias / clamp
@@ -141,15 +177,18 @@ int main()
     bool rok = true;
     for (std::size_t i = 0; i < rough.px.size(); ++i) {
       const float want = std::max(0.45f, std::min(0.92f, src.px[i].a / 255.0f * -0.45f + 0.92f));
-      rok = rok && std::abs(static_cast<int>(rough.px[i].a) - static_cast<int>(want * 255.0f + 0.5f)) <= 1 && rough.px[i].r == src.px[i].r;
+      rok = rok && std::abs(static_cast<int>(rough.px[i].a) - static_cast<int>(want * 255.0f + 0.5f)) <= 1 &&
+        rough.px[i].r == src.px[i].r;
     }
     CHECK(rok, "roughness from spec alpha: scale -0.45, bias 0.92, clamp 0.45..0.92");
-    // a channel that keeps its source but has arithmetic (the converter's "invert the alpha") still works on that channel when the whole picture is converted
+    // a channel that keeps its source but has arithmetic (the converter's "invert the alpha") still works on that
+    // channel when the whole picture is converted
     tc::Chan invA[4];
     invA[3].invert = true;
     const dds::Image ia = tc::Convert(src, 16, 8, invA);
     bool iaok = true;
-    for (std::size_t i = 0; i < ia.px.size(); ++i) iaok = iaok && ia.px[i].a == 255 - src.px[i].a && ia.px[i].r == src.px[i].r && ia.px[i].b == src.px[i].b;
+    for (std::size_t i = 0; i < ia.px.size(); ++i)
+      iaok = iaok && ia.px[i].a == 255 - src.px[i].a && ia.px[i].r == src.px[i].r && ia.px[i].b == src.px[i].b;
     CHECK(iaok, "Keep + invert inverts the channel's own values");
     // luminance
     tc::Chan lum[4];
@@ -164,7 +203,8 @@ int main()
     hc[1].scale = 1.0f;
     const dds::Image hh = tc::Convert(Smooth(32, 32), 32, 32, hc);
     double mean = 0;
-    for (const auto& p : hh.px) mean += p.g;
+    for (const auto& p : hh.px)
+      mean += p.g;
     mean /= static_cast<double>(hh.px.size());
     CHECK(std::fabs(mean / 255.0 - 0.5) < 0.01, "a centred plane has mean 0.5: %f", mean / 255.0);
     // a size change
@@ -183,7 +223,8 @@ int main()
     const auto px = Decode(bytes, 0, w, h);
     int worst = 0;
     for (std::size_t i = 0; i < px.size(); ++i) {
-      for (int c = 0; c < 4; ++c) worst = std::max(worst, std::abs(Chan(px[i], c) - Chan(img.px[i], c)));
+      for (int c = 0; c < 4; ++c)
+        worst = std::max(worst, std::abs(Chan(px[i], c) - Chan(img.px[i], c)));
     }
     CHECK(w == 64 && h == 32 && worst <= 24, "round trip error %d", worst);
     const auto last = Decode(bytes, 6, w, h);
@@ -247,7 +288,8 @@ int main()
     dds::Dxt5MapAlpha(opaque, lut);
     const auto o = Decode(opaque, 0, w, h);
     bool all255 = true;
-    for (const auto& p : o) all255 = all255 && p.a == 255;
+    for (const auto& p : o)
+      all255 = all255 && p.a == 255;
     CHECK(all255, "alpha 255 everywhere");
     // not a table: other channel, centre
     tc::Chan other;
@@ -269,7 +311,8 @@ int main()
     tc::AlphaTable(sb, a);
     tc::AlphaTable(inv, b);
     bool same = true;
-    for (int i = 0; i < 256; ++i) same = same && a[i] == b[i] && a[i] == 255 - i;
+    for (int i = 0; i < 256; ++i)
+      same = same && a[i] == b[i] && a[i] == 255 - i;
     CHECK(same, "scale -1 bias 1 is the inverse");
   }
 
@@ -284,7 +327,8 @@ int main()
       height[k].h = D;
       height[k].v.resize(D * D);
       for (int y = 0; y < D; ++y)
-        for (int x = 0; x < D; ++x) height[k].v[y * D + x] = static_cast<float>((x * 7 + y * 3 + k * 11) % D) / static_cast<float>(D);
+        for (int x = 0; x < D; ++x)
+          height[k].v[y * D + x] = static_cast<float>((x * 7 + y * 3 + k * 11) % D) / static_cast<float>(D);
     }
     const dds::Image atlas = tc::BuildAtlas(S, rough.data(), height.data(), 0.65f, 0.5f);
     CHECK(atlas.w == S && atlas.h == S, "atlas size");
@@ -314,7 +358,9 @@ int main()
         }
       }
     }
-    CHECK(ok, "the shader's atlas2D reads back every layer's own picture in its own orientation (%d texels wrong)", bad);
+    CHECK(
+      ok, "the shader's atlas2D reads back every layer's own picture in its own orientation (%d texels wrong)", bad
+    );
     // the picture repeats twice: a texel one period (D) further right holds the same value
     const dds::Px& a = atlas.px[5 * S + 3];
     const dds::Px& b = atlas.px[5 * S + 3 + D];
@@ -322,7 +368,8 @@ int main()
     // inverse
     const tc::Plane back = tc::AtlasTilePlane(atlas, 5, 3, D, D);
     bool inv = true;
-    for (int i = 0; i < D * D; ++i) inv = inv && std::abs(tc::ToByte(back.v[i]) - tc::ToByte(height[5].v[i])) <= 0;
+    for (int i = 0; i < D * D; ++i)
+      inv = inv && std::abs(tc::ToByte(back.v[i]) - tc::ToByte(height[5].v[i])) <= 0;
     CHECK(inv, "AtlasTilePlane gives the height of layer 4 (tile 6, channel A) back");
     const tc::Plane rb = tc::AtlasTilePlane(atlas, 2, 0, 8, 8);
     CHECK(std::abs(tc::ToByte(rb.v[0]) - tc::ToByte(0.3f)) <= 0, "roughness of tile 3 from channel R");
@@ -330,7 +377,8 @@ int main()
     std::vector<tc::Plane> none(8);
     const dds::Image neutral = tc::BuildAtlas(S, none.data(), none.data(), 0.65f, 0.5f);
     bool allDefault = true;
-    for (const auto& p : neutral.px) allDefault = allDefault && p.r == tc::ToByte(0.65f) && p.b == p.r && p.g == tc::ToByte(0.5f) && p.a == p.g;
+    for (const auto& p : neutral.px)
+      allDefault = allDefault && p.r == tc::ToByte(0.65f) && p.b == p.r && p.g == tc::ToByte(0.5f) && p.a == p.g;
     CHECK(allDefault, "an atlas without pictures is the neutral one (roughness 0.65, height 0.5 in all four channels)");
     // writes as a DXT5 file with mips
     const std::string bytes = dds::EncodeDxt5(atlas, 32);

@@ -1,12 +1,15 @@
-// EDITOR: the geometry of an overlay decal laid on the terrain (EdOverlay.cpp, ed_overlay_decal): a square of `size` world units that follows the ground
-// instead of floating flat at one height, cut into a grid of cells so that
+// EDITOR: the geometry of an overlay decal laid on the terrain (EdOverlay.cpp, ed_overlay_decal): a square of `size`
+// world units that follows the ground instead of floating flat at one height, cut into a grid of cells so that
 //   * it lies on the slope (a flat quad cut through the ground on one side and hovered above it on the other),
-//   * its picture is not distorted: the batcher interpolates the texture coordinates linearly over the screen, which is only right for a quad that is small
+//   * its picture is not distorted: the batcher interpolates the texture coordinates linearly over the screen, which is
+//   only right for a quad that is small
 //     on screen; one big quad seen from close by (strong perspective) showed a skewed, malformed picture.
-// A header-only pure function (no engine types) so it can be tested on its own (moho/editor/tests/EdOverlayGeomTest.cpp).
+// A header-only pure function (no engine types) so it can be tested on its own
+// (moho/editor/tests/EdOverlayGeomTest.cpp).
 //
-// Heights are given by a callback `float h(int ix, int iz)` for the integer sample (ix, iz) in world units, as the height field has one sample per world unit;
-// the ground between the samples is the bilinear blend of the four around it.
+// Heights are given by a callback `float h(int ix, int iz)` for the integer sample (ix, iz) in world units, as the
+// height field has one sample per world unit; the ground between the samples is the bilinear blend of the four around
+// it.
 #pragma once
 
 #include <algorithm>
@@ -16,9 +19,16 @@
 
 namespace moho::editor::overlaygeom
 {
-  /** Height of the ground at a world position: bilinear between the four samples around it; positions outside the field use its edge samples. */
+  /** Height of the ground at a world position: bilinear between the four samples around it; positions outside the field
+   * use its edge samples. */
   template <class Height>
-  [[nodiscard]] inline float GroundAt(const Height& height, const int width, const int depth, const float x, const float z)
+  [[nodiscard]] inline float GroundAt(
+    const Height& height,
+    const int width,
+    const int depth,
+    const float x,
+    const float z
+  )
   {
     const float cx = std::min(std::max(x, 0.0f), static_cast<float>(width - 1));
     const float cz = std::min(std::max(z, 0.0f), static_cast<float>(depth - 1));
@@ -36,11 +46,15 @@ namespace moho::editor::overlaygeom
   }
 
   /**
-   * Cells per side for a decal of `size` world units: fine enough to follow the terrain (a cell is at most half a unit across, the ground has a sample per
-   * unit) and, when `screenPx` (the decal's widest extent on screen, <= 0 when unknown or partly behind the camera) is known, no finer than a cell of
-   * about 16 pixels needs: a decal far away costs one or two quads, one up close up to 48 x 48.
+   * Cells per side for a decal of `size` world units: fine enough to follow the terrain (a cell is at most half a unit
+   * across, the ground has a sample per unit) and, when `screenPx` (the decal's widest extent on screen, <= 0 when
+   * unknown or partly behind the camera) is known, no finer than a cell of about 16 pixels needs: a decal far away
+   * costs one or two quads, one up close up to 48 x 48.
    */
-  [[nodiscard]] inline int DecalCells(const float size, const float screenPx)
+  [[nodiscard]] inline int DecalCells(
+    const float size,
+    const float screenPx
+  )
   {
     int byWorld = static_cast<int>(std::ceil(size / 0.5f));
     byWorld = std::min(48, std::max(2, byWorld));
@@ -51,25 +65,37 @@ namespace moho::editor::overlaygeom
     return std::min(byWorld, 16);
   }
 
-  constexpr float kOnGround = 1.0f;     // a decal given this close to the ground (either way) stands on the ground
-  constexpr float kGroundLift = 0.05f;  // ... a little above it
+  constexpr float kOnGround = 1.0f;    // a decal given this close to the ground (either way) stands on the ground
+  constexpr float kGroundLift = 0.05f; // ... a little above it
 
   struct DecalPoint
   {
-    float x, y, z;   // world position
-    float u, v;      // texture coordinate
+    float x, y, z; // world position
+    float u, v;    // texture coordinate
   };
 
   /**
-   * The (cells + 1)^2 points of a decal centred on (cx, cz), `size` across, turned by `yaw` radians, row by row (v = 0 .. 1, u = 0 .. 1 inside a row), laid on the
-   * ground: y = ground(x, z) + lift. The caller's height for the centre decides the lift: within kOnGround of the ground there (a splat standing on the terrain, whose
-   * height was read from the nearest sample or lifted by a few hundredths) the lift is kGroundLift, so the decal lies on the slope however the height was rounded;
-   * further off (a mesh surface above the field) the difference is kept, so the decal follows the field's slope at that height.
-   * The corner order and the texture coordinates are those of the flat quad this replaces: (-h, -h) is u = 0, v = 0; (h, -h) is u = 1, v = 0.
+   * The (cells + 1)^2 points of a decal centred on (cx, cz), `size` across, turned by `yaw` radians, row by row (v = 0
+   * .. 1, u = 0 .. 1 inside a row), laid on the ground: y = ground(x, z) + lift. The caller's height for the centre
+   * decides the lift: within kOnGround of the ground there (a splat standing on the terrain, whose height was read from
+   * the nearest sample or lifted by a few hundredths) the lift is kGroundLift, so the decal lies on the slope however
+   * the height was rounded; further off (a mesh surface above the field) the difference is kept, so the decal follows
+   * the field's slope at that height. The corner order and the texture coordinates are those of the flat quad this
+   * replaces: (-h, -h) is u = 0, v = 0; (h, -h) is u = 1, v = 0.
    */
   template <class Height>
-  inline void BuildDecal(const Height& height, const int width, const int depth, const float cx, const float cy, const float cz, const float size, const float yaw,
-                         const int cells, std::vector<DecalPoint>& out)
+  inline void BuildDecal(
+    const Height& height,
+    const int width,
+    const int depth,
+    const float cx,
+    const float cy,
+    const float cz,
+    const float size,
+    const float yaw,
+    const int cells,
+    std::vector<DecalPoint>& out
+  )
   {
     const int n = std::max(1, cells);
     out.clear();

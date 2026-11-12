@@ -79,18 +79,25 @@ namespace moho
     }
 
     /**
-     * One glyph bitmap as a batch texture: A8R8G8B8 (white with coverage in alpha), uploaded into a dynamic sheet of that
-     * format. The CPU copy is kept so the sheet can be rebuilt after a device reset.
+     * One glyph bitmap as a batch texture: A8R8G8B8 (white with coverage in alpha), uploaded into a dynamic sheet of
+     * that format. The CPU copy is kept so the sheet can be rebuilt after a device reset.
      */
     class CEdGlyphTexture final : public CD3DBatchTexture
     {
     public:
-      CEdGlyphTexture(const std::uint32_t width, const std::uint32_t height, std::vector<std::uint32_t>&& argb)
+      CEdGlyphTexture(
+        const std::uint32_t width,
+        const std::uint32_t height,
+        std::vector<std::uint32_t>&& argb
+      )
         : CD3DBatchTexture(width, height, 0u)
         , mPixels(std::move(argb))
       {}
 
-      void BuildTextureData(void* const destination, const std::uint32_t destinationPitchBytes) override
+      void BuildTextureData(
+        void* const destination,
+        const std::uint32_t destinationPitchBytes
+      ) override
       {
         auto* row = static_cast<std::uint8_t*>(destination);
         for (std::uint32_t y = 0; y < mHeight; ++y) {
@@ -99,12 +106,20 @@ namespace moho
         }
       }
 
-      [[nodiscard]] std::uint8_t GetAlphaAt(const std::uint32_t x, const std::uint32_t y) const override
+      [[nodiscard]] std::uint8_t GetAlphaAt(
+        const std::uint32_t x,
+        const std::uint32_t y
+      ) const override
       {
-        return (x < mWidth && y < mHeight) ? static_cast<std::uint8_t>(mPixels[static_cast<std::size_t>(y) * mWidth + x] >> 24) : 0u;
+        return (x < mWidth && y < mHeight)
+          ? static_cast<std::uint8_t>(mPixels[static_cast<std::size_t>(y) * mWidth + x] >> 24)
+          : 0u;
       }
 
-      [[nodiscard]] std::uint32_t GetSheetFormat() const override { return 2u; } // A8R8G8B8
+      [[nodiscard]] std::uint32_t GetSheetFormat() const override
+      {
+        return 2u;
+      } // A8R8G8B8
 
     private:
       std::vector<std::uint32_t> mPixels;
@@ -114,8 +129,9 @@ namespace moho
     {
       std::vector<EdGlyph> glyphs;
       float width = 0.0f;
-      // The glyph bitmap of every glyph at each of the four sub-pixel phases, resolved on first use: a drawn run then needs no hash lookup per glyph per frame. The pointers are
-      // into State::glyphCache (an unordered_map: its nodes never move, and nothing erases from it).
+      // The glyph bitmap of every glyph at each of the four sub-pixel phases, resolved on first use: a drawn run then
+      // needs no hash lookup per glyph per frame. The pointers are into State::glyphCache (an unordered_map: its nodes
+      // never move, and nothing erases from it).
       mutable std::vector<const CD3DFontCharInfo*> resolved[4];
     };
 
@@ -123,7 +139,12 @@ namespace moho
     struct StringKeyHash
     {
       using is_transparent = void;
-      std::size_t operator()(const std::string_view key) const noexcept { return std::hash<std::string_view>{}(key); }
+      std::size_t operator()(
+        const std::string_view key
+      ) const noexcept
+      {
+        return std::hash<std::string_view>{}(key);
+      }
     };
 
     // Counters for `ed_text_stats()` (cost measurements of P2).
@@ -138,7 +159,8 @@ namespace moho
     };
 
     TextStats gStats;
-    // The render timing costs two QueryPerformanceCounter reads per drawn string; it only runs once ed_text_stats has been asked for (perf report, tests).
+    // The render timing costs two QueryPerformanceCounter reads per drawn string; it only runs once ed_text_stats has
+    // been asked for (perf report, tests).
     bool gStatsTiming = false;
 
     TextStats GetTextStatsAndReset()
@@ -169,14 +191,20 @@ namespace moho
     // Gray mode (P1): mean of the three sub-pixel coverages with a boost, because the plain mean looks dim (P0 result).
     constexpr float kGrayExponent = 0.9f;
 
-    State& AsState(void* const state)
+    State& AsState(
+      void* const state
+    )
     {
       return *static_cast<State*>(state);
     }
 
     // UTF-8 to UTF-16 with a local decoder (the engine's decoder is BMP only). `starts` receives the UTF-16 offset of
     // every code point.
-    void DecodeUtf8(const char* s, std::wstring& out, std::vector<int>* starts)
+    void DecodeUtf8(
+      const char* s,
+      std::wstring& out,
+      std::vector<int>* starts
+    )
     {
       const auto* p = reinterpret_cast<const unsigned char*>(s);
       while (*p != 0) {
@@ -209,7 +237,10 @@ namespace moho
       }
     }
 
-    const Layout& GetLayout(State& st, const char* text)
+    const Layout& GetLayout(
+      State& st,
+      const char* text
+    )
     {
       const std::string_view lookup(text != nullptr ? text : "");
       const auto it = st.layoutCache.find(lookup);
@@ -226,17 +257,30 @@ namespace moho
       const EdApi& api = GetApi();
       if (!wide.empty()) {
         layout.glyphs.resize(wide.size() + 8u);
-        const int n = api.layout(st.font, wide.c_str(), static_cast<int>(wide.size()), layout.glyphs.data(), static_cast<int>(layout.glyphs.size()), &layout.width);
+        const int n = api.layout(
+          st.font,
+          wide.c_str(),
+          static_cast<int>(wide.size()),
+          layout.glyphs.data(),
+          static_cast<int>(layout.glyphs.size()),
+          &layout.width
+        );
         if (n > static_cast<int>(layout.glyphs.size())) {
           layout.glyphs.resize(static_cast<std::size_t>(n));
-          (void)api.layout(st.font, wide.c_str(), static_cast<int>(wide.size()), layout.glyphs.data(), n, &layout.width);
+          (void)api.layout(
+            st.font, wide.c_str(), static_cast<int>(wide.size()), layout.glyphs.data(), n, &layout.width
+          );
         }
         layout.glyphs.resize(static_cast<std::size_t>(n > 0 ? n : 0));
       }
       return st.layoutCache.emplace(key, std::move(layout)).first->second;
     }
 
-    CD3DFontCharInfo MakeGlyph(State& st, const EdGlyph& g, const int phase)
+    CD3DFontCharInfo MakeGlyph(
+      State& st,
+      const EdGlyph& g,
+      const int phase
+    )
     {
       CD3DFontCharInfo info;
       info.mAdvance = g.advance;
@@ -248,7 +292,8 @@ namespace moho
       int top = 0;
       int w = 0;
       int h = 0;
-      int ok = api.raster(st.font, g.face, g.glyph, phase, &left, &top, &w, &h, buf.data(), static_cast<int>(buf.size()));
+      int ok =
+        api.raster(st.font, g.face, g.glyph, phase, &left, &top, &w, &h, buf.data(), static_cast<int>(buf.size()));
       if (!ok && w > 0 && h > 0 && static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 3u > buf.size()) {
         buf.resize(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 3u);
         ok = api.raster(st.font, g.face, g.glyph, phase, &left, &top, &w, &h, buf.data(), static_cast<int>(buf.size()));
@@ -266,11 +311,13 @@ namespace moho
       std::vector<std::uint32_t> argb(static_cast<std::size_t>(pw) * ph, 0x00FFFFFFu);
       for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
-          const std::uint8_t* s = &buf[(static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)) * 3u];
+          const std::uint8_t* s =
+            &buf[(static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)) * 3u];
           std::uint32_t texel = 0;
           if (st.lcd) {
             // LCD: the three sub-pixel coverages in R, G, B (the TTextLcd shader reads them); alpha is unused.
-            texel = 0xFF000000u | (static_cast<std::uint32_t>(s[0]) << 16) | (static_cast<std::uint32_t>(s[1]) << 8) | s[2];
+            texel =
+              0xFF000000u | (static_cast<std::uint32_t>(s[0]) << 16) | (static_cast<std::uint32_t>(s[1]) << 8) | s[2];
           } else {
             const unsigned mean = (static_cast<unsigned>(s[0]) + s[1] + s[2] + 1u) / 3u;
             texel = (static_cast<std::uint32_t>(st.grayLut[mean]) << 24) | 0x00FFFFFFu;
@@ -298,9 +345,14 @@ namespace moho
       return info;
     }
 
-    const CD3DFontCharInfo& GetGlyph(State& st, const EdGlyph& g, const int phase)
+    const CD3DFontCharInfo& GetGlyph(
+      State& st,
+      const EdGlyph& g,
+      const int phase
+    )
     {
-      const std::uint64_t key = (static_cast<std::uint64_t>(g.face) << 32) | (static_cast<std::uint64_t>(g.glyph & 0xFFFFu) << 8) | static_cast<std::uint64_t>(phase);
+      const std::uint64_t key = (static_cast<std::uint64_t>(g.face) << 32) |
+        (static_cast<std::uint64_t>(g.glyph & 0xFFFFu) << 8) | static_cast<std::uint64_t>(phase);
       const auto it = st.glyphCache.find(key);
       if (it != st.glyphCache.end()) {
         return it->second;
@@ -311,12 +363,16 @@ namespace moho
 
   namespace edtext
   {
-    bool IsEdFace(const char* const face)
+    bool IsEdFace(
+      const char* const face
+    )
     {
       return face != nullptr && std::strncmp(face, "ed:", 3) == 0;
     }
 
-    std::string FamilyOf(const char* const face)
+    std::string FamilyOf(
+      const char* const face
+    )
     {
       std::string s(face != nullptr ? face : "");
       if (s.compare(0, 3, "ed:") == 0) {
@@ -329,13 +385,21 @@ namespace moho
       return s;
     }
 
-    bool WantsLcd(const char* const face)
+    bool WantsLcd(
+      const char* const face
+    )
     {
       const char* const flag = face != nullptr ? std::strrchr(face, ';') : nullptr;
       return flag == nullptr || std::strcmp(flag, ";g") != 0;
     }
 
-    void* Attach(const char* const face, const float pixelSize, float& ascent, float& descent, float& lineGap)
+    void* Attach(
+      const char* const face,
+      const float pixelSize,
+      float& ascent,
+      float& descent,
+      float& lineGap
+    )
     {
       const EdApi& api = GetApi();
       if (!api.ok) {
@@ -354,13 +418,16 @@ namespace moho
       st->pixelSize = pixelSize;
       st->lcd = WantsLcd(face);
       for (int i = 0; i < 256; ++i) {
-        st->grayLut[i] = static_cast<std::uint8_t>(std::lround(255.0f * std::pow(static_cast<float>(i) / 255.0f, kGrayExponent)));
+        st->grayLut[i] =
+          static_cast<std::uint8_t>(std::lround(255.0f * std::pow(static_cast<float>(i) / 255.0f, kGrayExponent)));
       }
       api.fontMetrics(font, &ascent, &descent, &lineGap);
       return st;
     }
 
-    void Destroy(void* const state)
+    void Destroy(
+      void* const state
+    )
     {
       if (state == nullptr) {
         return;
@@ -387,8 +454,8 @@ namespace moho
       const Layout& layout = GetLayout(st, text);
 
       // Standard screen axes: snap the glyph quads to whole pixels and select the sub-pixel phase from the fraction.
-      const bool standardAxes = xAxis.x == 1.0f && xAxis.y == 0.0f && xAxis.z == 0.0f && yAxis.x == 0.0f && yAxis.z == 0.0f &&
-        std::fabs(yAxis.y) == 1.0f;
+      const bool standardAxes = xAxis.x == 1.0f && xAxis.y == 0.0f && xAxis.z == 0.0f && yAxis.x == 0.0f &&
+        yAxis.z == 0.0f && std::fabs(yAxis.y) == 1.0f;
 
       float end = 0.0f;
       const bool limited = std::isfinite(maxAdvance);
@@ -429,9 +496,9 @@ namespace moho
         if (info.mTex) {
           if (st.lcd) {
             if (!primBatcher->mLcdTextActive) {
-              // Switch to the two-pass LCD technique: flush what is queued with the caller's technique first. The technique
-              // stays active for the following glyph runs; CD3DPrimBatcher::EndTextRun restores the UI technique when a
-              // non-glyph quad, Setup, or the end of the UI pass comes.
+              // Switch to the two-pass LCD technique: flush what is queued with the caller's technique first. The
+              // technique stays active for the following glyph runs; CD3DPrimBatcher::EndTextRun restores the UI
+              // technique when a non-glyph quad, Setup, or the end of the UI pass comes.
               primBatcher->Flush();
               D3D_GetDevice()->SelectTechnique("TTextLcd");
               primBatcher->mLcdTextActive = true;
@@ -452,12 +519,19 @@ namespace moho
       return Vector3f{origin.x + xAxis.x * end, origin.y + xAxis.y * end, origin.z + xAxis.z * end};
     }
 
-    float GetAdvance(void* const state, const char* const text)
+    float GetAdvance(
+      void* const state,
+      const char* const text
+    )
     {
       return GetLayout(AsState(state), text).width;
     }
 
-    std::int32_t GetNearestCharacterIndex(void* const state, const char* const text, const float targetAdvance)
+    std::int32_t GetNearestCharacterIndex(
+      void* const state,
+      const char* const text,
+      const float targetAdvance
+    )
     {
       State& st = AsState(state);
       std::wstring wide;
@@ -480,7 +554,10 @@ namespace moho
       return index;
     }
 
-    const CD3DFontCharInfo& GetCharInfo(void* const state, const wchar_t chText)
+    const CD3DFontCharInfo& GetCharInfo(
+      void* const state,
+      const wchar_t chText
+    )
     {
       State& st = AsState(state);
       const auto it = st.charInfoCache.find(chText);
@@ -504,8 +581,11 @@ namespace moho
 namespace
 {
   // ed_text_stats() -> runs, quads, flushes, glyphs rasterised, raster milliseconds, render milliseconds
-  // Returns the counters since the last call and resets them (cost measurements, docs/projects/editor_research/P2_LCD_TEXT.md).
-  int __cdecl cfunc_EdTextStats(lua_State* const state)
+  // Returns the counters since the last call and resets them (cost measurements,
+  // docs/projects/editor_research/P2_LCD_TEXT.md).
+  int __cdecl cfunc_EdTextStats(
+    lua_State* const state
+  )
   {
     moho::gStatsTiming = true;
     const moho::TextStats snapshot = moho::GetTextStatsAndReset();
@@ -534,8 +614,14 @@ namespace
   {
     EdTextLuaBootstrap()
     {
-      (void)new moho::CScrLuaBinder(UserLuaInitSet(), "ed_text_stats", &cfunc_EdTextStats, nullptr, "<global>",
-                                    "ed_text_stats() -> runs, quads, flushes, rasterised, rasterMs, renderMs (and resets them)");
+      (void)new moho::CScrLuaBinder(
+        UserLuaInitSet(),
+        "ed_text_stats",
+        &cfunc_EdTextStats,
+        nullptr,
+        "<global>",
+        "ed_text_stats() -> runs, quads, flushes, rasterised, rasterMs, renderMs (and resets them)"
+      );
     }
   };
 

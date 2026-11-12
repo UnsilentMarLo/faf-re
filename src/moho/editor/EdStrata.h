@@ -1,5 +1,6 @@
-// EDITOR: access to the terrain strata paint masks for other editor natives (the field engine, EdField.cpp). Implemented in EdStrata.cpp on top of its
-// MaskShadow, so the engine textures, the shadow and the readers of ed_stratum_read stay in step.
+// EDITOR: access to the terrain strata paint masks for other editor natives (the field engine, EdField.cpp).
+// Implemented in EdStrata.cpp on top of its MaskShadow, so the engine textures, the shadow and the readers of
+// ed_stratum_read stay in step.
 #pragma once
 
 #include <cstdint>
@@ -14,8 +15,9 @@ namespace moho::editor
   bool StratumMaskWrite(int stratum, const std::uint8_t* data, int w, int h);
 
   /**
-   * Counts the changes made to the stratum masks since the process started (a write, a resize). The exact map save (EdUpMapFileLua.cpp) compares it with the
-   * value it noted when the map was loaded: unchanged masks go back into the file as the file had them. Conservative: a write that stores the same bytes counts.
+   * Counts the changes made to the stratum masks since the process started (a write, a resize). The exact map save
+   * (EdUpMapFileLua.cpp) compares it with the value it noted when the map was loaded: unchanged masks go back into the
+   * file as the file had them. Conservative: a write that stores the same bytes counts.
    */
   std::uint64_t StratumMaskRevision();
 } // namespace moho::editor

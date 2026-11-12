@@ -1,27 +1,37 @@
-// EDITOR: the native terrain brush dab (docs/projects/MAP_EDITOR.md, "Native brush dab"; math in EdBrush.h, caller editor/runtime/lua/editor/terrain.lua DabOne).
+// EDITOR: the native terrain brush dab (docs/projects/MAP_EDITOR.md, "Native brush dab"; math in EdBrush.h, caller
+// editor/runtime/lua/editor/terrain.lua DabOne).
 //
-//   ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed [, noiseScale, noiseOctaves, noiseRoughness]) -> changed, x0, z0, x1, z1, level
-//       One dab of the round brush at sample position (cx, cz) inside the open stroke of the document (ed_cmd_begin). mode = 'raise' | 'lower' |
-//       'plateau' | 'flatten' | 'smooth' | 'noise' (anything else: returns nil and does nothing, the caller keeps its Lua path). strength, falloff and the
-//       weight profile are the ones of terrain.lua; dir = -1 inverts; level (world units, flatten / plateau) nil or negative = the ground under the
-//       dab centre; seed = the stroke id (noise). It reads the document's heights, computes the new window and writes it through
-//       MapDocument::EditHeights, the path ed_doc_height_write takes (undo stroke, view field, sim queue). Returns the number of changed samples,
-//       the inclusive window it worked on (the rectangle to re-snap units in; clamped to the map) and, for plateau / flatten, the level it used
-//       (nil for the other modes) so the caller can keep it for the rest of the stroke. nil without a terrain.
-//       Noise mode: smooth value noise at the sample coordinates (so it is continuous across the dabs of a stroke, seed = the stroke id); noiseScale = the
-//       lattice cell size in samples (default 8), noiseOctaves 1..4 (default 2), noiseRoughness = amplitude share of each further octave (default 0.5).
-//       Shaped brush: arguments 13 and 14, shape (a handle of ed_brush_shape_set; nil / 0 = the round falloff profile) and angle (degrees the mask is turned: brushes.lua Angle
-//       plus the stroke's random turn). The mask then replaces the falloff profile (the brush is still cut at the radius), the maths of every mode is unchanged. An unknown handle returns nil
-//       and does nothing, so the Lua loop takes over. An exe without these ignores the two extra arguments and would draw a round brush: the Lua side only passes a shape after
-//       finding ed_brush_shape_set.
-//       Terrace and plane (WP7 of the upstream port, kernels of upstream's HeightBrush): mode = 'terrace' | 'plane'. Arguments 15..18 = step, planeX, planeZ, planeC: terrace pulls the ground towards the nearest multiple of
-//       `step` (world units, default 5); plane towards the height planeX * x + planeZ * z + planeC (height words at sample (x, z); all three given = set, else the dab changes nothing). A dab pulls by
-//       min(1, strength * 0.2 * weight) of the distance, like flatten; Shift (dir) is ignored. An exe without these modes returns nil for them and the Lua loop of terrain.lua does the same maths.
+//   ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed [, noiseScale, noiseOctaves,
+//   noiseRoughness]) -> changed, x0, z0, x1, z1, level
+//       One dab of the round brush at sample position (cx, cz) inside the open stroke of the document (ed_cmd_begin).
+//       mode = 'raise' | 'lower' | 'plateau' | 'flatten' | 'smooth' | 'noise' (anything else: returns nil and does
+//       nothing, the caller keeps its Lua path). strength, falloff and the weight profile are the ones of terrain.lua;
+//       dir = -1 inverts; level (world units, flatten / plateau) nil or negative = the ground under the dab centre;
+//       seed = the stroke id (noise). It reads the document's heights, computes the new window and writes it through
+//       MapDocument::EditHeights, the path ed_doc_height_write takes (undo stroke, view field, sim queue). Returns the
+//       number of changed samples, the inclusive window it worked on (the rectangle to re-snap units in; clamped to the
+//       map) and, for plateau / flatten, the level it used (nil for the other modes) so the caller can keep it for the
+//       rest of the stroke. nil without a terrain. Noise mode: smooth value noise at the sample coordinates (so it is
+//       continuous across the dabs of a stroke, seed = the stroke id); noiseScale = the lattice cell size in samples
+//       (default 8), noiseOctaves 1..4 (default 2), noiseRoughness = amplitude share of each further octave (default
+//       0.5). Shaped brush: arguments 13 and 14, shape (a handle of ed_brush_shape_set; nil / 0 = the round falloff
+//       profile) and angle (degrees the mask is turned: brushes.lua Angle plus the stroke's random turn). The mask then
+//       replaces the falloff profile (the brush is still cut at the radius), the maths of every mode is unchanged. An
+//       unknown handle returns nil and does nothing, so the Lua loop takes over. An exe without these ignores the two
+//       extra arguments and would draw a round brush: the Lua side only passes a shape after finding
+//       ed_brush_shape_set. Terrace and plane (WP7 of the upstream port, kernels of upstream's HeightBrush): mode =
+//       'terrace' | 'plane'. Arguments 15..18 = step, planeX, planeZ, planeC: terrace pulls the ground towards the
+//       nearest multiple of `step` (world units, default 5); plane towards the height planeX * x + planeZ * z + planeC
+//       (height words at sample (x, z); all three given = set, else the dab changes nothing). A dab pulls by min(1,
+//       strength * 0.2 * weight) of the distance, like flatten; Shift (dir) is ignored. An exe without these modes
+//       returns nil for them and the Lua loop of terrain.lua does the same maths.
 //   ed_plane_through(x1, h1, z1, x2, h2, z2, x3, h3, z3) -> planeX, planeZ, planeC | nil
-//       upstream's faf::editor::PlaneThrough: the plane through three points (sample x, height words, sample z); nil when they are on one line seen from above.
+//       upstream's faf::editor::PlaneThrough: the plane through three points (sample x, height words, sample z); nil
+//       when they are on one line seen from above.
 //   ed_brush_shape_set(handle, n, values) -> true | false
-//       Stores the shape mask `handle` (an integer >= 1; set again to replace it): n x n weights 0..1 (2 <= n <= 512) in a Lua array, row after row (z outer, x fastest), over the unit
-//       square -1..1 with the samples on the corners (u = -1 + 2 i / (n - 1)). Done once per shape and resolution (brushes.lua NativeShape), not per dab.
+//       Stores the shape mask `handle` (an integer >= 1; set again to replace it): n x n weights 0..1 (2 <= n <= 512)
+//       in a Lua array, row after row (z outer, x fastest), over the unit square -1..1 with the samples on the corners
+//       (u = -1 + 2 i / (n - 1)). Done once per shape and resolution (brushes.lua NativeShape), not per dab.
 //   ed_brush_shape_info(handle) -> n | nil
 //       The size of a stored shape (nil: none), for tests and as the probe.
 #include <cstdint>
@@ -39,7 +49,11 @@ namespace
 {
   namespace br = moho::editor::brush;
 
-  double NumberOr(lua_State* const L, const int index, const double fallback)
+  double NumberOr(
+    lua_State* const L,
+    const int index,
+    const double fallback
+  )
   {
     if (lua_type(L, index) == LUA_TNUMBER) {
       return lua_tonumber(L, index);
@@ -47,7 +61,9 @@ namespace
     return fallback;
   }
 
-  int __cdecl cfunc_EdTerrainBrush(lua_State* const L)
+  int __cdecl cfunc_EdTerrainBrush(
+    lua_State* const L
+  )
   {
     br::Dab dab;
     dab.cx = static_cast<float>(luaL_checknumber(L, 1));
@@ -79,7 +95,7 @@ namespace
     if (shapeHandle > 0) {
       dab.shape = br::FindShape(shapeHandle);
       if (dab.shape == nullptr) {
-        lua_pushnil(L);       // unknown handle: the Lua loop does the dab
+        lua_pushnil(L); // unknown handle: the Lua loop does the dab
         return 1;
       }
       dab.shapeAngle = static_cast<float>(NumberOr(L, 14, 0.0));
@@ -125,7 +141,9 @@ namespace
     return 6;
   }
 
-  int __cdecl cfunc_EdPlaneThrough(lua_State* const L)
+  int __cdecl cfunc_EdPlaneThrough(
+    lua_State* const L
+  )
   {
     double x[3];
     double h[3];
@@ -148,7 +166,9 @@ namespace
     return 3;
   }
 
-  int __cdecl cfunc_EdBrushShapeSet(lua_State* const L)
+  int __cdecl cfunc_EdBrushShapeSet(
+    lua_State* const L
+  )
   {
     const int handle = static_cast<int>(luaL_checknumber(L, 1));
     const int n = static_cast<int>(luaL_checknumber(L, 2));
@@ -172,7 +192,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_EdBrushShapeInfo(lua_State* const L)
+  int __cdecl cfunc_EdBrushShapeInfo(
+    lua_State* const L
+  )
   {
     const br::Shape* const shape = br::FindShape(static_cast<int>(luaL_checknumber(L, 1)));
     if (shape == nullptr) {
@@ -197,17 +219,37 @@ namespace
     EdBrushLuaBootstrap()
     {
       (void)new moho::CScrLuaBinder(
-        UserLuaInitSet(), "ed_terrain_brush", &cfunc_EdTerrainBrush, nullptr, "<global>",
-        "ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed [, noiseScale, noiseOctaves, noiseRoughness, shape, angle, step, planeX, planeZ, planeC]) -> changed, x0, z0, x1, z1, level"
+        UserLuaInitSet(),
+        "ed_terrain_brush",
+        &cfunc_EdTerrainBrush,
+        nullptr,
+        "<global>",
+        "ed_terrain_brush(cx, cz, radius, mode, strength, dir, falloff, level, seed [, noiseScale, noiseOctaves, "
+        "noiseRoughness, shape, angle, step, planeX, planeZ, planeC]) -> changed, x0, z0, x1, z1, level"
       );
       (void)new moho::CScrLuaBinder(
-        UserLuaInitSet(), "ed_plane_through", &cfunc_EdPlaneThrough, nullptr, "<global>", "ed_plane_through(x1, h1, z1, x2, h2, z2, x3, h3, z3) -> planeX, planeZ, planeC | nil"
+        UserLuaInitSet(),
+        "ed_plane_through",
+        &cfunc_EdPlaneThrough,
+        nullptr,
+        "<global>",
+        "ed_plane_through(x1, h1, z1, x2, h2, z2, x3, h3, z3) -> planeX, planeZ, planeC | nil"
       );
       (void)new moho::CScrLuaBinder(
-        UserLuaInitSet(), "ed_brush_shape_set", &cfunc_EdBrushShapeSet, nullptr, "<global>", "ed_brush_shape_set(handle, n, values) -> true | false"
+        UserLuaInitSet(),
+        "ed_brush_shape_set",
+        &cfunc_EdBrushShapeSet,
+        nullptr,
+        "<global>",
+        "ed_brush_shape_set(handle, n, values) -> true | false"
       );
       (void)new moho::CScrLuaBinder(
-        UserLuaInitSet(), "ed_brush_shape_info", &cfunc_EdBrushShapeInfo, nullptr, "<global>", "ed_brush_shape_info(handle) -> n | nil"
+        UserLuaInitSet(),
+        "ed_brush_shape_info",
+        &cfunc_EdBrushShapeInfo,
+        nullptr,
+        "<global>",
+        "ed_brush_shape_info(handle) -> n | nil"
       );
     }
   };

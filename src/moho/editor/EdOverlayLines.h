@@ -1,14 +1,17 @@
-// EDITOR: the screen quads of the overlay's lines (EdOverlay.cpp: marker chains, paths, rings, grid lines), engine independent so they can be tested on their own
-// (moho/editor/tests/EdOverlayLinesTest.cpp).
+// EDITOR: the screen quads of the overlay's lines (EdOverlay.cpp: marker chains, paths, rings, grid lines), engine
+// independent so they can be tested on their own (moho/editor/tests/EdOverlayLinesTest.cpp).
 //
-// A line is a polyline in world space with a world width, drawn as a ribbon between projected ground corners, clamped to a pixel range, with a dark halo under it. The
-// halo and the line are the same ribbon (the halo is a pixel wider on each side): the projection of the vertices (`ProjectLine`) is done once and both passes
-// (`EmitLine`) work from it. The quads are appended to a caller's list (four vertices per quad, in CD3DPrimBatcher::DrawQuad's argument order) so they can be kept and
-// replayed while the camera and the lines do not change. Everything is a template over the vertex type (aggregate {x, y, z, color, u, v}) and a projector:
+// A line is a polyline in world space with a world width, drawn as a ribbon between projected ground corners, clamped
+// to a pixel range, with a dark halo under it. The halo and the line are the same ribbon (the halo is a pixel wider on
+// each side): the projection of the vertices (`ProjectLine`) is done once and both passes
+// (`EmitLine`) work from it. The quads are appended to a caller's list (four vertices per quad, in
+// CD3DPrimBatcher::DrawQuad's argument order) so they can be kept and replayed while the camera and the lines do not
+// change. Everything is a template over the vertex type (aggregate {x, y, z, color, u, v}) and a projector:
 //
 //   struct Projector {
 //     void  Screen(float x, float y, float z, float& sx, float& sy) const;   // screen position (GeomCamera3::Project)
-//     float W(float x, float y, float z) const;                              // clip space w: > 0 in front of the camera (overlaydrape::InFront)
+//     float W(float x, float y, float z) const;                              // clip space w: > 0 in front of the
+//     camera (overlaydrape::InFront)
 //   };
 #pragma once
 
@@ -24,14 +27,14 @@ namespace moho::editor::overlaylines
 {
   struct Polyline
   {
-    std::vector<float> pts;     // x, y, z triples
+    std::vector<float> pts; // x, y, z triples
     std::uint32_t argb = 0xFFFFFFFFu;
-    float worldWidth = 0.6f;    // ribbon width on the ground in world units
-    float minPx = 2.0f;         // never thinner than this on screen
-    float maxPx = 14.0f;        // never thicker than this on screen
+    float worldWidth = 0.6f; // ribbon width on the ground in world units
+    float minPx = 2.0f;      // never thinner than this on screen
+    float maxPx = 14.0f;     // never thicker than this on screen
     bool closed = false;
-    bool halo = true;           // dark underlay for contrast on any terrain
-    bool caps = true;           // squares at the vertices that join the ribbons (off for thin grid lines)
+    bool halo = true; // dark underlay for contrast on any terrain
+    bool caps = true; // squares at the vertices that join the ribbons (off for thin grid lines)
   };
 
   struct Pt
@@ -40,8 +43,10 @@ namespace moho::editor::overlaylines
     float depth;
   };
 
-  // What the projection of one vertex gives, independent of the halo: screen position and depth of the vertex, the width of a horizontal ribbon across it on the screen
-  // (`px`) and the projected middle / half span of that ribbon (`mx`, `my`, `ax`, `ay`). `side` is false for a vertex whose neighbours coincide (no direction).
+  // What the projection of one vertex gives, independent of the halo: screen position and depth of the vertex, the
+  // width of a horizontal ribbon across it on the screen
+  // (`px`) and the projected middle / half span of that ribbon (`mx`, `my`, `ax`, `ay`). `side` is false for a vertex
+  // whose neighbours coincide (no direction).
   struct LineVertex
   {
     Pt sp;
@@ -55,12 +60,19 @@ namespace moho::editor::overlaylines
   {
     std::vector<LineVertex> v;
     std::vector<float> half;
-    std::vector<Pt> cl, cr;     // the projected ground corners left / right of every vertex, already clamped to the pixel limits and grown for the halo
+    std::vector<Pt> cl, cr; // the projected ground corners left / right of every vertex, already clamped to the pixel
+                            // limits and grown for the halo
     std::vector<char> cornersOk;
   };
 
   template <class V>
-  inline void PushQuad(std::vector<V>& q, const V& a, const V& b, const V& c, const V& d)
+  inline void PushQuad(
+    std::vector<V>& q,
+    const V& a,
+    const V& b,
+    const V& c,
+    const V& d
+  )
   {
     q.push_back(a);
     q.push_back(b);
@@ -69,7 +81,16 @@ namespace moho::editor::overlaylines
   }
 
   template <class V>
-  inline void Emit(std::vector<V>& q, const float x0, const float y0, const float h0, const float x1, const float y1, const float h1, const std::uint32_t color)
+  inline void Emit(
+    std::vector<V>& q,
+    const float x0,
+    const float y0,
+    const float h0,
+    const float x1,
+    const float y1,
+    const float h1,
+    const std::uint32_t color
+  )
   {
     float dx = x1 - x0;
     float dy = y1 - y0;
@@ -88,23 +109,52 @@ namespace moho::editor::overlaylines
     PushQuad(q, a, c, d, e);
   }
 
-  // A ribbon segment from the four screen positions of its ground corners (left / right of each end): a ribbon wider than a line is a rectangle on the GROUND, which on the
-  // screen is a parallelogram, not a rectangle across the screen direction of the spine (that one stood up like a plane when the camera looked along a diagonal).
+  // A ribbon segment from the four screen positions of its ground corners (left / right of each end): a ribbon wider
+  // than a line is a rectangle on the GROUND, which on the screen is a parallelogram, not a rectangle across the screen
+  // direction of the spine (that one stood up like a plane when the camera looked along a diagonal).
   template <class V>
-  inline void EmitCorners(std::vector<V>& q, const Pt& l0, const Pt& r0, const Pt& r1, const Pt& l1, const std::uint32_t color)
+  inline void EmitCorners(
+    std::vector<V>& q,
+    const Pt& l0,
+    const Pt& r0,
+    const Pt& r1,
+    const Pt& l1,
+    const std::uint32_t color
+  )
   {
-    PushQuad(q, V{l0.x, l0.y, 0.0f, color, 0.0f, 0.0f}, V{r0.x, r0.y, 0.0f, color, 0.0f, 1.0f}, V{r1.x, r1.y, 0.0f, color, 1.0f, 1.0f}, V{l1.x, l1.y, 0.0f, color, 1.0f, 0.0f});
+    PushQuad(
+      q,
+      V{l0.x, l0.y, 0.0f, color, 0.0f, 0.0f},
+      V{r0.x, r0.y, 0.0f, color, 0.0f, 1.0f},
+      V{r1.x, r1.y, 0.0f, color, 1.0f, 1.0f},
+      V{l1.x, l1.y, 0.0f, color, 1.0f, 0.0f}
+    );
   }
 
   template <class V>
-  inline void Cap(std::vector<V>& q, const float x, const float y, const float h, const std::uint32_t color)
+  inline void Cap(
+    std::vector<V>& q,
+    const float x,
+    const float y,
+    const float h,
+    const std::uint32_t color
+  )
   {
-    PushQuad(q, V{x - h, y - h, 0.0f, color, 0.0f, 0.0f}, V{x + h, y - h, 0.0f, color, 1.0f, 0.0f},
-             V{x + h, y + h, 0.0f, color, 1.0f, 1.0f}, V{x - h, y + h, 0.0f, color, 0.0f, 1.0f});
+    PushQuad(
+      q,
+      V{x - h, y - h, 0.0f, color, 0.0f, 0.0f},
+      V{x + h, y - h, 0.0f, color, 1.0f, 0.0f},
+      V{x + h, y + h, 0.0f, color, 1.0f, 1.0f},
+      V{x - h, y + h, 0.0f, color, 0.0f, 1.0f}
+    );
   }
 
   template <class Projector>
-  inline void ProjectLine(const Projector& proj, const Polyline& pl, std::vector<LineVertex>& out)
+  inline void ProjectLine(
+    const Projector& proj,
+    const Polyline& pl,
+    std::vector<LineVertex>& out
+  )
   {
     const std::size_t n = pl.pts.size() / 3u;
     out.resize(n);
@@ -132,19 +182,28 @@ namespace moho::editor::overlaylines
         proj.Screen(px0 + ox, py0, pz0 + oz, s1x, s1y);
         proj.Screen(px0 - ox, py0, pz0 - oz, s2x, s2y);
         lv.px = 0.5f * std::sqrt((s1x - s2x) * (s1x - s2x) + (s1y - s2y) * (s1y - s2y));
-        lv.ax = 0.5f * (s1x - s2x);        // half of the way from the right to the left corner
+        lv.ax = 0.5f * (s1x - s2x); // half of the way from the right to the left corner
         lv.ay = 0.5f * (s1y - s2y);
-        lv.mx = 0.5f * (s1x + s2x);        // the middle of the ribbon across this vertex on the screen
+        lv.mx = 0.5f * (s1x + s2x); // the middle of the ribbon across this vertex on the screen
         lv.my = 0.5f * (s1y + s2y);
         lv.side = true;
       }
     }
   }
 
-  // The quads of one pass (halo or line) of an already projected line (`sc.v`). `dbg` (line pass only) receives ed_overlay_stats' numbers for this line: first vertex
-  // (screen x, y, depth), its half width, viewport w, h, segments drawn, segments behind the camera.
+  // The quads of one pass (halo or line) of an already projected line (`sc.v`). `dbg` (line pass only) receives
+  // ed_overlay_stats' numbers for this line: first vertex (screen x, y, depth), its half width, viewport w, h, segments
+  // drawn, segments behind the camera.
   template <class V>
-  inline void EmitLine(const Polyline& pl, LineScratch& sc, const float vw, const float vh, const bool halo, std::vector<V>& q, float* const dbg)
+  inline void EmitLine(
+    const Polyline& pl,
+    LineScratch& sc,
+    const float vw,
+    const float vh,
+    const bool halo,
+    std::vector<V>& q,
+    float* const dbg
+  )
   {
     const std::vector<LineVertex>& v = sc.v;
     const std::size_t n = v.size();
@@ -155,9 +214,13 @@ namespace moho::editor::overlaylines
     sc.cornersOk.assign(n, 0);
     for (std::size_t i = 0; i < n; ++i) {
       const LineVertex& lv = v[i];
-      // the corners: from the middle of the vertex to each side, stretched or shrunk to the pixel limits (the halo is a pixel wider on each side)
+      // the corners: from the middle of the vertex to each side, stretched or shrunk to the pixel limits (the halo is a
+      // pixel wider on each side)
       const float want = std::min(pl.maxPx * 0.5f, std::max(pl.minPx * 0.5f, lv.px)) + (halo ? 1.0f : 0.0f);
-      if (lv.side && lv.px >= pl.minPx * 0.75f && lv.px <= pl.maxPx * 0.5f) {          // a ribbon the pixel limits do not touch is drawn as the ground rectangle it is; a thin line keeps its pixel width across
+      if (lv.side && lv.px >= pl.minPx * 0.75f && lv.px <= pl.maxPx * 0.5f) { // a ribbon the pixel limits do not touch
+                                                                              // is drawn as the ground rectangle it is;
+                                                                              // a thin line keeps its pixel width
+                                                                              // across
         const float k = want / lv.px;
         sc.cl[i] = {lv.mx + lv.ax * k, lv.my + lv.ay * k, 0.0f};
         sc.cr[i] = {lv.mx - lv.ax * k, lv.my - lv.ay * k, 0.0f};
@@ -167,8 +230,14 @@ namespace moho::editor::overlaylines
     }
 
     if (dbg != nullptr) {
-      dbg[0] = v[0].sp.x; dbg[1] = v[0].sp.y; dbg[2] = v[0].sp.depth; dbg[3] = sc.half[0]; dbg[4] = vw; dbg[5] = vh;
-      dbg[6] = 0.0f; dbg[7] = 0.0f;
+      dbg[0] = v[0].sp.x;
+      dbg[1] = v[0].sp.y;
+      dbg[2] = v[0].sp.depth;
+      dbg[3] = sc.half[0];
+      dbg[4] = vw;
+      dbg[5] = vh;
+      dbg[6] = 0.0f;
+      dbg[7] = 0.0f;
     }
     const std::uint32_t color = halo ? 0xB0000000u : pl.argb;
     for (std::size_t s = 0; s < segs; ++s) {
@@ -177,14 +246,18 @@ namespace moho::editor::overlaylines
       const Pt& a = v[i0].sp;
       const Pt& c = v[i1].sp;
       if (!overlaydrape::InFront(a.depth) || !overlaydrape::InFront(c.depth)) {
-        if (dbg != nullptr) dbg[7] += 1.0f;
+        if (dbg != nullptr)
+          dbg[7] += 1.0f;
         continue;
       }
-      if ((a.x < -64.0f && c.x < -64.0f) || (a.x > vw + 64.0f && c.x > vw + 64.0f) ||
-          (a.y < -64.0f && c.y < -64.0f) || (a.y > vh + 64.0f && c.y > vh + 64.0f)) {
+      if (
+        (a.x < -64.0f && c.x < -64.0f) || (a.x > vw + 64.0f && c.x > vw + 64.0f) || (a.y < -64.0f && c.y < -64.0f) ||
+        (a.y > vh + 64.0f && c.y > vh + 64.0f)
+      ) {
         continue;
       }
-      if (dbg != nullptr) dbg[6] += 1.0f;
+      if (dbg != nullptr)
+        dbg[6] += 1.0f;
       if (sc.cornersOk[i0] && sc.cornersOk[i1]) {
         EmitCorners(q, sc.cl[i0], sc.cr[i0], sc.cr[i1], sc.cl[i1], color);
       } else {
@@ -194,7 +267,7 @@ namespace moho::editor::overlaylines
     if (pl.caps) {
       for (std::size_t i = 0; i < n; ++i) {
         if (overlaydrape::InFront(v[i].sp.depth)) {
-          Cap(q, v[i].sp.x, v[i].sp.y, sc.half[i], color);   // joins the ribbons at the vertices
+          Cap(q, v[i].sp.x, v[i].sp.y, sc.half[i], color); // joins the ribbons at the vertices
         }
       }
     }

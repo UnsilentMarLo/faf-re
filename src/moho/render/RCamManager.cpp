@@ -39,8 +39,6 @@ namespace
 {
   using CameraPointer = moho::CameraImpl*;
 
-
-
   /**
    * Address: 0x00BC47E0 (FUN_00BC47E0, dynamic initializer for `gTConVar_cam_HighLOD`)
    * Address: 0x00BEF640 (FUN_00BEF640, dynamic atexit destructor for `gTConVar_cam_HighLOD`)
@@ -63,7 +61,11 @@ namespace
    * Address: 0x00BC48A0 (FUN_00BC48A0, dynamic initializer for `gTConVar_cam_DefaultLOD`)
    * Address: 0x00BEF6D0 (FUN_00BEF6D0, dynamic atexit destructor for `gTConVar_cam_DefaultLOD`)
    */
-  moho::TConVar<float> gTConVar_cam_DefaultLOD("cam_DefaultLOD", "default value for camera level-of-detail scaling factor", &moho::cam_DefaultLOD);
+  moho::TConVar<float> gTConVar_cam_DefaultLOD(
+    "cam_DefaultLOD",
+    "default value for camera level-of-detail scaling factor",
+    &moho::cam_DefaultLOD
+  );
 
   /// 0x00E00779 (the shared empty-string literal also used by
   /// `ResolutionCommands.cpp`'s startup commands), the `.data` initializer
@@ -79,7 +81,11 @@ namespace
    * Address: 0x00BE9540 (FUN_00BE9540, dynamic initializer for `gCConFunc_SC_CameraScaleLOD`)
    * Address: 0x00C08DC0 (FUN_00C08DC0, dynamic atexit destructor for `gCConFunc_SC_CameraScaleLOD`)
    */
-  moho::CConFunc gCConFunc_SC_CameraScaleLOD("SC_CameraScaleLOD", kConsoleStartupSCCameraScaleLODDescription, &moho::SC_CameraScaleLOD);
+  moho::CConFunc gCConFunc_SC_CameraScaleLOD(
+    "SC_CameraScaleLOD",
+    kConsoleStartupSCCameraScaleLODDescription,
+    &moho::SC_CameraScaleLOD
+  );
 } // namespace
 
 namespace moho
@@ -106,7 +112,10 @@ namespace moho
   /**
    * Address: 0x007AABB0 (FUN_007AABB0, ?Frame@RCamManager@Moho@@QAEXMM@Z)
    */
-  void RCamManager::Frame(const float simDeltaSeconds, const float frameSeconds)
+  void RCamManager::Frame(
+    const float simDeltaSeconds,
+    const float frameSeconds
+  )
   {
     for (CameraImpl* const camera : mCams) {
       if (camera != nullptr) {
@@ -116,7 +125,8 @@ namespace moho
   }
 
   /**
-   * Address: 0x007AA9C0 (FUN_007AA9C0, ?CreateCamera@RCamManager@Moho@@QAEPAVRCamCamera@2@VStrArg@gpg@@ABVSTIMap@2@PAVLuaState@LuaPlus@@@Z)
+   * Address: 0x007AA9C0 (FUN_007AA9C0,
+   * ?CreateCamera@RCamManager@Moho@@QAEPAVRCamCamera@2@VStrArg@gpg@@ABVSTIMap@2@PAVLuaState@LuaPlus@@@Z)
    *
    * MSVC inlines the `mCams.push_back(camera)` fast path here and calls the
    * grow half directly (0x007AAA68 `call sub_7AFD10`), which is why the
@@ -124,7 +134,9 @@ namespace moho
    * callers at all.
    */
   CameraImpl* RCamManager::CreateCamera(
-    const gpg::StrArg name, const STIMap& map, LuaPlus::LuaState* const luaState
+    const gpg::StrArg name,
+    const STIMap& map,
+    LuaPlus::LuaState* const luaState
   )
   {
     CameraImpl* camera = nullptr;
@@ -135,7 +147,8 @@ namespace moho
     // bearing, back when the class was a thin shell whose state lived behind
     // runtime views and sizing the block by it would have handed the
     // constructor four bytes to write 0x854 past.
-    CameraImpl* const storage = static_cast<CameraImpl*>(::operator new(sizeof(CameraImpl), std::nothrow)); // 0x858 on x86
+    CameraImpl* const storage =
+      static_cast<CameraImpl*>(::operator new(sizeof(CameraImpl), std::nothrow)); // 0x858 on x86
     if (storage != nullptr) {
       try {
         camera = new (storage) CameraImpl(name, map, luaState);
@@ -152,7 +165,9 @@ namespace moho
   /**
    * Address: 0x007AAA90 (FUN_007AAA90, ?ForgetCamera@RCamManager@Moho@@QAEXPBVRCamCamera@2@@Z)
    */
-  void RCamManager::ForgetCamera(const CameraImpl* const camera)
+  void RCamManager::ForgetCamera(
+    const CameraImpl* const camera
+  )
   {
     if (camera == nullptr) {
       return;
@@ -168,7 +183,9 @@ namespace moho
   /**
    * Address: 0x007AAAF0 (FUN_007AAAF0, ?GetCamera@RCamManager@Moho@@QAEPAVCameraImpl@2@VStrArg@gpg@@@Z)
    */
-  CameraImpl* RCamManager::GetCamera(const gpg::StrArg name)
+  CameraImpl* RCamManager::GetCamera(
+    const gpg::StrArg name
+  )
   {
     const std::size_t cameraCount = mCams.size();
     for (std::size_t index = cameraCount; index != 0u; --index) {
@@ -182,7 +199,8 @@ namespace moho
   }
 
   /**
-   * Address: 0x007AAB60 (FUN_007AAB60, ?GetAllCameras@RCamManager@Moho@@QAE?AV?$vector@PAVCameraImpl@Moho@@V?$allocator@PAVCameraImpl@Moho@@@std@@@std@@XZ)
+   * Address: 0x007AAB60 (FUN_007AAB60,
+   * ?GetAllCameras@RCamManager@Moho@@QAE?AV?$vector@PAVCameraImpl@Moho@@V?$allocator@PAVCameraImpl@Moho@@@std@@@std@@XZ)
    *
    * Returns the camera vector by value; the copy is `mCams`' own copy
    * constructor at 0x007AE840.
@@ -193,7 +211,8 @@ namespace moho
   }
 
   /**
-   * Address: 0x007AAD20 (FUN_007AAD20, ?CAM_GetAllCameras@Moho@@YA?AV?$vector@VGeomCamera3@Moho@@V?$allocator@VGeomCamera3@Moho@@@std@@@std@@XZ)
+   * Address: 0x007AAD20 (FUN_007AAD20,
+   * ?CAM_GetAllCameras@Moho@@YA?AV?$vector@VGeomCamera3@Moho@@V?$allocator@VGeomCamera3@Moho@@@std@@@std@@XZ)
    *
    * What it does:
    * Copies all non-minimap camera views from the manager into one returned
@@ -215,7 +234,8 @@ namespace moho
   }
 
   /**
-   * Address: 0x007AADE0 (FUN_007AADE0, ?CAM_GetAllRCamCameras@Moho@@YA?AV?$vector@PAVCameraImpl@Moho@@V?$allocator@PAVCameraImpl@Moho@@@std@@@std@@XZ)
+   * Address: 0x007AADE0 (FUN_007AADE0,
+   * ?CAM_GetAllRCamCameras@Moho@@YA?AV?$vector@PAVCameraImpl@Moho@@V?$allocator@PAVCameraImpl@Moho@@@std@@@std@@XZ)
    *
    * What it does:
    * Copies every camera pointer from the manager's temporary camera vector into
@@ -253,12 +273,17 @@ namespace moho
   }
 
   /**
-   * Address: 0x007AACD0 (FUN_007AACD0, ?CAM_CreateCamera@Moho@@YAPAVRCamCamera@1@VStrArg@gpg@@ABVSTIMap@1@PAVLuaState@LuaPlus@@@Z)
+   * Address: 0x007AACD0 (FUN_007AACD0,
+   * ?CAM_CreateCamera@Moho@@YAPAVRCamCamera@1@VStrArg@gpg@@ABVSTIMap@1@PAVLuaState@LuaPlus@@@Z)
    *
    * What it does:
    * Routes camera creation to the process-global camera manager.
    */
-  CameraImpl* CAM_CreateCamera(const gpg::StrArg name, const STIMap& map, LuaPlus::LuaState* const luaState)
+  CameraImpl* CAM_CreateCamera(
+    const gpg::StrArg name,
+    const STIMap& map,
+    LuaPlus::LuaState* const luaState
+  )
   {
     RCamManager* const manager = CAM_GetManager();
     return manager->CreateCamera(name, map, luaState);
@@ -270,7 +295,9 @@ namespace moho
    * What it does:
    * Routes camera lookup by name to the process-global camera manager.
    */
-  CameraImpl* CAM_GetCamera(const gpg::StrArg name)
+  CameraImpl* CAM_GetCamera(
+    const gpg::StrArg name
+  )
   {
     RCamManager* const manager = CAM_GetManager();
     return manager->GetCamera(name);
@@ -296,7 +323,10 @@ namespace moho
    * What it does:
    * Executes one frame tick on the process-global camera manager.
    */
-  void CAM_Frame(const float simDeltaSeconds, const float frameSeconds)
+  void CAM_Frame(
+    const float simDeltaSeconds,
+    const float frameSeconds
+  )
   {
     RCamManager* const manager = CAM_GetManager();
     manager->Frame(simDeltaSeconds, frameSeconds);
@@ -322,13 +352,16 @@ namespace moho
    * the initial `atoi`-selected float, so all four commands carry the same
    * selected LOD value.
    */
-  void SC_CameraScaleLOD(const fa::vector<fa::string>& args)
+  void SC_CameraScaleLOD(
+    const fa::vector<fa::string>& args
+  )
   {
     if (args.size() != 2) {
       return;
     }
 
-    // EDITOR: an index outside 0..2 (a damaged saved setting) read past the table: a random LOD scale for the whole session
+    // EDITOR: an index outside 0..2 (a damaged saved setting) read past the table: a random LOD scale for the whole
+    // session
     const int lodIndex = std::min(2, std::max(0, std::atoi(ConCommandArg(args, 1)->c_str())));
     const float lodValues[3] = {cam_LowLOD, cam_MediumLOD, cam_HighLOD};
     const float selectedLod = lodValues[lodIndex];
@@ -356,4 +389,3 @@ namespace moho
   }
 
 } // namespace moho
-

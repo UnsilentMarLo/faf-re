@@ -1,22 +1,25 @@
-// Editor natives for the parts of the environment EdWorld.cpp does not cover: the sky dome, the wave textures and movement of the water, the sky cube / background / environment cube
-// lookups and the strategic (cartographic) colours. All of it lives in the terrain resource and is written to the .scmap by the engine's own saver (CWldTerrainRes::Save: the sky block,
-// the water block, the cube maps), so what is set here is what a saved map carries.
+// Editor natives for the parts of the environment EdWorld.cpp does not cover: the sky dome, the wave textures and
+// movement of the water, the sky cube / background / environment cube lookups and the strategic (cartographic) colours.
+// All of it lives in the terrain resource and is written to the .scmap by the engine's own saver (CWldTerrainRes::Save:
+// the sky block, the water block, the cube maps), so what is set here is what a saved map carries.
 //
 //   ed_env_get()                   -> table name -> number
-//   ed_env_set(t[, reset])         -> true | nil     numbers present in `t`; `reset` (default true) also rebuilds the sky dome's GPU resources
-//   ed_env_texts()                 -> table name -> path (strings)
-//   ed_env_set_texts(t)            -> true | nil     texture paths present in `t`; the owners reload their textures
-//   ed_env_sky_decals()            -> flat list, 10 numbers per sky billboard (sun / moon / planets): x, y, z, rotation, width, height, u, v, du, dv
+//   ed_env_set(t[, reset])         -> true | nil     numbers present in `t`; `reset` (default true) also rebuilds the
+//   sky dome's GPU resources ed_env_texts()                 -> table name -> path (strings) ed_env_set_texts(t) -> true
+//   | nil     texture paths present in `t`; the owners reload their textures ed_env_sky_decals()            -> flat
+//   list, 10 numbers per sky billboard (sun / moon / planets): x, y, z, rotation, width, height, u, v, du, dv
 //   ed_env_set_sky_decals(list)    -> number of billboards set (at most 1024: the engine's buffer)
-//   ed_env_lookups()               -> flat list key, path, key, path ... (the environment cube maps meshes reflect: "<default>" and per environment)
-//   ed_env_set_lookups(list)       -> number of pairs set
+//   ed_env_lookups()               -> flat list key, path, key, path ... (the environment cube maps meshes reflect:
+//   "<default>" and per environment) ed_env_set_lookups(list)       -> number of pairs set
 //
 // Numbers (floats unless noted):
-//   dome_ox / oy / oz (centre), dome_height, dome_radius, dome_start (start angle), dome_w, dome_h (tessellation), horizon_size, horizon_r/g/b, sky_r/g/b, horizon_blend (the glow of the
-//   sky billboards), cirrus_mult, cirrus_r/g/b, cirrus1..4_fx, _fz (frequency), _speed, _dx, _dz (direction), sky_decal_count (read only),
-//   w_move1..4_x, _z (wave movement of the four normal maps), topo_samples, imager_offset, hypso0..4_r/g/b/a (0..1)
+//   dome_ox / oy / oz (centre), dome_height, dome_radius, dome_start (start angle), dome_w, dome_h (tessellation),
+//   horizon_size, horizon_r/g/b, sky_r/g/b, horizon_blend (the glow of the sky billboards), cirrus_mult, cirrus_r/g/b,
+//   cirrus1..4_fx, _fz (frequency), _speed, _dx, _dz (direction), sky_decal_count (read only), w_move1..4_x, _z (wave
+//   movement of the four normal maps), topo_samples, imager_offset, hypso0..4_r/g/b/a (0..1)
 // Texts:
-//   sky_billboards (albedo atlas), sky_glow (glow atlas), sky_cumulus1..3, sky_cirrus, skycube, background, water_cubemap, water_ramp, water_wave1..4
+//   sky_billboards (albedo atlas), sky_glow (glow atlas), sky_cumulus1..3, sky_cirrus, skycube, background,
+//   water_cubemap, water_ramp, water_wave1..4
 
 #include <algorithm>
 #include <cstdint>
@@ -54,18 +57,28 @@ namespace
     float* ptr;
   };
 
-  void Lane(std::vector<Field>& out, const std::string& name, float* const ptr)
+  void Lane(
+    std::vector<Field>& out,
+    const std::string& name,
+    float* const ptr
+  )
   {
     out.push_back({name, ptr});
   }
 
-  std::string Numbered(const char* const stem, const int n, const char* const tail)
+  std::string Numbered(
+    const char* const stem,
+    const int n,
+    const char* const tail
+  )
   {
     return std::string(stem) + std::to_string(n) + tail;
   }
 
   // The float lanes by name.
-  std::vector<Field> Fields(moho::CWldTerrainRes& t)
+  std::vector<Field> Fields(
+    moho::CWldTerrainRes& t
+  )
   {
     std::vector<Field> f;
     moho::SkyDome& sky = t.mSkyDome;
@@ -87,7 +100,8 @@ namespace
     Lane(f, "cirrus_r", &sky.mCirrusColor_R);
     Lane(f, "cirrus_g", &sky.mCirrusColor_G);
     Lane(f, "cirrus_b", &sky.mCirrusColor_B);
-    float* const layers = reinterpret_cast<float*>(sky.mCirrusData);        // 4 records of 5 floats: frequency (2), speed, direction (2)
+    float* const layers =
+      reinterpret_cast<float*>(sky.mCirrusData); // 4 records of 5 floats: frequency (2), speed, direction (2)
     static const char* const lane[5] = {"_fx", "_fz", "_speed", "_dx", "_dz"};
     for (int i = 0; i < 4; ++i) {
       for (int k = 0; k < 5; ++k) {
@@ -107,10 +121,12 @@ namespace
   {
     const char* name;
     fa::string* str;
-    int owner;      // 0 sky, 1 water, 2 terrain (skycube / background: through their setters)
+    int owner; // 0 sky, 1 water, 2 terrain (skycube / background: through their setters)
   };
 
-  std::vector<TextField> Texts(moho::CWldTerrainRes& t)
+  std::vector<TextField> Texts(
+    moho::CWldTerrainRes& t
+  )
   {
     std::vector<TextField> f;
     moho::SkyDome& sky = t.mSkyDome;
@@ -130,21 +146,31 @@ namespace
     return f;
   }
 
-  void Put(lua_State* const L, const char* const key, const double value)
+  void Put(
+    lua_State* const L,
+    const char* const key,
+    const double value
+  )
   {
     lua_pushstring(L, key);
     lua_pushnumber(L, static_cast<lua_Number>(value));
     lua_settable(L, -3);
   }
 
-  void PutText(lua_State* const L, const char* const key, const std::string& value)
+  void PutText(
+    lua_State* const L,
+    const char* const key,
+    const std::string& value
+  )
   {
     lua_pushstring(L, key);
     lua_pushstring(L, value.c_str());
     lua_settable(L, -3);
   }
 
-  int __cdecl cfunc_Get(lua_State* const L)
+  int __cdecl cfunc_Get(
+    lua_State* const L
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     if (t == nullptr) {
@@ -170,7 +196,12 @@ namespace
     return 1;
   }
 
-  bool Has(lua_State* const L, const int table, const char* const key, double& value)
+  bool Has(
+    lua_State* const L,
+    const int table,
+    const char* const key,
+    double& value
+  )
   {
     lua_pushstring(L, key);
     lua_gettable(L, table);
@@ -182,12 +213,16 @@ namespace
     return ok;
   }
 
-  std::uint32_t Byte(const double v)
+  std::uint32_t Byte(
+    const double v
+  )
   {
     return static_cast<std::uint32_t>(std::max(0.0, std::min(255.0, v * 255.0 + 0.5)));
   }
 
-  int __cdecl cfunc_Set(lua_State* const L)
+  int __cdecl cfunc_Set(
+    lua_State* const L
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -223,15 +258,28 @@ namespace
       std::uint32_t g = (old >> 8) & 255u;
       std::uint32_t b = old & 255u;
       bool any = false;
-      if (Has(L, 1, Numbered("hypso", i, "_a").c_str(), v)) { a = Byte(v); any = true; }
-      if (Has(L, 1, Numbered("hypso", i, "_r").c_str(), v)) { r = Byte(v); any = true; }
-      if (Has(L, 1, Numbered("hypso", i, "_g").c_str(), v)) { g = Byte(v); any = true; }
-      if (Has(L, 1, Numbered("hypso", i, "_b").c_str(), v)) { b = Byte(v); any = true; }
+      if (Has(L, 1, Numbered("hypso", i, "_a").c_str(), v)) {
+        a = Byte(v);
+        any = true;
+      }
+      if (Has(L, 1, Numbered("hypso", i, "_r").c_str(), v)) {
+        r = Byte(v);
+        any = true;
+      }
+      if (Has(L, 1, Numbered("hypso", i, "_g").c_str(), v)) {
+        g = Byte(v);
+        any = true;
+      }
+      if (Has(L, 1, Numbered("hypso", i, "_b").c_str(), v)) {
+        b = Byte(v);
+        any = true;
+      }
       if (any) {
         t->SetHypsometricColor(i, (a << 24) | (r << 16) | (g << 8) | b);
       }
     }
-    // the dome's vertex buffer is built from the shape numbers: a changed shape needs the GPU resources rebuilt (colours are read every frame)
+    // the dome's vertex buffer is built from the shape numbers: a changed shape needs the GPU resources rebuilt
+    // (colours are read every frame)
     if (shape || (lua_type(L, 2) != LUA_TNIL && lua_toboolean(L, 2) != 0)) {
       t->mSkyDome.Reset();
     }
@@ -239,7 +287,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Texts(lua_State* const L)
+  int __cdecl cfunc_Texts(
+    lua_State* const L
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     if (t == nullptr) {
@@ -255,7 +305,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_SetTexts(lua_State* const L)
+  int __cdecl cfunc_SetTexts(
+    lua_State* const L
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -287,7 +339,7 @@ namespace
     }
     lua_settop(L, -2);
     if (sky) {
-      t->mSkyDome.Reset();           // releases every texture handle: the next frame loads the paths again
+      t->mSkyDome.Reset(); // releases every texture handle: the next frame loads the paths again
     }
     if (water) {
       t->mWaterShaderProperties.releaseTextures();
@@ -296,7 +348,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_SkyDecals(lua_State* const L)
+  int __cdecl cfunc_SkyDecals(
+    lua_State* const L
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     if (t == nullptr) {
@@ -317,7 +371,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_SetSkyDecals(lua_State* const L)
+  int __cdecl cfunc_SetSkyDecals(
+    lua_State* const L
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -348,7 +404,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Lookups(lua_State* const L)
+  int __cdecl cfunc_Lookups(
+    lua_State* const L
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     if (t == nullptr) {
@@ -370,7 +428,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_SetLookups(lua_State* const L)
+  int __cdecl cfunc_SetLookups(
+    lua_State* const L
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -412,7 +472,9 @@ namespace
     EdEnvLuaBootstrap()
     {
       auto& set = UserLuaInitSet();
-      const auto bind = [&](const char* name, int(__cdecl* fn)(lua_State*), const char* doc) { (void)new moho::CScrLuaBinder(set, name, fn, nullptr, "<global>", doc); };
+      const auto bind = [&](const char* name, int(__cdecl * fn)(lua_State*), const char* doc) {
+        (void)new moho::CScrLuaBinder(set, name, fn, nullptr, "<global>", doc);
+      };
       bind("ed_env_get", &cfunc_Get, "ed_env_get() -> table of sky / water motion / imager numbers");
       bind("ed_env_set", &cfunc_Set, "ed_env_set(table[, reset]) -> true");
       bind("ed_env_texts", &cfunc_Texts, "ed_env_texts() -> table of sky / water / sky cube texture paths");
@@ -431,12 +493,19 @@ namespace moho::editor
 {
   namespace
   {
-    std::uint8_t* MaskPtr(moho::CWldTerrainRes& t, const int kind)
+    std::uint8_t* MaskPtr(
+      moho::CWldTerrainRes& t,
+      const int kind
+    )
     {
       return kind == 0 ? t.GetWaterFoam() : (kind == 1 ? t.GetWaterFlatness() : t.GetWaterDepthBias());
     }
 
-    bool MaskSize(moho::CWldTerrainRes& t, int& w, int& h)
+    bool MaskSize(
+      moho::CWldTerrainRes& t,
+      int& w,
+      int& h
+    )
     {
       if (t.mMap == nullptr || t.mMap->mHeightField.get() == nullptr) {
         return false;
@@ -447,7 +516,12 @@ namespace moho::editor
     }
   } // namespace
 
-  bool WaterMaskRead(const int kind, std::vector<std::uint8_t>& out, int& w, int& h)
+  bool WaterMaskRead(
+    const int kind,
+    std::vector<std::uint8_t>& out,
+    int& w,
+    int& h
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     if (t == nullptr || kind < 0 || kind > 2 || !MaskSize(*t, w, h) || MaskPtr(*t, kind) == nullptr) {
@@ -457,12 +531,20 @@ namespace moho::editor
     return true;
   }
 
-  bool WaterMaskWrite(const int kind, const std::uint8_t* const data, const int w, const int h)
+  bool WaterMaskWrite(
+    const int kind,
+    const std::uint8_t* const data,
+    const int w,
+    const int h
+  )
   {
     moho::CWldTerrainRes* const t = Terrain();
     int mw = 0;
     int mh = 0;
-    if (t == nullptr || kind < 0 || kind > 2 || !MaskSize(*t, mw, mh) || mw != w || mh != h || MaskPtr(*t, kind) == nullptr) {
+    if (
+      t == nullptr || kind < 0 || kind > 2 || !MaskSize(*t, mw, mh) || mw != w || mh != h ||
+      MaskPtr(*t, kind) == nullptr
+    ) {
       return false;
     }
     std::memcpy(MaskPtr(*t, kind), data, static_cast<std::size_t>(w) * static_cast<std::size_t>(h));

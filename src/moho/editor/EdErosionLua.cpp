@@ -1,15 +1,29 @@
-// EDITOR: Lua natives of the local erosion brush (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T3; the solver is EdErosion.cpp).
+// EDITOR: Lua natives of the local erosion brush (docs/projects/editor/TERRAIN_GEN_DESIGN.md, stage T3; the solver is
+// EdErosion.cpp).
 //
-//   ed_erode_begin([params])                      -> ok | nil, message   starts a stroke session: copies the map heights as floats, water / sediment start empty.
-//                                                 params (all optional numbers): rain evaporation gain capacity erosion deposition depth_max min_slope cut_limit talus thermal thermal_every max_speed vary vary_scale
-//                                                 inertia conserve seed. The brush runs water droplets (EdErosion.h): rain scales how many are released per round, capacity / erosion / deposition / evaporation /
-//                                                 min_slope / cut_limit / inertia are theirs, thermal / talus / thermal_every the slides after them; gain, depth_max and max_speed belong to the grid solver and are ignored
-//   ed_erode_window(cx, cz, radius[, {mode, margin}])  -> x0, z0, x1, z1    the inclusive sample window a dab would use (for building shaped brush weights); the erode and deposit brushes
-//                                                 never change a sample outside the radius, the rain brush up to 0.9 * margin past it
-//   ed_erode_dab(cx, cz, radius[, opts])          -> changed, x0, z0, x1, z1   one dab inside the open stroke of the document (ed_cmd_begin): runs the kernels on the window and writes
-//                                                 the new heights. opts: iterations strength falloff margin amount weights (list for the window, row major), mode = 'erode' | 'rain' | 'deposit',
-//                                                 shape (handle of ed_brush_shape_set, EdBrush.h) + angle (degrees): a shaped brush, the weights are made natively from the mask (cut at the radius)
-//   ed_erode_end([settle])                        -> changed, x0, z0, x1, z1   settles the remaining sediment (default) into the terrain, writes it and frees the session
+//   ed_erode_begin([params])                      -> ok | nil, message   starts a stroke session: copies the map
+//   heights as floats, water / sediment start empty.
+//                                                 params (all optional numbers): rain evaporation gain capacity erosion
+//                                                 deposition depth_max min_slope cut_limit talus thermal thermal_every
+//                                                 max_speed vary vary_scale inertia conserve seed. The brush runs water
+//                                                 droplets (EdErosion.h): rain scales how many are released per round,
+//                                                 capacity / erosion / deposition / evaporation / min_slope / cut_limit
+//                                                 / inertia are theirs, thermal / talus / thermal_every the slides
+//                                                 after them; gain, depth_max and max_speed belong to the grid solver
+//                                                 and are ignored
+//   ed_erode_window(cx, cz, radius[, {mode, margin}])  -> x0, z0, x1, z1    the inclusive sample window a dab would use
+//   (for building shaped brush weights); the erode and deposit brushes
+//                                                 never change a sample outside the radius, the rain brush up to 0.9 *
+//                                                 margin past it
+//   ed_erode_dab(cx, cz, radius[, opts])          -> changed, x0, z0, x1, z1   one dab inside the open stroke of the
+//   document (ed_cmd_begin): runs the kernels on the window and writes
+//                                                 the new heights. opts: iterations strength falloff margin amount
+//                                                 weights (list for the window, row major), mode = 'erode' | 'rain' |
+//                                                 'deposit', shape (handle of ed_brush_shape_set, EdBrush.h) + angle
+//                                                 (degrees): a shaped brush, the weights are made natively from the
+//                                                 mask (cut at the radius)
+//   ed_erode_end([settle])                        -> changed, x0, z0, x1, z1   settles the remaining sediment (default)
+//   into the terrain, writes it and frees the session
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -31,14 +45,22 @@ namespace
 
   er::ErodeSession gSession;
 
-  int Fail(lua_State* const L, const char* const message)
+  int Fail(
+    lua_State* const L,
+    const char* const message
+  )
   {
     lua_pushnil(L);
     lua_pushstring(L, message);
     return 2;
   }
 
-  double OptNum(lua_State* const L, const int index, const char* const key, const double fallback)
+  double OptNum(
+    lua_State* const L,
+    const int index,
+    const char* const key,
+    const double fallback
+  )
   {
     if (lua_type(L, index) != LUA_TTABLE) {
       return fallback;
@@ -53,7 +75,12 @@ namespace
     return v;
   }
 
-  std::string OptStr(lua_State* const L, const int index, const char* const key, const char* const fallback)
+  std::string OptStr(
+    lua_State* const L,
+    const int index,
+    const char* const key,
+    const char* const fallback
+  )
   {
     if (lua_type(L, index) != LUA_TTABLE) {
       return fallback;
@@ -65,7 +92,10 @@ namespace
     return v;
   }
 
-  er::HydroParams ParamsOf(lua_State* const L, const int index)
+  er::HydroParams ParamsOf(
+    lua_State* const L,
+    const int index
+  )
   {
     er::HydroParams p;
     p.rain = static_cast<float>(OptNum(L, index, "rain", p.rain));
@@ -89,9 +119,16 @@ namespace
     return p;
   }
 
-  int ModeOf(const std::string& s) { return s == "rain" ? 1 : (s == "deposit" ? 2 : 0); }
+  int ModeOf(
+    const std::string& s
+  )
+  {
+    return s == "rain" ? 1 : (s == "deposit" ? 2 : 0);
+  }
 
-  int __cdecl cfunc_Begin(lua_State* const L)
+  int __cdecl cfunc_Begin(
+    lua_State* const L
+  )
   {
     if (!moho::editor::AttachDocument(false)) {
       return Fail(L, "no terrain");
@@ -112,7 +149,9 @@ namespace
     return 1;
   }
 
-  int __cdecl cfunc_Window(lua_State* const L)
+  int __cdecl cfunc_Window(
+    lua_State* const L
+  )
   {
     // the window rule of ErodeSession::Dab, without running it
     const double cx = luaL_checknumber(L, 1), cz = luaL_checknumber(L, 2);
@@ -133,7 +172,14 @@ namespace
     return 4;
   }
 
-  int WriteBack(lua_State* const L, const int x0, const int z0, const int x1, const int z1, const std::vector<std::uint16_t>& words)
+  int WriteBack(
+    lua_State* const L,
+    const int x0,
+    const int z0,
+    const int x1,
+    const int z1,
+    const std::vector<std::uint16_t>& words
+  )
   {
     moho::editor::MapDocument& doc = moho::editor::Document();
     moho::editor::CellRect rect;
@@ -150,7 +196,9 @@ namespace
     return 5;
   }
 
-  int __cdecl cfunc_Dab(lua_State* const L)
+  int __cdecl cfunc_Dab(
+    lua_State* const L
+  )
   {
     if (!gSession.Active() || !moho::editor::AttachDocument(false)) {
       return Fail(L, "no erosion session (ed_erode_begin)");
@@ -182,17 +230,29 @@ namespace
       }
       lua_settop(L, -2);
     }
-    // opts.shape (a handle of ed_brush_shape_set) and opts.angle (degrees): a shaped brush. The weights of the dab's window are made here from the stored mask, instead of by a Lua callback
-    // per sample (terrain.lua used to hand a list built by Brush.Weight). Unknown handle: no weights, the round falloff.
+    // opts.shape (a handle of ed_brush_shape_set) and opts.angle (degrees): a shaped brush. The weights of the dab's
+    // window are made here from the stored mask, instead of by a Lua callback per sample (terrain.lua used to hand a
+    // list built by Brush.Weight). Unknown handle: no weights, the round falloff.
     if (lua_type(L, 4) == LUA_TTABLE) {
       const int shapeHandle = static_cast<int>(OptNum(L, 4, "shape", 0.0));
-      const moho::editor::brush::Shape* const shape = shapeHandle > 0 ? moho::editor::brush::FindShape(shapeHandle) : nullptr;
+      const moho::editor::brush::Shape* const shape =
+        shapeHandle > 0 ? moho::editor::brush::FindShape(shapeHandle) : nullptr;
       if (shape != nullptr) {
         moho::editor::MapDocument& doc = moho::editor::Document();
         int wx0, wz0, wx1, wz1;
-        er::BrushWindow(dab, doc.Width(), doc.Height(), wx0, wz0, wx1, wz1);       // the same rule as ErodeSession::Dab
-        moho::editor::brush::FillShapeWeights(*shape, static_cast<float>(OptNum(L, 4, "angle", 0.0)), static_cast<float>(dab.cx), static_cast<float>(dab.cz),
-                                              static_cast<float>(dab.radius), wx0, wz0, wx1, wz1, dab.weights);
+        er::BrushWindow(dab, doc.Width(), doc.Height(), wx0, wz0, wx1, wz1); // the same rule as ErodeSession::Dab
+        moho::editor::brush::FillShapeWeights(
+          *shape,
+          static_cast<float>(OptNum(L, 4, "angle", 0.0)),
+          static_cast<float>(dab.cx),
+          static_cast<float>(dab.cz),
+          static_cast<float>(dab.radius),
+          wx0,
+          wz0,
+          wx1,
+          wz1,
+          dab.weights
+        );
       }
     }
     int x0 = 0, z0 = 0, x1 = -1, z1 = -1;
@@ -204,7 +264,9 @@ namespace
     return WriteBack(L, x0, z0, x1, z1, words);
   }
 
-  int __cdecl cfunc_End(lua_State* const L)
+  int __cdecl cfunc_End(
+    lua_State* const L
+  )
   {
     if (!gSession.Active()) {
       lua_pushnumber(L, 0);
@@ -236,9 +298,13 @@ namespace
   {
     EdErosionLuaBootstrap()
     {
-      moho::editor::OnSessionEnd([] { gSession.End(); });   // the session's terrain is gone: drop the working copy
+      moho::editor::OnSessionEnd([] {
+        gSession.End();
+      }); // the session's terrain is gone: drop the working copy
       auto& set = UserLuaInitSet();
-      const auto bind = [&](const char* name, int (__cdecl* fn)(lua_State*), const char* doc) { (void)new moho::CScrLuaBinder(set, name, fn, nullptr, "<global>", doc); };
+      const auto bind = [&](const char* name, int(__cdecl * fn)(lua_State*), const char* doc) {
+        (void)new moho::CScrLuaBinder(set, name, fn, nullptr, "<global>", doc);
+      };
       bind("ed_erode_begin", &cfunc_Begin, "ed_erode_begin([params]) -> ok | nil, message");
       bind("ed_erode_window", &cfunc_Window, "ed_erode_window(cx, cz, radius[, {mode, margin}]) -> x0, z0, x1, z1");
       bind("ed_erode_dab", &cfunc_Dab, "ed_erode_dab(cx, cz, radius[, opts]) -> changed, x0, z0, x1, z1");

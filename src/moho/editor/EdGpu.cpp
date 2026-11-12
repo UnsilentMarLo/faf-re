@@ -1,9 +1,11 @@
-// EDITOR GPU compute backend: the device independent helpers (fields, dispatch geometry, RunIterations, the Lease) and the Direct3D 11 implementation of Backend / Executor.
-// See EdGpu.h and docs/projects/editor/GPU_COMPUTE.md. NOTHING IN THE DIRECT3D 11 PART WAS RUN ON A GPU when this was written (Linux, g++ syntax check against hand written
-// stub headers only): the first thing to do on a Windows machine is `dev.gpu` / ed_gpu_selftest().
+// EDITOR GPU compute backend: the device independent helpers (fields, dispatch geometry, RunIterations, the Lease) and
+// the Direct3D 11 implementation of Backend / Executor. See EdGpu.h and docs/projects/editor/GPU_COMPUTE.md. NOTHING IN
+// THE DIRECT3D 11 PART WAS RUN ON A GPU when this was written (Linux, g++ syntax check against hand written stub
+// headers only): the first thing to do on a Windows machine is `dev.gpu` / ed_gpu_selftest().
 //
-// Failure rules: no exception leaves this file, no wait is unbounded, any failure of the device marks the backend failed for the session (the objects are then NOT released:
-// a stuck driver may block Release) and every caller falls back to the CPU.
+// Failure rules: no exception leaves this file, no wait is unbounded, any failure of the device marks the backend
+// failed for the session (the objects are then NOT released: a stuck driver may block Release) and every caller falls
+// back to the CPU.
 #include "moho/editor/EdGpu.h"
 
 #include <algorithm>
@@ -28,9 +30,12 @@ namespace moho::editor::gpu::hk
 
 namespace moho::editor::gpu
 {
-  // ---- kernel table --------------------------------------------------------------------------------------------------------------------------
+  // ---- kernel table
+  // --------------------------------------------------------------------------------------------------------------------------
 
-  const KernelInfo* FindKernel(const char* const name)
+  const KernelInfo* FindKernel(
+    const char* const name
+  )
   {
     if (name == nullptr) {
       return nullptr;
@@ -43,31 +48,54 @@ namespace moho::editor::gpu
     return nullptr;
   }
 
-  int KernelCount() { return shaders::kKernelCount; }
-  const KernelInfo& KernelAt(const int index) { return shaders::kKernels[index]; }
+  int KernelCount()
+  {
+    return shaders::kKernelCount;
+  }
+  const KernelInfo& KernelAt(
+    const int index
+  )
+  {
+    return shaders::kKernels[index];
+  }
 
   namespace
   {
     std::atomic<LogFn> gLog{nullptr};
 
-    [[maybe_unused]] void Log(const std::string& line)
+    [[maybe_unused]] void Log(
+      const std::string& line
+    )
     {
       if (const LogFn fn = gLog.load(); fn != nullptr) {
         fn(line.c_str());
       }
     }
 
-    double MsSince(const std::chrono::steady_clock::time_point t0)
+    double MsSince(
+      const std::chrono::steady_clock::time_point t0
+    )
     {
       return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     }
   } // namespace
 
-  void SetLogSink(const LogFn fn) { gLog.store(fn); }
+  void SetLogSink(
+    const LogFn fn
+  )
+  {
+    gLog.store(fn);
+  }
 
-  // ---- helpers on top of an Executor ---------------------------------------------------------------------------------------------------------
+  // ---- helpers on top of an Executor
+  // ---------------------------------------------------------------------------------------------------------
 
-  bool MakeBuffer(Executor& ex, const u32 count, std::unique_ptr<Resource>& out, std::string& err)
+  bool MakeBuffer(
+    Executor& ex,
+    const u32 count,
+    std::unique_ptr<Resource>& out,
+    std::string& err
+  )
   {
     if (count == 0) {
       err = "empty buffer";
@@ -80,12 +108,23 @@ namespace moho::editor::gpu
     return out != nullptr;
   }
 
-  bool UploadBuffer(Executor& ex, Resource& r, const void* const data, const std::size_t bytes, std::string& err)
+  bool UploadBuffer(
+    Executor& ex,
+    Resource& r,
+    const void* const data,
+    const std::size_t bytes,
+    std::string& err
+  )
   {
     return ex.Upload(r, data, bytes, err);
   }
 
-  bool FillBuffer(Executor& ex, Resource& r, const u32 pattern, std::string& err)
+  bool FillBuffer(
+    Executor& ex,
+    Resource& r,
+    const u32 pattern,
+    std::string& err
+  )
   {
     if (r.kind != Resource::Kind::Buffer || r.stride != 4 || r.count == 0) {
       err = "FillBuffer needs a buffer of 4 byte elements";
@@ -95,7 +134,13 @@ namespace moho::editor::gpu
     return ex.Upload(r, words.data(), words.size() * 4, err);
   }
 
-  bool MakeField(Executor& ex, const int w, const int h, Field& out, std::string& err)
+  bool MakeField(
+    Executor& ex,
+    const int w,
+    const int h,
+    Field& out,
+    std::string& err
+  )
   {
     if (w < 1 || h < 1 || static_cast<std::uint64_t>(w) * static_cast<std::uint64_t>(h) > (1ull << 27)) {
       err = "field size out of range";
@@ -117,7 +162,12 @@ namespace moho::editor::gpu
     return true;
   }
 
-  bool UploadField(Executor& ex, Field& f, const float* const data, std::string& err)
+  bool UploadField(
+    Executor& ex,
+    Field& f,
+    const float* const data,
+    std::string& err
+  )
   {
     if (!f.buf) {
       err = "field not created";
@@ -126,7 +176,12 @@ namespace moho::editor::gpu
     return ex.Upload(*f.buf, data, f.buf->Bytes(), err);
   }
 
-  bool DownloadField(Executor& ex, Field& f, float* const data, std::string& err)
+  bool DownloadField(
+    Executor& ex,
+    Field& f,
+    float* const data,
+    std::string& err
+  )
   {
     if (!f.buf) {
       err = "field not created";
@@ -135,7 +190,12 @@ namespace moho::editor::gpu
     return ex.Download(*f.buf, data, f.buf->Bytes(), err);
   }
 
-  bool UploadGrid(Executor& ex, const field::Grid& g, Field& out, std::string& err)
+  bool UploadGrid(
+    Executor& ex,
+    const field::Grid& g,
+    Field& out,
+    std::string& err
+  )
   {
     if (g.v.size() != g.Count()) {
       err = "grid size does not match its data";
@@ -144,7 +204,12 @@ namespace moho::editor::gpu
     return MakeField(ex, g.w, g.h, out, err) && UploadField(ex, out, g.v.data(), err);
   }
 
-  bool DownloadGrid(Executor& ex, Field& f, field::Grid& g, std::string& err)
+  bool DownloadGrid(
+    Executor& ex,
+    Field& f,
+    field::Grid& g,
+    std::string& err
+  )
   {
     if (g.w != f.w || g.h != f.h || g.v.size() != g.Count()) {
       err = "grid and field differ in size";
@@ -153,7 +218,13 @@ namespace moho::editor::gpu
     return DownloadField(ex, f, g.v.data(), err);
   }
 
-  bool GroupsFor(const KernelInfo& k, const u32 w, const u32 h, Groups& g, std::string& err)
+  bool GroupsFor(
+    const KernelInfo& k,
+    const u32 w,
+    const u32 h,
+    Groups& g,
+    std::string& err
+  )
   {
     if (w == 0 || h == 0 || k.tx == 0 || k.ty == 0) {
       err = "empty dispatch";
@@ -169,13 +240,25 @@ namespace moho::editor::gpu
     return true;
   }
 
-  bool DispatchGridNoCb(Executor& ex, const KernelInfo& k, const u32 w, const u32 h, const Bindings& b, std::string& err)
+  bool DispatchGridNoCb(
+    Executor& ex,
+    const KernelInfo& k,
+    const u32 w,
+    const u32 h,
+    const Bindings& b,
+    std::string& err
+  )
   {
     Groups g;
     return GroupsFor(k, w, h, g, err) && ex.Dispatch(k, g, nullptr, 0, b, err);
   }
 
-  bool MakeTextureFromField(Executor& ex, const Field& f, std::unique_ptr<Resource>& tex, std::string& err)
+  bool MakeTextureFromField(
+    Executor& ex,
+    const Field& f,
+    std::unique_ptr<Resource>& tex,
+    std::string& err
+  )
   {
     if (!f.buf || !ex.SupportsTextures()) {
       err = "no texture support";
@@ -203,19 +286,33 @@ namespace moho::editor::gpu
     return DispatchGrid(ex, *k, p.w, p.h, p, b, err);
   }
 
-  u32 NextBatch(const u32 batch, const double ms, const double targetMs, const u32 remaining)
+  u32 NextBatch(
+    const u32 batch,
+    const double ms,
+    const double targetMs,
+    const u32 remaining
+  )
   {
     if (remaining == 0) {
       return 0;
     }
     const double perIteration = std::max(ms, 0.001) / static_cast<double>(std::max<u32>(batch, 1));
     double n = targetMs / perIteration;
-    n = std::min(n, static_cast<double>(std::max<u32>(batch, 1)) * 4.0);   // grow at most 4 times per step: one slow iteration is not an average
+    n = std::min(
+      n, static_cast<double>(std::max<u32>(batch, 1)) * 4.0
+    ); // grow at most 4 times per step: one slow iteration is not an average
     const u32 whole = n < 1.0 ? 1u : static_cast<u32>(n);
     return std::min(whole, remaining);
   }
 
-  bool RunIterations(Executor& ex, const u32 count, const double targetMs, const std::function<bool(u32, std::string&)>& step, std::string& err, IterStats* const stats)
+  bool RunIterations(
+    Executor& ex,
+    const u32 count,
+    const double targetMs,
+    const std::function<bool(u32, std::string&)>& step,
+    std::string& err,
+    IterStats* const stats
+  )
   {
     IterStats local;
     IterStats& s = stats != nullptr ? *stats : local;
@@ -237,7 +334,7 @@ namespace moho::editor::gpu
         s.iterations = done;
         return false;
       }
-      const double ms = MsSince(t0);   // wall time of the whole submission: the conservative number for the TDR limit
+      const double ms = MsSince(t0); // wall time of the whole submission: the conservative number for the TDR limit
       done += n;
       ++s.submits;
       s.totalMs += ms;
@@ -249,7 +346,8 @@ namespace moho::editor::gpu
     return true;
   }
 
-  // ---- Lease and the process backend -----------------------------------------------------------------------------------------------------------
+  // ---- Lease and the process backend
+  // -----------------------------------------------------------------------------------------------------------
 
   namespace
   {
@@ -259,14 +357,24 @@ namespace moho::editor::gpu
     std::atomic<u32> gPreferredDevice{0};
   } // namespace
 
-  void SetBackendForTest(Backend* const b) { gOverride = b; }
-  void SetPreferredAdapter(const u32 vendorId, const u32 deviceId)
+  void SetBackendForTest(
+    Backend* const b
+  )
+  {
+    gOverride = b;
+  }
+  void SetPreferredAdapter(
+    const u32 vendorId,
+    const u32 deviceId
+  )
   {
     gPreferredVendor.store(vendorId);
     gPreferredDevice.store(deviceId);
   }
 
-  Lease::Lease(const bool wait)
+  Lease::Lease(
+    const bool wait
+  )
   {
     if (tHolding) {
       busy_ = true;
@@ -294,13 +402,14 @@ namespace moho::editor::gpu
       if (ex_->DeviceLost()) {
         backend_->MarkFailed("device lost");
       }
-    } catch (...) {
-    }
+    } catch (...) {}
     tHolding = false;
     backend_->Release();
   }
 
-  void Lease::Fail(const std::string& why)
+  void Lease::Fail(
+    const std::string& why
+  )
   {
     if (backend_ != nullptr && ex_ != nullptr) {
       backend_->MarkFailed(why);
@@ -329,16 +438,29 @@ namespace moho::editor::gpu
 {
   namespace
   {
-    // d3dcompiler is loaded at run time (d3dcompiler_47.dll, else _43): no link dependency. The flags are written out so the old d3dcompiler.h of the June 2010 SDK is not needed.
+    // d3dcompiler is loaded at run time (d3dcompiler_47.dll, else _43): no link dependency. The flags are written out
+    // so the old d3dcompiler.h of the June 2010 SDK is not needed.
     constexpr UINT kCompileOptimizationLevel3 = 1u << 15;
     constexpr UINT kCompileEnableStrictness = 1u << 11;
-    using PFN_D3DCompile_ = HRESULT(WINAPI*)(LPCVOID pSrcData, SIZE_T SrcDataSize, LPCSTR pSourceName, const D3D_SHADER_MACRO* pDefines, ID3DInclude* pInclude, LPCSTR pEntrypoint,
-                                             LPCSTR pTarget, UINT Flags1, UINT Flags2, ID3DBlob** ppCode, ID3DBlob** ppErrorMsgs);
+    using PFN_D3DCompile_ = HRESULT(WINAPI*)(
+      LPCVOID pSrcData,
+      SIZE_T SrcDataSize,
+      LPCSTR pSourceName,
+      const D3D_SHADER_MACRO* pDefines,
+      ID3DInclude* pInclude,
+      LPCSTR pEntrypoint,
+      LPCSTR pTarget,
+      UINT Flags1,
+      UINT Flags2,
+      ID3DBlob** ppCode,
+      ID3DBlob** ppErrorMsgs
+    );
     using PFN_CreateDXGIFactory1_ = HRESULT(WINAPI*)(REFIID riid, void** ppFactory);
 
-    constexpr int kSyncTimeoutMs = 6000;      // far above the 2 s of the Windows driver reset: a wait this long means the device is gone
+    constexpr int kSyncTimeoutMs =
+      6000; // far above the 2 s of the Windows driver reset: a wait this long means the device is gone
     constexpr UINT kConstantBufferBytes = 4096;
-    constexpr UINT kAdapterFlagSoftware = 2;   // DXGI_ADAPTER_FLAG_SOFTWARE (not in the June 2010 SDK's dxgi.h)
+    constexpr UINT kAdapterFlagSoftware = 2; // DXGI_ADAPTER_FLAG_SOFTWARE (not in the June 2010 SDK's dxgi.h)
     constexpr std::uint64_t kPoolCapBytes = 512ull << 20;
     constexpr double kPoolMaxIdleSeconds = 30.0;
 
@@ -348,11 +470,23 @@ namespace moho::editor::gpu
     {
     public:
       Com() = default;
-      explicit Com(T* p) : p_(p) {}
+      explicit Com(
+        T* p
+      )
+        : p_(p)
+      {}
       Com(const Com&) = delete;
       Com& operator=(const Com&) = delete;
-      Com(Com&& o) noexcept : p_(o.p_) { o.p_ = nullptr; }
-      Com& operator=(Com&& o) noexcept
+      Com(
+        Com&& o
+      ) noexcept
+        : p_(o.p_)
+      {
+        o.p_ = nullptr;
+      }
+      Com& operator=(
+        Com&& o
+      ) noexcept
       {
         if (this != &o) {
           Reset();
@@ -361,7 +495,10 @@ namespace moho::editor::gpu
         }
         return *this;
       }
-      ~Com() { Reset(); }
+      ~Com()
+      {
+        Reset();
+      }
       void Reset()
       {
         if (p_ != nullptr) {
@@ -375,34 +512,48 @@ namespace moho::editor::gpu
         p_ = nullptr;
         return t;
       }
-      [[nodiscard]] T* Get() const { return p_; }
+      [[nodiscard]] T* Get() const
+      {
+        return p_;
+      }
       [[nodiscard]] T** Put()
       {
         Reset();
         return &p_;
       }
-      T* operator->() const { return p_; }
-      explicit operator bool() const { return p_ != nullptr; }
+      T* operator->() const
+      {
+        return p_;
+      }
+      explicit operator bool() const
+      {
+        return p_ != nullptr;
+      }
 
     private:
       T* p_ = nullptr;
     };
 
-    std::string Hex(const HRESULT hr)
+    std::string Hex(
+      const HRESULT hr
+    )
     {
       char buf[24];
       std::snprintf(buf, sizeof(buf), "0x%08lX", static_cast<unsigned long>(hr));
       return buf;
     }
 
-    std::string Narrow(const wchar_t* w)
+    std::string Narrow(
+      const wchar_t* w
+    )
     {
       char buf[260] = {};
       WideCharToMultiByte(CP_UTF8, 0, w, -1, buf, static_cast<int>(sizeof(buf)) - 1, nullptr, nullptr);
       return buf;
     }
 
-    // ---- pooled device objects ---------------------------------------------------------------------------------------------------------------
+    // ---- pooled device objects
+    // ---------------------------------------------------------------------------------------------------------------
 
     struct PoolEntry
     {
@@ -412,12 +563,15 @@ namespace moho::editor::gpu
       std::uint64_t bytes = 0;
       std::chrono::steady_clock::time_point last;
     };
-    using PoolKey = std::tuple<int, u32, u32>;   // (0 buffer / 1 texture / 2 staging buffer / 3 staging texture, a, b)
+    using PoolKey = std::tuple<int, u32, u32>; // (0 buffer / 1 texture / 2 staging buffer / 3 staging texture, a, b)
 
     class Pool
     {
     public:
-      bool Take(const PoolKey& key, PoolEntry& out)
+      bool Take(
+        const PoolKey& key,
+        PoolEntry& out
+      )
       {
         const std::lock_guard<std::mutex> lock(m_);
         auto it = free_.find(key);
@@ -429,17 +583,22 @@ namespace moho::editor::gpu
         pooled_ -= out.bytes;
         return true;
       }
-      void Give(const PoolKey& key, PoolEntry&& e)
+      void Give(
+        const PoolKey& key,
+        PoolEntry&& e
+      )
       {
         const std::lock_guard<std::mutex> lock(m_);
         if (pooled_ + e.bytes > kPoolCapBytes) {
-          return;   // dropped (released) when `e` goes out of scope
+          return; // dropped (released) when `e` goes out of scope
         }
         e.last = std::chrono::steady_clock::now();
         pooled_ += e.bytes;
         free_[key].push_back(std::move(e));
       }
-      void Purge(const double idleSeconds)
+      void Purge(
+        const double idleSeconds
+      )
       {
         const std::lock_guard<std::mutex> lock(m_);
         const auto now = std::chrono::steady_clock::now();
@@ -483,7 +642,8 @@ namespace moho::editor::gpu
       const void* owner = nullptr;
     };
 
-    // ---- the executor ------------------------------------------------------------------------------------------------------------------------
+    // ---- the executor
+    // ------------------------------------------------------------------------------------------------------------------------
 
     class D3D11Executor final : public Executor
     {
@@ -513,12 +673,28 @@ namespace moho::editor::gpu
         }
       }
 
-      [[nodiscard]] const char* Name() const override { return "Direct3D 11"; }
-      [[nodiscard]] std::uint64_t MaxBytes() const override { return maxBytes; }
-      [[nodiscard]] bool SupportsTextures() const override { return textures; }
-      [[nodiscard]] bool DeviceLost() const override { return lost; }
+      [[nodiscard]] const char* Name() const override
+      {
+        return "Direct3D 11";
+      }
+      [[nodiscard]] std::uint64_t MaxBytes() const override
+      {
+        return maxBytes;
+      }
+      [[nodiscard]] bool SupportsTextures() const override
+      {
+        return textures;
+      }
+      [[nodiscard]] bool DeviceLost() const override
+      {
+        return lost;
+      }
 
-      bool Fail(std::string& err, const std::string& what, const HRESULT hr)
+      bool Fail(
+        std::string& err,
+        const std::string& what,
+        const HRESULT hr
+      )
       {
         err = what + " (" + Hex(hr) + ")";
         CheckRemoved(err);
@@ -526,7 +702,9 @@ namespace moho::editor::gpu
       }
 
       /** After any failure: a removed device marks the executor lost (the backend then stays off). */
-      void CheckRemoved(std::string& err)
+      void CheckRemoved(
+        std::string& err
+      )
       {
         if (!dev) {
           return;
@@ -539,13 +717,19 @@ namespace moho::editor::gpu
         }
       }
 
-      void MarkLost(const std::string& why)
+      void MarkLost(
+        const std::string& why
+      )
       {
         lost = true;
         lostWhy = why;
       }
 
-      std::unique_ptr<Resource> CreateBuffer(const u32 count, const u32 stride, std::string& err) override
+      std::unique_ptr<Resource> CreateBuffer(
+        const u32 count,
+        const u32 stride,
+        std::string& err
+      ) override
       {
         if (lost) {
           err = lostWhy;
@@ -599,11 +783,17 @@ namespace moho::editor::gpu
           return nullptr;
         }
         r->entry.bytes = static_cast<std::uint64_t>(bd.ByteWidth);
-        r->entry.res = Com<ID3D11Resource>(buf.Detach());   // Detach keeps the reference the new Com owns (ID3D11Buffer derives from ID3D11Resource)
+        r->entry.res = Com<ID3D11Resource>(
+          buf.Detach()
+        ); // Detach keeps the reference the new Com owns (ID3D11Buffer derives from ID3D11Resource)
         return r;
       }
 
-      std::unique_ptr<Resource> CreateTexture(const u32 w, const u32 h, std::string& err) override
+      std::unique_ptr<Resource> CreateTexture(
+        const u32 w,
+        const u32 h,
+        std::string& err
+      ) override
       {
         if (lost) {
           err = lostWhy;
@@ -667,7 +857,10 @@ namespace moho::editor::gpu
         return r;
       }
 
-      D3DResource* Mine(Resource& r, std::string& err)
+      D3DResource* Mine(
+        Resource& r,
+        std::string& err
+      )
       {
         auto* d = static_cast<D3DResource*>(&r);
         if (d->owner != this || !d->entry.res) {
@@ -677,7 +870,12 @@ namespace moho::editor::gpu
         return d;
       }
 
-      bool Upload(Resource& r, const void* const data, const std::size_t bytes, std::string& err) override
+      bool Upload(
+        Resource& r,
+        const void* const data,
+        const std::size_t bytes,
+        std::string& err
+      ) override
       {
         if (lost) {
           err = lostWhy;
@@ -712,7 +910,12 @@ namespace moho::editor::gpu
         return true;
       }
 
-      bool WaitQuery(ID3D11Query* const q, void* const data, const UINT size, std::string& err)
+      bool WaitQuery(
+        ID3D11Query* const q,
+        void* const data,
+        const UINT size,
+        std::string& err
+      )
       {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kSyncTimeoutMs);
         int spins = 0;
@@ -737,7 +940,12 @@ namespace moho::editor::gpu
         }
       }
 
-      bool Download(Resource& r, void* const data, const std::size_t bytes, std::string& err) override
+      bool Download(
+        Resource& r,
+        void* const data,
+        const std::size_t bytes,
+        std::string& err
+      ) override
       {
         if (lost) {
           err = lostWhy;
@@ -797,7 +1005,11 @@ namespace moho::editor::gpu
         if (tex) {
           const std::size_t rowBytes = static_cast<std::size_t>(r.w) * 4u;
           for (u32 y = 0; y < r.h && (static_cast<std::size_t>(y) + 1) * rowBytes <= bytes; ++y) {
-            std::memcpy(static_cast<char*>(data) + static_cast<std::size_t>(y) * rowBytes, static_cast<const char*>(m.pData) + static_cast<std::size_t>(y) * m.RowPitch, rowBytes);
+            std::memcpy(
+              static_cast<char*>(data) + static_cast<std::size_t>(y) * rowBytes,
+              static_cast<const char*>(m.pData) + static_cast<std::size_t>(y) * m.RowPitch,
+              rowBytes
+            );
           }
         } else {
           std::memcpy(data, m.pData, bytes);
@@ -807,9 +1019,14 @@ namespace moho::editor::gpu
         return true;
       }
 
-      // ---- shaders ---------------------------------------------------------------------------------------------------------------------------
+      // ---- shaders
+      // ---------------------------------------------------------------------------------------------------------------------------
 
-      bool GetShader(const KernelInfo& k, ID3D11ComputeShader*& out, std::string& err)
+      bool GetShader(
+        const KernelInfo& k,
+        ID3D11ComputeShader*& out,
+        std::string& err
+      )
       {
         const auto it = shaders.find(k.hash);
         if (it != shaders.end()) {
@@ -822,9 +1039,23 @@ namespace moho::editor::gpu
         }
         Com<ID3DBlob> code, errors;
         const auto t0 = std::chrono::steady_clock::now();
-        const HRESULT hr = compile(k.source, std::strlen(k.source), k.name, nullptr, nullptr, k.entry, "cs_5_0", kCompileOptimizationLevel3 | kCompileEnableStrictness, 0, code.Put(), errors.Put());
+        const HRESULT hr = compile(
+          k.source,
+          std::strlen(k.source),
+          k.name,
+          nullptr,
+          nullptr,
+          k.entry,
+          "cs_5_0",
+          kCompileOptimizationLevel3 | kCompileEnableStrictness,
+          0,
+          code.Put(),
+          errors.Put()
+        );
         if (FAILED(hr) || !code) {
-          std::string text = errors ? std::string(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()) : std::string();
+          std::string text = errors
+            ? std::string(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize())
+            : std::string();
           if (text.size() > 2000) {
             text.resize(2000);
           }
@@ -833,27 +1064,44 @@ namespace moho::editor::gpu
           return false;
         }
         Com<ID3D11ComputeShader> cs;
-        const HRESULT hr2 = dev->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, cs.Put());
+        const HRESULT hr2 =
+          dev->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, cs.Put());
         if (FAILED(hr2)) {
           return Fail(err, std::string("CreateComputeShader ") + k.name + " failed", hr2);
         }
-        Log(std::string("GPU compute: compiled kernel ") + k.name + " in " + std::to_string(static_cast<int>(MsSince(t0))) + " ms");
+        Log(
+          std::string("GPU compute: compiled kernel ") + k.name + " in " +
+          std::to_string(static_cast<int>(MsSince(t0))) + " ms"
+        );
         out = cs.Get();
         shaders[k.hash] = std::move(cs);
         return true;
       }
 
-      bool Dispatch(const KernelInfo& k, const Groups groups, const void* const cb, const u32 cbBytes, const Bindings& b, std::string& err) override
+      bool Dispatch(
+        const KernelInfo& k,
+        const Groups groups,
+        const void* const cb,
+        const u32 cbBytes,
+        const Bindings& b,
+        std::string& err
+      ) override
       {
         if (lost) {
           err = lostWhy;
           return false;
         }
-        if (groups.x == 0 || groups.y == 0 || groups.z == 0 || groups.x > kMaxGroups || groups.y > kMaxGroups || groups.z > kMaxGroups) {
+        if (
+          groups.x == 0 || groups.y == 0 || groups.z == 0 || groups.x > kMaxGroups || groups.y > kMaxGroups ||
+          groups.z > kMaxGroups
+        ) {
           err = "dispatch group count out of range";
           return false;
         }
-        if ((k.hasCb != 0) != (cb != nullptr) || (k.hasCb != 0 && (cbBytes == 0 || cbBytes % 16 != 0 || cbBytes > kConstantBufferBytes))) {
+        if (
+          (k.hasCb != 0) != (cb != nullptr) ||
+          (k.hasCb != 0 && (cbBytes == 0 || cbBytes % 16 != 0 || cbBytes > kConstantBufferBytes))
+        ) {
           err = std::string("kernel ") + k.name + ": constant buffer missing, unexpected or not a multiple of 16 bytes";
           return false;
         }
@@ -945,7 +1193,10 @@ namespace moho::editor::gpu
         return true;
       }
 
-      bool Sync(double* const gpuMs, std::string& err) override
+      bool Sync(
+        double* const gpuMs,
+        std::string& err
+      ) override
       {
         if (gpuMs != nullptr) {
           *gpuMs = 0.0;
@@ -966,7 +1217,10 @@ namespace moho::editor::gpu
           }
           UINT64 t1 = 0;
           UINT64 t2 = 0;
-          if (WaitQuery(qStart.Get(), &t1, sizeof(t1), err) && WaitQuery(qEnd.Get(), &t2, sizeof(t2), err) && !dj.Disjoint && dj.Frequency != 0 && t2 >= t1) {
+          if (
+            WaitQuery(qStart.Get(), &t1, sizeof(t1), err) && WaitQuery(qEnd.Get(), &t2, sizeof(t2), err) &&
+            !dj.Disjoint && dj.Frequency != 0 && t2 >= t1
+          ) {
             if (gpuMs != nullptr) {
               *gpuMs = static_cast<double>(t2 - t1) * 1000.0 / static_cast<double>(dj.Frequency);
             }
@@ -996,10 +1250,17 @@ namespace moho::editor::gpu
       }
 
       /** Called by the backend at the start of a lease: gives back device objects idle for a long time. */
-      void Housekeeping() { pool->Purge(kPoolMaxIdleSeconds); }
+      void Housekeeping()
+      {
+        pool->Purge(kPoolMaxIdleSeconds);
+      }
 
-      /** Creates what every dispatch needs (constant buffer, samplers, queries) and finds out whether R32_FLOAT textures can be sampled and written. */
-      bool Prepare(const PFN_D3DCompile_ compileFn, std::string& err)
+      /** Creates what every dispatch needs (constant buffer, samplers, queries) and finds out whether R32_FLOAT
+       * textures can be sampled and written. */
+      bool Prepare(
+        const PFN_D3DCompile_ compileFn,
+        std::string& err
+      )
       {
         compile = compileFn;
         D3D11_BUFFER_DESC bd = {};
@@ -1056,13 +1317,15 @@ namespace moho::editor::gpu
         const bool sample = (fs & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE) != 0;
         D3D11_FEATURE_DATA_FORMAT_SUPPORT2 f2 = {};
         f2.InFormat = DXGI_FORMAT_R32_FLOAT;
-        const bool store = SUCCEEDED(dev->CheckFeatureSupport(D3D11_FEATURE_FORMAT_SUPPORT2, &f2, sizeof(f2))) && (f2.OutFormatSupport2 & D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE) != 0;
+        const bool store = SUCCEEDED(dev->CheckFeatureSupport(D3D11_FEATURE_FORMAT_SUPPORT2, &f2, sizeof(f2))) &&
+          (f2.OutFormatSupport2 & D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE) != 0;
         textures = tex2d != 0 && sample && store;
         return true;
       }
     };
 
-    // ---- the backend -------------------------------------------------------------------------------------------------------------------------
+    // ---- the backend
+    // -------------------------------------------------------------------------------------------------------------------------
 
     struct Candidate
     {
@@ -1082,7 +1345,9 @@ namespace moho::editor::gpu
         }
       }
 
-      BackendInfo Info(const bool probe) override
+      BackendInfo Info(
+        const bool probe
+      ) override
       {
         if (probe && !tHolding && !tried_) {
           bool busy = false;
@@ -1107,7 +1372,11 @@ namespace moho::editor::gpu
         return !failed_ && !(tried_ && !available_);
       }
 
-      Executor* Acquire(const bool wait, bool& busy, std::string& err) override
+      Executor* Acquire(
+        const bool wait,
+        bool& busy,
+        std::string& err
+      ) override
       {
         busy = false;
         std::unique_lock<std::mutex> lk(use_, std::defer_lock);
@@ -1134,13 +1403,18 @@ namespace moho::editor::gpu
           return nullptr;
         }
         exec_->Housekeeping();
-        (void)lk.release();   // stays locked until Release()
+        (void)lk.release(); // stays locked until Release()
         return exec_.get();
       }
 
-      void Release() override { use_.unlock(); }
+      void Release() override
+      {
+        use_.unlock();
+      }
 
-      void MarkFailed(const std::string& why) override
+      void MarkFailed(
+        const std::string& why
+      ) override
       {
         const std::lock_guard<std::mutex> lock(infoMutex_);
         if (!failed_) {
@@ -1153,7 +1427,7 @@ namespace moho::editor::gpu
       void Reset() override
       {
         if (tHolding) {
-          return;   // the thread that holds a lease cannot reset the device under itself
+          return; // the thread that holds a lease cannot reset the device under itself
         }
         const std::lock_guard<std::mutex> useLock(use_);
         // a failed device is abandoned (leaked), a healthy one released
@@ -1171,7 +1445,9 @@ namespace moho::editor::gpu
       }
 
     private:
-      void SetError(const std::string& e)
+      void SetError(
+        const std::string& e
+      )
       {
         const std::lock_guard<std::mutex> lock(infoMutex_);
         lastError_ = e;
@@ -1197,9 +1473,15 @@ namespace moho::editor::gpu
           SetError("d3d11.dll not found (Direct3D 11 is not installed)");
           return;
         }
-        const auto create = reinterpret_cast<PFN_D3D11_CREATE_DEVICE>(reinterpret_cast<void*>(GetProcAddress(d3d11, "D3D11CreateDevice")));
+        const auto create = reinterpret_cast<PFN_D3D11_CREATE_DEVICE>(
+          reinterpret_cast<void*>(GetProcAddress(d3d11, "D3D11CreateDevice"))
+        );
         const HMODULE dxgi = LoadLibraryA("dxgi.dll");
-        const auto createFactory = dxgi != nullptr ? reinterpret_cast<PFN_CreateDXGIFactory1_>(reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory1"))) : nullptr;
+        const auto createFactory = dxgi != nullptr
+          ? reinterpret_cast<PFN_CreateDXGIFactory1_>(
+              reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory1"))
+            )
+          : nullptr;
         if (create == nullptr || createFactory == nullptr) {
           SetError("D3D11CreateDevice / CreateDXGIFactory1 not found");
           return;
@@ -1211,7 +1493,9 @@ namespace moho::editor::gpu
           compilerName = "d3dcompiler_43.dll";
           compiler = LoadLibraryA(compilerName);
         }
-        PFN_D3DCompile_ compileFn = compiler != nullptr ? reinterpret_cast<PFN_D3DCompile_>(reinterpret_cast<void*>(GetProcAddress(compiler, "D3DCompile"))) : nullptr;
+        PFN_D3DCompile_ compileFn = compiler != nullptr
+          ? reinterpret_cast<PFN_D3DCompile_>(reinterpret_cast<void*>(GetProcAddress(compiler, "D3DCompile")))
+          : nullptr;
         if (compileFn == nullptr) {
           SetError("no shader compiler: d3dcompiler_47.dll / d3dcompiler_43.dll not found");
           return;
@@ -1234,9 +1518,10 @@ namespace moho::editor::gpu
             continue;
           }
           if ((c.desc.Flags & kAdapterFlagSoftware) != 0 || c.desc.VendorId == 0x1414) {
-            continue;   // WARP / the basic render driver: far slower than the CPU ops
+            continue; // WARP / the basic render driver: far slower than the CPU ops
           }
-          c.preferred = gPreferredVendor.load() != 0 && c.desc.VendorId == gPreferredVendor.load() && (gPreferredDevice.load() == 0 || c.desc.DeviceId == gPreferredDevice.load());
+          c.preferred = gPreferredVendor.load() != 0 && c.desc.VendorId == gPreferredVendor.load() &&
+            (gPreferredDevice.load() == 0 || c.desc.DeviceId == gPreferredDevice.load());
           list.push_back(std::move(c));
         }
         if (list.empty()) {
@@ -1255,9 +1540,21 @@ namespace moho::editor::gpu
           auto ex = std::make_unique<D3D11Executor>();
           const D3D_FEATURE_LEVEL wanted[1] = {D3D_FEATURE_LEVEL_11_0};
           D3D_FEATURE_LEVEL got = D3D_FEATURE_LEVEL_9_1;
-          hr = create(c.adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, wanted, 1, D3D11_SDK_VERSION, ex->dev.Put(), &got, ex->ctx.Put());
+          hr = create(
+            c.adapter.Get(),
+            D3D_DRIVER_TYPE_UNKNOWN,
+            nullptr,
+            0,
+            wanted,
+            1,
+            D3D11_SDK_VERSION,
+            ex->dev.Put(),
+            &got,
+            ex->ctx.Put()
+          );
           if (FAILED(hr) || !ex->dev || !ex->ctx) {
-            lastFail = Narrow(c.desc.Description) + ": D3D11CreateDevice at feature level 11_0 failed (" + Hex(hr) + ")";
+            lastFail =
+              Narrow(c.desc.Description) + ": D3D11CreateDevice at feature level 11_0 failed (" + Hex(hr) + ")";
             continue;
           }
           if (got < D3D_FEATURE_LEVEL_11_0) {
@@ -1277,7 +1574,9 @@ namespace moho::editor::gpu
             const std::lock_guard<std::mutex> lock(infoMutex_);
             info_.adapter = Narrow(c.desc.Description);
             info_.vramMB = dedicated >> 20;
-            info_.featureLevel = static_cast<int>(got) == 0xb100 ? "11_1" : "11_0";   // D3D_FEATURE_LEVEL_11_1 is not in the June 2010 SDK's headers
+            info_.featureLevel = static_cast<int>(got) == 0xb100
+              ? "11_1"
+              : "11_0"; // D3D_FEATURE_LEVEL_11_1 is not in the June 2010 SDK's headers
             info_.compiler = compilerName;
             info_.textures = ex->textures;
             info_.maxBytes = ex->maxBytes;
@@ -1285,18 +1584,21 @@ namespace moho::editor::gpu
           }
           exec_ = std::move(ex);
           available_ = true;
-          Log("GPU compute: using " + info_.adapter + " (" + std::to_string(info_.vramMB) + " MB, feature level " + info_.featureLevel + ", " + compilerName + ")");
+          Log(
+            "GPU compute: using " + info_.adapter + " (" + std::to_string(info_.vramMB) + " MB, feature level " +
+            info_.featureLevel + ", " + compilerName + ")"
+          );
           return;
         }
         SetError(lastFail.empty() ? std::string("no adapter supports feature level 11_0") : lastFail);
       }
 
-      std::mutex use_;           // held by the Lease
-      std::mutex infoMutex_;     // the state below; never held while waiting for the device
+      std::mutex use_;       // held by the Lease
+      std::mutex infoMutex_; // the state below; never held while waiting for the device
       std::unique_ptr<D3D11Executor> exec_;
       std::atomic<bool> tried_{false};
       std::atomic<bool> available_{false};
-      bool failed_ = false;       // under infoMutex_
+      bool failed_ = false; // under infoMutex_
       std::string lastError_;
       BackendInfo info_;
     };
@@ -1314,21 +1616,33 @@ namespace moho::editor::gpu
     class NullBackend final : public Backend
     {
     public:
-      BackendInfo Info(bool) override
+      BackendInfo Info(
+        bool
+      ) override
       {
         BackendInfo i;
         i.lastError = "built without Direct3D 11";
         return i;
       }
-      bool MayWork() override { return false; }
-      Executor* Acquire(bool, bool& busy, std::string& err) override
+      bool MayWork() override
+      {
+        return false;
+      }
+      Executor* Acquire(
+        bool,
+        bool& busy,
+        std::string& err
+      ) override
       {
         busy = false;
         err = "built without Direct3D 11";
         return nullptr;
       }
       void Release() override {}
-      void MarkFailed(const std::string&) override {}
+      void MarkFailed(
+        const std::string&
+      ) override
+      {}
       void Reset() override {}
     };
   } // namespace

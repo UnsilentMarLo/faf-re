@@ -34,7 +34,8 @@ namespace moho::editor
   /** Sim thread, between beats: applies the queued height edits to the sim's field and dirties its path caches. */
   std::size_t ApplyPendingHeightEdits(Sim* sim);
 
-  /** Puts ApplyPendingHeightEdits into the engine's per-beat hook (moho/sim/SimEditorHook.h); called once by the editor's start (EdBootstrap.cpp). */
+  /** Puts ApplyPendingHeightEdits into the engine's per-beat hook (moho/sim/SimEditorHook.h); called once by the
+   * editor's start (EdBootstrap.cpp). */
   void InstallSimBeatHook();
 
   /** Checksum of the sim's own height field over a rectangle, comparable with MapDocument::Checksum. */
@@ -43,9 +44,10 @@ namespace moho::editor
   [[nodiscard]] std::string HexChecksum(std::uint64_t value);
 
   /**
-   * Session end (WLD_Teardown, before the old session is deleted): drops the queued height edits, forgets the terrain the document was
-   * attached to (a new session may reuse the same addresses), then runs every handler registered with OnSessionEnd. Editor modules that
-   * keep per-session caches (strata mask shadow, erosion session, ...) register one. Handlers run on the UI thread with the sim stopped.
+   * Session end (WLD_Teardown, before the old session is deleted): drops the queued height edits, forgets the terrain
+   * the document was attached to (a new session may reuse the same addresses), then runs every handler registered with
+   * OnSessionEnd. Editor modules that keep per-session caches (strata mask shadow, erosion session, ...) register one.
+   * Handlers run on the UI thread with the sim stopped.
    */
   void EndSession();
   void OnSessionEnd(void (*handler)());
