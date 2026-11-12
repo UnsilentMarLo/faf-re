@@ -611,7 +611,8 @@ namespace moho
     [[nodiscard]]
     bool MapLoad(gpg::StrArg mapName, LuaPlus::LuaState* state, bool previewOnly, CBackgroundTaskControl& loadControl);
 
-    /// Editor addition: save to an explicit disk path (the container the retail `MapSave` wrote; upstream removed the unused `MapSave`).
+    /// Editor addition: save to an explicit disk path (the container the retail `MapSave` wrote; upstream removed the
+    /// unused `MapSave`).
     [[nodiscard]] bool MapSaveToDiskPath(const char* diskPath);
 
   private:
