@@ -183,6 +183,7 @@ void Sim::Setup(
     if (props != nullptr && !props->mEntries.empty()) {
       propCount = static_cast<int>(props->mEntries.size());
       for (const CWldPropEntry* entry = props->mEntries.begin(); entry != props->mEntries.end(); ++entry) {
+#if defined(FAF_STUDIO_EDITOR)
         Prop* const prop = PROP_Create(this, entry->mTransform, entry->mBlueprintPath.c_str());
         // EDITOR DIVERGENCE (prop-scale compat layer), same contract as the patched retail exe's MapPropScale
         // (FA-Binary-Patches-mesh/section/MapPropScale.cpp): the record's scale multiplies the draw scale the
@@ -198,6 +199,9 @@ void Sim::Setup(
           prop->mVarDat.mScale.z *= scale.z;
           prop->ListLinkBefore(&mCoordEntities);
         }
+#else
+        (void)PROP_Create(this, entry->mTransform, entry->mBlueprintPath.c_str());
+#endif
       }
     }
     gpg::Warnf(" NUM PROPS = %d", propCount);

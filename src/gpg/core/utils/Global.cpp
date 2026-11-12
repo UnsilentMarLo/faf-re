@@ -2560,6 +2560,7 @@ bool gpg::ParseNum(
   return true;
 }
 
+#if defined(FAF_STUDIO_EDITOR)
 namespace
 {
   // EDITOR: kept out of gpg::SetThreadName because MSVC refuses __try in a function that needs unwinding (C2712): the
@@ -2601,6 +2602,7 @@ namespace
     }
   }
 } // namespace
+#endif // FAF_STUDIO_EDITOR
 
 /**
  * Address: 0x009071D0 (FUN_009071D0, gpg::SetThreadName)
@@ -2615,8 +2617,10 @@ void gpg::SetThreadName(
   [[maybe_unused]] const char* const name
 )
 {
+#if defined(FAF_STUDIO_EDITOR)
   NameThreadForSystem(id, name); // EDITOR: the thread shows its name in the debugger (the stock AQtime exception stays
                                  // out, as in the FAF hot patch)
+#endif
   FAF_PROFILE_SET_THREAD_NAME(name);
 }
 

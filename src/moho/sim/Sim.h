@@ -6111,7 +6111,6 @@ namespace moho
    * slot 0x0128B884).
    */
   CScrLuaInitForm* func_GetDepositsAroundPoint_LuaFuncDef();
-  CScrLuaInitForm* func_GetDepositsAroundPointUser_LuaFuncDef();
 
   /**
    * What it does:

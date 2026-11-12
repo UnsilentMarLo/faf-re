@@ -377,7 +377,9 @@ namespace
     defaultEntry.mBlueprintPath.tidy(false, 0U);
     defaultEntry.mTransform.orient_ = Wm3::Quatf{1.0f, 0.0f, 0.0f, 0.0f};
     defaultEntry.mTransform.pos_ = Wm3::Vec3f{0.0f, 0.0f, 0.0f};
+#if defined(FAF_STUDIO_EDITOR)
     defaultEntry.mScale = Wm3::Vec3f{1.0f, 1.0f, 1.0f};
+#endif
     return defaultEntry;
   }
 
@@ -397,7 +399,11 @@ namespace
   {
     outEntry.mBlueprintPath.assign_owned(path.c_str());
     outEntry.mTransform = transform;
+#if defined(FAF_STUDIO_EDITOR)
     outEntry.mScale = scale;
+#else
+    (void)scale;
+#endif
     return &outEntry;
   }
 
@@ -518,6 +524,7 @@ namespace moho
         reader.ReadExact(row.z);
       }
 
+#if defined(FAF_STUDIO_EDITOR)
       // The three scale lanes retail reads and drops (EDITOR DIVERGENCE: kept, see CWldPropEntry::mScale).
       float scaleX = 1.0f;
       float scaleY = 1.0f;
@@ -525,6 +532,14 @@ namespace moho
       reader.ReadExact(scaleX);
       reader.ReadExact(scaleY);
       reader.ReadExact(scaleZ);
+#else
+      float ignoredLane0 = 0.0f;
+      float ignoredLane1 = 0.0f;
+      float ignoredLane2 = 0.0f;
+      reader.ReadExact(ignoredLane0);
+      reader.ReadExact(ignoredLane1);
+      reader.ReadExact(ignoredLane2);
+#endif
 
       MatrixToQuat(matrixRows, &transform.orient_);
       Wm3::Quatf& orientation = transform.orient_;
@@ -544,7 +559,11 @@ namespace moho
         orientation = Wm3::Quatf{0.0f, 0.0f, 0.0f, 0.0f};
       }
 
+#if defined(FAF_STUDIO_EDITOR)
       PackWldPropEntry(mEntries[index], transform, blueprintPath, Wm3::Vec3f{scaleX, scaleY, scaleZ});
+#else
+      PackWldPropEntry(mEntries[index], transform, blueprintPath);
+#endif
     }
 
     return true;
@@ -583,9 +602,16 @@ namespace moho
       writer.Write(matrix.vZ.y);
       writer.Write(matrix.vZ.z);
 
+#if defined(FAF_STUDIO_EDITOR)
       writer.Write(entry.mScale.x);
       writer.Write(entry.mScale.y);
       writer.Write(entry.mScale.z);
+#else
+      constexpr float kScaleIdentity = 1.0f;
+      writer.Write(kScaleIdentity);
+      writer.Write(kScaleIdentity);
+      writer.Write(kScaleIdentity);
+#endif
     }
 
     return true;

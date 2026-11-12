@@ -56,14 +56,21 @@ namespace moho
   {
     fa::string mBlueprintPath; // +0x00
     VTransform mTransform;     // +0x1C
+#if defined(FAF_STUDIO_EDITOR)
     // EDITOR DIVERGENCE (prop-scale compat layer; retail record is 0x38 bytes and drops the three scale lanes of the
-    // .scmap prop record, CWldProps::Load/Save). Kept per prop so the editor reads, edits and writes them.
+    // .scmap prop record, CWldProps::Load/Save). Kept per prop so the editor reads, edits and writes them. Not in the
+    // game's build (FAF_EDITOR=OFF): the record is the retail one.
     Wm3::Vec3f mScale{1.0f, 1.0f, 1.0f}; // +0x38
+#endif
   };
   static_assert(offsetof(CWldPropEntry, mBlueprintPath) == 0x00, "CWldPropEntry::mBlueprintPath offset must be 0x00");
   static_assert(offsetof(CWldPropEntry, mTransform) == 0x1C, "CWldPropEntry::mTransform offset must be 0x1C");
+#if defined(FAF_STUDIO_EDITOR)
   static_assert(offsetof(CWldPropEntry, mScale) == 0x38, "CWldPropEntry::mScale offset must be 0x38");
   static_assert(sizeof(CWldPropEntry) == 0x44, "CWldPropEntry size must be 0x44 (0x38 retail + editor scale)");
+#else
+  static_assert(sizeof(CWldPropEntry) == 0x38, "CWldPropEntry size must be 0x38");
+#endif
 
   struct CWldProps
   {

@@ -2098,20 +2098,28 @@ namespace moho
       x0 = 0;
     }
 
+#if defined(FAF_STUDIO_EDITOR)
     // CRASHFIX (editor): the copy below is inclusive (x <= x1, z <= z1) over a width x height buffer, so the last valid
     // index is width-1 / height-1. The recovered clamp was `height` for both axes: a rect ending on the map edge (the
     // editor's whole-map commits, SyncTerrain of a dirty rect that touches the edge) wrote one row past the allocation
-    // (heap overflow).
+    // (heap overflow). The game's build (FAF_EDITOR=OFF) keeps the recovered clamp.
     std::int32_t x1 = rect.x1;
     if (x1 >= width - 1) {
       x1 = width - 1;
     }
+#else
+    std::int32_t x1 = rect.x1;
+    if (x1 >= height) {
+      x1 = height;
+    }
+#endif
 
     std::int32_t z0 = rect.z0;
     if (z0 < 0) {
       z0 = 0;
     }
 
+#if defined(FAF_STUDIO_EDITOR)
     std::int32_t z1 = rect.z1;
     if (z1 >= height - 1) {
       z1 = height - 1;
@@ -2120,6 +2128,16 @@ namespace moho
     if (x0 > x1 || z0 > z1) {
       return;
     }
+#else
+    std::int32_t z1 = rect.z1;
+    if (z1 >= height) {
+      z1 = height;
+    }
+
+    if (x0 >= x1 || z0 >= z1) {
+      return;
+    }
+#endif
 
     const std::uint16_t* sourceRow = sourceHeights + (x0 + sourceRowStride * (z0 - rect.z0) - rect.x0);
     for (std::int32_t z = z0; z <= z1; ++z) {
