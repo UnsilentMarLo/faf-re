@@ -270,6 +270,14 @@ namespace moho
     DrawQuadClipped(const Vertex& topLeft, const Vertex& topRight, const Vertex& bottomRight, const Vertex& bottomLeft);
 
     /**
+     * Address: 0x00439B60 (?AddVert@CD3DPrimBatcher@Moho@@AAEXABUVertex@12@@Z)
+     *
+     * What it does:
+     * Appends one transformed vertex to the queue.
+     */
+    void AddVert(const Vertex& sourceVertex);
+
+    /**
      * Address: 0x00439790 (?AddVerts@CD3DPrimBatcher@Moho@@AAEXPBUVertex@12@II@Z)
      *
      * What it does:

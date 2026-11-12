@@ -975,6 +975,20 @@ namespace moho
   }
 
   /**
+   * Address: 0x00439B60 (?AddVert@CD3DPrimBatcher@Moho@@AAEXABUVertex@12@@Z)
+   *
+   * What it does:
+   * Appends one UV-transformed vertex to the queued vertex stream.
+   */
+  void CD3DPrimBatcher::AddVert(
+    const Vertex& sourceVertex
+  )
+  {
+    auto* const runtime = this;
+    runtime->mVertices.push_back(BuildTransformedVertex(*runtime, sourceVertex));
+  }
+
+  /**
    * Address: 0x00439790 (?AddVerts@CD3DPrimBatcher@Moho@@AAEXPBUVertex@12@II@Z)
    *
    * What it does:
