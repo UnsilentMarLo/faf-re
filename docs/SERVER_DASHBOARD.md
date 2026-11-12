@@ -2,7 +2,7 @@
 
 How to run the dedicated server (`server`, Linux only) on a machine with the host agent (`server-host`) and drive it from the web dashboard (`tools/dashboard`): the host starts with no lobby; from the page you pick a map, seats, AIs and options, choose the CPUs a lobby runs on (by hand on a CPU heatmap, or the least loaded ones), start it, give players their join line, and watch the lobby and the game (each army's resources, units, commander health and upgrades).
 
-A single `server` can also run without a host, from a match file you write yourself (section 6).
+The dashboard is one page and talks to `server-host` only; every lobby, including a player's game on an open slot, opens inside it. A single `server` can also run without a host, from a match file you write yourself (section 6), but the dashboard doesn't connect to it.
 
 ## 1. Build
 
@@ -65,17 +65,27 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:5173` (exactly the `--cors-origin` origin: `http://127.0.0.1:5173` is another origin and the browser refuses it), enter the host's address (`http://<host>:27180`) and the token, and press Connect.
+Open `http://localhost:5173` (exactly the `--cors-origin` origin: `http://127.0.0.1:5173` is another origin and the browser refuses it). The page opens on the control plane straight away, with a connection strip on top: the address starts as `http://<the page's own host name>:27180` (server-host's port unless `--listen` says otherwise); change it if the host runs on another machine, enter the admin token (the content of the `--token-file` file), and press Connect. The address stays in the browser, the token in the tab only; with both at hand the page connects by itself the next time it opens. If nothing answers, the page names the address it tried and says what to check (the port, that server-host runs, its `--cors-origin`).
 
-The host page shows:
+For development, `tools/dashboard/.env.local` (ignored by git) may hold `VITE_HOST_URL=http://<host>:27180` and `VITE_HOST_TOKEN=<token>`: the page starts from them when the browser has nothing stored. The token is read by `npm run dev` only and never goes into a build.
 
-- **The machine**: CPU model, memory, and a heatmap with one cell per logical CPU, grouped by socket and by core (hyperthread siblings together), coloured by the load of the last 10 s. CPUs that run a lobby are outlined in that lobby's colour.
-- **The lobbies**: map, state (starting, lobby, game, ended, failed, stopped), seats, CPUs, game time; Open, Stop, and Forget once stopped.
-- **New lobby**: the map (search by name; size and start spots shown), the seats (each a human with a name, or an AI with its personality; faction and team each), the game options, who starts it, the countdown, and the CPUs.
+Connected, the page shows:
+
+- **The machine**: CPU model, memory, and a heatmap with one cell per logical CPU, grouped by NUMA node and by core (hyperthread siblings together), coloured by the load of the last 10 s; each node's memory, the network links, and a table of what is allocated with its live use. CPUs that run a lobby are outlined in that lobby's colour, an open slot's dashed.
+- **The tournament lobbies** and **the open slots**, side by side: map, state (starting, lobby, game, ended, failed, stopped), seats, CPUs, game time, placement warnings, join and watch lines, claim codes and links; Open, Stop or Free, and Forget once stopped.
+- **Configure**: a new lobby (the map with search, size and start spots; the seats, each a human with a name or an AI with its personality, faction and team; observers; every game setting; who starts it; the countdown) or new open slots, and the CPUs either runs on, with the planner's estimate and warnings.
+
+### Game settings
+
+The configuration panel lists every setting FAF's lobby has, read from the game's own files: the rules (victory, share, unit cap, fog, timeouts, prebuilt units, no-rush ...), the team options, the AI options, the AI personalities (mod AIs once mods are loaded), and for an adaptive map its own options (mexes, reclaim, and so on). Each shows its default; only the ones you change are sent. On fw0's data: 32 options, 12 AIs, 19 maps with their own options (`adaptive_adrastea.v0004`: 11).
 
 ### Choosing CPUs
 
-Pick cells on the heatmap, or leave **Auto** on with a number of cores: the host then takes the CPUs no lobby uses, least loaded first. The form shows what a game of that size costs, from measurements: a game on fw0 (Xeon Gold 6144, one sim thread, normal speed) used on average 0.07 cores with 1-2 players, 0.25 with 3-5, 0.22 with 6-8 and 0.38 with 9 or more; its worst 30 s 0.14, 0.58, 0.40 and 0.67. Bigger maps are scaled up by an estimate (×1.15 at 20 km, ×1.3 at 40 km, ×1.5 at 81 km) that hasn't been measured. One core holds about four games at once; the form warns when you pick fewer cores than suggested, or CPUs already busy.
+Pick cells on the heatmap, or leave **Auto** on with a number of cores. Either way the host's planner (`POST /api/v1/plan`, the same as a lobby's creation uses) estimates the game and says where it goes:
+
+- **Estimate**, from measurements on fw0 (Xeon Gold 6144, one sim thread, normal speed): cores on average 0.07 with 1-2 players, 0.25 with 3-5, 0.22 with 6-8 and 0.38 with 9 or more, worst 30 s 0.14, 0.58, 0.40 and 0.67 (bigger maps scaled by an unmeasured ×1.15 at 20 km, ×1.3 at 40 km, ×1.5 at 81 km); memory from the measured peaks (190 MB at 4 players to 406 MB at 12) plus a quarter, 16 players estimated; the server's upload 205 KB/s for a 1v1, 2.3 MB/s for 8 players, 2.6 MB/s for 16.
+- **Placement** (Auto): one NUMA node, the one with enough free physical cores (no lobby on any of their hyperthreads), then the most free memory, then the least load; one CPU per physical core, least loaded first; hyperthread siblings only when the node runs short. The lobby's memory is preferred on that node (`set_mempolicy`, inherited by its server): in a container this needs `CAP_SYS_NICE` (`docker run --cap-add SYS_NICE`), else the lobby starts with a `memory_policy` warning.
+- **Warnings**: CPUs on two NUMA nodes (`spans_nodes`), fewer cores than the game's worst 30 s needs (`too_few_cores`) or far more than it needs (`too_many_cores`), a CPU another lobby runs on (`shared_cpu`) or busy outside the lobbies (`busy_cpu`), both hyperthreads of one core (`both_siblings`), a sibling busy with another lobby (`sibling_busy`), a node short of whole cores (`node_short`), less free memory on the node than the game takes (`node_memory`), and the lobbies' upload over 80% of the links (`network`). An `error` (too little memory, no free CPU, links overrun, an unknown CPU) refuses the lobby unless the request says `"force": true`.
 
 ### Who starts the game
 
@@ -83,6 +93,12 @@ Pick cells on the heatmap, or leave **Auto** on with a number of cores: the host
 - **The organiser** (`organiser`): nobody hosts. Start it from the lobby's page (Start now), or set **start when ready**: once every player but the lobby's host is ready, a countdown of that many seconds runs, and the game starts at its end. Anyone leaving or standing down stops it.
 
 A lobby left open longer than its lobby minutes starts as it is.
+
+### Open slots
+
+Next to the tournament lobbies, the same host can hold capacity for players who host their own game. An open slot has a name, the most players it takes, the map size it is sized for, its CPUs (Auto or picked, through the same planner and warnings as a lobby), the lobby minutes, default settings, and whether it opens again after each game. Making several at once with Auto places each with the ones before it holding their CPUs, so they get different cores. An open slot's CPUs count as taken: the heatmap shows them in the slot's colour, and the planner warns `shared_cpu` on them. Open slots count against `--max-lobbies` with the running lobbies.
+
+Each slot has a claim code, and a claim link to the dashboard's claim page (`claim.html?host=<host>&code=<code>`), which the operator hands to a player. The player needs no admin token: on the claim page they pick the map, the seats (friends and AIs, up to the slot's players), the game options and the map's own options, starting from the slot's defaults. The slot then becomes a player-hosted lobby on the slot's CPUs (`control` `player`): seat 1 is the claiming player, who changes game options (not the map) in their own game's lobby screen and presses Launch; the page shows every human seat's join line for the host to hand to their friends. When the game ends the slot opens again with a new claim code, so the old one stops working; a slot made with `"reopen": false` ends instead. Freeing a slot from the operator's page stops a game running on it.
 
 ### Joining
 
@@ -100,7 +116,9 @@ A lobby may list observers, each with a name and a token of their own, and a del
 
 ### A lobby's page
 
-Open shows the lobby through the host: its seats (joined, ready, ping), the countdown, the controls (start, pause, resume, end, eject, set options or a player's team, faction and colour), the events, and during the game each army: score, mass and energy (stored, income per second, storage), units against the unit cap, the commander's health and upgrades, and the result.
+Open (on a lobby's card, or on a claimed slot) opens the lobby inside the same page, through the host's proxy; `#/lobby/<id>` links to it directly. A bar on top leads back to the overview, sums up the host (CPUs and load, memory, lobbies running, slots open) and switches to the other running lobbies. Below it: the lobby or game (phase, the start-when-ready countdown, the game clock), during the game each army (score, mass and energy with stored, income per second and storage, units against the unit cap, the commander's health and upgrades, the result), the seats (joined, ready, ping), the lobby's facts (map, control, CPUs, node, live use, port, its open slot) with every join and watch line and Stop, and the events with filters.
+
+The controls: start the game now; the lobby's game settings, as the same form the configuration panel has (the catalog's options and the map's own, each with its default; the lobby's current values, as it started and as `options` events change them; changes marked “to apply” and sent with `set_options`); pause, resume, end with results; eject, set a player's team, faction and colour, substitute, extend timeouts; allow or disallow an address. Settings change in the lobby only, and only in a lobby the organiser starts: a player-hosted lobby's settings are its host player's, so the page shows them without changing them. Game speed and team lock are fixed when the lobby starts and aren't offered. On a host without the settings catalog the settings are typed as `Key=Value,Key=Value` instead.
 
 ## 5. Reaching it from another machine
 
@@ -123,10 +141,10 @@ A match file describes the game: map, options, the players' seats (`OwnerID` and
 ```
 server --match match.lua --out game --data /path/to/data \
   --listen 0.0.0.0:27185 --join-seconds 600 --lobby-seconds 600 \
-  --rest 127.0.0.1:27181 --rest-token-file admin.token --rest-cors-origin http://localhost:5173
+  --rest 127.0.0.1:27181 --rest-token-file admin.token
 ```
 
-The dashboard connects to `http://127.0.0.1:27181` the same way and shows the lobby's page directly. To see a seat taken without a game client: `faf_server_probe --server 127.0.0.1:27185 --uid 1001 --token <its MatchTokens entry> --lobby-name Probe --no-decode --seconds 3600`.
+The server's own REST API (`--rest`, the lobby API below) is a feature of the server for scripts and other tools, for example `faf_server_control` or `curl`. The dashboard doesn't connect to it: it reaches games through `server-host`, which runs each lobby's server with `--rest` itself and proxies it. To drive a game from the dashboard, run it under `server-host`. To see a seat taken without a game client: `faf_server_probe --server 127.0.0.1:27185 --uid 1001 --token <its MatchTokens entry> --lobby-name Probe --no-decode --seconds 3600`.
 
 ## API
 
@@ -136,11 +154,16 @@ The host (`server-host`):
 
 | Request | Does |
 |---|---|
-| `GET /api/v1/host` | the machine: `name`, `cpu_model`, `memory_mb`, `cpus` (each `id`, `core`, `socket`, `load` over 1 s and `load10` over 10 s in %, the `lobbies` on it), the number of running `lobbies`, the `ai` personalities |
+| `GET /api/v1/host` | the machine: `name`, `cpu_model`, `memory_mb`, `cpus` (each `id`, `core`, `socket`, `load` over 1 s and `load10` over 10 s in %, the `lobbies` on it), the number of running `lobbies`, the `ai` personalities; `nodes` (each NUMA node's `id`, `cpus`, `memory_mb` total and free) and `links` (each physical network link's `name`, `speed_mbps`, `in_kbps`, `out_kbps`); each CPU also has its `node` |
 | `GET /api/v1/maps` | the maps: `id`, `name`, `file`, `size`, `km`, `players` (start spots), `description`, `source` |
 | `GET /api/v1/hint?players=<n>&km=<km>` | a game's cost: `mean_cores`, `worst_cores`, `suggested_cores`, `basis` |
-| `GET /api/v1/lobbies` | every lobby: `id`, `name`, `state`, `map`, `cpus`, `port`, `seats` (with each human's `join` line), `observers` (each `name`, `referee`, `watch` line), `observer_delay_seconds`, `observe_port`, `hint`, `phase`, `beat`, `exit` |
+| `POST /api/v1/plan` | `{"players": 8, "km": 20, "cores": 2}` or `{..., "cpus": [3, 11]}`: the planner's answer without starting anything: `estimate` (cores mean, worst, suggested; `memory_mb`; `upload_kbps`; `basis`), `cores`, `cpus`, `nodes`, `fits` and `warnings` (each `code`, `severity`, `text`) |
+| `GET /api/v1/settings[?map=<id>]` | the game's settings as FAF's Lua defines them (the server binary reads them, `--describe-settings`): `options` (each `key`, `label`, `help`, `default`, `group` rules, teams or ai, and its `values`), `ai` (each `key`, `name`, `rating`) and, with a map that has its own `_options.lua` (adaptive maps; `has_options` in `/maps`), `map_options`. A lobby starts from every option's default and the request's `options` (game and map options together, values as strings or numbers as FAF has them) change them |
+| `GET /api/v1/lobbies` | every lobby: `id`, `name`, `state`, `map`, `cpus`, `port`, `seats` (with each human's `join` line), `observers` (each `name`, `referee`, `watch` line), `observer_delay_seconds`, `observe_port`, `hint`, `nodes`, `warnings` (the placement's), `usage` (its server's `cpu_cores` and `rss_mb`, every 2 s), `phase`, `beat`, `exit` |
 | `POST /api/v1/lobbies` | a new lobby: `{"map": "scmp_009", "seats": [{"kind": "human", "name": "Ann", "faction": 1, "team": 2}, {"kind": "ai", "ai": "adaptive", "faction": 2, "team": 3}], "options": {"Victory": "demoralization"}, "control": "player", "start_when_ready": 10, "lobby_minutes": 60, "observers": [{"name": "Caster"}, {"name": "Ref", "referee": true}], "observer_delay_seconds": 120, "cpus": "auto", "cores": 1}`; `cpus` may instead list CPU ids. Faction 1-4 (UEF, Aeon, Cybran, Seraphim) or 5 (random, chosen by the host); team 1 is no team, 2-9 teams 1-8 |
+| `GET /api/v1/slots` | the open slots: `id`, `name`, `state` (`open`, `claimed` while its lobby's server starts, `lobby`, `game`, `ended`), `max_players`, `km`, `cpus`, `nodes`, `warnings`, `claim_code`, `lobby` (the lobby it became, or null), `host_player`, `lobby_minutes`, `options`, `reopen`, `games` (hosted so far), `created` |
+| `POST /api/v1/slots` | new slots: `{"name": "Public 4v4", "max_players": 8, "km": 20, "cores": 2, "count": 3, "lobby_minutes": 60, "options": {"Victory": "demoralization"}, "reopen": true}`; `cpus` may list CPU ids instead of `cores`. A slot that doesn't fit is refused (`409`) unless `"force": true`, and then none of the batch is made |
+| `DELETE /api/v1/slots/<id>` | frees the slot, and stops the game on it if it was claimed |
 | `DELETE /api/v1/lobbies/<id>` | stops the lobby's server (SIGTERM, a kill after 10 s); `?forget=1` then removes it from the list |
 | `/api/v1/lobbies/<id>/api/v1/...` | that lobby's own API, below, with the host's token |
 
@@ -155,11 +178,21 @@ A lobby (`server --rest`, or through the host):
 
 The details of each op are in [SWITCHES.md](SWITCHES.md) under `--control` and `--rest`.
 
+A player's claim of an open slot (no `Authorization`: the claim code in the path is the credential; `404` for a code no slot has):
+
+| Request | Does |
+|---|---|
+| `GET /api/v1/claim/<code>` | `claim`: the `slot` (`id`, `name`, `state`, `max_players`, `km`, `cores`, `lobby_minutes`, `options`) and, once claimed, the `lobby` (`id`, `name`, `state`, `phase`, `beat`, `map`, `seats` with each human's `join` line, `options`, `port`) |
+| `GET /api/v1/claim/<code>/maps` | the maps, as `/api/v1/maps` |
+| `GET /api/v1/claim/<code>/settings[?map=<id>]` | the settings, as `/api/v1/settings` |
+| `POST /api/v1/claim/<code>` | claims the slot: `{"player": "Ann", "map": "adaptive_adrastea.v0004", "seats": [{"kind": "human"}, {"kind": "human", "name": "Bo"}, {"kind": "ai", "ai": "rush"}], "options": {"UnitCap": "500", "automex": 2}, "start_when_ready": 0}`; seat 1 must be a human (the claiming player); no seats means the host alone. The `options` go over the slot's. Answers as GET, with the lobby; `409` if the slot is already claimed |
+
 ## When it doesn't work
 
-- **401** in the dashboard: the token differs from the file's (spaces and line ends at its end are dropped).
-- **The page can't reach the API** (the browser's console shows a CORS error): the page's address isn't exactly the `--cors-origin` (or `--rest-cors-origin`) origin, scheme and port included.
-- **No answer at all**: the API is bound to `127.0.0.1` and the page runs on another machine, or a firewall closes the port.
+- **Token refused** (401) in the dashboard: the token differs from the `--token-file` file's (spaces and line ends at its end are dropped).
+- **Not a host**: the address answered but has no `/api/v1/host`, for example a lone server's `--rest` port; the dashboard needs `server-host`'s address (port 27180 unless `--listen` says otherwise).
+- **The page can't reach the API** (the browser's console shows a CORS error): the page's address isn't exactly the `--cors-origin` origin, scheme and port included.
+- **No answer at all**: the address or port is wrong, server-host isn't running, the API is bound to `127.0.0.1` and the page runs on another machine, or a firewall closes the port.
 - **A lobby is `failed`**: its card shows how the server ended; its `server.log` in the lobby's folder under `--runs` says why.
 - **A lobby's CPUs**: the kernel's view is in `cpus_allowed` on the lobby (from `/proc/<pid>/status`); inside a container, CPUs outside the container's set can't be used.
 - **A player can't join**: the game isn't a server-mode build, the join line is another seat's, or the lobby's port isn't reachable.

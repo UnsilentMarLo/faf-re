@@ -1,4 +1,5 @@
 #include "moho/effects/rendering/CEffectManagerImpl.h"
+#include "moho/effects/rendering/EffectOps.h"
 
 #include <algorithm>
 #include <memory>
@@ -237,6 +238,14 @@ namespace moho
       effect.SetNParam(0, &stackLane.pos_.x, 3);
       effect.Interpolate();
     }
+
+    // Plan WP9.1 (EffectOps.h): an op names a blueprint by its id.
+    [[nodiscard]] const char* EffectOpBlueprint(
+      const REffectBlueprint* const blueprint
+    ) noexcept
+    {
+      return blueprint != nullptr ? blueprint->BlueprintId.name.c_str() : nullptr;
+    }
   } // namespace
 
   /**
@@ -304,6 +313,16 @@ namespace moho
       return nullptr;
     }
 
+    // Plan WP9.1: recorded once the effect exists and is attached, before the fidelity check may destroy it.
+    EFFECT_Op(
+      EEffectOp::CreateEmitter,
+      {.effect = effect,
+       .army = armyIndex,
+       .blueprint = EffectOpBlueprint(blueprint),
+       .values = &position.x,
+       .valueCount = 3}
+    );
+
     if (blueprint != nullptr && !IsBlueprintEnabledForCurrentFidelity(blueprint)) {
       DestroyEffect(effect);
     }
@@ -336,6 +355,16 @@ namespace moho
     }
 
     effect->SetBone(entity, boneIndex);
+
+    // Plan WP9.1: recorded once the effect exists and is attached, before the fidelity check may destroy it.
+    EFFECT_Op(
+      EEffectOp::CreateAttachedEmitter,
+      {.effect = effect,
+       .entity = EffectOpEntity(entity),
+       .bone = boneIndex,
+       .army = armyIndex,
+       .blueprint = EffectOpBlueprint(blueprint)}
+    );
 
     if (blueprint != nullptr && !IsBlueprintEnabledForCurrentFidelity(blueprint)) {
       DestroyEffect(effect);
@@ -370,6 +399,16 @@ namespace moho
 
     ApplyBoneTransformToEffect(*effect, entity, boneIndex);
 
+    // Plan WP9.1: recorded once the effect exists and is attached, before the fidelity check may destroy it.
+    EFFECT_Op(
+      EEffectOp::CreateEmitterAtBone,
+      {.effect = effect,
+       .entity = EffectOpEntity(entity),
+       .bone = boneIndex,
+       .army = armyIndex,
+       .blueprint = EffectOpBlueprint(blueprint)}
+    );
+
     if (blueprint != nullptr && !IsBlueprintEnabledForCurrentFidelity(blueprint)) {
       DestroyEffect(effect);
     }
@@ -402,6 +441,12 @@ namespace moho
 
     ApplyEntityWorldPositionToEffect(*effect, *entity);
 
+    // Plan WP9.1: recorded once the effect exists and is attached, before the fidelity check may destroy it.
+    EFFECT_Op(
+      EEffectOp::CreateEmitterAtEntity,
+      {.effect = effect, .entity = EffectOpEntity(entity), .army = armyIndex, .blueprint = EffectOpBlueprint(blueprint)}
+    );
+
     if (blueprint != nullptr && !IsBlueprintEnabledForCurrentFidelity(blueprint)) {
       DestroyEffect(effect);
     }
@@ -433,6 +478,12 @@ namespace moho
     }
 
     effect->SetEntity(entity);
+
+    // Plan WP9.1: recorded once the effect exists and is attached, before the fidelity check may destroy it.
+    EFFECT_Op(
+      EEffectOp::CreateEmitterOnEntity,
+      {.effect = effect, .entity = EffectOpEntity(entity), .army = armyIndex, .blueprint = EffectOpBlueprint(blueprint)}
+    );
 
     if (blueprint != nullptr && !IsBlueprintEnabledForCurrentFidelity(blueprint)) {
       DestroyEffect(effect);
@@ -469,6 +520,16 @@ namespace moho
 
     effect->SetBone(entity, boneIndex);
 
+    // Plan WP9.1: recorded once the effect exists and is attached, before the fidelity check may destroy it.
+    EFFECT_Op(
+      EEffectOp::CreateTrail,
+      {.effect = effect,
+       .entity = EffectOpEntity(entity),
+       .bone = boneIndex,
+       .army = armyIndex,
+       .blueprint = EffectOpBlueprint(blueprint)}
+    );
+
     if (blueprint != nullptr && !IsBlueprintEnabledForCurrentFidelity(blueprint)) {
       DestroyEffect(effect);
     }
@@ -493,7 +554,43 @@ namespace moho
       return;
     }
 
+    // Plan WP9.1: after the chunk check, so a destroy on a worker records once, at its commit (which calls this
+    // again on the sim thread), in list order.
+    EFFECT_Op(EEffectOp::Destroy, {.effect = effect});
+
     effect->ListLinkBefore(&mDestroyedEffects);
+  }
+
+  // Plan WP9.1 (EffectOps.h): null in the game.
+  EffectOpHook gEffectOpHook = nullptr;
+
+  const char* EffectOpName(
+    const EEffectOp op
+  ) noexcept
+  {
+    static constexpr const char* kNames[] = {
+      "CreateEmitter",
+      "CreateAttachedEmitter",
+      "CreateEmitterAtBone",
+      "CreateEmitterAtEntity",
+      "CreateEmitterOnEntity",
+      "CreateTrail",
+      "CreateBeam",
+      "CreateBeamEntityToEntity",
+      "AttachBeamEntityToEntity",
+      "CreateLightParticle",
+      "Destroy",
+      "SetFloat",
+      "SetVector",
+      "SetN",
+      "SetCurve",
+      "SetEntity",
+      "SetBone",
+      "DestroyByScript"
+    };
+    static_assert(sizeof(kNames) / sizeof(kNames[0]) == static_cast<std::size_t>(EEffectOp::Count));
+    const auto index = static_cast<std::size_t>(op);
+    return index < static_cast<std::size_t>(EEffectOp::Count) ? kNames[index] : "?";
   }
 
   namespace
@@ -661,6 +758,17 @@ namespace moho
       return;
     }
 
+    // Plan WP9.1: a light without a ramp texture makes nothing, so it records nothing.
+    const float lightValues[5] = {position.x, position.y, position.z, size, lifetime};
+    EFFECT_Op(
+      EEffectOp::CreateLightParticle,
+      {.army = armyIndex,
+       .texture = texturePrimary.c_str(),
+       .texture2 = textureSecondary.c_str(),
+       .values = lightValues,
+       .valueCount = 5}
+    );
+
     const fa::string rampPath = BuildParticleTexturePath(textureSecondary, nullptr);
 
     SWorldParticle particle{};
@@ -710,6 +818,11 @@ namespace moho
     // Blend mode and every beam parameter are seeded by the blueprint ctor above.
     (void)LinkActiveEffect(mActiveEffects, effect);
 
+    // Plan WP9.1: recorded once the effect exists and is attached, before the fidelity check may destroy it.
+    EFFECT_Op(
+      EEffectOp::CreateBeam, {.effect = effect, .army = armyIndex, .blueprint = EffectOpBlueprint(beamBlueprint)}
+    );
+
     if (!IsBlueprintEnabledForCurrentFidelity(beamBlueprint)) {
       DestroyEffect(effect);
     }
@@ -742,6 +855,7 @@ namespace moho
     }
 
     (void)LinkActiveEffect(mActiveEffects, effect);
+    EFFECT_Op(EEffectOp::CreateBeam, {.effect = effect, .beam = &params}); // plan WP9.1
     return effect;
   }
 
@@ -774,6 +888,18 @@ namespace moho
     effect->SetNParam(0, sourceLane, 3);
     effect->SetNParam(3, targetLane, 3);
 
+    // Plan WP9.1: recorded once the effect exists and is attached, before the fidelity check may destroy it.
+    EFFECT_Op(
+      EEffectOp::CreateBeamEntityToEntity,
+      {.effect = effect,
+       .entity = EffectOpEntity(sourceEntity),
+       .bone = sourceBoneIndex,
+       .entity2 = EffectOpEntity(targetEntity),
+       .bone2 = targetBoneIndex,
+       .army = armyIndex,
+       .blueprint = EffectOpBlueprint(beamBlueprint)}
+    );
+
     if (!IsBlueprintEnabledForCurrentFidelity(beamBlueprint)) {
       DestroyEffect(effect);
     }
@@ -802,6 +928,18 @@ namespace moho
     (void)LinkActiveEffect(mActiveEffects, effect);
 
     effect->AttachEntityToEntity(sourceEntity, sourceBoneIndex, targetEntity, targetBoneIndex);
+
+    // Plan WP9.1: recorded once the effect exists and is attached, before the fidelity check may destroy it.
+    EFFECT_Op(
+      EEffectOp::AttachBeamEntityToEntity,
+      {.effect = effect,
+       .entity = EffectOpEntity(sourceEntity),
+       .bone = sourceBoneIndex,
+       .entity2 = EffectOpEntity(targetEntity),
+       .bone2 = targetBoneIndex,
+       .army = armyIndex,
+       .blueprint = EffectOpBlueprint(beamBlueprint)}
+    );
 
     if (!IsBlueprintEnabledForCurrentFidelity(beamBlueprint)) {
       DestroyEffect(effect);

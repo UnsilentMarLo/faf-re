@@ -336,6 +336,44 @@ do
                 },
             })
         end
+        if Supported('ren_RayBounce') then
+            table.insert(video.items, math.min(position + 2, table.getn(video.items) + 1), {
+                title = 'Ray-traced bounce light',
+                key = 'ray_bounce_optin',
+                type = 'toggle',
+                default = 0,
+                tip = 'With ray-traced shadows on: light bounces once off the ground, cliffs and buildings onto what '
+                    .. 'stands next to them, in their own colour.',
+                set = function(key, value, startup)
+                    ConExecute('ren_RayBounce ' .. tostring(value))
+                end,
+                custom = {
+                    states = {
+                        { text = '<LOC _On>', key = 1 },
+                        { text = '<LOC _Off>', key = 0 },
+                    },
+                },
+            })
+        end
+        if Supported('ren_RayWaterReflections') then
+            table.insert(video.items, math.min(position + 2, table.getn(video.items) + 1), {
+                title = 'Ray-traced water reflections',
+                key = 'ray_water_optin',
+                type = 'toggle',
+                default = 0,
+                tip = 'With ray-traced shadows on: lakes and the sea reflect the hills, ground and units around them, '
+                    .. 'not only the sky.',
+                set = function(key, value, startup)
+                    ConExecute('ren_RayWaterReflections ' .. tostring(value))
+                end,
+                custom = {
+                    states = {
+                        { text = '<LOC _On>', key = 1 },
+                        { text = '<LOC _Off>', key = 0 },
+                    },
+                },
+            })
+        end
         if Supported('ren_RaySunAngle') then
             table.insert(video.items, math.min(position + 2, table.getn(video.items) + 1), {
                 title = 'Soft ray-traced shadows',
@@ -355,6 +393,118 @@ do
                 },
             })
         end
+    end
+end
+
+-- Temporal anti-aliasing (ren_Taa), on Direct3D 12 and Vulkan: off until the player turns it on.
+do
+    local kind = type(ConTextMatches)
+    local supported = false
+    if kind == 'function' or kind == 'cfunction' then
+        local ok, matches = pcall(ConTextMatches, 'ren_Taa')
+        if ok and type(matches) == 'table' then
+            for _, name in ipairs(matches) do
+                if name == 'ren_Taa' then
+                    supported = true
+                end
+            end
+        end
+    end
+    local video = options and options.video
+    if supported and video and video.items then
+        local position = table.getn(video.items) + 1
+        for index, item in ipairs(video.items) do
+            if item.key == 'antialiasing' or item.key == 'fxaa_on' then
+                position = index + 1
+            end
+        end
+        table.insert(video.items, position, {
+            title = 'Temporal anti-aliasing',
+            key = 'taa',
+            type = 'toggle',
+            default = 0,
+            tip = 'Direct3D 12 and Vulkan: smooths edges and stops thin lines and far detail from crawling, by blending '
+                .. 'each frame with the last ones. Replaces FXAA while on.',
+            set = function(key, value, startup)
+                ConExecute('ren_Taa ' .. tostring(value))
+            end,
+            custom = {
+                states = {
+                    { text = '<LOC _On>', key = 1 },
+                    { text = '<LOC _Off>', key = 0 },
+                },
+            },
+        })
+        -- ren_RenderScale: with temporal anti-aliasing, the world drawn smaller and rebuilt to full size.
+        table.insert(video.items, position + 1, {
+            title = 'Render resolution',
+            key = 'render_scale',
+            type = 'toggle',
+            default = 100,
+            tip = 'With temporal anti-aliasing on: draws the world at a lower resolution and rebuilds the full picture '
+                .. 'from the last frames. Faster on a slow graphics card, a little softer. The interface stays sharp.',
+            set = function(key, value, startup)
+                ConExecute('ren_RenderScale ' .. tostring((tonumber(value) or 100) / 100))
+            end,
+            custom = {
+                states = {
+                    { text = '100%', key = 100 },
+                    { text = '85%', key = 85 },
+                    { text = '75%', key = 75 },
+                    { text = '67%', key = 67 },
+                    { text = '50%', key = 50 },
+                },
+            },
+        })
+    end
+end
+
+-- Sun shafts and height fog (ren_Atmosphere), on Direct3D 12 and Vulkan: off until the player turns it on.
+do
+    local function Supported(command)
+        -- The engine's Lua reports C functions as 'cfunction'.
+        local kind = type(ConTextMatches)
+        if kind ~= 'function' and kind ~= 'cfunction' then
+            return false
+        end
+        local ok, matches = pcall(ConTextMatches, command)
+        if not ok or type(matches) ~= 'table' then
+            return false
+        end
+        for _, name in ipairs(matches) do
+            if name == command then
+                return true
+            end
+        end
+        return false
+    end
+
+    local video = options and options.video
+    if video and video.items and Supported('ren_Atmosphere') then
+        local position = table.getn(video.items) + 1
+        for index, item in ipairs(video.items) do
+            if item.key == 'dynamic_lights_optin' or item.key == 'ray_soft_shadows' or item.key == 'ray_traced_ao'
+                or item.key == 'ray_traced_shadows_optin' or item.key == 'shadow_resolution' then
+                position = index + 1
+            end
+        end
+        table.insert(video.items, position, {
+            title = 'Sun shafts and height fog',
+            key = 'atmosphere',
+            type = 'toggle',
+            default = 0,
+            tip = 'Direct3D 12 and Vulkan: a light haze over the low ground and water, lit by the sun, darker where '
+                .. 'hills shade it. Never thick enough to hide units.',
+            set = function(key, value, startup)
+                ConExecute('ren_Atmosphere ' .. tostring(value))
+            end,
+            custom = {
+                states = {
+                    { text = '<LOC _On>', key = 1 },
+                    { text = '<LOC _Off>', key = 0 },
+                },
+            },
+        })
     end
 end
 

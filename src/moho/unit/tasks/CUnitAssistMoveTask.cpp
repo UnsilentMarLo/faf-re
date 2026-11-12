@@ -545,42 +545,7 @@ namespace
 
 namespace gpg
 {
-  /**
-   * Address: 0x005F1D80 (FUN_005F1D80, gpg::RRef_CUnitAssistMoveTask)
-   *
-   * What it does:
-   * Builds one typed reflection reference for `moho::CUnitAssistMoveTask*`,
-   * preserving dynamic-derived ownership and base-offset adjustment.
-   */
-  gpg::RRef* RRef_CUnitAssistMoveTask(
-    gpg::RRef* const outRef,
-    moho::CUnitAssistMoveTask* const value
-  )
-  {
-    return gpg::WriteDerivedRef(outRef, value);
-  }
 
-  /**
-   * Address: 0x005F1D30 (FUN_005F1D30)
-   *
-   * What it does:
-   * Builds one temporary `RRef_CUnitAssistMoveTask` and copies its
-   * `(mObj,mType)` pair into caller-owned output storage.
-   */
-  [[maybe_unused]] gpg::RRef* PackRRef_CUnitAssistMoveTask(
-    gpg::RRef* const outPair,
-    moho::CUnitAssistMoveTask* const value
-  )
-  {
-    if (!outPair) {
-      return nullptr;
-    }
-
-    gpg::RRef typedRef{};
-    (void)gpg::RRef_CUnitAssistMoveTask(&typedRef, value);
-    *outPair = typedRef;
-    return outPair;
-  }
 } // namespace gpg
 
 namespace moho

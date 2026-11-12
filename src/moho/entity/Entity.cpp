@@ -768,44 +768,6 @@ namespace moho
   }
 
   /**
-   * Address: 0x008B8330 (FUN_008B8330, Moho::EntityAttributes::IsEnabled)
-   *
-   * What it does:
-   * Returns the high-bit enable flag for range-bearing intel lanes and false
-   * for field/jammer/spoof lanes.
-   */
-  bool EntityAttributes::IsEnabled(
-    const EEntityAttribute attribute
-  ) const noexcept
-  {
-    switch (attribute) {
-    case ENTATTR_Vision:
-      return (vision >> 31u) != 0u;
-    case ENTATTR_WaterVision:
-      return (waterVision >> 31u) != 0u;
-    case ENTATTR_Radar:
-      return (radar >> 31u) != 0u;
-    case ENTATTR_Sonar:
-      return (sonar >> 31u) != 0u;
-    case ENTATTR_Omni:
-      return (omni >> 31u) != 0u;
-    case ENTATTR_RadarStealthField:
-    case ENTATTR_SonarStealthField:
-    case ENTATTR_CloakField:
-    case ENTATTR_Jammer:
-    case ENTATTR_Spoof:
-      return false;
-    case ENTATTR_Cloak:
-      return (cloak >> 31u) != 0u;
-    case ENTATTR_RadarStealth:
-      return (radarStealth >> 31u) != 0u;
-    case ENTATTR_SonarStealth:
-      return (sonarStealth >> 31u) != 0u;
-    }
-    return false;
-  }
-
-  /**
    * Address: 0x00689DC0 (FUN_00689DC0, Moho::EntityAttributes::SetEnabled)
    *
    * What it does:
@@ -2090,37 +2052,6 @@ namespace moho
   }
 
   /**
-   * Address: 0x0067A900 (FUN_0067A900, ?UpdateScrollPos@Entity@Moho@@QAEXQAM@Z)
-   *
-   * What it does:
-   * Seeds both texture-scroll lanes from one incoming UV coordinate pair.
-   */
-  void Entity::UpdateScrollPos(
-    const Wm3::Vec2f& scrollPosition
-  )
-  {
-    mVarDat.mScrollBeatStart = scrollPosition;
-    mVarDat.mScrollBeatEnd = scrollPosition;
-  }
-
-  /**
-   * Address: 0x0067A930 (FUN_0067A930, ?UpdateScroll@Entity@Moho@@QAEXQAM@Z)
-   *
-   * What it does:
-   * Copies current scroll lane to previous and advances current lane by one
-   * delta vector.
-   */
-  void Entity::UpdateScroll(
-    const Wm3::Vec2f& scrollDelta
-  )
-  {
-    const Wm3::Vec2f beatEnd = mVarDat.mScrollBeatEnd;
-    mVarDat.mScrollBeatStart = beatEnd;
-    mVarDat.mScrollBeatEnd.x = beatEnd.x + scrollDelta.x;
-    mVarDat.mScrollBeatEnd.y = beatEnd.y + scrollDelta.y;
-  }
-
-  /**
    * Address: 0x0067A980 (FUN_0067A980, ?StopScroll@Entity@Moho@@QAEXXZ)
    *
    * What it does:
@@ -2129,38 +2060,6 @@ namespace moho
   void Entity::StopScroll()
   {
     mVarDat.mScrollBeatEnd = mVarDat.mScrollBeatStart;
-  }
-
-  /**
-   * Address: 0x00678D80 (FUN_00678D80, ?SetAnimScoll@Entity@Moho@@QAEXMM@Z)
-   *
-   * What it does:
-   * Shifts the current texture-scroll lane into the previous lane and stores
-   * one new animation scroll lane pair.
-   */
-  void Entity::SetAnimScroll(
-    const float scrollX,
-    const float scrollY
-  )
-  {
-    mVarDat.mScrollBeatStart = mVarDat.mScrollBeatEnd;
-    mVarDat.mScrollBeatEnd.x = scrollX;
-    mVarDat.mScrollBeatEnd.y = scrollY;
-  }
-
-  /**
-   * Address: 0x0067A9A0 (FUN_0067A9A0, ?SetAmbientSound@Entity@Moho@@QAEXPAVCSndParams@2@0@Z)
-   *
-   * What it does:
-   * Stores ambient detail and rumble sound parameter lanes.
-   */
-  void Entity::SetAmbientSound(
-    CSndParams* const detailSound,
-    CSndParams* const rumbleSound
-  )
-  {
-    mVarDat.mAmbientSound = detailSound;
-    mVarDat.mRumbleSound = rumbleSound;
   }
 
   /**
@@ -3234,62 +3133,6 @@ namespace moho
   }
 
   /**
-   * Address: 0x0067AA50 (FUN_0067AA50,
-   * ?GetTerrainCollisionGeom@Entity@Moho@@QBEXAAV?$fastvector@V?$Sphere3@M@Wm3@@@gpg@@@Z)
-   *
-   * What it does:
-   * Emits one terrain-collision proxy sphere list from the active collision
-   * primitive: eight corner points for box primitives, or one center/radius
-   * sphere for sphere primitives.
-   *
-   * 0x0067AA57 loads `CollisionExtents` and calls through its vtable with no
-   * null test, so an entity whose script ran `SetCollisionShape('None')` must
-   * never get here. Its only caller, `CUnitMotion::HandleGroundCollision`, is
-   * unreachable in FAF's build (patched out of `CalcMoveAir` at 0x006C018B).
-   */
-  void Entity::GetTerrainCollisionGeom(
-    gpg::fastvector<Wm3::Sphere3f>& outSpheres
-  ) const
-  {
-    Wm3::Vec3f center{};
-    CollisionExtents->GetCenter(&center);
-
-    if (const Wm3::Box3f* const box = CollisionExtents->GetBox(); box != nullptr) {
-      const float minX = center.x - box->Extent[0];
-      const float maxX = center.x + box->Extent[0];
-      const float minY = center.y - box->Extent[1];
-      const float maxY = center.y + box->Extent[1];
-      const float minZ = center.z - box->Extent[2];
-      const float maxZ = center.z + box->Extent[2];
-
-      outSpheres.resize(8u, Wm3::Sphere3f{});
-      outSpheres[0].Center = Wm3::Vec3f(minX, minY, minZ);
-      outSpheres[0].Radius = 0.0f;
-      outSpheres[1].Center = Wm3::Vec3f(maxX, minY, minZ);
-      outSpheres[1].Radius = 0.0f;
-      outSpheres[2].Center = Wm3::Vec3f(minX, maxY, minZ);
-      outSpheres[2].Radius = 0.0f;
-      outSpheres[3].Center = Wm3::Vec3f(maxX, maxY, minZ);
-      outSpheres[3].Radius = 0.0f;
-      outSpheres[4].Center = Wm3::Vec3f(minX, minY, maxZ);
-      outSpheres[4].Radius = 0.0f;
-      outSpheres[5].Center = Wm3::Vec3f(maxX, minY, maxZ);
-      outSpheres[5].Radius = 0.0f;
-      outSpheres[6].Center = Wm3::Vec3f(minX, maxY, maxZ);
-      outSpheres[6].Radius = 0.0f;
-      outSpheres[7].Center = Wm3::Vec3f(maxX, maxY, maxZ);
-      outSpheres[7].Radius = 0.0f;
-      return;
-    }
-
-    if (const Wm3::Sphere3f* const sphere = CollisionExtents->GetSphere(); sphere != nullptr) {
-      outSpheres.resize(1u, Wm3::Sphere3f{});
-      outSpheres[0].Center = center;
-      outSpheres[0].Radius = sphere->Radius;
-    }
-  }
-
-  /**
    * Alias of FUN_0067AC40 (non-canonical helper lane).
    *
    * What it does:
@@ -3940,25 +3783,6 @@ namespace moho
   }
 
   /**
-   * Address: 0x006926C0 (FUN_006926C0, Moho::ENTSCR_GetBonePosition)
-   * Mangled: ?ENTSCR_GetBonePosition@Moho@@YA?AV?$Vector3@M@Wm3@@PAVEntity@1@AAVLuaStackObject@LuaPlus@@_N@Z
-   *
-   * What it does:
-   * Resolves one bone index and returns the corresponding world-space position lane.
-   */
-  Wm3::Vector3f ENTSCR_GetBonePosition(
-    Entity* const entity,
-    LuaPlus::LuaStackObject& boneIdentifier,
-    [[maybe_unused]] const bool allowNilAndSpecialIndices
-  )
-  {
-    // Binary hard-codes AL=1 for the resolve call in this helper.
-    const int boneIndex = ENTSCR_ResolveBoneIndex(entity, boneIdentifier, true);
-    const VTransform boneWorldTransform = entity->GetBoneWorldTransform(boneIndex);
-    return boneWorldTransform.pos_;
-  }
-
-  /**
    * Address: 0x0050B300 (FUN_0050B300, ?COORDS_Orient@Moho@@YA?AV?$Quaternion@M@Wm3@@MMM@Z)
    *
    * What it does:
@@ -4053,27 +3877,6 @@ namespace moho
     Wm3::Quaternionf orientation{};
     (void)MatrixToQuat(rows, &orientation);
     return orientation;
-  }
-
-  /**
-   * Address: 0x0050B620 (FUN_0050B620, ?COORDS_ForwardVector@Moho@@YA?AV?$Vector3@M@Wm3@@MM@Z)
-   *
-   * What it does:
-   * Converts heading/pitch radians into one forward vector using the engine's
-   * original trigonometric sign convention.
-   */
-  Wm3::Vector3f COORDS_ForwardVector(
-    const float heading,
-    const float pitch
-  ) noexcept
-  {
-    const float cosPitch = fa::cos(pitch);
-
-    Wm3::Vector3f result{};
-    result.x = fa::sin(heading) * cosPitch;
-    result.y = -fa::sin(pitch);
-    result.z = cosPitch * fa::cos(heading);
-    return result;
   }
 
   /**
@@ -4204,26 +4007,6 @@ namespace moho
   }
 
   /**
-   * Address: 0x0050AF80 (FUN_0050AF80, ?COORDS_ToRect@Moho@@YA?AV?$Rect2@H@gpg@@ABUSOCellPos@1@ABUSFootprint@1@@Z)
-   *
-   * What it does:
-   * Converts one footprint-origin cell position and footprint dimensions into
-   * one half-open cell rectangle.
-   */
-  gpg::Rect2i COORDS_ToRect(
-    const SOCellPos& cellPos,
-    const SFootprint& footprint
-  ) noexcept
-  {
-    gpg::Rect2i result{};
-    result.x0 = static_cast<int>(cellPos.x);
-    result.z0 = static_cast<int>(cellPos.z);
-    result.x1 = result.x0 + static_cast<int>(footprint.mSizeX);
-    result.z1 = result.z0 + static_cast<int>(footprint.mSizeZ);
-    return result;
-  }
-
-  /**
    * Address: 0x0050AFA0 (FUN_0050AFA0, Moho::COORDS_ToGridRect)
    *
    * IDA signature:
@@ -4273,30 +4056,6 @@ namespace moho
   )
   {
     return COORDS_ToGridRect(result, centerXZ, static_cast<int>(footprint.mSizeX), static_cast<int>(footprint.mSizeZ));
-  }
-
-  /**
-   * Address: 0x0050B090 (FUN_0050B090, ?COORDS_Elevation@Moho@@YAMPBVSTIMap@1@MME@Z)
-   *
-   * What it does:
-   * Samples terrain elevation and optionally clamps it to water elevation when
-   * the requested layer is not seabed-capable.
-   */
-  float COORDS_Elevation(
-    const STIMap* const map,
-    const float x,
-    const float z,
-    const ELayer layer
-  ) noexcept
-  {
-    const float terrainElevation = map->mHeightField->GetElevation(x, z);
-    if ((static_cast<std::uint8_t>(layer) & static_cast<std::uint8_t>(LAYER_Seabed)) != 0u) {
-      return terrainElevation;
-    }
-
-    // Engine addition (water bodies): the level at (x, z); -10000 without water.
-    const float waterElevation = map->GetWaterElevationAt(x, z);
-    return (waterElevation > terrainElevation) ? waterElevation : terrainElevation;
   }
 
   /**

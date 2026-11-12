@@ -11,6 +11,7 @@
 // the variable a scope costs one well-predicted branch.
 
 #include <cstdint>
+#include <vector>
 
 #include "gpg/gal/DrawStatistics.h"
 
@@ -32,7 +33,6 @@ namespace gpg::gal
 
     /** The region index for `name` (a string literal), registered on first use. */
     [[nodiscard]] std::uint32_t Region(const char* name) noexcept;
-    [[nodiscard]] const char* RegionName(std::uint32_t region) const noexcept;
 
     void BeginRegion(std::uint32_t region) noexcept;
     void EndRegion(std::uint32_t region) noexcept;
@@ -104,6 +104,8 @@ namespace gpg::gal
     std::uint64_t mDrawCalls = 0U;
     std::int64_t mIntervalStartTicks = 0;
     std::int64_t mLastFrameEndTicks = 0;
+    std::vector<float> mFrameWalls; // this interval's frame times (wall, ms), for the spike line
+
     Summary mSummary{};
   };
 

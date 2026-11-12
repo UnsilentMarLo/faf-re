@@ -703,34 +703,6 @@ namespace moho
   CScrLuaMetatableFactory<CScriptObject*> CScrLuaMetatableFactory<CScriptObject*>::sInstance{};
 
   /**
-   * Address: 0x00BC60D0 (FUN_00BC60D0)
-   *
-   * What it does:
-   * Allocates the next Lua metatable-factory object index and stores it in the
-   * recovered `CScrLuaMetatableFactory<CScriptObject*>` startup index lane.
-   */
-  int register_CScrLuaMetatableFactory_CScriptObject_Index()
-  {
-    const int index = CScrLuaObjectFactory::AllocateFactoryObjectIndex();
-    CScrLuaMetatableFactory<CScriptObject*>::Instance().SetFactoryObjectIndexForRecovery(index);
-    gRecoveredCScrLuaMetatableFactoryCScriptObjectIndex = index;
-    return index;
-  }
-
-  /**
-   * Address: 0x004C8500 (FUN_004C8500)
-   *
-   * What it does:
-   * Initializes the `CScriptObject*` metatable-factory singleton index lane
-   * and returns that singleton address.
-   */
-  [[maybe_unused]] CScrLuaMetatableFactory<CScriptObject*>* InitializeCScriptObjectMetatableFactorySingleton()
-  {
-    (void)register_CScrLuaMetatableFactory_CScriptObject_Index();
-    return &CScrLuaMetatableFactory<CScriptObject*>::Instance();
-  }
-
-  /**
    * Address: 0x004D22D0 (FUN_004D22D0, ?SCR_CreateSimpleMetatable@Moho@@YA?AVLuaObject@LuaPlus@@PAVLuaState@3@@Z)
    * Alias:   0x100C3290 (alt lane)
    */
@@ -756,35 +728,6 @@ namespace moho
     const int argumentCount = lua_gettop(state->m_state);
     if (argumentCount != expectedArgs) {
       LuaPlus::LuaState::Error(state, "%s\n  expected %d args, but got %d", helpText, expectedArgs, argumentCount);
-    }
-  }
-
-  /**
-   * Address: 0x004D2380 (FUN_004D2380, ?SCR_ExpectArgs@Moho@@YAXPAVLuaState@LuaPlus@@HHPBD@Z)
-   *
-   * What it does:
-   * Validates Lua argument count in `[minArgs, maxArgs]` (or `>= minArgs`
-   * when `maxArgs == -1`) and raises LuaState::Error with `helpText` on
-   * mismatch.
-   */
-  void SCR_ExpectArgs(
-    LuaPlus::LuaState* const state,
-    const int maxArgs,
-    const int minArgs,
-    const char* const helpText
-  )
-  {
-    const int argumentCount = lua_gettop(state->m_state);
-    if (argumentCount < minArgs || (maxArgs != -1 && argumentCount > maxArgs)) {
-      if (maxArgs == -1) {
-        LuaPlus::LuaState::Error(
-          state, "%s\n  expected at least %d args, but got %d", helpText, minArgs, argumentCount
-        );
-      } else {
-        LuaPlus::LuaState::Error(
-          state, "%s\n  expected between %d and %d args, but got %d", helpText, minArgs, maxArgs, argumentCount
-        );
-      }
     }
   }
 
@@ -821,26 +764,30 @@ namespace moho
     const char* const modulePath
   )
   {
-    if (!state || !modulePath || !*modulePath) {
-      return {};
-    }
-
-    lua_State* const lstate = state->GetCState();
+    // A failed import answers a nil object bound to `state`, as SCR_Import
+    // (0x004D3250) does through 0x00908970. An unbound object would pass the
+    // callers' `IsNil()` guards, and the `GetByName` after them then throws
+    // "m_state" (issue #379: a broken /lua/formations.lua ended the game on
+    // the first formation drag).
+    lua_State* const lstate = (state != nullptr) ? state->GetCState() : nullptr;
     if (!lstate) {
       return {};
+    }
+    if (!modulePath || !*modulePath) {
+      return LuaPlus::LuaObject(state);
     }
 
     const int savedTop = lua_gettop(lstate);
     lua_getglobal(lstate, "import");
     if (!lua_isfunction(lstate, -1)) {
       lua_settop(lstate, savedTop);
-      return {};
+      return LuaPlus::LuaObject(state);
     }
 
     lua_pushstring(lstate, modulePath);
     if (LuaCallProtected(lstate, 1, 1) != 0) {
       lua_settop(lstate, savedTop);
-      return {};
+      return LuaPlus::LuaObject(state);
     }
 
     LuaPlus::LuaObject moduleObject{LuaPlus::LuaStackObject(state, -1)};
@@ -863,8 +810,13 @@ namespace moho
     const char* const fieldName
   )
   {
-    if (!state || !fieldName || !*fieldName || !tableObj.IsTable()) {
+    // Same nil-not-unbound answer as SCR_ImportLuaModule, so `IsNil()`
+    // guards on the result hold.
+    if (!state) {
       return {};
+    }
+    if (!fieldName || !*fieldName || !tableObj.IsTable()) {
+      return LuaPlus::LuaObject(state);
     }
 
     return tableObj.GetByName(fieldName);
@@ -972,42 +924,6 @@ namespace moho
     }
 
     return fa::string(stream.mWriteStart, serializedSize);
-  }
-
-  /**
-   * Address: 0x004D31D0 (FUN_004D31D0, ?SCR_ToBool@Moho@@YA_NABVLuaObject@LuaPlus@@@Z)
-   *
-   * What it does:
-   * Converts one Lua object to bool using Moho script semantics:
-   * numeric non-zero is true; case-insensitive string `"true"`, `"on"`, or
-   * `"yes"` is true; every other value is false.
-   */
-  bool SCR_ToBool(
-    const LuaPlus::LuaObject& object
-  )
-  {
-    if (object.IsNumber()) {
-      return object.GetInteger() != 0;
-    }
-
-    if (object.IsString()) {
-      const char* const valueTrue = object.GetString();
-      if (_stricmp(valueTrue, "true") == 0) {
-        return true;
-      }
-
-      const char* const valueOn = object.GetString();
-      if (_stricmp(valueOn, "on") == 0) {
-        return true;
-      }
-
-      const char* const valueYes = object.GetString();
-      if (_stricmp(valueYes, "yes") == 0) {
-        return true;
-      }
-    }
-
-    return false;
   }
 
   /**
@@ -1313,24 +1229,6 @@ namespace moho
 
     const fa::string lexicalValue = source.GetLexical();
     destination.AssignString(state, lexicalValue.c_str());
-  }
-
-  /**
-   * Address: 0x004CF4A0 (FUN_004CF4A0, ?SCR_RObjectToLua@Moho@@...)
-   *
-   * What it does:
-   * Builds one Lua object initialized as `nil` and merges one reflected source
-   * reference into it.
-   */
-  LuaPlus::LuaObject SCR_RObjectToLua(
-    const gpg::RRef& source,
-    LuaPlus::LuaState* const state
-  )
-  {
-    LuaPlus::LuaObject out{};
-    out.AssignNil(state);
-    SCR_RObjectToLuaMerge(source, out);
-    return out;
   }
 
   /**

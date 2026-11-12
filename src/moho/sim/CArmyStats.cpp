@@ -39,6 +39,8 @@
 #include "gpg/core/containers/ArchiveSerialization.h"
 #include "gpg/core/reflection/Reflection.h"
 
+#include "legacy/algorithms/Sort.h"
+
 namespace
 {
   constexpr const char* kOnStatsTriggerScriptName = "OnStatsTrigger";
@@ -152,6 +154,30 @@ namespace
   )
   {
     return static_cast<int>(SumStatCategory(item, category));
+  }
+
+  /**
+   * Engine addition: the map is keyed on blueprint pointers, so it walks in
+   * heap-address order, which is not the same on Linux and Windows (or between allocators). What adds
+   * up the floats or hands them to Lua walks them in blueprint-ordinal order instead
+   * (`mCategoryBitIndex`, RBlueprint::mBlueprintOrdinal: load order, unique per blueprint), the same on
+   * every platform. Null keys are left out, as the walks did.
+   */
+  [[nodiscard]] fa::vector<std::pair<const moho::RUnitBlueprint*, float>> BlueprintStatsInOrdinalOrder(
+    const moho::ArmyBlueprintStatTree& tree
+  )
+  {
+    fa::vector<std::pair<const moho::RUnitBlueprint*, float>> entries;
+    entries.reserve(tree.size());
+    for (const auto& entry : tree) {
+      if (entry.first != nullptr) {
+        entries.push_back(std::pair<const moho::RUnitBlueprint*, float>(entry.first, entry.second));
+      }
+    }
+    fa::sort(entries.data(), entries.data() + entries.size(), [](const auto& lhs, const auto& rhs) {
+      return lhs.first->mCategoryBitIndex < rhs.first->mCategoryBitIndex;
+    });
+    return entries;
   }
 
   void CollectBlueprintStatKeys(
@@ -415,12 +441,12 @@ namespace moho
     LuaPlus::LuaObject blueprints;
     blueprints.AssignNewTable(state, 0, 0);
 
-    for (const auto& entry : mBlueprintStats) {
+    // Engine addition: in ordinal order, not address order (BlueprintStatsInOrdinalOrder): the
+    // insertion order decides where colliding keys land, and so the table's pairs() order.
+    for (const auto& entry : BlueprintStatsInOrdinalOrder(mBlueprintStats)) {
       const RUnitBlueprint* const blueprint = entry.first;
-      if (blueprint != nullptr) {
-        const fa::string value = gpg::STR_Printf("%.2f", entry.second);
-        blueprints.SetString(blueprint->mBlueprintId.c_str(), value.c_str());
-      }
+      const fa::string value = gpg::STR_Printf("%.2f", entry.second);
+      blueprints.SetString(blueprint->mBlueprintId.c_str(), value.c_str());
     }
 
     outObject->SetObject("Blueprints", &blueprints);
@@ -437,13 +463,11 @@ namespace moho
       return 0.0f;
     }
 
+    // Engine addition: summed in ordinal order, not address order (BlueprintStatsInOrdinalOrder):
+    // the damage lanes have fractions, so the order changes the rounding of the float sum.
     float total = 0.0f;
-    for (const auto& entry : mBlueprintStats) {
+    for (const auto& entry : BlueprintStatsInOrdinalOrder(mBlueprintStats)) {
       const RUnitBlueprint* const blueprint = entry.first;
-      if (blueprint == nullptr) {
-        continue;
-      }
-
       if (categorySet->mBits.Contains(static_cast<unsigned int>(blueprint->mCategoryBitIndex))) {
         total += entry.second;
       }
@@ -1086,80 +1110,6 @@ namespace moho
     CArmyStatItem* const item = GetItem(statPath);
     item->SynchronizeAsInt();
     return platform::AtomicAdd(&item->mPrimaryValueBits, *delta);
-  }
-
-  /**
-   * Address: 0x00593220 (FUN_00593220, func_SetUnitStat)
-   */
-  std::int32_t CArmyStats::SetUnitStat(
-    const char* const statPath,
-    const std::int32_t* const value
-  )
-  {
-    CArmyStatItem* const item = ResolveArmyStatItemCachedCreate(this, statPath); // 0x00594720
-    item->SynchronizeAsFloat();                                                  // 0x00415370
-
-    volatile std::int32_t* const counter = &item->mPrimaryValueBits;
-    for (;;) {
-      const std::int32_t observed = platform::AtomicLoad(counter);
-      const std::int32_t result = platform::AtomicCompareExchange(counter, *value, observed);
-      if (result == observed) {
-        return result;
-      }
-    }
-  }
-
-  /**
-   * Address: 0x005931E0 (FUN_005931E0, Moho::CArmyStats::SetIntStatAtomic)
-   *
-   * What it does:
-   * Resolves one stat item by path, marks it as an integer lane, and then
-   * repeatedly compares and swaps the stored counter until the replace
-   * succeeds, returning the previous counter value.
-   */
-  std::int32_t CArmyStats::SetIntStatAtomic(
-    const char* const statPath,
-    const std::int32_t* const value
-  )
-  {
-    CArmyStatItem* const item = GetItem(statPath);
-    item->SynchronizeAsInt();
-
-    volatile std::int32_t* const counter = &item->mPrimaryValueBits;
-    for (;;) {
-      const std::int32_t observed = platform::AtomicLoad(counter);
-      const std::int32_t previous = platform::AtomicCompareExchange(counter, *value, observed);
-      if (previous == observed) {
-        return previous;
-      }
-    }
-  }
-
-  /**
-   * Address: 0x005932C0 (FUN_005932C0, sub_5932C0)
-   */
-  std::int32_t CArmyStats::SetUnitStatGreaterOf(
-    const char* const statPath,
-    const std::int32_t* const candidate
-  )
-  {
-    CArmyStatItem* const item = GetItem(statPath);
-    volatile std::int32_t* const counter = &item->mPrimaryValueBits;
-
-    std::int32_t result = platform::AtomicLoad(counter);
-    const std::int32_t targetValue = *candidate;
-    if (targetValue > result) {
-      item->SynchronizeAsInt();
-      for (;;) {
-        const std::int32_t observed = platform::AtomicLoad(counter);
-        result = platform::AtomicCompareExchange(counter, targetValue, observed);
-        if (result == observed) {
-          break;
-        }
-      }
-    }
-
-    return result;
   }
 
   /**

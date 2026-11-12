@@ -387,39 +387,7 @@ namespace moho
 
 namespace gpg
 {
-  /**
-   * Address: 0x006031D0 (FUN_006031D0, gpg::RRef_CUnitCallTransport)
-   *
-   * What it does:
-   * Builds one typed reflection reference for `moho::CUnitCallTransport*`,
-   * preserving dynamic-derived ownership and base-offset adjustment.
-   */
-  gpg::RRef* RRef_CUnitCallTransport(
-    gpg::RRef* const outRef,
-    moho::CUnitCallTransport* const value
-  )
-  {
-    return gpg::WriteDerivedRef(outRef, value);
-  }
 
-  /**
-   * Address: 0x00602FA0 (FUN_00602FA0)
-   *
-   * What it does:
-   * Materializes one `RRef_CUnitCallTransport` result into a stack local and
-   * copies that pair into caller-owned output storage.
-   */
-  [[maybe_unused]] gpg::RRef* StoreRRefCUnitCallTransportAdapter(
-    moho::CUnitCallTransport* const value,
-    gpg::RRef* const outRef
-  )
-  {
-    gpg::RRef temp{};
-    (void)RRef_CUnitCallTransport(&temp, value);
-    outRef->mObj = temp.mObj;
-    outRef->mType = temp.mType;
-    return outRef;
-  }
 } // namespace gpg
 
 namespace moho

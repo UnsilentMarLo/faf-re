@@ -3,6 +3,7 @@
 
 #include <string_view>
 
+#include "gpg/gal/PipelineDefer.h"
 #include "moho/console/CConCommand.h"
 
 namespace moho
@@ -489,31 +490,6 @@ namespace moho
   // fa::vector<SkinPaletteEntry> (see Mesh.h), so its 0x007E9280 body is
   // this template's own insert(pos,count,value) member for the 16-byte
   // element -- see the Address: citations added there.
-
-  /**
-   * Address: 0x007E96A0 (FUN_007E96A0, sub_7E96A0)
-   *
-   * What it does:
-   * Uninitialized-move relocation for palette entries: copies each 16-byte
-   * `SkinPaletteEntry` in `[first, last)` into `dest`, four floats at a time, and
-   * returns the one-past-end destination pointer.
-   */
-  SkinPaletteEntry* RelocatePaletteEntries(
-    SkinPaletteEntry* dest,
-    SkinPaletteEntry* first,
-    SkinPaletteEntry* const last
-  )
-  {
-    while (first != last) {
-      dest->x = first->x;
-      dest->y = first->y;
-      dest->z = first->z;
-      dest->w = first->w;
-      ++first;
-      ++dest;
-    }
-    return dest;
-  }
 
   void MeshShaderPaletteBuffer::ReserveToPaletteCapacity()
   {
@@ -1430,6 +1406,9 @@ namespace moho
     if (meshMap.empty()) {
       return;
     }
+    // Engine addition (ren_AsyncPipelines): these draws repeat every frame, so one can wait a frame or two for a
+    // pipeline a worker builds instead of the frame stalling on the driver.
+    const gpg::gal::PipelineDeferScope deferPipelines;
 
     // Active render-time terrain resource (nullptr when no map/terrain). Read at
     // the head of the pass exactly like the binary's `sWldMap ? mTerrainRes : 0`.
@@ -1536,44 +1515,6 @@ namespace moho
     (void)debugCanvas;
     (void)camera;
     (void)showBoneNames;
-  }
-
-  /**
-   * Address: 0x007E2290 (FUN_007E2290, Moho::MeshRenderer::RenderSkeleton)
-   *
-   * What it does:
-   * Draws one mesh instance skeleton-debug overlay. The recovered entry
-   * calls `MeshInstance::ComputeDebugPose` at the head of the function
-   * (address 0x007DE7A0) to refresh the interpolated pose used for the
-   * bone-debug pass; remaining CD3D-prim-batcher draw-call mechanics are
-   * still under recovery, so this TU keeps the typed pose-refresh step
-   * and drops the draw-call emission until its typed dependencies are
-   * wired.
-   */
-  void MeshRenderer::RenderSkeleton(
-    CD3DPrimBatcher* const debugBatcher,
-    CDebugCanvas* const debugCanvas,
-    MeshInstance* const meshInstance,
-    const bool showBoneNames
-  )
-  {
-    (void)debugBatcher;
-    (void)debugCanvas;
-    (void)showBoneNames;
-
-    if (meshInstance == nullptr) {
-      return;
-    }
-
-    const boost::shared_ptr<CAniPose> activePose = meshInstance->ComputeDebugPose();
-    if (!activePose) {
-      return;
-    }
-
-    // Draw-call emission (CD3DPrimBatcher bind + bone-line quad batch)
-    // stays blocked on typed CD3DPrimBatcher surface recovery; the pose
-    // refresh above produces the same observable side effect as the
-    // binary's skeleton-overlay entry before it enters draw-call code.
   }
 
   /**

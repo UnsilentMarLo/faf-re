@@ -159,15 +159,6 @@ namespace moho
   );
 
   /**
-   * Address: 0x006240F0 (FUN_006240F0)
-   *
-   * What it does:
-   * Rebinds the startup metatable-factory index lane for
-   * `CScrLuaMetatableFactory<CUnitScriptTask>` and returns that singleton.
-   */
-  CScrLuaMetatableFactory<CUnitScriptTask>* startup_CScrLuaMetatableFactory_CUnitScriptTask_Index();
-
-  /**
    * Address: 0x006233C0 (FUN_006233C0, cfunc_CUnitScriptTaskGetUnit)
    *
    * What it does:
@@ -284,12 +275,4 @@ namespace moho
 
 namespace gpg
 {
-  /**
-   * Address: 0x006242A0 (FUN_006242A0, gpg::RRef_CUnitScriptTask)
-   *
-   * What it does:
-   * Builds one typed reflection reference for `moho::CUnitScriptTask*`,
-   * preserving dynamic-derived ownership and base-offset adjustment.
-   */
-  gpg::RRef* RRef_CUnitScriptTask(gpg::RRef* outRef, moho::CUnitScriptTask* value);
 } // namespace gpg

@@ -101,27 +101,6 @@ namespace moho
   }
 
   /**
-   * Address: 0x006973C0 (FUN_006973C0)
-   *
-   * What it does:
-   * Seeds one `SPhysBodyParams` payload with unit mass/inertia and zero
-   * collision offset.
-   */
-  [[maybe_unused]] [[nodiscard]] SPhysBodyParams* InitializeSPhysBodyParamsDefaults(
-    SPhysBodyParams* const params
-  ) noexcept
-  {
-    params->mass = 1.0f;
-    params->inertiaTensor.x = 1.0f;
-    params->inertiaTensor.y = 1.0f;
-    params->inertiaTensor.z = 1.0f;
-    params->collisionOffset.x = 0.0f;
-    params->collisionOffset.y = 0.0f;
-    params->collisionOffset.z = 0.0f;
-    return params;
-  }
-
-  /**
    * Address: 0x00697530 (FUN_00697530)
    *
    * What it does:
@@ -181,53 +160,6 @@ namespace moho
   }
 
   /**
-   * Address: 0x006977C0 (FUN_006977C0)
-   *
-   * What it does:
-   * Integrates one body's linear velocity and position from applied force,
-   * gravity, and `deltaSeconds` using trapezoidal position update.
-   */
-  [[maybe_unused]] [[nodiscard]] SPhysBody* IntegrateSPhysBodyLinearState(
-    SPhysBody* const body,
-    const Wm3::Vec3f* const appliedForce,
-    const float deltaSeconds
-  ) noexcept
-  {
-    const Wm3::Vec3f priorVelocity = body->mVelocity;
-    const float inverseMass = deltaSeconds / body->mMass;
-    const float gravityScale = deltaSeconds;
-
-    body->mVelocity.x += (appliedForce->x * inverseMass) + (body->mConstants->mGravity.x * gravityScale);
-    body->mVelocity.y += (appliedForce->y * inverseMass) + (body->mConstants->mGravity.y * gravityScale);
-    body->mVelocity.z += (appliedForce->z * inverseMass) + (body->mConstants->mGravity.z * gravityScale);
-
-    const float halfDelta = deltaSeconds * 0.5f;
-    body->mPos.x += (body->mVelocity.x + priorVelocity.x) * halfDelta;
-    body->mPos.y += (body->mVelocity.y + priorVelocity.y) * halfDelta;
-    body->mPos.z += (body->mVelocity.z + priorVelocity.z) * halfDelta;
-    return body;
-  }
-
-  /**
-   * Address: 0x00699720 (FUN_00699720)
-   *
-   * What it does:
-   * Computes one scale factor as `(lane34 * 0.5f) / ((lane24*lane28) - (lane2C*lane20))`,
-   * returning `0.0f` when the denominator is zero.
-   */
-  [[maybe_unused]] [[nodiscard]] float ComputeHalfScaleOverCrossDeterminant(
-    const float* const laneBase
-  ) noexcept
-  {
-    const float denominator = (laneBase[9] * laneBase[10]) - (laneBase[11] * laneBase[8]);
-    if (denominator == 0.0f) {
-      return 0.0f;
-    }
-
-    return (laneBase[13] * 0.5f) / denominator;
-  }
-
-  /**
    * Address: 0x006975B0 (FUN_006975B0, Moho::SPhysBody::SPhysBody)
    *
    * What it does:
@@ -276,41 +208,6 @@ namespace moho
     mPos.x = rotatedOffset.x + transform.pos_.x;
     mPos.y = rotatedOffset.y + transform.pos_.y;
     mPos.z = rotatedOffset.z + transform.pos_.z;
-  }
-
-  /**
-   * Address: 0x00697F80 (FUN_00697F80, world-impulse inertia helper lane)
-   *
-   * What it does:
-   * Rotates `mWorldImpulse` into local space using the orientation conjugate and
-   * scales each axis by `mInvInertiaTensor`.
-   *
-   * The conjugate is the ordinary scalar-first one. 0x00697F83 copies
-   * `[edi+2Ch]` (orientation lane 0) verbatim, and 0x00697F9A / 0x00697FAD /
-   * 0x00697FB2 subtract `[edi+30h]` / `[edi+34h]` / `[edi+38h]` from the zero
-   * constant `dword_E4F748` - keep `.w`, negate `.x/.y/.z`. A prior revision
-   * recorded this as an scalar-first conjugate "confirmed throughout this
-   * file"; the same lane-0-kept shape appears in `VTransform::Inverse`
-   * (0x0046FBF0) and `IntegrateAngularImpulse` (0x006978D0).
-   */
-  [[maybe_unused]] Wm3::Vec3f* ComputeWorldImpulseFromInertiaTensor(
-    const SPhysBody* const body,
-    Wm3::Vec3f* const out
-  )
-  {
-    if (body == nullptr || out == nullptr) {
-      return out;
-    }
-
-    const Wm3::Quaternionf inverseOrientation = ConjugateQuat(body->mOrientation);
-
-    Wm3::Vec3f localImpulse{};
-    moho::MultQuadVec(&localImpulse, &body->mWorldImpulse, &inverseOrientation);
-
-    out->x = body->mInvInertiaTensor.x * localImpulse.x;
-    out->y = body->mInvInertiaTensor.y * localImpulse.y;
-    out->z = body->mInvInertiaTensor.z * localImpulse.z;
-    return out;
   }
 
   /**
@@ -542,78 +439,6 @@ namespace moho
       ((orientation.x * deltaOrientation.y + orientation.w * deltaOrientation.z) + orientation.z * deltaOrientation.w) -
       orientation.y * deltaOrientation.x;
     NormalizeQuatInPlace(&mOrientation);
-  }
-
-  /**
-   * Address: 0x00698350 (FUN_00698350, sub_698350)
-   *
-   * IDA signature:
-   * int __usercall sub_698350@<eax>(Moho::SPhysBody *a1@<edx>, int edi0@<edi>);
-   *
-   * What it does: see header.
-   */
-  void SPhysBody::ApplyGroundCollisionResponse(
-    const gpg::fastvector_n<GroundPenetrationSample, 8>& samples
-  )
-  {
-    Wm3::Vec3f angularVelocity{};
-    GetImpulse(&angularVelocity);
-
-    float maxPenetrationDepth = 0.0f;
-    std::int32_t downwardPointCount = 0;
-    Wm3::Vec3f impulseAccum{};
-    Wm3::Vec3f angularImpulseAccum{};
-
-    for (const GroundPenetrationSample& sample : samples) {
-      if (sample.y > sample.terrainElevation) {
-        continue;
-      }
-
-      const Wm3::Vec3f relative{sample.x - mPos.x, sample.y - mPos.y, sample.z - mPos.z};
-      const float penetrationDepth = sample.terrainElevation - sample.y;
-      if (penetrationDepth > maxPenetrationDepth) {
-        maxPenetrationDepth = penetrationDepth;
-      }
-
-      const Wm3::Vec3f pointVelocity{
-        mVelocity.x + ((angularVelocity.y * relative.z) - (angularVelocity.z * relative.y)),
-        mVelocity.y + ((angularVelocity.z * relative.x) - (relative.z * angularVelocity.x)),
-        mVelocity.z + ((relative.y * angularVelocity.x) - (angularVelocity.y * relative.x))
-      };
-
-      if (pointVelocity.y < 0.0f) {
-        impulseAccum.x -= pointVelocity.x;
-        impulseAccum.y -= pointVelocity.y;
-        impulseAccum.z -= pointVelocity.z;
-
-        angularImpulseAccum.x -= (pointVelocity.z * relative.y) - (pointVelocity.y * relative.z);
-        angularImpulseAccum.y -= (relative.z * pointVelocity.x) - (pointVelocity.z * relative.x);
-        angularImpulseAccum.z -= (pointVelocity.y * relative.x) - (relative.y * pointVelocity.x);
-
-        ++downwardPointCount;
-      }
-    }
-
-    if (downwardPointCount <= 0) {
-      return;
-    }
-
-    constexpr float kResponseDamping = 0.89999998f;
-
-    const float invCount = 1.0f / static_cast<float>(downwardPointCount);
-    const float angularScale = mMass * invCount * 0.5f;
-
-    mWorldImpulse.x = (mWorldImpulse.x + (angularScale * angularImpulseAccum.x)) * kResponseDamping;
-    mWorldImpulse.y = (mWorldImpulse.y + (angularImpulseAccum.y * angularScale)) * kResponseDamping;
-    mWorldImpulse.z = (mWorldImpulse.z + (angularImpulseAccum.z * angularScale)) * kResponseDamping;
-
-    const float linearScale = invCount * 0.5f;
-
-    mVelocity.x = (mVelocity.x + (linearScale * impulseAccum.x)) * kResponseDamping;
-    mVelocity.y = (mVelocity.y + (impulseAccum.y * linearScale)) * kResponseDamping;
-    mVelocity.z = (mVelocity.z + (impulseAccum.z * linearScale)) * kResponseDamping;
-
-    mPos.y += maxPenetrationDepth;
   }
 
   /**

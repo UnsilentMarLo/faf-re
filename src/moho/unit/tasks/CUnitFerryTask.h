@@ -289,21 +289,5 @@ namespace moho
 
 namespace gpg
 {
-  /**
-   * Address: 0x00610650 (FUN_00610650, gpg::RRef_CUnitFerryTask)
-   *
-   * What it does:
-   * Builds one typed reflection reference for `moho::CUnitFerryTask*`,
-   * preserving dynamic-derived ownership and base-offset adjustment.
-   */
-  gpg::RRef* RRef_CUnitFerryTask(gpg::RRef* outRef, moho::CUnitFerryTask* value);
 
-  /**
-   * Address: 0x006105B0 (FUN_006105B0)
-   *
-   * What it does:
-   * Wrapper lane that materializes one temporary `RRef_CUnitFerryTask` and
-   * copies object/type fields into the destination reference record.
-   */
-  gpg::RRef* AssignCUnitFerryTaskRef(gpg::RRef* outRef, moho::CUnitFerryTask* value);
 } // namespace gpg

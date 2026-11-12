@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <deque>
 #include <functional>
 #include <stdexcept>
@@ -216,6 +217,37 @@ namespace gpg::gal::effects
     return gpg::LocalCacheDirectory();
   }
 
+  CompiledShader CompileRawCached(
+    const std::string_view hlsl,
+    const std::string_view entryName,
+    const wchar_t* const profile,
+    const std::vector<std::wstring>& extraArguments,
+    const ShaderTarget target
+  )
+  {
+    const ShaderCompiler& compiler = ShaderCompiler::Instance();
+    Fnv1a64 hash;
+    hash.Add("faf gpu program 1");
+    hash.Add(compiler.Version());
+    hash.Add(hlsl);
+    hash.Add(entryName);
+    hash.Add(profile, std::wcslen(profile) * sizeof(wchar_t));
+    for (const std::wstring& argument : extraArguments) {
+      hash.Add(argument.data(), (argument.size() + 1U) * sizeof(wchar_t));
+    }
+    const std::string path = CachePath(hash.Value(), target);
+    CompiledShader cached;
+    if (ReadCache(path, hash.Value(), cached.code)) {
+      cached.succeeded = true;
+      return cached;
+    }
+    CompiledShader compiled = compiler.CompileRaw(hlsl, entryName, profile, extraArguments);
+    if (compiled.succeeded) {
+      WriteCache(path, hash.Value(), compiled.code);
+    }
+    return compiled;
+  }
+
   EffectProgram::EffectProgram(
     std::string name,
     std::string translatedSource,
@@ -237,6 +269,21 @@ namespace gpg::gal::effects
       if (gRayQueryShaders && FindParameter(kRayShadowParameter) < 0) {
         translatedSource.insert(0U, RayShadowDeclaration());
       }
+      mDescription = ParseEffect(translatedSource);
+    }
+    // Engine addition (ren_RayWaterReflections): the water effect (it samples the sky cube and the refraction copy,
+    // and has the eye and the view-projection) gets the ray constants too, for its traced reflections.
+    const auto hasSampler = [&](const std::string_view name) {
+      return std::any_of(mDescription.samplers.begin(), mDescription.samplers.end(), [&](const SamplerDesc& sampler) {
+        return sampler.name == name;
+      });
+    };
+    if (
+      gRayQueryShaders && FindParameter(kRayShadowParameter) < 0 && hasSampler("SkySampler") &&
+      hasSampler("RefractionSampler") && FindParameter("ViewPosition") >= 0 && FindParameter("WorldToView") >= 0 &&
+      FindParameter("Projection") >= 0 && FindParameter("ViewportScaleOffset") >= 0
+    ) {
+      translatedSource.insert(0U, RayShadowDeclaration());
       mDescription = ParseEffect(translatedSource);
     }
     if (!originalSource.empty()) {

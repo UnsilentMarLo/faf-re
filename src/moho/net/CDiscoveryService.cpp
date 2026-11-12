@@ -277,65 +277,6 @@ moho::CDiscoveryService::~CDiscoveryService()
 }
 
 /**
- * Address: 0x007BF7A0 (FUN_007BF7A0, Moho::CDiscoveryService::dtr)
- *
- * What it does:
- * Runs `CDiscoveryService` non-deleting teardown and conditionally frees
- * object storage when `deleteFlags & 1`.
- */
-[[maybe_unused]] moho::CScriptObject* DestroyDiscoveryServiceWithDeleteFlagThunk(
-  moho::CDiscoveryService* const discoveryService,
-  const std::uint8_t deleteFlags
-) noexcept
-{
-  if (discoveryService == nullptr) {
-    return nullptr;
-  }
-
-  discoveryService->~CDiscoveryService();
-  if ((deleteFlags & 1u) != 0u) {
-    ::operator delete(discoveryService);
-  }
-  return static_cast<moho::CScriptObject*>(discoveryService);
-}
-
-/**
- * Address: 0x007D0060 (FUN_007D0060)
- *
- * What it does:
- * Adjusts one `CPushTask<CDiscoveryService>` subobject `this` lane back to the
- * owning `CDiscoveryService` object, then forwards to scalar deleting teardown.
- */
-[[maybe_unused]] moho::CScriptObject* DestroyDiscoveryServiceFromPushTaskAdjustorThunk(
-  void* const pushTaskSubobject,
-  const std::uint8_t deleteFlags
-) noexcept
-{
-  auto* const owner = reinterpret_cast<moho::CDiscoveryService*>(
-    static_cast<std::uint8_t*>(pushTaskSubobject) - offsetof(moho::CDiscoveryService, mPushTaskStorage)
-  );
-  return DestroyDiscoveryServiceWithDeleteFlagThunk(owner, deleteFlags);
-}
-
-/**
- * Address: 0x007D0070 (FUN_007D0070)
- *
- * What it does:
- * Adjusts one `CPullTask<CDiscoveryService>` subobject `this` lane back to the
- * owning `CDiscoveryService` object, then forwards to scalar deleting teardown.
- */
-[[maybe_unused]] moho::CScriptObject* DestroyDiscoveryServiceFromPullTaskAdjustorThunk(
-  void* const pullTaskSubobject,
-  const std::uint8_t deleteFlags
-) noexcept
-{
-  auto* const owner = reinterpret_cast<moho::CDiscoveryService*>(
-    static_cast<std::uint8_t*>(pullTaskSubobject) - offsetof(moho::CDiscoveryService, mPullTaskStorage)
-  );
-  return DestroyDiscoveryServiceWithDeleteFlagThunk(owner, deleteFlags);
-}
-
-/**
  * Address: 0x007BF4B0 (FUN_007BF4B0, Moho::CDiscoveryService::GetClass)
  *
  * What it does:

@@ -52,48 +52,55 @@ type LobbyMap struct {
 
 // Lobby is one lobby: its own server process.
 type Lobby struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	State          string            `json:"state"` // starting, lobby, game, ended, failed, stopped
-	Map            LobbyMap          `json:"map"`
-	Options        map[string]string `json:"options"`
-	CPUs           []int             `json:"cpus"`
-	CPUsAllowed    string            `json:"cpus_allowed,omitempty"`
-	Port           int               `json:"port"`
-	PID            int               `json:"pid"`
-	Created        string            `json:"created"`
-	Control        string            `json:"control"`
-	StartWhenReady float64           `json:"start_when_ready"`
-	Seats          []Seat            `json:"seats"`
-	Observers      []Observer        `json:"observers"`
-	ObserverDelay  float64           `json:"observer_delay_seconds"`
-	ObservePort    int               `json:"observe_port,omitempty"`
-	Hint           Hint              `json:"hint"`
-	Phase          string            `json:"phase"`
-	Beat           int               `json:"beat"`
-	Exit           string            `json:"exit"`
-	Dir            string            `json:"dir"`
+	ID             string         `json:"id"`
+	Name           string         `json:"name"`
+	State          string         `json:"state"` // starting, lobby, game, ended, failed, stopped
+	Map            LobbyMap       `json:"map"`
+	Options        map[string]any `json:"options"`
+	CPUs           []int          `json:"cpus"`
+	CPUsAllowed    string         `json:"cpus_allowed,omitempty"`
+	Port           int            `json:"port"`
+	PID            int            `json:"pid"`
+	Created        string         `json:"created"`
+	Control        string         `json:"control"`
+	StartWhenReady float64        `json:"start_when_ready"`
+	Seats          []Seat         `json:"seats"`
+	Observers      []Observer     `json:"observers"`
+	ObserverDelay  float64        `json:"observer_delay_seconds"`
+	ObservePort    int            `json:"observe_port,omitempty"`
+	Hint           Hint           `json:"hint"`
+	Nodes          []int          `json:"nodes"`          // plan WP17.17: the NUMA nodes its CPUs are on
+	Warnings       []Warning      `json:"warnings"`       // the placement's, when it was made
+	Usage          procUsage      `json:"usage"`          // plan WP17.16: its server process, sampled every 2 s
+	Slot           string         `json:"slot,omitempty"` // plan WP17.18: the open slot it was claimed from
+	Phase          string         `json:"phase"`
+	Beat           int            `json:"beat"`
+	Exit           string         `json:"exit"`
+	Dir            string         `json:"dir"`
 
-	restPort  int
-	restToken string
-	proc      *os.Process
-	stopAsked bool
-	done      chan struct{}
+	restPort   int
+	lastTicks  uint64
+	lastSample time.Time
+	restToken  string
+	proc       *os.Process
+	stopAsked  bool
+	done       chan struct{}
 }
 
 // CreateRequest is POST /api/v1/lobbies's body.
 type CreateRequest struct {
-	Name           string            `json:"name"`
-	Map            string            `json:"map"`
-	Options        map[string]string `json:"options"`
-	Seats          []Seat            `json:"seats"`
-	Observers      []Observer        `json:"observers"`
-	ObserverDelay  float64           `json:"observer_delay_seconds"`
-	Control        string            `json:"control"`
-	StartWhenReady float64           `json:"start_when_ready"`
-	LobbyMinutes   float64           `json:"lobby_minutes"`
-	CPUs           json.RawMessage   `json:"cpus"` // [ids] or "auto"
-	Cores          int               `json:"cores"`
+	Name           string          `json:"name"`
+	Map            string          `json:"map"`
+	Options        map[string]any  `json:"options"`
+	Seats          []Seat          `json:"seats"`
+	Observers      []Observer      `json:"observers"`
+	ObserverDelay  float64         `json:"observer_delay_seconds"`
+	Control        string          `json:"control"`
+	StartWhenReady float64         `json:"start_when_ready"`
+	LobbyMinutes   float64         `json:"lobby_minutes"`
+	CPUs           json.RawMessage `json:"cpus"` // [ids] or "auto"
+	Cores          int             `json:"cores"`
+	Force          bool            `json:"force"` // start even when the placement says it doesn't fit
 }
 
 // config is how the host starts each lobby's server.
@@ -116,10 +123,28 @@ type manager struct {
 	maps    func() []Map
 	cpus    func() []CPU
 	client  *http.Client
+	nodes   func() []Node
+	links   func() []Link
+	procDir string
+	// Plan WP17.20: FAF's settings and defaults; nil without them (tests).
+	settings *settingsSource
+	// Plan WP17.18: open slots, by id.
+	slots    map[string]*Slot
+	nextSlot int
 }
 
 func newManager(cfg config, maps func() []Map, cpus func() []CPU) *manager {
-	return &manager{cfg: cfg, lobbies: map[string]*Lobby{}, next: 1, maps: maps, cpus: cpus, client: &http.Client{Timeout: 3 * time.Second}}
+	m := &manager{cfg: cfg, lobbies: map[string]*Lobby{}, next: 1, maps: maps, cpus: cpus, client: &http.Client{Timeout: 3 * time.Second},
+		procDir: "/proc", links: func() []Link { return nil }, slots: map[string]*Slot{}, nextSlot: 1}
+	// Without NUMA information (tests, a machine without /sys): one node holding every CPU.
+	m.nodes = func() []Node {
+		ids := []int{}
+		for _, c := range cpus() {
+			ids = append(ids, c.ID)
+		}
+		return []Node{{ID: 0, CPUs: ids}}
+	}
+	return m
 }
 
 var (
@@ -129,8 +154,9 @@ var (
 	fixedOptions = map[string]bool{"ScenarioFile": true, "TeamLock": true}
 )
 
-func defaultOptions() map[string]string {
-	return map[string]string{
+// defaultOptions is what a lobby starts from when the settings catalog can't be read (WP17.20 gives FAF's own).
+func defaultOptions() map[string]any {
+	return map[string]any{
 		"Victory": "demoralization", "Share": "FullShare", "UnitCap": "1000", "GameSpeed": "normal",
 		"FogOfWar": "explored", "CheatsEnabled": "false", "CivilianAlliance": "enemy", "Timeouts": "3",
 		"NoRushOption": "Off", "PrebuiltUnits": "Off", "RevealCivilians": "Yes", "TeamSpawn": "fixed", "Score": "no",
@@ -146,6 +172,20 @@ func randomHex(n int) string {
 func randomInt(n int) int {
 	v, _ := rand.Int(rand.Reader, big.NewInt(int64(n)))
 	return int(v.Int64())
+}
+
+// luaValue writes an option's value for Lua: a string quoted, a number as it is, true/false.
+func luaValue(v any) string {
+	switch value := v.(type) {
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(value)
+	case string:
+		return luaString(value)
+	default:
+		return luaString(fmt.Sprint(value))
+	}
 }
 
 // luaString quotes s for Lua, escaping what a single-quoted string can't hold.
@@ -205,13 +245,8 @@ func (m *manager) validate(req *CreateRequest) (Map, error) {
 	if req.LobbyMinutes < 1 || req.LobbyMinutes > 24*60 {
 		return mp, errors.New("lobby_minutes is 1..1440")
 	}
-	for k, v := range req.Options {
-		if !reOptionKey.MatchString(k) || fixedOptions[k] {
-			return mp, fmt.Errorf("game option %q can't be set", k)
-		}
-		if len(v) > 64 || strings.ContainsAny(v, "\n\r") {
-			return mp, fmt.Errorf("game option %s: value too long or not one line", k)
-		}
+	if err := validateOptions(req.Options); err != nil {
+		return mp, err
 	}
 	humans := 0
 	uids := map[int]bool{}
@@ -257,7 +292,7 @@ func (m *manager) validate(req *CreateRequest) (Map, error) {
 				s.AI = "adaptive"
 			}
 			ok := false
-			for _, k := range aiKeys {
+			for _, k := range m.aiKeys() {
 				ok = ok || k == s.AI
 			}
 			if !ok {
@@ -294,6 +329,21 @@ func (m *manager) validate(req *CreateRequest) (Map, error) {
 	return mp, nil
 }
 
+// aiKeys is the AIs a seat may be: the settings catalog's (FAF's aitypes.lua, as the server describes it) when the
+// host has one, else the built-in list.
+func (m *manager) aiKeys() []string {
+	if m.settings != nil {
+		if s, err := m.settings.get(nil); err == nil && len(s.AI) > 0 {
+			keys := make([]string, len(s.AI))
+			for i, a := range s.AI {
+				keys[i] = a.Key
+			}
+			return keys
+		}
+	}
+	return aiKeys
+}
+
 // matchFile is the server's --match file for the lobby.
 func matchFile(l *Lobby, scenario string) string {
 	var b strings.Builder
@@ -310,8 +360,13 @@ func matchFile(l *Lobby, scenario string) string {
 			}
 		}
 		fmt.Fprintf(&b, "MatchObservers = { %s }\nMatchReferees = { %s }\n", strings.Join(watchers, ", "), strings.Join(referees, ", "))
-		fmt.Fprintf(&b, "MatchRules = { ObserverDelaySeconds = %s }\n", strconv.FormatFloat(l.ObserverDelay, 'f', -1, 64))
 	}
+	// Plan WPR.8: the published minimum each player needs down goes with the match; the server shows it.
+	rules := []string{fmt.Sprintf("MinConnectionKBps = %d", l.Hint.MinConnectionKBps)}
+	if len(l.Observers) > 0 {
+		rules = append(rules, "ObserverDelaySeconds = "+strconv.FormatFloat(l.ObserverDelay, 'f', -1, 64))
+	}
+	fmt.Fprintf(&b, "MatchRules = { %s }\n", strings.Join(rules, ", "))
 	b.WriteString("MatchTokens = {")
 	for _, s := range l.Seats {
 		if s.Kind == "human" {
@@ -326,7 +381,7 @@ func matchFile(l *Lobby, scenario string) string {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		fmt.Fprintf(&b, "    %s = %s,\n", k, luaString(l.Options[k]))
+		fmt.Fprintf(&b, "    %s = %s,\n", k, luaValue(l.Options[k]))
 	}
 	b.WriteString("  },\n  PlayerOptions = {\n")
 	for _, s := range l.Seats {
@@ -343,29 +398,6 @@ func matchFile(l *Lobby, scenario string) string {
 	return b.String()
 }
 
-// pickCPUs chooses n CPUs for a lobby: those no running lobby holds first, then the least loaded.
-func pickCPUs(cpus []CPU, n int) []int {
-	c := append([]CPU(nil), cpus...)
-	sort.SliceStable(c, func(i, j int) bool {
-		if len(c[i].Lobbies) != len(c[j].Lobbies) {
-			return len(c[i].Lobbies) < len(c[j].Lobbies)
-		}
-		if c[i].Load10 != c[j].Load10 {
-			return c[i].Load10 < c[j].Load10
-		}
-		return c[i].ID < c[j].ID
-	})
-	if n > len(c) {
-		n = len(c)
-	}
-	out := make([]int, 0, n)
-	for _, x := range c[:n] {
-		out = append(out, x.ID)
-	}
-	sort.Ints(out)
-	return out
-}
-
 // cpusWithLobbies is the sampler's CPUs with each running lobby marked on its CPUs.
 func (m *manager) cpusWithLobbies() []CPU {
 	cpus := m.cpus()
@@ -374,6 +406,13 @@ func (m *manager) cpusWithLobbies() []CPU {
 	idx := map[int]int{}
 	for i, c := range cpus {
 		idx[c.ID] = i
+	}
+	for _, n := range m.nodes() {
+		for _, c := range n.CPUs {
+			if i, ok := idx[c]; ok {
+				cpus[i].Node = n.ID
+			}
+		}
 	}
 	ids := make([]string, 0, len(m.lobbies))
 	for id := range m.lobbies {
@@ -391,6 +430,21 @@ func (m *manager) cpusWithLobbies() []CPU {
 			}
 		}
 	}
+	// Plan WP17.18: an open slot holds its CPUs under its own id until its lobby runs on them.
+	slotIDs := make([]string, 0, len(m.slots))
+	for id, s := range m.slots {
+		if holding(s) {
+			slotIDs = append(slotIDs, id)
+		}
+	}
+	sort.Strings(slotIDs)
+	for _, id := range slotIDs {
+		for _, c := range m.slots[id].CPUs {
+			if i, ok := idx[c]; ok {
+				cpus[i].Lobbies = append(cpus[i].Lobbies, id)
+			}
+		}
+	}
 	return cpus
 }
 
@@ -400,6 +454,36 @@ func cpuArg(cpus []int) string {
 		parts[i] = strconv.Itoa(c)
 	}
 	return strings.Join(parts, ",")
+}
+
+// machine is the placement engine's view: CPUs with the lobbies on them, NUMA nodes, links, the running lobbies'
+// upload estimates and the memory available.
+func (m *manager) machine() *machine { return m.machineExcept("") }
+
+// machineExcept is machine() without one holder on the CPUs: the slot a lobby is being claimed from.
+func (m *manager) machineExcept(holder string) *machine {
+	cpus := m.cpusWithLobbies()
+	if holder != "" {
+		for i := range cpus {
+			kept := cpus[i].Lobbies[:0]
+			for _, id := range cpus[i].Lobbies {
+				if id != holder {
+					kept = append(kept, id)
+				}
+			}
+			cpus[i].Lobbies = kept
+		}
+	}
+	mc := &machine{cpus: cpus, nodes: m.nodes(), links: m.links()}
+	m.mu.Lock()
+	for _, l := range m.lobbies {
+		if running(l.State) {
+			mc.lobbiesUpload += l.Hint.ServerUploadKBps
+		}
+	}
+	m.mu.Unlock()
+	_, mc.memAvailMB = memoryMB(m.procDir)
+	return mc
 }
 
 func running(state string) bool { return state == "starting" || state == "lobby" || state == "game" }
@@ -428,40 +512,35 @@ func freeLocalTCPPort() (int, error) {
 }
 
 // create starts a lobby: its folder, match file, token, and the server pinned to its CPUs.
-func (m *manager) create(req CreateRequest) (*Lobby, int, error) {
+func (m *manager) create(req CreateRequest) (*Lobby, int, error) { return m.createIn(req, "") }
+
+// createIn is create for a lobby claimed from slot (plan WP17.18; "" for none): the slot's hold on its CPUs doesn't
+// count against the lobby that takes them over.
+func (m *manager) createIn(req CreateRequest, slot string) (*Lobby, int, error) {
 	mp, err := m.validate(&req)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
 	hint := hintFor(len(req.Seats), mp.KM)
-	cpuList := []int{}
-	raw := strings.TrimSpace(string(req.CPUs))
-	allCPUs := m.cpusWithLobbies()
-	if raw == "" || raw == `"auto"` || raw == "null" {
-		n := req.Cores
-		if n <= 0 {
-			n = hint.SuggestedCores
-		}
-		cpuList = pickCPUs(allCPUs, n)
-	} else if err := json.Unmarshal(req.CPUs, &cpuList); err != nil {
-		return nil, http.StatusBadRequest, errors.New(`cpus is a list of CPU ids or "auto"`)
-	} else {
-		known := map[int]bool{}
-		for _, c := range allCPUs {
-			known[c.ID] = true
-		}
-		seen := map[int]bool{}
-		for _, c := range cpuList {
-			if !known[c] || seen[c] {
-				return nil, http.StatusBadRequest, fmt.Errorf("CPU %d isn't one of this machine's, or is listed twice", c)
-			}
-			seen[c] = true
-		}
-		sort.Ints(cpuList)
+	// Plan WP17.17: the placement engine picks or checks the CPUs, inside one NUMA node where it can.
+	preq := PlanRequest{Players: len(req.Seats), KM: mp.KM, Cores: req.Cores}
+	if preq.CPUs, err = parseCPUs(req.CPUs); err != nil {
+		return nil, http.StatusBadRequest, err
 	}
-	if len(cpuList) == 0 {
+	plan := place(m.machineExcept(slot), preq)
+	if !plan.Fits && !req.Force {
+		var why []string
+		for _, w := range plan.Warnings {
+			if w.Severity == "error" {
+				why = append(why, w.Text)
+			}
+		}
+		return nil, http.StatusConflict, fmt.Errorf("doesn't fit (force to start anyway): %s", strings.Join(why, "; "))
+	}
+	if len(plan.CPUs) == 0 {
 		return nil, http.StatusBadRequest, errors.New("no CPUs to run the lobby on")
 	}
+	cpuList := plan.CPUs
 
 	m.mu.Lock()
 	live := 0
@@ -475,9 +554,15 @@ func (m *manager) create(req CreateRequest) (*Lobby, int, error) {
 			}
 		}
 	}
+	// Plan WP17.18: open slots count too, as making them does, except the one this lobby is claimed from.
+	for id, s := range m.slots {
+		if holding(s) && id != slot {
+			live++
+		}
+	}
 	if live >= m.cfg.maxLobbies {
 		m.mu.Unlock()
-		return nil, http.StatusConflict, fmt.Errorf("this host runs at most %d lobbies", m.cfg.maxLobbies)
+		return nil, http.StatusConflict, fmt.Errorf("this host runs at most %d lobbies and open slots", m.cfg.maxLobbies)
 	}
 	// A game port, and with observers a second one they watch from.
 	wanted := 1
@@ -508,7 +593,16 @@ func (m *manager) create(req CreateRequest) (*Lobby, int, error) {
 	if req.Name == "" {
 		req.Name = mp.Name
 	}
+	// Plan WP17.20: every option at FAF's default (the game's and the map's own), then the request's.
 	opts := defaultOptions()
+	if m.settings != nil {
+		if s, err := m.settings.get(&mp); err == nil {
+			opts = map[string]any{}
+			for _, o := range append(s.Options, s.MapOptions...) {
+				opts[o.Key] = o.Default
+			}
+		}
+	}
 	for k, v := range req.Options {
 		opts[k] = v
 	}
@@ -516,7 +610,7 @@ func (m *manager) create(req CreateRequest) (*Lobby, int, error) {
 	l := &Lobby{ID: id, Name: req.Name, State: "starting", Map: LobbyMap{mp.ID, mp.Name, mp.KM, mp.Players}, Options: opts,
 		CPUs: cpuList, Port: port, Created: now.Format(time.RFC3339), Control: req.Control, StartWhenReady: req.StartWhenReady,
 		Seats: req.Seats, Observers: req.Observers, ObserverDelay: req.ObserverDelay, ObservePort: observePort,
-		Hint: hint, restPort: restPort, restToken: randomHex(24), done: make(chan struct{})}
+		Hint: hint, Nodes: plan.Nodes, Warnings: plan.Warnings, Slot: slot, restPort: restPort, restToken: randomHex(24), done: make(chan struct{})}
 	if l.Observers == nil {
 		l.Observers = []Observer{}
 	}
@@ -561,7 +655,11 @@ func (m *manager) create(req CreateRequest) (*Lobby, int, error) {
 	cmd := exec.Command(m.cfg.serverBin, args...)
 	cmd.Dir = l.Dir
 	cmd.Stdout, cmd.Stderr = logf, logf
-	if err := startPinned(cmd, cpuList); err != nil {
+	memNote, err := startPinned(cmd, cpuList, l.Nodes)
+	if memNote != "" {
+		l.Warnings = append(l.Warnings, Warning{Code: "memory_policy", Severity: "warn", Text: memNote})
+	}
+	if err != nil {
 		logf.Close()
 		return nil, http.StatusInternalServerError, fmt.Errorf("starting the server: %w", err)
 	}
@@ -589,6 +687,7 @@ func (m *manager) create(req CreateRequest) (*Lobby, int, error) {
 		} else {
 			l.Exit = "exit 0"
 		}
+		m.lobbyEnded(l)
 		close(l.done)
 	}()
 	go m.watch(l)
@@ -606,7 +705,17 @@ func (m *manager) watch(l *Lobby) {
 		case <-time.After(wait):
 		}
 		phase, beat, ok := m.childStatus(l)
+		ticks, rssKB, pok := procTicks(m.procDir, l.PID)
+		now := time.Now()
 		m.mu.Lock()
+		if pok {
+			if !l.lastSample.IsZero() && ticks >= l.lastTicks {
+				// Clock ticks are 1/100 s on Linux (USER_HZ).
+				l.Usage.CPUCores = round1(float64(ticks-l.lastTicks)/100/now.Sub(l.lastSample).Seconds()*10) / 10
+			}
+			l.Usage.RSSMB = rssKB / 1024
+			l.lastTicks, l.lastSample = ticks, now
+		}
 		if ok && running(l.State) {
 			l.Phase, l.Beat = phase, beat
 			if phase == "lobby" || phase == "game" {
@@ -707,7 +816,7 @@ func (m *manager) snapshot(l *Lobby) *Lobby {
 	c.Seats = append([]Seat(nil), l.Seats...)
 	c.Observers = append([]Observer{}, l.Observers...)
 	c.CPUs = append([]int(nil), l.CPUs...)
-	c.Options = map[string]string{}
+	c.Options = map[string]any{}
 	for k, v := range l.Options {
 		c.Options[k] = v
 	}

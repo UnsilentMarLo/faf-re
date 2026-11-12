@@ -195,46 +195,12 @@ namespace moho
     void DrawQuads(const Vertex* sourceVertices, std::uint32_t quadCount);
 
     /**
-     * Address: 0x00438EF0 (FUN_00438EF0)
-     *
-     * What it does:
-     * Appends one batch of indexed quads.
-     */
-    void DrawIndexedQuads(
-      const Vertex* sourceVertices,
-      std::uint32_t sourceVertexCount,
-      const std::uint16_t* sourceIndices,
-      std::uint32_t quadCount
-    );
-
-    /**
-     * Address: 0x00438F50 (?DrawTri@CD3DPrimBatcher@Moho@@QAEXABUVertex@12@00@Z)
-     *
-     * What it does:
-     * Emits one textured/color triangle from three prebuilt vertices.
-     */
-    void DrawTri(const Vertex& v0, const Vertex& v1, const Vertex& v2);
-
-    /**
      * Address: 0x00439210 (FUN_00439210)
      *
      * What it does:
      * Appends one batch of non-indexed triangles.
      */
     void DrawTriangles(const Vertex* sourceVertices, std::uint32_t triangleCount);
-
-    /**
-     * Address: 0x00439260 (FUN_00439260)
-     *
-     * What it does:
-     * Appends one batch of indexed triangles.
-     */
-    void DrawIndexedTriangles(
-      const Vertex* sourceVertices,
-      std::uint32_t sourceVertexCount,
-      const std::uint16_t* sourceIndices,
-      std::uint32_t triangleCount
-    );
 
     /**
      * Address: 0x00426150 (FUN_00426150, Moho::CD3DPrimBatcher::DrawChar)
@@ -258,56 +224,6 @@ namespace moho
      * Emits one colored line primitive from two prebuilt vertices.
      */
     void DrawLine(const Vertex& start, const Vertex& end);
-
-    /**
-     * Address: 0x004394D0 (FUN_004394D0)
-     *
-     * What it does:
-     * Appends one batch of non-indexed lines.
-     */
-    void DrawLines(const Vertex* sourceVertices, std::uint32_t lineCount);
-
-    /**
-     * Address: 0x00439520 (FUN_00439520)
-     *
-     * What it does:
-     * Appends one batch of indexed lines.
-     */
-    void DrawIndexedLines(
-      const Vertex* sourceVertices,
-      std::uint32_t sourceVertexCount,
-      const std::uint16_t* sourceIndices,
-      std::uint32_t lineCount
-    );
-
-    /**
-     * Address: 0x00439580 (?DrawPoint@CD3DPrimBatcher@Moho@@QAEXABUVertex@12@@Z)
-     *
-     * What it does:
-     * Emits one textured/color point vertex and one primitive index entry.
-     */
-    void DrawPoint(const Vertex& vertex);
-
-    /**
-     * Address: 0x004396E0 (FUN_004396E0)
-     *
-     * What it does:
-     * Appends one batch of non-indexed vertex pairs using primitive mode 1.
-     */
-    void DrawMode1PrimitivePairs(const Vertex* sourceVertices, std::uint32_t primitivePairCount);
-
-    /**
-     * Address: 0x00439730 (FUN_00439730)
-     *
-     * What it does:
-     * Appends one batch of indexed vertex pairs using primitive mode 1.
-     */
-    void DrawIndexedMode1PrimitivePairs(
-      const Vertex* sourceVertices,
-      std::uint32_t sourceVertexCount,
-      const std::uint16_t* sourceIndices,
-      std::uint32_t primitivePairCount
-    );
 
     /**
      * Address: 0x0043A140 (?Flush@CD3DPrimBatcher@Moho@@QAEXXZ)
@@ -345,14 +261,6 @@ namespace moho
     DrawQuadClipped(const Vertex& topLeft, const Vertex& topRight, const Vertex& bottomRight, const Vertex& bottomLeft);
 
     /**
-     * Address: 0x00439B60 (?AddVert@CD3DPrimBatcher@Moho@@AAEXABUVertex@12@@Z)
-     *
-     * What it does:
-     * Appends one transformed vertex to the queue.
-     */
-    void AddVert(const Vertex& sourceVertex);
-
-    /**
      * Address: 0x00439790 (?AddVerts@CD3DPrimBatcher@Moho@@AAEXPBUVertex@12@II@Z)
      *
      * What it does:
@@ -368,20 +276,6 @@ namespace moho
      */
     std::uint16_t
     AddIndexedVert(std::uint16_t sourceIndex, const Vertex* sourceVertices, gpg::fastvector<std::uint16_t>& remap);
-
-    /**
-     * Address: 0x00439BD0 (?AddIndexedVerts@CD3DPrimBatcher@Moho@@AAEXPBUVertex@12@IPBGII@Z)
-     *
-     * What it does:
-     * Appends indexed primitives with per-chunk remap cache reset across flush boundaries.
-     */
-    void AddIndexedVerts(
-      const Vertex* sourceVertices,
-      std::uint32_t sourceVertexCount,
-      const std::uint16_t* sourceIndices,
-      std::uint32_t primitiveCount,
-      std::uint32_t verticesPerPrimitive
-    );
 
   public:
     // Offsets proven from the binary:
@@ -534,65 +428,6 @@ namespace moho
    * zero and destroying the block when `weak_count_` follows it to zero.
    */
   void ResetSharedDynamicTextureSheetHandle(boost::shared_ptr<CD3DDynamicTextureSheet>& handle) noexcept;
-
-  /**
-   * Address: 0x00453AB0 (?DRAW_WireOval@Moho@@YAXPAVCD3DPrimBatcher@1@ABV?$Vector3@M@Wm3@@11II@Z)
-   *
-   * What it does:
-   * Emits one wireframe oval around `center` using two orthogonal axis vectors.
-   */
-  void DRAW_WireOval(
-    CD3DPrimBatcher* primBatcher,
-    const Vector3f& center,
-    const Vector3f& axisCos,
-    const Vector3f& axisSin,
-    std::uint32_t color,
-    std::uint32_t precision
-  );
-
-  /**
-   * Address: 0x00453ED0 (?DRAW_WireCircle@Moho@@YAXPAVCD3DPrimBatcher@1@ABV?$Vector3@M@Wm3@@1MII@Z)
-   *
-   * What it does:
-   * Builds two tangent basis vectors from `normal` and delegates to `DRAW_WireOval`.
-   */
-  void DRAW_WireCircle(
-    CD3DPrimBatcher* primBatcher,
-    const Vector3f& center,
-    const Vector3f& normal,
-    float radius,
-    std::uint32_t color,
-    std::uint32_t precision
-  );
-
-  /**
-   * Address: 0x004541F0 (?DRAW_WireCoords@Moho@@YAXPAVCD3DPrimBatcher@1@ABV?$Vector3@M@Wm3@@ABV?$Quaternion@M@4@M@Z)
-   *
-   * What it does:
-   * Draws RGB basis axes at `origin` transformed by quaternion orientation.
-   */
-  void DRAW_WireCoords(
-    CD3DPrimBatcher* primBatcher,
-    const Vector3f& origin,
-    const Wm3::Quaternionf& orientation,
-    float axisLength
-  );
-
-  /**
-   * Address: 0x00454430 (?DRAW_WireCoords@Moho@@YAXPAVCD3DPrimBatcher@1@ABUVMatrix4@1@M@Z)
-   *
-   * What it does:
-   * Draws RGB basis axes from one transform matrix row-basis and translation.
-   */
-  void DRAW_WireCoords(CD3DPrimBatcher* primBatcher, const VMatrix4& transform, float axisLength);
-
-  /**
-   * Address: 0x00454680 (?DRAW_WireBox@Moho@@YAXPAVCD3DPrimBatcher@1@ABV?$Box3@M@Wm3@@I@Z)
-   *
-   * What it does:
-   * Emits a wireframe oriented box using the standard 12-edge index pattern.
-   */
-  void DRAW_WireBox(CD3DPrimBatcher* primBatcher, const Wm3::Box3f& box, std::uint32_t color);
 
   /** The two corner rings of a `DRAW_Rect` border, each top-left, top-right, bottom-right, bottom-left. */
   struct DrawRectRing
