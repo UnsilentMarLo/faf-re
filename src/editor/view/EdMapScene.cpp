@@ -48,10 +48,11 @@ namespace moho
 {
   extern bool ren_Ui; // the game's interface drawn (console `ren_Ui`; RuntimeTuningGlobals.cpp)
 }
+#include "gpg/core/utils/BoostWrappers.h"
 #include "moho/render/camera/CameraImpl.h"
 #include "moho/render/d3d/CD3DDevice.h"
+#include "moho/render/d3d/CD3DDeviceResources.h"
 #include "moho/render/d3d/RD3DTextureResource.h"
-#include "gpg/core/utils/BoostWrappers.h"
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/STIMap.h"
 
@@ -641,6 +642,29 @@ namespace faf::editor
         }
       }
     }
+    // `/hoverprop <index>` (test runs): the Select tool, the camera close over that prop once, and the cursor on it.
+    if (mTestHoverProp >= 0 && mCamera != nullptr && mMap->mProps != nullptr &&
+        static_cast<std::size_t>(mTestHoverProp) < mMap->mProps->mEntries.size()) {
+      const moho::CWldPropEntry& entry = mMap->mProps->mEntries[static_cast<std::size_t>(mTestHoverProp)];
+      const Wm3::Vec3f at = entry.mTransform.pos_;
+      if (!mTestHoverPropFramed) {
+        mTestHoverPropFramed = true;
+        mTools->SetTool(0);
+        if (mTestSelectHoverProp) {
+          // `/propswap` too: that prop selected, alone (the Properties panel shows it).
+          mMarkerSelection.clear();
+          mUnitSelection.clear();
+          mDecalSelection.clear();
+          mSelection = {mTestHoverProp};
+        }
+        mTargetX = at.x;
+        mTargetZ = at.z;
+        mDistance = 40.0f;
+        ApplyCamera();
+      }
+      const Wm3::Vector2f screen = mCamera->Project(at);
+      mCursor = POINT{static_cast<LONG>(screen.x), static_cast<LONG>(screen.y)};
+    }
     // `/hovermarker` (test runs): the cursor on that marker, as a real mouse over it would be.
     if (!mTestHover.empty() && mCamera != nullptr) {
       if (mTestHover == "near" && !mMarkerSelection.empty()) {
@@ -673,6 +697,7 @@ namespace faf::editor
     }
     // The marker under the cursor, drawn in the hover colour next frame (the Select and Markers tools).
     std::string hoverMarker;
+    int hoverProp = -1;
     if (mTools->MarkersToolActive() && !mDragMarkers && mGizmoDrag == GizmoPart::None && PickGizmo(mCursor) == GizmoPart::None) {
       float mx = 0.0f;
       float mz = 0.0f;
@@ -692,6 +717,8 @@ namespace faf::editor
       float radius = 0.0f;
       const PickHit hover = PickAnything(mCursor);
       constexpr std::uint32_t kHover = 0xE0FFFFFFu;
+      // A prop: its own shape lit over it (UpdatePropHighlight, made next frame outside the draw), no ring.
+      hoverProp = hover.kind == PickKind::Prop ? hover.index : -1;
       const moho::CWldTerrainDecal* const hoverDecal =
         hover.kind == PickKind::Decal && mDocument.Decals() != nullptr ? FindDecal(*mDocument.Decals(), hover.index) : nullptr;
       if (hover.kind == PickKind::Marker) {
@@ -714,7 +741,7 @@ namespace faf::editor
                               groundVertex(cx[side] + (cx[next] - cx[side]) * t1, cz[side] + (cz[next] - cz[side]) * t1, kHover, 0.8f));
           }
         }
-      } else if (PickPlace(hover, hx, hz, radius)) {
+      } else if (hover.kind != PickKind::Prop && PickPlace(hover, hx, hz, radius)) {
         for (int s = 0; s < 32; ++s) {
           const float a0 = 2.0f * kPi * static_cast<float>(s) / 32.0f;
           const float a1 = 2.0f * kPi * static_cast<float>(s + 1) / 32.0f;
@@ -727,6 +754,7 @@ namespace faf::editor
       gpg::Logf("editor: /hovermarker: the cursor is over marker %s", hoverMarker.c_str());
     }
     mHoverMarker = std::move(hoverMarker);
+    mHoverPropWanted = hoverProp;
     // The play's selected units (in front of a play): a red ring each, and where a drag puts them.
     {
       std::vector<EdTools::ViewRing> live;
@@ -2035,6 +2063,7 @@ namespace faf::editor
       }
     }
     UpdatePropPreview();
+    UpdatePropHighlight();
     MoveWithKeys(frameSeconds);
     if (mPainting) {
       PaintStroke(frameSeconds);
@@ -3808,6 +3837,37 @@ namespace faf::editor
       break;
     }
     case SelectionProperties::Kind::Prop: {
+      if (edit.what == PropertyEdit::What::Blueprint && !edit.value.empty() && mMap->mProps != nullptr) {
+        // Every selected prop becomes the chosen one where it stands (user ask 2026-11-11, WPE.55), as one undo step.
+        BeginObjectStroke();
+        int changed = 0;
+        for (const int index : mSelection) {
+          if (index < 0 || static_cast<std::size_t>(index) >= mMap->mProps->mEntries.size()) {
+            continue;
+          }
+          moho::CWldPropEntry& entry = mMap->mProps->mEntries[static_cast<std::size_t>(index)];
+          if (edit.value == entry.mBlueprintPath.c_str()) {
+            continue;
+          }
+          entry.mBlueprintPath.assign(edit.value.c_str());
+          const PropRecord record = PropRecordFor(entry.mBlueprintPath.c_str(), entry.mTransform);
+          entry.mTransform = record.loaded;
+          mDocument.SetPropRecord(static_cast<std::size_t>(index), record);
+          if (static_cast<std::size_t>(index) < mProps.size()) {
+            delete mProps[static_cast<std::size_t>(index)];
+            mProps[static_cast<std::size_t>(index)] = MakePropInstance(entry);
+          }
+          ++changed;
+        }
+        if (changed > 0) {
+          DeletePropHighlight(); // it was the old model's
+          mObjectsChanged = true;
+          mDocument.SetModified(true);
+        }
+        EndObjectStroke();
+        gpg::Logf("editor: %d props now %s", changed, edit.value.c_str());
+        break;
+      }
       if (edit.what != PropertyEdit::What::Position && edit.what != PropertyEdit::What::Heading) {
         break;
       }
@@ -5555,8 +5615,120 @@ namespace faf::editor
     }
   }
 
+  void EdMapScene::TestUndoPropSwap()
+  {
+    const bool undone = UndoProps(false);
+    const std::string path = mMap != nullptr && mMap->mProps != nullptr && mTestHoverProp >= 0 &&
+        static_cast<std::size_t>(mTestHoverProp) < mMap->mProps->mEntries.size()
+      ? mMap->mProps->mEntries[static_cast<std::size_t>(mTestHoverProp)].mBlueprintPath.c_str()
+      : "";
+    gpg::Logf(
+      "editor: /propswapundo: %s; prop %d is %s", undone ? "undone" : "nothing to undo", mTestHoverProp, path.c_str()
+    );
+  }
+
+  void EdMapScene::UpdatePropHighlight()
+  {
+    // A prop's index changes when props are added or removed: the highlight is remade from the entry each time the
+    // wanted prop differs, or its entry moved.
+    const int wanted = mProps.empty() || mMap == nullptr || mMap->mProps == nullptr ||
+                           mHoverPropWanted < 0 || static_cast<std::size_t>(mHoverPropWanted) >= mMap->mProps->mEntries.size()
+                         ? -1
+                         : mHoverPropWanted;
+    if (wanted < 0) {
+      // Hidden, not deleted: the cursor often leaves a prop and comes back to it; a mesh is remade only for another prop.
+      for (moho::MeshInstance* const instance : {mHighlight, mHighlightOver}) {
+        if (instance != nullptr) {
+          instance->isHidden = 1;
+        }
+      }
+      return;
+    }
+    const moho::CWldPropEntry& entry = mMap->mProps->mEntries[static_cast<std::size_t>(wanted)];
+    if (wanted != mHighlightProp || mHighlight == nullptr) {
+      DeletePropHighlight();
+      moho::RRuleGameRules* const rules = Rules();
+      moho::MeshRenderer* const renderer = moho::MeshRenderer::GetInstance();
+      if (rules == nullptr || renderer == nullptr) {
+        return;
+      }
+      moho::RResId id{};
+      gpg::STR_CopyFilename(&id.name, &entry.mBlueprintPath);
+      moho::RPropBlueprint* const blueprint = rules->GetPropBlueprint(id);
+      moho::RMeshBlueprint* const mesh = blueprint != nullptr ? rules->GetMeshBlueprint(blueprint->Display.MeshBlueprint) : nullptr;
+      if (mesh == nullptr) {
+        return;
+      }
+      // The outline (WPE.57), two more instances of the prop's mesh with the editor's techniques appended to mesh.fx
+      // (ren_EditorMeshOutline): EditorOutline, its front faces pushed out a few pixels' worth at any zoom in the
+      // instance's colour, drawn after the water over everything; then EditorPropOver, the prop again with its own
+      // textures over the shell's middle, so only the rim stays (both over what stands in front, as a highlight). A
+      // prop drawn alpha-tested (its shader "...Alpha": most props, the trees' leaf cards among them) gets the hull cut
+      // out by its albedo's alpha, so the outline follows the leaves, not the cards.
+      const moho::RMeshBlueprintLOD* const lod =
+        mesh->mLods.begin() != mesh->mLods.end() ? mesh->mLods.begin() : nullptr;
+      if (lod == nullptr) {
+        return;
+      }
+      // A swaying prop (UndulatingNormalMappedAlpha: the trees) gets the swaying shell and redraw, so they move with
+      // it; its shell a hairline (each leaf card gets a rim; a wide rim on every card painted a tree group amber).
+      const std::string shader = lod->mShaderName.c_str();
+      const bool alphaTested = shader.find("Alpha") != std::string::npos;
+      const bool sways = shader.find("Undulating") != std::string::npos;
+      const char* const shellTechnique = sways ? "EditorOutlineAlphaSway"
+        : alphaTested                          ? "EditorOutlineAlpha"
+                                               : "EditorOutline";
+      const boost::shared_ptr<moho::MeshMaterial> hull = moho::MeshMaterial::Create(
+        fa::string(shellTechnique), lod->mAlbedoName, fa::string(), fa::string(), fa::string(), fa::string(), nullptr
+      );
+      const boost::shared_ptr<moho::MeshMaterial> over = moho::MeshMaterial::Create(
+        fa::string(sways ? "EditorPropOverSway" : "EditorPropOver"),
+        lod->mAlbedoName,
+        lod->mNormalsName,
+        lod->mSpecularName,
+        lod->mLookupName,
+        lod->mSecondaryName,
+        nullptr
+      );
+      const float scale = blueprint->Display.UniformScale;
+      mHighlight = renderer->CreateMeshInstance(
+        0, static_cast<std::int32_t>(0xFFFFB040u), mesh, Wm3::Vec3f{scale, scale, scale}, false, hull
+      );
+      mHighlightOver = renderer->CreateMeshInstance(0, -1, mesh, Wm3::Vec3f{scale, scale, scale}, false, over);
+      mHighlightProp = wanted;
+      if (mHighlight == nullptr) {
+        return;
+      }
+      gpg::Logf(
+        "editor: prop %d outlined (%s, shader %s: %s)",
+        wanted,
+        entry.mBlueprintPath.c_str(),
+        shader.c_str(),
+        shellTechnique
+      );
+    }
+    for (moho::MeshInstance* const instance : {mHighlight, mHighlightOver}) {
+      if (instance != nullptr) {
+        instance->isHidden = 0;
+        instance->SetStance(entry.mTransform, entry.mTransform);
+      }
+    }
+  }
+
+  void EdMapScene::DeletePropHighlight()
+  {
+    if (moho::MeshRenderer::GetInstance() != nullptr) {
+      delete mHighlight;
+      delete mHighlightOver;
+    }
+    mHighlight = nullptr;
+    mHighlightOver = nullptr;
+    mHighlightProp = -1;
+  }
+
   void EdMapScene::DeleteProps()
   {
+    DeletePropHighlight();
     DeletePropPreview();
     DeleteUnits();
     DeleteDeposits();

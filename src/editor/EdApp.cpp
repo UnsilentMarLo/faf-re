@@ -24,53 +24,55 @@
 #include <string>
 #include <vector>
 
-#include "editor/EdLog.h"
-#include "editor/doc/EdWaterPreset.h"
-#include "editor/EdMemTrace.h"
-#include "editor/EdPlay.h"
-#include "editor/ui/EdHelp.h"
-#include "editor/EdShell.h"
-#include "editor/ui/EdFonts.h"
-#include "moho/render/AmbientOcclusionRenderer.h"
-#include <cstring>
 #include "editor/doc/EdDocument.h"
-#include "moho/render/RCamManager.h"
-#include "moho/render/camera/CameraImpl.h"
-#include "moho/sim/CWldMap.h"
-#include "moho/sim/STIMap.h"
-#include "moho/terrain/splat/CWldSplat.h"
+#include "editor/doc/EdMapFile.h"
 #include "editor/doc/EdRoundTrip.h"
 #include "editor/doc/EdUnitWrecks.h"
-#include "editor/ui/EdImGuiRenderer.h"
+#include "editor/doc/EdWaterPreset.h"
+#include "editor/EdLog.h"
+#include "editor/EdMemTrace.h"
+#include "editor/EdPlay.h"
+#include "editor/EdShell.h"
 #include "editor/tools/EdHeightFile.h"
 #include "editor/tools/EdTextureLibrary.h"
-#include "editor/doc/EdMapFile.h"
+#include "editor/ui/EdFonts.h"
+#include "editor/ui/EdHelp.h"
+#include "editor/ui/EdImGuiRenderer.h"
 #include "editor/view/EdLiveTerrain.h"
 #include "editor/view/EdMapScene.h"
 #include "gpg/core/diagnostics/CrashHooks.h"
 #include "gpg/core/diagnostics/CrashReport.h"
 #include "gpg/core/utils/Global.h"
 #include "gpg/core/utils/Logging.h"
+#include "gpg/gal/backends/common/ImageCodec.h"
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/Error.hpp"
-#include "gpg/gal/backends/common/ImageCodec.h"
 #include "imgui.h"
-#include "imgui_internal.h"
 #include "imgui_impl_win32.h"
+#include "imgui_internal.h"
 #include "moho/app/CScApp.h"
 #include "moho/app/WinApp.h"
 #include "moho/app/WxRuntimeTypes.h"
-#include "moho/misc/SessionStartup.h"
+#include "moho/audio/AudioEngine.h"
 #include "moho/misc/CVirtualFileSystem.h"
-#include "moho/misc/StartupHelpers.h"
-#include "moho/render/WRenViewport.h"
-#include "moho/render/d3d/CD3DDevice.h"
-#include "moho/render/d3d/CD3DRenderTarget.h"
-#include "moho/misc/ID3DDeviceResources.h"
-#include "moho/sim/RRuleGameRules.h"
 #include "moho/misc/FileWaitHandleSet.h"
+#include "moho/misc/ID3DDeviceResources.h"
+#include "moho/misc/SessionStartup.h"
+#include "moho/misc/StartupHelpers.h"
+#include "moho/render/AmbientOcclusionRenderer.h"
+#include "moho/render/camera/CameraImpl.h"
+#include "moho/render/d3d/CD3DDevice.h"
+#include "moho/render/d3d/CD3DEffectTechnique.h"
+#include "moho/render/d3d/CD3DRenderTarget.h"
+#include "moho/render/RCamManager.h"
+#include "moho/render/WRenViewport.h"
 #include "moho/sim/CVFSImpl.h"
+#include "moho/sim/CWldMap.h"
+#include "moho/sim/RRuleGameRules.h"
+#include "moho/sim/STIMap.h"
+#include "moho/terrain/splat/CWldSplat.h"
 #include "moho/ui/IUIManager.h"
+#include <cstring>
 
 // imgui_impl_win32.h leaves this declaration to the application.
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -568,6 +570,31 @@ namespace faf::editor
       /** The style at the screen's DPI, before the user's UI scale; the scale in use on it. */
       ImGuiStyle mBaseStyle;
       float mUiScaleApplied = 1.0f;
+      bool mSoundFocused = true;
+
+      /**
+       * Sound only while the editor is the window in front (user ask 2026-11-11): its own windows and dialogs share its
+       * frame's root owner; any other window in front mutes it (moho::kSndMuteUnfocused, beside the game's own mute
+       * while minimized).
+       */
+      void KeepSoundToFocus()
+      {
+        const HWND frame = HandleOf(mGame.supcomFrame);
+        const HWND front = ::GetForegroundWindow();
+        const bool focused = frame != nullptr && front != nullptr &&
+          ::GetAncestor(front, GA_ROOTOWNER) == ::GetAncestor(frame, GA_ROOTOWNER);
+        if (focused == mSoundFocused) {
+          return;
+        }
+        mSoundFocused = focused;
+        moho::SND_MuteFor(moho::kSndMuteUnfocused, !focused);
+        gpg::Logf(
+          "editor: sound %s (the editor's window %s)",
+          focused ? "on" : "muted",
+          focused ? "is in front" : "isn't in front"
+        );
+      }
+      double mPropSwapUndoAt = 0.0;
 
       /**
        * Before a frame: the scale read from layout.ini at the first frame into the toolbar's, `/uiscale <x>` (test runs)
@@ -805,6 +832,8 @@ namespace faf::editor
       } else {
         moho::gAppRenderers = {DeviceApi::Direct3D12, DeviceApi::Vulkan};
       }
+      // The hovered prop's outline techniques in mesh.fx (before the device loads its effects; WPE.57).
+      moho::ren_EditorMeshOutline = true;
       // One maximized, movable, resizable window, whatever the game's display options say.
       moho::gAppWindowed = true;
       // The panels' window and its head (head 1); the game keeps head 0 for its viewport.
@@ -1569,6 +1598,74 @@ namespace faf::editor
               step = 3;
             }
           }
+          // `/playridgetest` (test runs, with /playeditorview; `/playnopathdirty` to compare): in the editor's view, a
+          // steep ridge raised 35 units east of the first commander, 70 units long north to south; then the commander
+          // ordered to a point 70 units east, and where it is logged every 2 s (WPE.47: the path clusters redone over
+          // new ground).
+          if (moho::CFG_GetArgOption("/playridgetest", 0, nullptr) && mScene.OverPlay()) {
+            SetLiveHeightsNoPathDirty(moho::CFG_GetArgOption("/playnopathdirty", 0, nullptr));
+            static int step = 0;
+            static double stepAt = 0.0;
+            static float x = 0.0f;
+            static float z = 0.0f;
+            static std::uint32_t unitId = 0;
+            if (step == 0) {
+              for (const LiveUnit& u : mScene.LiveNow()) {
+                if (u.blueprint.find("0001") != std::string::npos && step == 0) {
+                  unitId = u.id;
+                  x = u.x;
+                  z = u.z;
+                  step = 1;
+                  stepAt = now + 1.0;
+                }
+              }
+            } else if (step == 1 && now >= stepAt) {
+              // `/playridgeoff`: no ridge, the route the commander takes over the map as it is (the control).
+              for (int k = -4; k <= 4 && !moho::CFG_GetArgOption("/playridgeoff", 0, nullptr); ++k) {
+                (void)mScene.TestRaise(x + 35.0f, z + static_cast<float>(k) * 8.0f, 1.5f);
+              }
+              gpg::Logf(
+                "editor: ridge test: a ridge at x %.0f from z %.0f to %.0f (path clusters %s)",
+                static_cast<double>(x + 35.0f),
+                static_cast<double>(z - 32.0f),
+                static_cast<double>(z + 32.0f),
+                moho::CFG_GetArgOption("/playnopathdirty", 0, nullptr) ? "left as they were" : "redone"
+              );
+              step = 2;
+              stepAt = now + 2.0;
+            } else if (step == 2 && now >= stepAt) {
+              char lua[200];
+              std::snprintf(
+                lua,
+                sizeof(lua),
+                "IssueClearCommands({u}) IssueMove({u}, {%.1f, GetTerrainHeight(%.1f, %.1f), %.1f})",
+                static_cast<double>(x + 70.0f),
+                static_cast<double>(x + 70.0f),
+                static_cast<double>(z),
+                static_cast<double>(z)
+              );
+              LiveUnitDo(unitId, lua);
+              step = 3;
+              stepAt = now + 2.0;
+            } else if (step >= 3 && step < 18 && now >= stepAt) {
+              for (const LiveUnit& u : LiveUnits()) {
+                if (u.id == unitId) {
+                  gpg::Logf(
+                    "editor: ridge test: %.0f s: the commander at %.1f,%.1f (%.1f east, %.1f off the line; target %.1f "
+                    "east)",
+                    static_cast<double>((step - 2) * 2),
+                    static_cast<double>(u.x),
+                    static_cast<double>(u.z),
+                    static_cast<double>(u.x - x),
+                    static_cast<double>(u.z - z),
+                    70.0
+                  );
+                }
+              }
+              ++step;
+              stepAt = now + 2.0;
+            }
+          }
           // `/playheighttest` (test runs, with /playeditorview): in the editor's view, a raise under the first commander,
           // then the sim's own terrain height there and the commander's height read through its Lua (WPE.40: the play's
           // sim takes it; WPE.47: the commander stands on the new ground).
@@ -1617,6 +1714,7 @@ namespace faf::editor
       }
       mScene.Update(frameSeconds, playIdle, mShell->EditorViewInPlay() && moho::WLD_GetFrameAction() == moho::EWldFrameAction::Playing);
       KeepViewState();
+      KeepSoundToFocus();
       mShell->Tools().SetModelsLoading(mScene.ModelsPending());
 
       if (mImGuiReady) {
@@ -2295,6 +2393,22 @@ namespace faf::editor
         }
         if (PropertyEdit edit; tools.TakePropertyEdit(edit)) {
           mScene.ApplyPropertyEdit(edit);
+          // `/propswapundo` (test runs, with /propswap): the swap undone a second on, the prop's blueprint logged.
+          static double undoAt = 0.0;
+          if (
+            edit.what == PropertyEdit::What::Blueprint && moho::CFG_GetArgOption("/propswapundo", 0, nullptr) &&
+            undoAt == 0.0
+          ) {
+            undoAt = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() + 1.0;
+          }
+          mPropSwapUndoAt = undoAt;
+        }
+        if (
+          mPropSwapUndoAt > 0.0 &&
+          std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() >= mPropSwapUndoAt
+        ) {
+          mPropSwapUndoAt = -1.0;
+          mScene.TestUndoPropSwap();
         }
         // The Water panel: its change on the map at once, one undo step when the drag ends.
         tools.SetWater(mDocument.WaterNow());
@@ -2499,6 +2613,31 @@ namespace faf::editor
           }
           if (fa::vector<fa::string> step; moho::CFG_GetArgOption("/gridstep", 1, &step) && !step.empty()) {
             tools.SetGridStep(static_cast<float>(std::atof(step[0].c_str())));
+          }
+        }
+        // `/hoverprop <index or part of a blueprint path>` (test runs): the Select tool's cursor kept on that prop (WPE.54).
+        static bool hoverPropArmed = false;
+        if (
+          fa::vector<fa::string> prop;
+          !hoverPropArmed && moho::CFG_GetArgOption("/hoverprop", 1, &prop) && !prop.empty()
+        ) {
+          const std::string wanted = prop[0].c_str();
+          int index = std::isdigit(static_cast<unsigned char>(wanted.front())) != 0 ? std::atoi(wanted.c_str()) : -1;
+          if (const moho::CWldMap* const map = mDocument.Map(); index < 0 && map != nullptr && map->mProps != nullptr) {
+            for (std::size_t i = 0; i < map->mProps->mEntries.size() && index < 0; ++i) {
+              if (std::string(map->mProps->mEntries[i].mBlueprintPath.c_str()).find(wanted) != std::string::npos) {
+                index = static_cast<int>(i);
+              }
+            }
+          }
+          // `/propswap <part of a blueprint path>` too: that prop selected, the Properties panel's prop browser opened
+          // on that filter and its first tile clicked (WPE.55).
+          fa::vector<fa::string> swap;
+          const bool swapping = moho::CFG_GetArgOption("/propswap", 1, &swap) && !swap.empty();
+          hoverPropArmed = index >= 0; // once, when the map's props are there to find it in
+          mScene.TestHoverProp(index, swapping);
+          if (swapping) {
+            mShell->TestPropSwap(swap[0].c_str());
           }
         }
         if (fa::vector<fa::string> hover; !mFrameMarkerArg.empty() && moho::CFG_GetArgOption("/hovermarker", 1, &hover) && !hover.empty()) {

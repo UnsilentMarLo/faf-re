@@ -393,7 +393,7 @@ set(FAF_EDITOR_BAKE_SOURCE ${CMAKE_SOURCE_DIR}/src/editor/graph/EdTextureBake.cp
 if(FAF_EDITOR)
   set(FAF_EDITOR_BAKE_SOURCE)
 endif()
-add_executable(faf_editor_bake_tests EXCLUDE_FROM_ALL editor/TextureBakeTests.cpp ${FAF_EDITOR_BAKE_SOURCE})
+add_executable(faf_editor_bake_tests EXCLUDE_FROM_ALL editor/TextureBakeTests.cpp editor/SoundMuteTests.cpp ${FAF_EDITOR_BAKE_SOURCE})
 target_include_directories(faf_editor_bake_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(faf_editor_bake_tests PRIVATE faf_editor_logic faf_engine gtest_main)
 set_target_properties(faf_editor_bake_tests PROPERTIES FOLDER "Tests/Editor")
