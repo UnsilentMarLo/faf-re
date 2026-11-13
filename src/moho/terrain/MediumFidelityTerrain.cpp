@@ -35,6 +35,7 @@
 #include "moho/terrain/splat/CWldSplat.h"
 #include "moho/terrain/water/CWaterShaderProperties.h"
 #include "moho/terrain/water/WaterBodySurfaces.h"
+#include "moho/terrain/water/TerrainWaterLevels.h"
 #include "moho/terrain/water/WaterFactory.h"
 #include "moho/terrain/water/WaterShaderVars.h"
 #include "moho/render/d3d/CD3DRenderTarget.h"
@@ -432,7 +433,9 @@ namespace moho
     );
     BindTextureShaderVar(shaderVars.utilityTextureA, strata.mStratumMask0);
     BindTextureShaderVar(shaderVars.utilityTextureB, strata.mStratumMask1);
-    BindTextureShaderVar(shaderVars.utilityTextureC, terrainRes->GetWaterMap());
+    // Engine addition (water bodies): the water map, or the level map of the patched terrain effect on a map with
+    // bodies
+    water::BindTerrainWaterMap(*terrainRes, shaderVars.utilityTextureC);
 
     BindTextureShaderVar(shaderVars.lowerAlbedoTexture, strata.mLowerAlbedoTexture.mTextureSheet);
     BindTextureShaderVar(shaderVars.stratum0AlbedoTexture, strata.mStratum0AlbedoTexture.mTextureSheet);
@@ -718,7 +721,7 @@ namespace moho
    *
    * IDA signature:
    * int __thiscall Moho::MediumFidelityTerrain::DrawTerrain(
-   *     void *this, boost::shared_ptr_CD3DDynamicTextureSheet a2, int *a3);
+   *     void *this, std::shared_ptr_CD3DDynamicTextureSheet a2, int *a3);
    *
    * What it does:
    * Runs one full opaque terrain pass. Rebinds all lighting shader vars with no

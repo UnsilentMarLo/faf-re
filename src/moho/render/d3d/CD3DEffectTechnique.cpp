@@ -22,16 +22,21 @@
 #include "gpg/gal/Effect.hpp"
 #include "gpg/gal/EffectContext.hpp"
 #include "gpg/gal/EffectMacro.hpp"
+#include "gpg/gal/effects/EffectRuntime.h"
 #include "gpg/gal/EffectTechnique.hpp"
 #include "gpg/gal/EffectVariable.hpp"
 #include "gpg/gal/GpuDriven.h"
 #include "gpg/gal/TextureContext.h"
-#include "gpg/gal/effects/EffectRuntime.h"
 #include "moho/console/CConCommand.h"
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/ID3DTextureSheet.h"
+#include "moho/terrain/water/TerrainWaterLevelPatch.h"
+#include "moho/terrain/water/TerrainWaterLevels.h"
+#include "moho/terrain/water/WaterEffectPatch.h"
+#include "moho/terrain/water/WaterQuality.h"
+#include "moho/terrain/water/WaterSimulation.h"
 
 namespace moho
 {
@@ -1035,9 +1040,9 @@ technique EditorPropOverSway_LowFidelity
       SDiskFileInfo sourceInfo{};
       (void)waitHandleSet->GetFileInfo(mFile.c_str(), &sourceInfo, false);
 
-      const gpg::MemBuffer<const char> effectSourceBuffer = DISK_MemoryMapFile(mFile.c_str());
+      gpg::MemBuffer<const char> effectSourceBuffer = DISK_MemoryMapFile(mFile.c_str());
       const std::size_t compatByteCount = compatStateBuffer.Size();
-      const std::size_t effectByteCount = effectSourceBuffer.Size();
+      std::size_t effectByteCount = effectSourceBuffer.Size();
       gpg::MemBuffer<char> mergedBuffer = gpg::AllocMemBuffer(compatByteCount + effectByteCount);
       if (compatByteCount > 0U) {
         // Raw effect-code blob copy into the merged buffer.
@@ -1048,6 +1053,39 @@ technique EditorPropOverSway_LowFidelity
         std::copy_n(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount, mergedBuffer.GetPtr(compatByteCount, 0U));
       }
 
+      // Engine addition (TerrainWaterLevelPatch.h): terrain.fx computes the tint under the water per pixel on a map
+      // with water bodies. It is the first patch of the chain (the shadow filter and the light patch continue from its
+      // text, which keeps all their anchors), independent of both; the cache name carries a tag.
+      // FAF_NO_RENDER_ADDITIONS=1 leaves the effect alone.
+      std::string terrainLevelVariant;
+      if (std::strcmp(effectBaseName.c_str(), "terrain") == 0) {
+        water::SetTerrainWaterLevelsPatched(false);
+        if (
+          deviceContext != nullptr && gpg::gal::UsesD3D10EffectDialect(deviceContext->mDeviceType) &&
+          effectByteCount > 0U && !water::TerrainWaterLevelsAdditionsDisabled() && water::TerrainWaterLevelsWanted()
+        ) {
+          std::string text(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);
+          const water::TerrainWaterLevelPatchResult patch = water::PatchTerrainWaterLevels(text);
+          if (patch.patched) {
+            effectSourceBuffer = gpg::CopyMemBuffer(text.data(), text.size());
+            effectByteCount = text.size();
+            mergedBuffer = gpg::AllocMemBuffer(compatByteCount + effectByteCount);
+            if (compatByteCount > 0U) {
+              std::copy_n(compatStateBuffer.GetPtr(0U, 0U), compatByteCount, mergedBuffer.GetPtr(0U, 0U));
+            }
+            std::copy_n(text.data(), text.size(), mergedBuffer.GetPtr(compatByteCount, 0U));
+            terrainLevelVariant = ".wlev1";
+            water::SetTerrainWaterLevelsPatched(true);
+            gpg::Logf(
+              "Water: %s patched, the tint under water bodies is computed per pixel (%d reads)",
+              effectBaseName.c_str(),
+              patch.sites
+            );
+          } else {
+            gpg::Warnf("Water: %s not patched with the water levels: %s", effectBaseName.c_str(), patch.error.c_str());
+          }
+        }
+      }
       // Builds the effect, from its compiled copy in the cache when that is at
       // least as new as the source. FAF: `boneTexture` compiles the variant
       // with FAF_BONE_TEXTURE defined (see WantsBoneTextureVariant); it turns
@@ -1055,6 +1093,7 @@ technique EditorPropOverSway_LowFidelity
       // does `msdfText`, the source with the MSDF technique appended, and
       // `terrainTess`, terrain.fx with the tessellated techniques appended.
       gpg::MemBuffer<const char> terrainTess{};
+      std::string waterVariant; // the patches water2.fx got (see below), part of its cache name
       const auto createEffect = [&](
                                   const bool boneTexture,
                                   const bool msdfText = false,
@@ -1074,7 +1113,8 @@ technique EditorPropOverSway_LowFidelity
         const char* const variant = boneTexture
           ? ".bonetex."
           : (msdfText ? ".msdf." : (withTerrainTess ? ".tess." : (editorOutline ? outlineVariant : ".")));
-        const fa::string cachePath = cacheDirectory + "/" + mName + variant + engineVersion;
+        const fa::string cachePath =
+          cacheDirectory + "/" + mName + terrainLevelVariant.c_str() + waterVariant.c_str() + variant + engineVersion;
         SDiskFileInfo cacheInfo{};
         bool useCachePayload = false;
         if (waitHandleSet->GetFileInfo(cachePath.c_str(), &cacheInfo, false)) {
@@ -1193,6 +1233,66 @@ technique EditorPropOverSway_LowFidelity
         } catch (const std::exception& exception) {
           gpg::Warnf("%s: %s; building it without the editor's outline", effectFilePath, exception.what());
           mEffect.reset();
+        }
+      }
+      // FAF addition: water2.fx is patched as it is read, on the Direct3D 10 dialect backends
+      // (docs/WATER_SIMULATION.md): the wave simulation (ripples that bend the normal, the projected grid, foam;
+      // WaterSimulation.cpp) and the filtered reflection / refraction lookups (Water Quality, WaterEffectPatch.cpp).
+      // The two chain, each continues from the text of the one before; a source a patch does not recognise is left
+      // without it. A patched source the backend compiler rejects falls back to the shipped effect. The cache name
+      // carries a tag per patch applied, so every combination compiles to its own cached effect.
+      if (
+        !mEffect && deviceContext != nullptr && effectByteCount > 0U && std::strcmp(mName.c_str(), "water2") == 0 &&
+        gpg::gal::UsesD3D10EffectDialect(deviceContext->mDeviceType)
+      ) {
+        const bool wantsSim = water::SimWanted();
+        const bool wantsFilter = water::EffectPatchWanted(deviceContext->mDeviceType);
+        if (wantsSim || wantsFilter) {
+          const gpg::MemBuffer<char> unpatchedBuffer = mergedBuffer;
+          std::string text(effectSourceBuffer.GetPtr(0U, 0U), effectByteCount);
+          std::string tags;
+          if (wantsSim) {
+            std::string simmed = text;
+            const water::SimPatchResult patch = water::PatchWaterSimulation(simmed);
+            if (patch.patched) {
+              text = std::move(simmed);
+              tags += ".watersim1";
+              gpg::Logf("Water: %s patched, the water follows the wave simulation", effectBaseName.c_str());
+            } else {
+              gpg::Warnf(
+                "Water: %s not patched with the wave simulation: %s", effectBaseName.c_str(), patch.error.c_str()
+              );
+            }
+          }
+          if (wantsFilter) {
+            std::string filtered = text;
+            const water::EffectPatchResult patch = water::PatchWaterEffect(filtered);
+            if (patch.patched) {
+              text = std::move(filtered);
+              tags += ".waterq1";
+              gpg::Logf(
+                "Water: %s patched with the filtered reflection and refraction lookups", effectBaseName.c_str()
+              );
+            } else {
+              gpg::Warnf("Water: %s not patched: %s", effectBaseName.c_str(), patch.error.c_str());
+            }
+          }
+          if (!tags.empty()) {
+            mergedBuffer = gpg::AllocMemBuffer(compatByteCount + text.size());
+            if (compatByteCount > 0U) {
+              std::copy_n(compatStateBuffer.GetPtr(0U, 0U), compatByteCount, mergedBuffer.GetPtr(0U, 0U));
+            }
+            std::copy_n(text.data(), text.size(), mergedBuffer.GetPtr(compatByteCount, 0U));
+            waterVariant = tags;
+            try {
+              createEffect(false);
+            } catch (const std::exception& exception) {
+              gpg::Warnf("%s: %s; building it without the water patches", effectFilePath, exception.what());
+              mEffect.reset();
+              waterVariant.clear();
+              mergedBuffer = unpatchedBuffer;
+            }
+          }
         }
       }
       if (!mEffect) {

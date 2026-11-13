@@ -47,6 +47,7 @@
 #include "moho/terrain/TerrainDynamicTextureHelpers.h"
 #include "moho/terrain/TerrainShaderVars.h"
 #include "moho/terrain/water/WaterBodySurfaces.h"
+#include "moho/terrain/water/TerrainWaterLevels.h"
 #include "moho/terrain/water/WaterFactory.h"
 #include "moho/terrain/water/WaterShaderVars.h"
 #include "moho/terrain/water/WaterSurface.h"
@@ -452,7 +453,9 @@ namespace moho
     BindTextureShaderVar(shaderVars.skirtTexture, std::static_pointer_cast<ID3DTextureSheet>(sHighFidelityGridTexture));
     BindTextureShaderVar(shaderVars.utilityTextureA, strata.mStratumMask0);
     BindTextureShaderVar(shaderVars.utilityTextureB, strata.mStratumMask1);
-    BindTextureShaderVar(shaderVars.utilityTextureC, terrainRes->GetWaterMap());
+    // Engine addition (water bodies): the water map, or the level map of the patched terrain effect on a map with
+    // bodies
+    water::BindTerrainWaterMap(*terrainRes, shaderVars.utilityTextureC);
 
     BindTextureShaderVar(shaderVars.lowerAlbedoTexture, strata.mLowerAlbedoTexture.mTextureSheet);
     BindTextureShaderVar(shaderVars.stratum0AlbedoTexture, strata.mStratum0AlbedoTexture.mTextureSheet);
@@ -1346,7 +1349,7 @@ namespace moho
    * IDA signature:
    * int __thiscall Moho::HighFidelityTerrain::DrawNormals(
    *     HighFidelityTerrain *this, MeshRenderer *a4, float a5,
-   *     boost::weak_ptr arg8, int arg10);
+   *     std::weak_ptr arg8, int arg10);
    *
    * What it does:
    * The high-fidelity terrain normal/decal render pass. Binds terrain lighting
@@ -1750,7 +1753,7 @@ namespace moho
    *
    * IDA signature:
    * void __thiscall Moho::HighFidelityTerrain::DrawTerrain(
-   *     Moho::HighFidelityTerrain *this, boost::shared_ptr_CD3DDynamicTextureSheet overlay,
+   *     Moho::HighFidelityTerrain *this, std::shared_ptr_CD3DDynamicTextureSheet overlay,
    *     std::string *techniqueName);
    *
    * What it does:
