@@ -204,7 +204,7 @@ void Sim::Setup(
  * Mangled: ?Create@Sim@Moho@@SAPAV12@ABV?$shared_ptr@ULaunchInfoBase@Moho@@@boost@@@Z
  *
  * IDA signature:
- * Moho::Sim *__thiscall Moho::Sim::Create(boost::shared_ptr<LaunchInfoBase> *launchInfo);
+ * Moho::Sim *__thiscall Moho::Sim::Create(std::shared_ptr<LaunchInfoBase> *launchInfo);
  *
  * What it does:
  * Factory entry point and coupling hub for the Sim construction chain. Allocates
@@ -258,6 +258,8 @@ Sim::~Sim()
 {
   // Engine addition (issue #216): a dump still owed is taken while the state it describes exists.
   CDesyncRecorder::Detach(*this);
+
+  lights::SimLightsOnSimDestroyed(this); // Lua dynamic lights (visual only, docs/DYNAMIC_LIGHTS.md)
 
   // Stop the three task stages (disk-watcher + two sim task stages).
   mDiskWatcherTaskStage.Teardown();
@@ -521,7 +523,7 @@ void Sim::RegisterEntitySet(
 }
 
 /*
- * Address: 0x00751220 (FUN_00751220, boost::shared_ptr_SParticleBuffer::operator=)
+ * Address: 0x00751220 (FUN_00751220, std::shared_ptr_SParticleBuffer::operator=)
  *
  * What it does:
  * Rebinds one `shared_ptr<SParticleBuffer>` from a raw pointer and releases

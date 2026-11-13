@@ -7,6 +7,7 @@
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/STIMap.h"
 #include "moho/render/DynamicLights.h"
+#include "moho/render/lights/LightFeeds.h"
 #include "moho/render/WRenViewport.h"
 
 namespace moho
@@ -1520,8 +1521,8 @@ namespace moho
    * Address: 0x007F6390 (FUN_007F6390, Moho::CWldSession::GetTickDebugCanvas)
    *
    * IDA signature:
-   * boost::shared_ptr_CDebugCanvas *__usercall Moho::CWldSession::GetTickDebugCanvas(
-   *   boost::shared_ptr_CDebugCanvas *result, Moho::CWldSession *this);
+   * std::shared_ptr_CDebugCanvas *__usercall Moho::CWldSession::GetTickDebugCanvas(
+   *   std::shared_ptr_CDebugCanvas *result, Moho::CWldSession *this);
    *
    * What it does:
    * Returns a retained copy of `mDebugCanvas` (+0x0414/+0x0418) - the tick
@@ -1536,8 +1537,8 @@ namespace moho
    * Address: 0x007F63C0 (FUN_007F63C0, Moho::CWldSession::GetBeatDebugCanvas)
    *
    * IDA signature:
-   * boost::shared_ptr_CDebugCanvas *__usercall Moho::CWldSession::GetBeatDebugCanvas(
-   *   boost::shared_ptr_CDebugCanvas *result, Moho::CWldSession *this);
+   * std::shared_ptr_CDebugCanvas *__usercall Moho::CWldSession::GetBeatDebugCanvas(
+   *   std::shared_ptr_CDebugCanvas *result, Moho::CWldSession *this);
    *
    * What it does:
    * Returns a retained copy of `mBeatDebugCanvas` (+0x041C/+0x0420).
@@ -1768,6 +1769,10 @@ namespace moho
         *static_cast<const SParticleBuffer*>(beat.mParticleBuffer.get()), beat.mCurTick
       );
       sWorldParticles.AddParticles(*static_cast<const SParticleBuffer*>(beat.mParticleBuffer.get()));
+      // Dynamic Lights (docs/DYNAMIC_LIGHTS.md), render only: the irradiance field's own feed of the same beat. While
+      // it is on, the screen-space effect lights above neither collect nor draw (DynamicLights::IsActive), so the two
+      // never run together.
+      lights::FeedParticleBuffer(*static_cast<const SParticleBuffer*>(beat.mParticleBuffer.get()), beat.mCurTick);
     }
 
     auto* const decalManager = static_cast<CDecalManager*>(terrainRes->GetDecalManager());

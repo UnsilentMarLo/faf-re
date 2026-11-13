@@ -4,6 +4,7 @@
 
 #include "gpg/gal/PipelineDefer.h"
 #include "moho/console/CConCommand.h"
+#include "moho/render/lights/LightBinding.h"
 
 namespace moho
 {
@@ -44,7 +45,7 @@ namespace moho
 namespace
 {
 
-  // The mesh-cache tree is `fa::map<MeshKey, boost::weak_ptr<Mesh>,
+  // The mesh-cache tree is `fa::map<MeshKey, std::weak_ptr<Mesh>,
   // MeshKeyLess>` (Mesh.h). Its storage lifecycle - header sentinel
   // allocation (0x007E4770/0x007E2B50), buy_node (0x007E6090),
   // insert_unique/insert_at/link_and_rebalance (0x007E5B20/0x007E5DF0),
@@ -209,6 +210,7 @@ namespace moho
     // FAF: the default-pool buffers the hardware batches share go too; a
     // device reset needs every one of them released.
     HardwareMeshBatch::ReleaseSharedBuffers();
+    lights::ReleaseBinding();
   }
 
   /**
@@ -229,6 +231,7 @@ namespace moho
 
     // FAF: see Reset.
     HardwareMeshBatch::ReleaseSharedBuffers();
+    lights::ReleaseBinding();
   }
 
   /**
@@ -355,8 +358,8 @@ namespace moho
    * IDA signature:
    * Moho::MeshInstance *__userpurge CreateMeshInstance(
    *   Moho::MeshRenderer *this@<ecx>, int gameTick, unsigned int color,
-   *   boost::shared_ptr<RScmResource> resource, const Wm3::Vector3<float> &scale,
-   *   bool isStaticPose, boost::shared_ptr<MeshMaterial> material, float lodCutoff);
+   *   std::shared_ptr<RScmResource> resource, const Wm3::Vector3<float> &scale,
+   *   bool isStaticPose, std::shared_ptr<MeshMaterial> material, float lodCutoff);
    *
    * What it does:
    * Constructs a standalone one-LOD mesh from an already-resolved
@@ -601,7 +604,7 @@ namespace moho
    * What it does:
    * Lazily resolves the renderer's four global texture resources from the
    * active D3D device resources and stores each retained
-   * `boost::shared_ptr<RD3DTextureResource>` into its lane. Each lane is only
+   * `std::shared_ptr<RD3DTextureResource>` into its lane. Each lane is only
    * (re)loaded when still empty, matching the binary's `if (!lane.obj)` guards,
    * so repeated calls after the first successful load are no-ops per lane. The
    * mesh-environment cube map path comes from the renderer's

@@ -1,5 +1,6 @@
 #include "moho/sim/SimPrivate2.h"
 #include "moho/sim/SimEditorHook.h"
+#include "moho/render/lights/SimLights.h"
 
 namespace
 {
@@ -740,7 +741,7 @@ void Sim::Sync(
 
   // The decompiled body here is the inlined `shared_ptr::operator=` -- copy the
   // pointer, add a reference to the incoming control block, release the
-  // outgoing one, which is boost::shared_ptr's assignment here.
+  // outgoing one, which is std::shared_ptr's assignment here.
   outSyncData->mSimResources = mSimResources;
 
   // 0x0074820E..0x00748310: close this beat's checksum. On a checksum beat
@@ -1298,6 +1299,7 @@ void Sim::AdvanceBeat(
       FAF_PROFILE_ZONE_NAMED("Sim::EffectManager");
       TickEffectManager(mEffectManager);
     }
+    lights::SimLightsTick(this); // dynamic lights (visual only), docs/DYNAMIC_LIGHTS.md
     {
       FAF_PROFILE_ZONE_NAMED("Sim::FormationDb");
       UpdateFormationDb(mFormationDB);
