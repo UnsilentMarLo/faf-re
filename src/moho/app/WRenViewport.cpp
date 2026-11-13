@@ -22,6 +22,7 @@
 #include "moho/terrain/water/WaterQuality.h"
 #include "moho/terrain/water/WaterReflections.h"
 #include "moho/terrain/water/WaterSimulation.h"
+#include "moho/terrain/water/Waterfall.h"
 
 #include <array>
 #include <cstdlib>
@@ -1596,20 +1597,6 @@ void moho::WRenViewport::D3DWindowOnDeviceRender()
   // Dynamic Lights switched on after the effects were built without the light pass: rebuild them now, before anything
   // of this frame is drawn. The terrain renderers set the water and terrain variables once, when they are made: the new
   // effects have lost them, so they are made again.
-  if (moho::lights::ApplyLiveLevel()) {
-    for (SWorldViewInfo& worldView : mWorldViews) {
-      if (worldView.mTerrain && moho::REN_GetTerrainRes() != nullptr) {
-        worldView.mTerrain.reset(IRenTerrain::Create());
-        if (worldView.mTerrain) {
-          (void)worldView.mTerrain->Create(REN_GetTerrainRes());
-        }
-      }
-    }
-  }
-
-  // Dynamic Lights switched on after the effects were built without the light pass: rebuild them now, before anything
-  // of this frame is drawn. The terrain renderers set the water and terrain variables once, when they are made: the new
-  // effects have lost them, so they are made again.
   // The same for the terrain effect of a map with water bodies (the water level patch, TerrainWaterLevels.h).
   // The particle effect is patched only while the soft particles or the large-particle quality are on: built again when
   // that changes (its variables find the new effect by name, nothing else holds on to it).
@@ -2278,6 +2265,14 @@ void moho::WRenViewport::RenderWorldView(
       "WaterFeed"
     ); // render profile: the hulls and bodies of the batch
     moho::water::FeedWaterFromMeshes(*meshRenderer);
+  }
+  // Waterfalls and rapids of the rivers (docs/projects/RIVERS.md): particles and foam sources by the game clock, before
+  // the simulation steps and takes the foam; the curtains are the beat's (CWldSession::ApplyBeatEffects).
+  if (worldView == begin && !RenderAdditionsDisabled()) {
+    const gpg::gal::RenderProfileScope profileWaterfalls(
+      "Waterfalls"
+    ); // render profile: the clock and particles of the falls
+    moho::water::falls::OnFrame(*mCam);
   }
   {
     const gpg::gal::RenderProfileScope profileWaterStep(
