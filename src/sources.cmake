@@ -953,6 +953,7 @@ set(FAF_ENGINE_SOURCES
   moho/render/DynamicLights.cpp
   moho/render/TemporalAA.cpp
   moho/render/RenderFeatures.cpp
+  moho/render/RenderScale.cpp
   moho/render/BoundaryRenderer.cpp
   moho/render/FxaaRenderer.cpp
   moho/render/PostRenderer.cpp
@@ -1139,6 +1140,7 @@ set(FAF_ENGINE_SOURCES
   gpg/gal/Device.cpp
   gpg/gal/AmbientOcclusionPass.cpp
   gpg/gal/RenderProfiler.cpp
+  gpg/gal/RenderScalePass.cpp
   gpg/gal/DxgiAdapterInfo.cpp
   gpg/gal/Effect.cpp
   gpg/gal/GalBaseClasses.cpp
