@@ -379,6 +379,7 @@ namespace gpg::gal::effects
     }
     mBindings[parameter].texture = texture;
     mBindings[parameter].renderTarget.reset();
+    mBindings[parameter].depthStencil.reset();
     ++mVersion;
     ++mTextureVersion;
   }
@@ -393,6 +394,22 @@ namespace gpg::gal::effects
     }
     mBindings[parameter].renderTarget = renderTarget;
     mBindings[parameter].texture.reset();
+    mBindings[parameter].depthStencil.reset();
+    ++mVersion;
+    ++mTextureVersion;
+  }
+
+  void ParameterStore::SetDepthStencil(
+    const std::uint32_t parameter,
+    const std::shared_ptr<DepthStencilTarget>& depthStencil
+  )
+  {
+    if (parameter >= mBindings.size()) {
+      return;
+    }
+    mBindings[parameter].depthStencil = depthStencil;
+    mBindings[parameter].texture.reset();
+    mBindings[parameter].renderTarget.reset();
     ++mVersion;
     ++mTextureVersion;
   }
