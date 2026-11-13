@@ -1798,7 +1798,9 @@ namespace moho
           if (body.elevation == kWaterBodyNoWater) {
             shown = std::max(terrain, mSurfaceElevation + 0.01f * elevationSpan);
           } else {
-            const float below = body.elevation - terrain;
+            // The depth under the body's own level at the vertex (a river's level slopes), against the
+            // body's deep range.
+            const float below = bodies.LevelOfVertex(vx, vz, body.elevation) - terrain;
             const float bodyRange = body.elevation - body.deep;
             shown = mSurfaceElevation - ((bodyRange > 0.0f && seaRange > 0.0f) ? below * seaRange / bodyRange : below);
           }
@@ -2038,7 +2040,7 @@ namespace moho
    * IDA signature:
    * void __usercall Moho::Cartographic::RenderTerrainStage1(
    *   Moho::Cartographic *this, int headIndex,
-   *   boost::shared_ptr<gpg::gal::RenderTarget> colorTarget);
+   *   std::shared_ptr<gpg::gal::RenderTarget> colorTarget);
    *
    * What it does:
    * Composites the offscreen cartographic frame back onto the head. Clears the
@@ -2134,9 +2136,9 @@ namespace moho
    *   Moho::Cartographic *this, unsigned int headIndex, int gameTick, float deltaFrame,
    *   Moho::IRenderWorldView *worldView, Moho::RangeRenderer *rangeRenderer,
    *   Moho::VisionRenderer *visionRenderer, Moho::BoundaryRenderer *boundaryRenderer,
-   *   boost::shared_ptr<gpg::gal::RenderTarget> colorTarget,
-   *   boost::shared_ptr<gpg::gal::DepthStencilTarget> depthStencilTarget,
-   *   boost::shared_ptr<Moho::CD3DPrimBatcher> primBatcher);
+   *   std::shared_ptr<gpg::gal::RenderTarget> colorTarget,
+   *   std::shared_ptr<gpg::gal::DepthStencilTarget> depthStencilTarget,
+   *   std::shared_ptr<Moho::CD3DPrimBatcher> primBatcher);
    *
    * What it does:
    * Draws one whole cartographic ("strategic") frame for one device head.
