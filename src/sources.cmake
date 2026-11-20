@@ -763,6 +763,8 @@ set(FAF_ENGINE_SOURCES
   moho/effects/rendering/CEfxBeam.cpp
   moho/effects/rendering/CEffectImplSerializer.cpp
   moho/particles/CParticleTextureCountedPtr.cpp
+  moho/particles/ParticleEffectPatch.cpp
+  moho/particles/ParticleLowRes.cpp
   moho/particles/SWorldBeam.cpp
   moho/render/EmitterTypeTypeInfo.cpp
   moho/effects/rendering/IEffect.cpp
@@ -957,6 +959,7 @@ set(FAF_ENGINE_SOURCES
   moho/render/BounceLight.cpp
   moho/render/DynamicLights.cpp
   moho/render/TemporalAA.cpp
+  moho/render/FrameLimiter.cpp
   moho/render/RenderFeatures.cpp
   moho/render/ImageQualityFeatures.cpp
   moho/render/RenderScale.cpp
