@@ -360,8 +360,15 @@ set(FAF_ENGINE_SOURCES
   moho/terrain/water/WaterSimulation.cpp
   moho/terrain/water/WaterMeshFeed.cpp
   moho/terrain/water/WaveSystem.cpp
+  moho/terrain/water/Waterfall.cpp
+  moho/terrain/water/WaterfallPlan.cpp
   moho/terrain/water/Shoreline.cpp
   moho/terrain/water/WaterBodySurfaces.cpp
+  moho/terrain/water/RiverFlow.cpp
+  moho/terrain/water/RiverFlowPatch.cpp
+  moho/terrain/water/WaterBankPatch.cpp
+  moho/terrain/water/WaterBankGrowth.cpp
+  moho/terrain/water/WaterBanksBind.cpp
   moho/terrain/water/TerrainWaterLevelPatch.cpp
   moho/terrain/water/TerrainWaterLevels.cpp
   moho/ui/CUIWorldView.cpp
