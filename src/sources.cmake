@@ -951,6 +951,7 @@ set(FAF_ENGINE_SOURCES
   moho/render/CDecalBufferTypeInfo.cpp
   moho/render/CWldTerrainDecal.cpp
   moho/render/CDecalHandleTypeInfo.cpp
+  moho/render/AmbientOcclusion.cpp
   moho/render/AmbientOcclusionRenderer.cpp
   moho/render/Atmosphere.cpp
   moho/render/BounceLight.cpp
@@ -1060,6 +1061,8 @@ set(FAF_ENGINE_SOURCES
   moho/render/RenderInfo.cpp
   moho/render/RayScene.cpp
   moho/render/Shadow.cpp
+  moho/render/shadow/ShadowEffectPatch.cpp
+  moho/render/shadow/ShadowFilter.cpp
   moho/render/SelectionBracketParams.cpp
   moho/render/SelectionBracketRenderer.cpp
   moho/render/RenderGeometryBuffers.cpp
@@ -1138,6 +1141,7 @@ set(FAF_ENGINE_SOURCES
   gpg/core/utils/LocalCache.cpp
   gpg/gal/ContextInterfaces.cpp
   gpg/gal/Device.cpp
+  gpg/gal/AmbientOcclusionPass.cpp
   gpg/gal/RenderProfiler.cpp
   gpg/gal/DxgiAdapterInfo.cpp
   gpg/gal/Effect.cpp
