@@ -5,4 +5,4 @@ left to right master, the PR with defaults, the PR with its own switches off (wh
 `stats.json` next to them holds the pixel shares: percent of pixels with a channel difference above 8/255, [full frame, crop, full frame after a 25 px box blur].
 `waterdetail0_*` (PR 02): master and PR 02 with `ren_WaterDetail 0`.
 Scenes: `sr` = sea scene (replay 28041625, tick 9000), `astro` = lake map (replay 28013263, tick 12000, lake in view, land in the crop), `levels` and `rivers` = map scenes of the PR 08 / 09 work.
-Replay paused at a fixed tick, UI hidden, 1920x1080, D3D11 / D3D12 / Vulkan, RX 7900 XTX. Water animates on the wall clock while paused, so water pixels are not repeatable between runs of one build (see the repeat columns).
+Replay paused at a fixed tick, UI hidden, 1600x900, D3D11 / D3D12 / Vulkan, RX 7900 XTX. Water animates on the wall clock while paused, so water pixels are not repeatable between runs of one build (see the repeat columns).
