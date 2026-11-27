@@ -1,0 +1,62 @@
+[
+ {
+  "api": "d3d12",
+  "scene": "ships",
+  "file": "waterdetail0_d3d12_ships.png",
+  "wd0_pr02_vs_master": [
+   89.41,
+   91.52,
+   87.86
+  ]
+ },
+ {
+  "api": "d3d12",
+  "scene": "coast_far",
+  "file": "waterdetail0_d3d12_coast_far.png",
+  "wd0_pr02_vs_master": [
+   49.39,
+   68.11,
+   41.23
+  ]
+ },
+ {
+  "api": "d3d12",
+  "scene": "coast_near",
+  "file": "waterdetail0_d3d12_coast_near.png",
+  "wd0_pr02_vs_master": [
+   86.29,
+   89.67,
+   83.46
+  ]
+ },
+ {
+  "api": "vulkan",
+  "scene": "ships",
+  "file": "waterdetail0_vulkan_ships.png",
+  "wd0_pr02_vs_master": [
+   90.16,
+   90.15,
+   89.59
+  ]
+ },
+ {
+  "api": "vulkan",
+  "scene": "coast_far",
+  "file": "waterdetail0_vulkan_coast_far.png",
+  "wd0_pr02_vs_master": [
+   53.62,
+   69.41,
+   42.53
+  ]
+ },
+ {
+  "api": "vulkan",
+  "scene": "coast_near",
+  "file": "waterdetail0_vulkan_coast_near.png",
+  "wd0_pr02_vs_master": [
+   87.32,
+   90.24,
+   84.68
+  ]
+ }
+]

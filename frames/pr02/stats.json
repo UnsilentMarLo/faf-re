@@ -1,0 +1,525 @@
+[
+ {
+  "scene": "ships",
+  "group": "sr",
+  "api": "d3d11",
+  "file": "sr_d3d11_ships.png",
+  "defaults_vs_master": [
+   85.69,
+   79.62,
+   90.13
+  ],
+  "off_vs_master": [
+   2.27,
+   4.21,
+   0.52
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": [
+   14.0,
+   7.7,
+   2.95
+  ],
+  "repeat_master": [
+   2.58,
+   4.88,
+   0.75
+  ]
+ },
+ {
+  "scene": "coast_far",
+  "group": "sr",
+  "api": "d3d11",
+  "file": "sr_d3d11_coast_far.png",
+  "defaults_vs_master": [
+   74.14,
+   72.55,
+   73.88
+  ],
+  "off_vs_master": [
+   0.41,
+   0.73,
+   0.11
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": [
+   2.23,
+   1.26,
+   0.1
+  ],
+  "repeat_master": [
+   0.41,
+   0.9,
+   0.32
+  ]
+ },
+ {
+  "scene": "coast_near",
+  "group": "sr",
+  "api": "d3d11",
+  "file": "sr_d3d11_coast_near.png",
+  "defaults_vs_master": [
+   89.12,
+   94.08,
+   88.7
+  ],
+  "off_vs_master": [
+   1.26,
+   1.68,
+   0.53
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": [
+   12.07,
+   5.66,
+   5.18
+  ],
+  "repeat_master": [
+   1.49,
+   2.21,
+   0.71
+  ]
+ },
+ {
+  "scene": "lake_wide",
+  "group": "astro",
+  "api": "d3d11",
+  "file": "astro_d3d11_lake_wide.png",
+  "defaults_vs_master": [
+   54.85,
+   21.28,
+   53.63
+  ],
+  "off_vs_master": [
+   1.48,
+   1.63,
+   0.44
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": [
+   1.96,
+   3.35,
+   0.33
+  ],
+  "repeat_master": [
+   1.13,
+   1.68,
+   0.61
+  ]
+ },
+ {
+  "scene": "lake_mid",
+  "group": "astro",
+  "api": "d3d11",
+  "file": "astro_d3d11_lake_mid.png",
+  "defaults_vs_master": [
+   24.18,
+   0.27,
+   24.31
+  ],
+  "off_vs_master": [
+   0.64,
+   0.49,
+   0.34
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": [
+   3.19,
+   0.18,
+   0.2
+  ],
+  "repeat_master": [
+   0.29,
+   0.31,
+   0.15
+  ]
+ },
+ {
+  "scene": "overview",
+  "group": "levels",
+  "api": "d3d11",
+  "file": "levels_d3d11_overview.png",
+  "defaults_vs_master": [
+   5.8,
+   0.0,
+   7.01
+  ],
+  "off_vs_master": [
+   6.14,
+   0.98,
+   4.92
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "mid",
+  "group": "levels",
+  "api": "d3d11",
+  "file": "levels_d3d11_mid.png",
+  "defaults_vs_master": [
+   0.03,
+   0.0,
+   0.02
+  ],
+  "off_vs_master": [
+   0.05,
+   0.0,
+   0.04
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "ships",
+  "group": "sr",
+  "api": "d3d12",
+  "file": "sr_d3d12_ships.png",
+  "defaults_vs_master": [
+   89.39,
+   91.53,
+   88.0
+  ],
+  "off_vs_master": [
+   3.37,
+   5.27,
+   0.26
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": [
+   8.95,
+   10.25,
+   0.29
+  ],
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "coast_far",
+  "group": "sr",
+  "api": "d3d12",
+  "file": "sr_d3d12_coast_far.png",
+  "defaults_vs_master": [
+   48.78,
+   68.0,
+   41.08
+  ],
+  "off_vs_master": [
+   1.33,
+   1.72,
+   0.02
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": [
+   2.09,
+   1.99,
+   0.04
+  ],
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "coast_near",
+  "group": "sr",
+  "api": "d3d12",
+  "file": "sr_d3d12_coast_near.png",
+  "defaults_vs_master": [
+   86.19,
+   89.36,
+   83.21
+  ],
+  "off_vs_master": [
+   3.04,
+   3.42,
+   0.3
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": [
+   5.52,
+   4.64,
+   0.36
+  ],
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "lake_wide",
+  "group": "astro",
+  "api": "d3d12",
+  "file": "astro_d3d12_lake_wide.png",
+  "defaults_vs_master": [
+   36.3,
+   8.14,
+   31.07
+  ],
+  "off_vs_master": [
+   1.26,
+   0.86,
+   0.55
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": [
+   2.41,
+   2.78,
+   0.99
+  ],
+  "repeat_master": [
+   1.02,
+   1.35,
+   0.25
+  ]
+ },
+ {
+  "scene": "lake_mid",
+  "group": "astro",
+  "api": "d3d12",
+  "file": "astro_d3d12_lake_mid.png",
+  "defaults_vs_master": [
+   10.2,
+   0.32,
+   8.73
+  ],
+  "off_vs_master": [
+   0.29,
+   0.2,
+   0.0
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": [
+   3.19,
+   0.62,
+   0.28
+  ],
+  "repeat_master": [
+   0.65,
+   0.19,
+   0.08
+  ]
+ },
+ {
+  "scene": "overview",
+  "group": "levels",
+  "api": "d3d12",
+  "file": "levels_d3d12_overview.png",
+  "defaults_vs_master": [
+   0.4,
+   0.0,
+   0.16
+  ],
+  "off_vs_master": [
+   7.59,
+   1.52,
+   3.14
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "mid",
+  "group": "levels",
+  "api": "d3d12",
+  "file": "levels_d3d12_mid.png",
+  "defaults_vs_master": [
+   0.04,
+   0.0,
+   0.01
+  ],
+  "off_vs_master": [
+   0.02,
+   0.0,
+   0.0
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "ships",
+  "group": "sr",
+  "api": "vulkan",
+  "file": "sr_vulkan_ships.png",
+  "defaults_vs_master": [
+   90.61,
+   90.57,
+   89.9
+  ],
+  "off_vs_master": [
+   36.64,
+   40.51,
+   2.18
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   46.22,
+   50.43,
+   6.69
+  ]
+ },
+ {
+  "scene": "coast_far",
+  "group": "sr",
+  "api": "vulkan",
+  "file": "sr_vulkan_coast_far.png",
+  "defaults_vs_master": [
+   53.61,
+   69.23,
+   42.43
+  ],
+  "off_vs_master": [
+   15.46,
+   19.53,
+   0.73
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   24.98,
+   30.72,
+   1.49
+  ]
+ },
+ {
+  "scene": "coast_near",
+  "group": "sr",
+  "api": "vulkan",
+  "file": "sr_vulkan_coast_near.png",
+  "defaults_vs_master": [
+   87.77,
+   89.17,
+   85.15
+  ],
+  "off_vs_master": [
+   31.5,
+   31.23,
+   1.72
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   41.8,
+   41.62,
+   4.75
+  ]
+ },
+ {
+  "scene": "lake_wide",
+  "group": "astro",
+  "api": "vulkan",
+  "file": "astro_vulkan_lake_wide.png",
+  "defaults_vs_master": [
+   38.43,
+   9.56,
+   29.97
+  ],
+  "off_vs_master": [
+   13.2,
+   6.45,
+   1.59
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   1.0,
+   0.99,
+   0.97
+  ]
+ },
+ {
+  "scene": "lake_mid",
+  "group": "astro",
+  "api": "vulkan",
+  "file": "astro_vulkan_lake_mid.png",
+  "defaults_vs_master": [
+   12.89,
+   0.32,
+   9.61
+  ],
+  "off_vs_master": [
+   8.53,
+   0.29,
+   0.5
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "overview",
+  "group": "levels",
+  "api": "vulkan",
+  "file": "levels_vulkan_overview.png",
+  "defaults_vs_master": [
+   0.12,
+   0.0,
+   0.0
+  ],
+  "off_vs_master": [
+   7.69,
+   1.54,
+   3.3
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "mid",
+  "group": "levels",
+  "api": "vulkan",
+  "file": "levels_vulkan_mid.png",
+  "defaults_vs_master": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "off_vs_master": [
+   0.05,
+   0.0,
+   0.03
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ }
+]

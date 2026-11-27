@@ -1,0 +1,209 @@
+[
+ {
+  "scene": "overview",
+  "group": "rivers",
+  "api": "d3d11",
+  "file": "rivers_d3d11_overview.png",
+  "defaults_vs_master": [
+   12.57,
+   30.0,
+   12.63
+  ],
+  "off_vs_master": [
+   12.54,
+   30.06,
+   12.56
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "mid",
+  "group": "rivers",
+  "api": "d3d11",
+  "file": "rivers_d3d11_mid.png",
+  "defaults_vs_master": [
+   32.98,
+   27.85,
+   29.73
+  ],
+  "off_vs_master": [
+   32.92,
+   27.89,
+   29.56
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.18,
+   0.0,
+   0.17
+  ]
+ },
+ {
+  "scene": "overview",
+  "group": "levels",
+  "api": "d3d11",
+  "file": "levels_d3d11_overview.png",
+  "defaults_vs_master": [
+   10.32,
+   5.6,
+   8.11
+  ],
+  "off_vs_master": [
+   17.67,
+   9.0,
+   11.05
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "overview",
+  "group": "rivers",
+  "api": "d3d12",
+  "file": "rivers_d3d12_overview.png",
+  "defaults_vs_master": [
+   7.66,
+   14.62,
+   9.63
+  ],
+  "off_vs_master": [
+   7.69,
+   15.03,
+   9.64
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "mid",
+  "group": "rivers",
+  "api": "d3d12",
+  "file": "rivers_d3d12_mid.png",
+  "defaults_vs_master": [
+   22.68,
+   17.29,
+   23.91
+  ],
+  "off_vs_master": [
+   22.92,
+   17.68,
+   24.12
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "overview",
+  "group": "levels",
+  "api": "d3d12",
+  "file": "levels_d3d12_overview.png",
+  "defaults_vs_master": [
+   1.84,
+   10.33,
+   1.18
+  ],
+  "off_vs_master": [
+   9.33,
+   10.78,
+   4.57
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "overview",
+  "group": "rivers",
+  "api": "vulkan",
+  "file": "rivers_vulkan_overview.png",
+  "defaults_vs_master": [
+   7.96,
+   14.26,
+   9.92
+  ],
+  "off_vs_master": [
+   8.0,
+   14.58,
+   9.88
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "mid",
+  "group": "rivers",
+  "api": "vulkan",
+  "file": "rivers_vulkan_mid.png",
+  "defaults_vs_master": [
+   22.68,
+   14.28,
+   23.88
+  ],
+  "off_vs_master": [
+   22.91,
+   14.63,
+   24.13
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "overview",
+  "group": "levels",
+  "api": "vulkan",
+  "file": "levels_vulkan_overview.png",
+  "defaults_vs_master": [
+   2.18,
+   10.26,
+   2.98
+  ],
+  "off_vs_master": [
+   9.65,
+   10.72,
+   6.32
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ }
+]

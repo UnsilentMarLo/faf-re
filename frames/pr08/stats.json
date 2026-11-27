@@ -1,0 +1,140 @@
+[
+ {
+  "scene": "overview",
+  "group": "rivers",
+  "api": "d3d11",
+  "file": "rivers_d3d11_overview.png",
+  "defaults_vs_master": [
+   12.91,
+   34.78,
+   12.95
+  ],
+  "off_vs_master": [
+   12.85,
+   34.79,
+   12.87
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "mid",
+  "group": "rivers",
+  "api": "d3d11",
+  "file": "rivers_d3d11_mid.png",
+  "defaults_vs_master": [
+   37.67,
+   39.77,
+   34.83
+  ],
+  "off_vs_master": [
+   37.67,
+   39.77,
+   34.84
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.18,
+   0.0,
+   0.17
+  ]
+ },
+ {
+  "scene": "overview",
+  "group": "rivers",
+  "api": "d3d12",
+  "file": "rivers_d3d12_overview.png",
+  "defaults_vs_master": [
+   8.72,
+   31.8,
+   9.5
+  ],
+  "off_vs_master": [
+   9.09,
+   31.98,
+   9.72
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "mid",
+  "group": "rivers",
+  "api": "d3d12",
+  "file": "rivers_d3d12_mid.png",
+  "defaults_vs_master": [
+   30.11,
+   34.93,
+   31.7
+  ],
+  "off_vs_master": [
+   30.2,
+   34.93,
+   31.72
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "overview",
+  "group": "rivers",
+  "api": "vulkan",
+  "file": "rivers_vulkan_overview.png",
+  "defaults_vs_master": [
+   9.49,
+   31.21,
+   11.53
+  ],
+  "off_vs_master": [
+   9.39,
+   31.27,
+   11.49
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "scene": "mid",
+  "group": "rivers",
+  "api": "vulkan",
+  "file": "rivers_vulkan_mid.png",
+  "defaults_vs_master": [
+   30.3,
+   32.37,
+   31.94
+  ],
+  "off_vs_master": [
+   30.31,
+   32.37,
+   31.95
+  ],
+  "on_vs_master": null,
+  "repeat_same_build": null,
+  "repeat_master": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ }
+]
